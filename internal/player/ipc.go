@@ -1,0 +1,105 @@
+package player
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"sync"
+	"time"
+)
+
+type IPCClient struct {
+	socketPath string
+	conn       net.Conn
+	scanner    *bufio.Scanner
+	mu         sync.Mutex
+	closed     bool
+	reqID      int
+}
+
+func NewIPCClient(socketPath string) *IPCClient {
+	return &IPCClient{
+		socketPath: socketPath,
+	}
+}
+
+func (c *IPCClient) Connect(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("unix", c.socketPath, 1*time.Second)
+		if err == nil {
+			c.mu.Lock()
+			c.conn = conn
+			c.scanner = bufio.NewScanner(conn)
+			c.closed = false
+			c.mu.Unlock()
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout connecting to mpv IPC socket: %s", c.socketPath)
+}
+
+func (c *IPCClient) GetProperty(property string) (interface{}, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil || c.closed {
+		return nil, fmt.Errorf("ipc client not connected")
+	}
+
+	c.reqID++
+	reqID := c.reqID
+
+	req := map[string]interface{}{
+		"command":    []interface{}{"get_property", property},
+		"request_id": reqID,
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+
+	c.conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Write(append(data, '\n')); err != nil {
+		return nil, err
+	}
+
+	// Keep reading lines until we find the response for our request_id
+	for c.scanner.Scan() {
+		var resp map[string]interface{}
+		if err := json.Unmarshal(c.scanner.Bytes(), &resp); err != nil {
+			continue // Skip malformed lines
+		}
+
+		// Check if this is the response we are waiting for
+		if idVal, ok := resp["request_id"].(float64); ok && int(idVal) == reqID {
+			if errStr, ok := resp["error"].(string); ok && errStr != "success" {
+				return nil, fmt.Errorf("mpv error: %s", errStr)
+			}
+			return resp["data"], nil
+		}
+		// If it's not our request_id (e.g., it's an event or old response), we just loop and scan again
+	}
+
+	if err := c.scanner.Err(); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("no response from mpv")
+}
+
+func (c *IPCClient) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != nil {
+		c.closed = true
+		return c.conn.Close()
+	}
+	return nil
+}
+
+func DefaultMPVSocketPath() string {
+	return fmt.Sprintf("/tmp/kari-mpv-%d.sock", os.Getpid())
+}

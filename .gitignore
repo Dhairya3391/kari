@@ -1,0 +1,26 @@
+# Build outputs
+/kari
+/kari.exe
+kari-*
+kari-build/
+
+# Project specific
+downloads/
+*.log
+
+# Go specific
+vendor/
+go.work
+go.work.sum
+*.test
+*.prof
+
+# OS/IDE
+.DS_Store
+.vscode/
+.idea/
+.env
+.env.local
+
+# AI agent workspace
+**/.atomcode/
