@@ -43,6 +43,7 @@ func (r *Registry) PlayWithSources(sources []model.PlaybackSource, media model.R
 	}
 	order := r.preferredPlayers(preferred)
 
+	var lastErr error
 	for _, p := range order {
 		logging.Debugf("PlayWithSources: trying player=%s available=%t", p.Name(), p.Available())
 		// If this is the explicitly preferred player, we try it even if it says it's unavailable,
@@ -58,10 +59,14 @@ func (r *Registry) PlayWithSources(sources []model.PlaybackSource, media model.R
 				return result, nil
 			}
 			logging.Warnf("PlayWithSources: player %s failed: %v", p.Name(), err)
+			lastErr = err
 		} else {
 			logging.Infof("PlayWithSources: player %s succeeded", p.Name())
 			return result, nil
 		}
+	}
+	if lastErr != nil {
+		return PlaybackResult{}, lastErr
 	}
 	return PlaybackResult{}, fmt.Errorf("no supported player found")
 }
