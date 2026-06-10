@@ -27,18 +27,6 @@ func cleanErrorForUI(err error) string {
 	}
 	msg := err.Error()
 
-	parts := strings.Split(msg, "; ")
-	if len(parts) > 1 {
-		var cleanParts []string
-		for _, p := range parts {
-			short := strings.Split(p, ":")[0]
-			short = strings.ReplaceAll(short, "vidking", "VidKing")
-			short = strings.ReplaceAll(short, "moviescraper", "MovieScraper")
-			cleanParts = append(cleanParts, short)
-		}
-		return "No sources: " + strings.Join(cleanParts, ", ")
-	}
-
 	if strings.Contains(msg, "no sources found") {
 		return "No sources found"
 	}
@@ -49,11 +37,32 @@ func cleanErrorForUI(err error) string {
 		return "Connection failed"
 	}
 
+	parts := strings.Split(msg, "; ")
+	if len(parts) > 1 {
+		var cleanParts []string
+		for _, p := range parts {
+			name := strings.Split(p, ":")[0]
+			cleanParts = append(cleanParts, title(name))
+		}
+		return "No sources: " + strings.Join(cleanParts, ", ")
+	}
+
 	short := strings.Split(msg, ":")[0]
 	if len(short) > 50 {
 		short = short[:50] + "..."
 	}
-	return short
+	return title(short)
+}
+
+func title(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	if r[0] >= 'a' && r[0] <= 'z' {
+		r[0] -= 32
+	}
+	return string(r)
 }
 
 func (m *modelImpl) onSearchDone(msg searchDoneMsg) (tea.Model, tea.Cmd) {
@@ -315,29 +324,9 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 		}
 	}
 
-	// Also merge subtitles
-	seenSub := make(map[string]struct{})
-	for _, s := range m.resolved.Subtitles {
-		key := s.Label + "|" + s.Language
-		seenSub[key] = struct{}{}
-	}
-	for _, s := range resolved.Subtitles {
-		key := s.Label + "|" + s.Language
-		if _, ok := seenSub[key]; !ok {
-			m.resolved.Subtitles = append(m.resolved.Subtitles, s)
-			seenSub[key] = struct{}{}
-		} else {
-			// Update existing track if the new one has a local path
-			for i, exist := range m.resolved.Subtitles {
-				if exist.Label+"|"+exist.Language == key {
-					if exist.Path == "" && s.Path != "" {
-						m.resolved.Subtitles[i].Path = s.Path
-						m.resolved.Subtitles[i].URL = s.URL
-					}
-					break
-				}
-			}
-		}
+	// Replace subtitles with the latest result (provider subs → OpenSubtitles final)
+	if len(resolved.Subtitles) > 0 {
+		m.resolved.Subtitles = append([]model.SubtitleTrack{}, resolved.Subtitles...)
 	}
 }
 
@@ -1165,7 +1154,7 @@ func (m *modelImpl) resolveCmd(opID int, series model.SearchResult, episode mode
 				if subErr != nil {
 					logging.Debugf("subtitle fetch failed: %v", subErr)
 				} else if len(tracks) > 0 {
-					resolved.Subtitles = append(resolved.Subtitles, tracks...)
+					resolved.Subtitles = tracks
 				}
 			}
 

@@ -2,15 +2,25 @@ package defaults
 
 import (
 	"kari/internal/provider"
+	"kari/internal/provider/cineby"
 	"kari/internal/provider/miruro"
-	"kari/internal/provider/moviescraper"
-	"kari/internal/provider/vidking"
 	"kari/internal/provider/vidnest"
 	"kari/internal/provider/wco"
 	"kari/internal/tmdb"
 )
 
 var DefaultProviders = []provider.Descriptor{
+	{
+		ID: "cineby",
+		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
+			return cineby.NewClient(kp)
+		},
+		Modes: []provider.Mode{
+			{Name: provider.ModeMovies, Priority: 1},
+			{Name: provider.ModeTV, Priority: 1},
+		},
+		Priority: 1,
+	},
 	{
 		ID: "vidnest",
 		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
@@ -22,28 +32,17 @@ var DefaultProviders = []provider.Descriptor{
 		},
 		Priority: 1,
 	},
-	{
-		ID: "vidking",
-		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
-			return vidking.NewClient(kp)
-		},
-		Modes: []provider.Mode{
-			{Name: provider.ModeMovies, Priority: 2},
-			{Name: provider.ModeTV, Priority: 1},
-		},
-		Priority: 2,
-	},
-	{
-		ID: "moviescraper",
-		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
-			return moviescraper.NewClient(kp)
-		},
-		Modes: []provider.Mode{
-			{Name: provider.ModeMovies, Priority: 3},
-			{Name: provider.ModeTV, Priority: 3},
-		},
-		Priority: 3,
-	},
+	// {
+	// 	ID: "vidking",
+	// 	Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
+	// 		return vidking.NewClient(kp)
+	// 	},
+	// 	Modes: []provider.Mode{
+	// 		{Name: provider.ModeMovies, Priority: 2},
+	// 		{Name: provider.ModeTV, Priority: 1},
+	// 	},
+	// 	Priority: 2,
+	// },
 	{
 		ID: "miruro",
 		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {

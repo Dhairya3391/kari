@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -182,6 +183,12 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		}
 	}
 
+	// Build priority map so sources can be ordered by provider priority
+	providerPriority := make(map[string]int, len(providers))
+	for i, p := range providers {
+		providerPriority[p.Name()] = i
+	}
+
 	g, gCtx := errgroup.WithContext(ctx)
 
 	for _, p := range providers {
@@ -295,6 +302,10 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	if len(allPlaybackSources) == 0 {
 		return model.ResolvedMedia{}, provider.ErrNoSources
 	}
+
+	sort.SliceStable(allPlaybackSources, func(i, j int) bool {
+		return providerPriority[allPlaybackSources[i].Resolver] < providerPriority[allPlaybackSources[j].Resolver]
+	})
 
 	return buildResolved(allPlaybackSources, allSubtitleTracks), nil
 }

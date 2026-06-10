@@ -26,7 +26,7 @@ Type a query, press Space, pick a result.
 
 ## Features
 
-- **Multi-source search** — Searches 5+ providers at once (Miruro, VidNest, VidKing, MovieScraper, WCO). Results grouped by source.
+- **Multi-source search** — Searches 5+ providers at once (Cineby, Miruro, VidNest, VidKing, WCO). Results grouped by source.
 - **4 media modes** — Anime, Movies, TV Shows, Cartoons. Switch with Tab.
 - **Episode browsing** — Season/episode lists with filler badges and sub/dub toggles.
 - **Parallel source resolution** — Queries every provider at once, shows all available qualities.
@@ -179,9 +179,9 @@ The binary ships with fallback keys for Trakt, AniList, and TMDB. They work fine
 | Provider | Mode | Method | Priority |
 | --- | --- | --- | --- |
 | Miruro | Anime | API | 1 |
-| VidNest | Movies, TV | API (via TMDB) | 1 |
-| VidKing | Movies, TV | API (via TMDB) | 2 |
-| MovieScraper | Movies, TV | Proxied API (via TMDB) | 3 |
+| Cineby | Movies, TV | API (via TMDB) | 1 |
+| VidNest | Movies, TV | API (via TMDB) | 2 |
+| VidKing | Movies, TV | API (via TMDB) | disabled |
 | WCO | Cartoons, Anime | HTML scraping | 2 |
 
 Lower priority = queried first. All providers are queried in parallel regardless — priority only affects result ordering when multiple providers return the same content.

@@ -38,7 +38,8 @@ type Provider interface {
 
 ## 5. Existing Providers
 
+- **Cineby**: API-based movie/TV provider (via TMDB).
 - **Miruro**: API-based, high performance Anime provider.
-- **MovieScraper**: Advanced movie/TV scraper using proxied HLS streams.
-- **VidKing**: Fast movie/TV scraper with multi-server support.
+- **VidNest**: Movie/TV provider with multi-stream support (via TMDB).
+- **VidKing**: Fast movie/TV scraper with multi-server support (currently disabled).
 - **WCO**: HTML scraping for Cartoons and Anime.
