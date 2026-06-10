@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"kari/internal/logging"
 )
@@ -97,8 +99,9 @@ func update(quiet bool) error {
 }
 
 func getLatestRelease() (*GitHubRelease, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
-	resp, err := http.Get(url)
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +120,8 @@ func getLatestRelease() (*GitHubRelease, error) {
 }
 
 func applyUpdate(url string) error {
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		return err
 	}
@@ -127,15 +131,12 @@ func applyUpdate(url string) error {
 		return fmt.Errorf("failed to download binary: %d", resp.StatusCode)
 	}
 
+	total, _ := strconv.Atoi(resp.Header.Get("Content-Length"))
+
 	exePath, err := os.Executable()
 	if err != nil {
 		return err
 	}
-
-	// For safer replacement, especially on Windows:
-	// 1. Download to a temp file
-	// 2. Rename existing binary to .old
-	// 3. Move temp file to existing binary path
 
 	tmpPath := exePath + ".tmp"
 	if runtime.GOOS == "windows" {
@@ -147,7 +148,30 @@ func applyUpdate(url string) error {
 		return err
 	}
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	var written int64
+	done := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(200 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-tick.C:
+				pct := 0
+				if total > 0 {
+					pct = int(written * 100 / int64(total))
+				}
+				fmt.Printf("\r  Downloading... %d%%", pct)
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	_, err = io.Copy(io.MultiWriter(f, &progressWriter{written: &written}), resp.Body)
+	close(done)
+	fmt.Print("\r  Downloading... done\n")
+
+	if err != nil {
 		_ = f.Close()
 		os.Remove(tmpPath)
 		return err
@@ -156,31 +180,33 @@ func applyUpdate(url string) error {
 		logging.Warnf("failed to close temp file: %v", err)
 	}
 
-	// Rename current to .old
 	oldPath := exePath + ".old"
 	if err := os.Rename(exePath, oldPath); err != nil {
-		// On some systems/situations, rename might fail if the file is busy.
-		// But usually on Unix it works (inode remains until closed).
-		// On Windows, you can't rename an open file usually, but there are tricks.
 		logging.Errorf("failed to rename current binary: %v", err)
 		return err
 	}
 
-	// Move new to current
 	if err := os.Rename(tmpPath, exePath); err != nil {
-		// Rollback
 		if e := os.Rename(oldPath, exePath); e != nil {
 			logging.Errorf("rollback rename failed: %v", e)
 		}
 		return err
 	}
 
-	// Clean up .old file if possible
-	// On Windows, this might fail until the process exits.
 	err = os.Remove(oldPath)
 	if err != nil {
 		logging.Warnf("could not remove old binary: %v (it will be removed on next run or manually)", err)
 	}
 
 	return nil
+}
+
+type progressWriter struct {
+	written *int64
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	*pw.written += int64(n)
+	return n, nil
 }
