@@ -4,6 +4,7 @@ import (
 	"kari/internal/provider"
 	"kari/internal/provider/cineby"
 	"kari/internal/provider/miruro"
+	"kari/internal/provider/vidking"
 	"kari/internal/provider/vidnest"
 	"kari/internal/provider/wco"
 	"kari/internal/tmdb"
@@ -32,17 +33,17 @@ var DefaultProviders = []provider.Descriptor{
 		},
 		Priority: 1,
 	},
-	// {
-	// 	ID: "vidking",
-	// 	Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
-	// 		return vidking.NewClient(kp)
-	// 	},
-	// 	Modes: []provider.Mode{
-	// 		{Name: provider.ModeMovies, Priority: 2},
-	// 		{Name: provider.ModeTV, Priority: 1},
-	// 	},
-	// 	Priority: 2,
-	// },
+	{
+		ID: "vidking",
+		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
+			return vidking.NewClient(kp)
+		},
+		Modes: []provider.Mode{
+			{Name: provider.ModeMovies, Priority: 2},
+			{Name: provider.ModeTV, Priority: 1},
+		},
+		Priority: 2,
+	},
 	{
 		ID: "miruro",
 		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
