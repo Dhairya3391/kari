@@ -151,6 +151,7 @@ type modelImpl struct {
 	availablePlayers     []string
 	selectedPlayer       int
 	autoPlayAfterResolve bool
+	pendingAutoPlay      bool
 	autoplay             bool
 
 	debugMode bool

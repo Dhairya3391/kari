@@ -213,6 +213,7 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	m.loadingText = ""
 	if msg.err != nil {
 		m.autoPlayAfterResolve = false
+		m.pendingAutoPlay = false
 		if m.resolved == nil {
 			logging.Errorf("resolve failed provider=%s series=%q episode=%q err=%v", selectedSeriesProvider(m.selectedSeries), selectedSeriesTitle(m.selectedSeries), selectedEpisodeTitle(m.selectedEpisode), msg.err)
 			m.setStatus(statusError, cleanErrorForUI(msg.err))
@@ -221,7 +222,6 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.mergeResolved(msg.resolved)
-	// Subtitles are already handled inside resolveCmd
 	return m.finalizeResolved()
 }
 
@@ -229,12 +229,15 @@ func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.subtitleOpID {
 		return m, nil
 	}
-	m.loading = false
-	m.loadingText = ""
+	m.subtitleOpID = 0
 	if msg.err == nil && len(msg.tracks) > 0 {
 		m.mergeResolved(model.ResolvedMedia{Subtitles: msg.tracks})
 	}
-	return m.finalizeResolved()
+	if m.pendingAutoPlay {
+		m.pendingAutoPlay = false
+		return m.finalizeResolved()
+	}
+	return m, nil
 }
 
 func (m *modelImpl) playStartedTimeoutCmd(opID int) tea.Cmd {
@@ -245,6 +248,12 @@ func (m *modelImpl) playStartedTimeoutCmd(opID int) tea.Cmd {
 
 func (m *modelImpl) finalizeResolved() (tea.Model, tea.Cmd) {
 	if m.autoPlayAfterResolve {
+		if m.subtitleOpID != 0 {
+			m.pendingAutoPlay = true
+			m.pushView(viewPreview)
+			m.setStatus(statusInfo, "")
+			return m, nil
+		}
 		m.autoPlayAfterResolve = false
 		m.loading = true
 		m.loadingText = "Opening player..."
@@ -285,8 +294,16 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 		return m, m.resolveSubscription()
 	}
 
+	wasNil := m.resolved == nil
 	m.mergeResolved(msg.resolved)
 	m.pushView(viewPreview)
+
+	if wasNil && m.subtitleService != nil {
+		opID := m.newOpID()
+		m.subtitleOpID = opID
+		return m, tea.Batch(m.resolveSubscription(), m.subtitleFetchCmd(opID, *m.resolved))
+	}
+
 	return m, m.resolveSubscription()
 }
 
@@ -1149,20 +1166,24 @@ func (m *modelImpl) resolveCmd(opID int, series model.SearchResult, episode mode
 			if err != nil {
 				return resolveDoneMsg{resolved: resolved, opID: opID, err: err}
 			}
-			if m.subtitleService != nil {
-				tracks, subErr := m.subtitleService.Fetch(ctx, resolved)
-				if subErr != nil {
-					logging.Debugf("subtitle fetch failed: %v", subErr)
-				} else if len(tracks) > 0 {
-					resolved.Subtitles = tracks
-				}
-			}
 
 			logging.Debugf("resolveCmd: resolved successfully with %d sources", len(resolved.Playback))
 			return resolveDoneMsg{resolved: resolved, opID: opID, err: nil}
 		},
 		m.resolveSubscription(),
 	)
+}
+
+func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.appCtx, 30*time.Second)
+		defer cancel()
+		tracks, err := m.subtitleService.Fetch(ctx, resolved)
+		if err != nil {
+			logging.Debugf("subtitle fetch failed: %v", err)
+		}
+		return subtitleDoneMsg{tracks: tracks, opID: opID, err: err}
+	}
 }
 
 func (m *modelImpl) playCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
