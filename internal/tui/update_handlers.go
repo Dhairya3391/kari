@@ -233,6 +233,14 @@ func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err == nil && len(msg.tracks) > 0 {
 		m.mergeResolved(model.ResolvedMedia{Subtitles: msg.tracks})
 	}
+	if m.pendingManualPlay {
+		m.pendingManualPlay = false
+		m.loading = true
+		m.loadingText = "Opening player..."
+		opID := m.newOpID()
+		m.playOpID = opID
+		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
+	}
 	if m.pendingAutoPlay {
 		m.pendingAutoPlay = false
 		return m.finalizeResolved()
@@ -259,7 +267,7 @@ func (m *modelImpl) finalizeResolved() (tea.Model, tea.Cmd) {
 		m.loadingText = "Opening player..."
 		opID := m.newOpID()
 		m.playOpID = opID
-		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID, *m.resolved), m.playStartedTimeoutCmd(opID))
+		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
 	}
 	m.pushView(viewPreview)
 	m.setStatus(statusInfo, "")
@@ -307,6 +315,15 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 	return m, m.resolveSubscription()
 }
 
+func hasDownloadedSubtitles(tracks []model.SubtitleTrack) bool {
+	for _, t := range tracks {
+		if t.Path != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 	if m.resolved == nil {
 		m.resolved = &model.ResolvedMedia{
@@ -341,8 +358,8 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 		}
 	}
 
-	// Replace subtitles with the latest result (provider subs → OpenSubtitles final)
-	if len(resolved.Subtitles) > 0 {
+	// Only replace subtitles from resolve phase if we don't already have downloaded ones
+	if len(resolved.Subtitles) > 0 && !hasDownloadedSubtitles(m.resolved.Subtitles) {
 		m.resolved.Subtitles = append([]model.SubtitleTrack{}, resolved.Subtitles...)
 	}
 }
@@ -809,12 +826,23 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch keyMsg.String() {
 	case "p", "enter":
+		if m.subtitleOpID != 0 {
+			m.pendingManualPlay = true
+			m.loadingText = "Downloading subtitles..."
+			return m, nil
+		}
 		m.loading = true
 		m.loadingText = "Opening player..."
 		opID := m.newOpID()
 		m.playOpID = opID
-		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID, *m.resolved), m.playStartedTimeoutCmd(opID))
+		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
 	case "r":
+		if m.subtitleOpID != 0 {
+			m.pendingManualPlay = true
+			m.resolved.StartTime = 0
+			m.loadingText = "Downloading subtitles..."
+			return m, nil
+		}
 		if m.resolved != nil {
 			m.resolved.StartTime = 0
 		}
@@ -822,7 +850,7 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadingText = "Starting from beginning..."
 		opID := m.newOpID()
 		m.playOpID = opID
-		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID, *m.resolved), m.playStartedTimeoutCmd(opID))
+		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
 	case "n":
 		return m.playNextEpisode()
 	case "A":
@@ -1186,15 +1214,17 @@ func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia) tea
 	}
 }
 
-func (m *modelImpl) playCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
+func (m *modelImpl) playCmd(opID int) tea.Cmd {
 	sources := m.orderedPlaybackSources()
 	provider := ""
 	if src, ok := m.selectedPlaybackSource(); ok {
 		provider = src.Label
 	}
-	logging.Debugf("playCmd: opID=%d media=%q provider=%q sources_count=%d", opID, resolved.DisplayTitle(), provider, len(sources))
 	return func() tea.Msg {
-		logging.Debugf("playCmd: launching playback for %q using player=%s", resolved.DisplayTitle(), m.selectedPlayerName())
+		resolved := *m.resolved
+		logging.Debugf("playCmd: opID=%d media=%q provider=%q sources_count=%d", opID, resolved.DisplayTitle(), provider, len(sources))
+		subPaths := resolved.SubtitlePaths()
+		logging.Debugf("playCmd: launching playback for %q using player=%s subs=%d paths=%v", resolved.DisplayTitle(), m.selectedPlayerName(), len(subPaths), subPaths)
 		result, err := m.players.PlayWithSources(sources, resolved, m.selectedPlayerName())
 		return playDoneMsg{opID: opID, provider: provider, result: result, err: err}
 	}

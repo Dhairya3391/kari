@@ -18,6 +18,8 @@ type Config struct {
 	DownloadDir         string
 	LogFile             string
 	PreferredPlayer     string
+	JellyfinURL         string
+	JellyfinAPIKey      string
 }
 
 func AndroidUA() string {
@@ -38,6 +40,8 @@ func Load() (*Config, error) {
 		DownloadDir:         strings.TrimSpace(os.Getenv("KARI_DOWNLOAD_DIR")),
 		LogFile:             firstEnv("KARI_LOG_FILE"),
 		PreferredPlayer:     firstEnv("KARI_PLAYER"),
+		JellyfinURL:         strings.TrimSpace(os.Getenv("JELLYFIN_URL")),
+		JellyfinAPIKey:      strings.TrimSpace(os.Getenv("JELLYFIN_API_KEY")),
 	}
 
 	// Apply hardcoded defaults if env vars are missing

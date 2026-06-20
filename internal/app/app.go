@@ -18,6 +18,7 @@ import (
 	"kari/internal/logging"
 	"kari/internal/player"
 	"kari/internal/provider/defaults"
+	"kari/internal/provider/jellyfin"
 	"kari/internal/scrobble"
 	"kari/internal/service"
 	"kari/internal/tmdb"
@@ -61,6 +62,16 @@ func Run() error {
 	registry, err := defaults.NewDefaultRegistry(keyPool)
 	if err != nil {
 		return err
+	}
+
+	if cfg.JellyfinURL != "" && cfg.JellyfinAPIKey != "" {
+		jf, err := jellyfin.NewClient(cfg.JellyfinURL, cfg.JellyfinAPIKey)
+		if err != nil {
+			logging.Errorf("failed to create jellyfin provider: %v", err)
+		} else {
+			registry.Register(jf)
+			logging.Infof("jellyfin provider registered (server=%s)", cfg.JellyfinURL)
+		}
 	}
 
 	players := player.NewRegistry(cfg.PreferredPlayer, aniskipClient)

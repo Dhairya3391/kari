@@ -247,7 +247,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 							}
 						}
 					}
-					current := buildResolved(allPlaybackSources, allSubtitleTracks)
+					current := buildResolved(allPlaybackSources, keepBestSubtitle(allSubtitleTracks))
 					mu.Unlock()
 					if onResult != nil {
 						onResult(current)
@@ -287,7 +287,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 					}
 				}
 			}
-			current := buildResolved(allPlaybackSources, allSubtitleTracks)
+			current := buildResolved(allPlaybackSources, keepBestSubtitle(allSubtitleTracks))
 			mu.Unlock()
 
 			if onResult != nil {
@@ -309,7 +309,28 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		return providerPriority[allPlaybackSources[i].Resolver] < providerPriority[allPlaybackSources[j].Resolver]
 	})
 
-	return buildResolved(allPlaybackSources, allSubtitleTracks), nil
+	return buildResolved(allPlaybackSources, keepBestSubtitle(allSubtitleTracks)), nil
+}
+
+func keepBestSubtitle(tracks []model.SubtitleTrack) []model.SubtitleTrack {
+	if len(tracks) == 0 {
+		return nil
+	}
+	for _, t := range tracks {
+		if strings.Contains(t.Label, "(vidking)") {
+			t.Label = "English"
+			return []model.SubtitleTrack{t}
+		}
+	}
+	for _, t := range tracks {
+		if strings.Contains(t.Label, "(cineby)") {
+			t.Label = "English"
+			return []model.SubtitleTrack{t}
+		}
+	}
+	track := tracks[0]
+	track.Label = "English"
+	return []model.SubtitleTrack{track}
 }
 
 func firstPlaybackURL(playback []model.PlaybackSource) string {

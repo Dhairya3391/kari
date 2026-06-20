@@ -67,9 +67,22 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia) 
 	}
 	s.mu.Unlock()
 
-	// For anime/cartoon, use provider subs directly
-	if (media.MediaType == "anime" || media.MediaType == "cartoon") && downloadedProvider {
-		return media.Subtitles, nil
+	// Priority 1: Use a single provider subtitle (VidKing > Cineby > first available)
+	if downloadedProvider && len(media.Subtitles) > 0 {
+		logging.Debugf("subtitle fetch: %d provider subs available after download, trying pickBestSubtitle", len(media.Subtitles))
+		for i, t := range media.Subtitles {
+			logging.Debugf("subtitle fetch:   sub[%d] label=%q path=%q url=%q", i, t.Label, t.Path, t.URL)
+		}
+		if track, ok := s.pickBestSubtitle(media.Subtitles); ok {
+			track.Label = "English"
+			tracks := []model.SubtitleTrack{track}
+			logging.Debugf("subtitle fetch: selected provider sub path=%q", track.Path)
+			s.mu.Lock()
+			s.cache[cacheKey] = tracks
+			s.mu.Unlock()
+			return tracks, nil
+		}
+		logging.Debugf("subtitle fetch: pickBestSubtitle found nothing")
 	}
 
 	query := strings.TrimSpace(media.SeriesTitle)
@@ -77,45 +90,59 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia) 
 		query = strings.TrimSpace(media.EpisodeTitle)
 	}
 
-	var openErr error
-	var finalTracks []model.SubtitleTrack
+	// Priority 2: Try OpenSubtitles
 	if s.openSubtitles != nil && s.openSubtitles.Configured() {
 		track, found, err := s.openSubtitles.FetchBestSubtitle(ctx, query, media.TMDBID, media.SeasonNumber, media.EpisodeNumber)
 		if err == nil && found {
-			finalTracks = []model.SubtitleTrack{track}
-			goto done
+			track.Label = "English"
+			tracks := []model.SubtitleTrack{track}
+			s.mu.Lock()
+			s.cache[cacheKey] = tracks
+			s.mu.Unlock()
+			return tracks, nil
 		}
-		openErr = err
+		if err != nil {
+			logging.Debugf("opensubtitles: %v", err)
+		}
 	}
 
+	// Priority 3: Try YIFY
 	{
 		tracks, err := s.fetchYify(ctx, media)
 		if err == nil && len(tracks) > 0 {
-			finalTracks = tracks
-			goto done
+			tracks[0].Label = "English"
+			s.mu.Lock()
+			s.cache[cacheKey] = tracks
+			s.mu.Unlock()
+			return tracks, nil
 		}
 		if err != nil {
-			if openErr != nil {
-				return nil, fmt.Errorf("opensubtitles: %w; yify: %w", openErr, err)
-			}
-			return nil, err
+			logging.Debugf("yify: %v", err)
 		}
 	}
 
 	// Fallback to provider subtitles if downloaded
-	if downloadedProvider {
-		return media.Subtitles, nil
+	if downloadedProvider && len(media.Subtitles) > 0 {
+		if track, ok := s.pickBestSubtitle(media.Subtitles); ok {
+			track.Label = "English"
+			tracks := []model.SubtitleTrack{track}
+			s.mu.Lock()
+			s.cache[cacheKey] = tracks
+			s.mu.Unlock()
+			return tracks, nil
+		}
 	}
 
-	if openErr != nil {
-		return nil, openErr
-	}
+	return nil, fmt.Errorf("no subtitles found")
+}
 
-done:
-	s.mu.Lock()
-	s.cache[cacheKey] = finalTracks
-	s.mu.Unlock()
-	return finalTracks, nil
+func (s *SubtitleService) pickBestSubtitle(tracks []model.SubtitleTrack) (model.SubtitleTrack, bool) {
+	for _, t := range tracks {
+		if t.Path != "" {
+			return t, true
+		}
+	}
+	return model.SubtitleTrack{}, false
 }
 
 func (s *SubtitleService) downloadProviderSubtitles(ctx context.Context, media *model.ResolvedMedia) bool {

@@ -271,10 +271,12 @@ func appendTitleArgs(args []string, title string) []string {
 
 func appendSubtitleArgs(args []string, subtitleFiles []string) []string {
 	if len(subtitleFiles) == 0 {
+		logging.Debugf("appendSubtitleArgs: no subtitle files to append")
 		return args
 	}
 	for _, sub := range subtitleFiles {
 		if strings.TrimSpace(sub) != "" {
+			logging.Debugf("appendSubtitleArgs: adding sub-file=%q", sub)
 			args = append(args, "--sub-file="+sub)
 		}
 	}

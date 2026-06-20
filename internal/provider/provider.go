@@ -8,10 +8,11 @@ import (
 type ContentType string
 
 const (
-	ModeAnime   ContentType = "anime"
-	ModeMovies  ContentType = "movies"
-	ModeTV      ContentType = "tv"
-	ModeCartoon ContentType = "cartoon"
+	ModeAnime    ContentType = "anime"
+	ModeMovies   ContentType = "movies"
+	ModeTV       ContentType = "tv"
+	ModeCartoon  ContentType = "cartoon"
+	ModeJellyfin ContentType = "jellyfin"
 )
 
 type Mode struct {

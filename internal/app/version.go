@@ -9,7 +9,7 @@ package app
 //	Dirty tree        → "1.0.0-dirty"  (uncommitted changes)
 //	go run/build      → "0.0.0-dev"    (no ldflags injected)
 var (
-	Version = "1.1.3"
+	Version = "1.2.2"
 	Commit  = ""
 	Date    = ""
 )

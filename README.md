@@ -26,8 +26,8 @@ Type a query, press Space, pick a result.
 
 ## Features
 
-- **Multi-source search** — Searches 5+ providers at once (Cineby, Miruro, VidNest, VidKing, WCO). Results grouped by source.
-- **4 media modes** — Anime, Movies, TV Shows, Cartoons. Switch with Tab.
+- **Multi-source search** — Searches 6+ providers at once (Cineby, Miruro, VidNest, VidKing, WCO, Jellyfin). Results grouped by source.
+- **5 media modes** — Anime, Movies, TV Shows, Cartoons, Jellyfin. Switch with Tab.
 - **Episode browsing** — Season/episode lists with filler badges and sub/dub toggles.
 - **Parallel source resolution** — Queries every provider at once, shows all available qualities.
 - **External player support** — MPV (any OS), IINA (macOS), VLC (Windows), MX Player (Android).
@@ -96,6 +96,8 @@ All config is through environment variables. No config files to wrangle.
 | `OPENSUBTITLES_API_KEY` | OpenSubtitles API key. If unset, falls back to Yify. |
 | `OPENSUBTITLES_USERNAME` | Required if you set the API key. |
 | `OPENSUBTITLES_PASSWORD` | Same. |
+| `JELLYFIN_URL` | Your Jellyfin server URL (e.g. `http://192.168.1.100:8096`). When set, a JELLYFIN mode appears. |
+| `JELLYFIN_API_KEY` | Jellyfin API key. Required if `JELLYFIN_URL` is set. Generate one in Dashboard → API Keys. |
 | `TRAKT_CLIENT_ID` / `TRAKT_ID` | Trakt.tv OAuth client ID |
 | `TRAKT_CLIENT_SECRET` / `TRAKT_SECRET` | Trakt.tv OAuth client secret |
 | `ANILIST_CLIENT_ID` / `ANILIST_ID` | AniList OAuth client ID |
@@ -137,7 +139,7 @@ The binary ships with fallback keys for Trakt, AniList, and TMDB. They work fine
 | Key | Action |
 | --- | --- |
 | `Space` | Start search |
-| `Tab` / `Shift+Tab` | Cycle media mode (Anime → Movies → TV → Cartoon) |
+| `Tab` / `Shift+Tab` | Cycle media mode (Anime → Movies → TV → Cartoon → Jellyfin) |
 | `Ctrl+H` | Go to home/search |
 
 #### Playback
@@ -183,6 +185,7 @@ The binary ships with fallback keys for Trakt, AniList, and TMDB. They work fine
 | VidNest | Movies, TV | API (via TMDB) | 2 |
 | VidKing | Movies, TV | API (via TMDB) | disabled |
 | WCO | Cartoons, Anime | HTML scraping | 2 |
+| Jellyfin | Movies, TV | Jellyfin API | 1 |
 
 Lower priority = queried first. All providers are queried in parallel regardless — priority only affects result ordering when multiple providers return the same content.
 

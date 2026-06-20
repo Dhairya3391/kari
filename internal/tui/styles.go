@@ -39,10 +39,11 @@ var (
 			Bold(true).
 			Padding(0, 1)
 
-	modeBadgeAnime   = badgeBase.Background(lipgloss.Color("#be95ff"))
-	modeBadgeCartoon = badgeBase.Background(lipgloss.Color("#42be65"))
-	modeBadgeMovies  = badgeBase.Background(lipgloss.Color("#33b1ff"))
-	modeBadgeTV      = badgeBase.Background(lipgloss.Color("#08bdba"))
+	modeBadgeAnime    = badgeBase.Background(lipgloss.Color("#be95ff"))
+	modeBadgeCartoon  = badgeBase.Background(lipgloss.Color("#42be65"))
+	modeBadgeMovies   = badgeBase.Background(lipgloss.Color("#33b1ff"))
+	modeBadgeTV       = badgeBase.Background(lipgloss.Color("#08bdba"))
+	modeBadgeJellyfin = badgeBase.Background(lipgloss.Color("#ee5396"))
 	modeBadgeDefault = badgeBase.Background(colorMuted)
 	preparingBadge   = badgeBase.Background(colorInfo).Render("PREPARING")
 	fillerBadgeStr   = badgeBase.MarginLeft(1).Background(colorWarn).Render("FILLER")
@@ -58,6 +59,8 @@ func renderBadge(mode string) string {
 		return modeBadgeMovies.Render(mode)
 	case "tv":
 		return modeBadgeTV.Render(mode)
+	case "jellyfin":
+		return modeBadgeJellyfin.Render(mode)
 	default:
 		return modeBadgeDefault.Render(mode)
 	}
