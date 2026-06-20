@@ -35,6 +35,7 @@ type SubtitleTrack struct {
 	Language string
 	Path     string
 	URL      string
+	Referer  string
 	Default  bool
 }
 

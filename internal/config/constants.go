@@ -5,7 +5,7 @@ const (
 	MiruroOrigin     = "https://miruro.tv"
 	VidKingAPIBase   = "https://noob.broggl.farm"
 	VidKingReferer   = "https://www.vidking.net/"
-	CinebyAPIBase    = "https://cineby.dhairya.codes"
+	CinebyAPIBase    = "https://noob2.broggl.farm"
 	CinebyReferer    = "https://www.cineby.at/"
 	VidNestAPIBase   = "https://vidnest-ebon.vercel.app"
 	WCOBaseURL       = "https://www.wco.tv"

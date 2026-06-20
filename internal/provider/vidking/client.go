@@ -33,7 +33,7 @@ type VidKingSource struct {
 type VidKingSubtitle struct {
 	URL      string `json:"url"`
 	Language string `json:"lang"`
-	Name     string `json:"name"`
+	Name     string `json:"label"`
 }
 
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
@@ -74,18 +74,24 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	if episode.Season > 0 || episode.Episode > 0 {
 		mediaType = "tv"
 	}
-	result, _, err := c.FetchVidKingSources(ctx, tmdbID, mediaType, episode.Season, episode.Episode)
+	result, subs, err := c.FetchVidKingSources(ctx, tmdbID, mediaType, episode.Season, episode.Episode)
 	if err != nil {
 		return nil, err
 	}
 	sources := make([]provider.MediaSource, 0, len(result))
 	for i, src := range result {
-		sources = append(sources, provider.MediaSource{
+		ms := provider.MediaSource{
 			URL:       src.URL,
 			Quality:   fmt.Sprintf("[VIDKING] Source %d", i+1),
 			Referer:   vidKingReferer,
 			UserAgent: vidKingUA,
-		})
+		}
+		for _, sub := range subs {
+			if sub.Language == "en" {
+				ms.Subtitles = append(ms.Subtitles, sub.URL)
+			}
+		}
+		sources = append(sources, ms)
 	}
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources

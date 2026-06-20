@@ -242,6 +242,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 									Label:    fmt.Sprintf("English (%s)", p.Name()),
 									Language: "en",
 									URL:      subURL,
+									Referer:  src.Referer,
 								})
 							}
 						}
@@ -281,6 +282,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 							Label:    fmt.Sprintf("English (%s)", p.Name()),
 							Language: "en",
 							URL:      subURL,
+							Referer:  src.Referer,
 						})
 					}
 				}

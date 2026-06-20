@@ -56,21 +56,8 @@ func NewSubtitleService(cfg *config.Config) *SubtitleService {
 }
 
 func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia) ([]model.SubtitleTrack, error) {
-	// Priority 1: Use provider-supplied subtitles for anime/cartoon
-	if (media.MediaType == "anime" || media.MediaType == "cartoon") && len(media.Subtitles) > 0 {
-		// Download them locally to prevent MPV remote URL issues
-		for i, sub := range media.Subtitles {
-			if sub.URL != "" && sub.Path == "" {
-				if localPath, err := s.downloadProviderSubtitle(ctx, sub.URL); err == nil {
-					media.Subtitles[i].Path = localPath
-					media.Subtitles[i].URL = "" // Clear URL to avoid confusion
-				} else {
-					logging.Warnf("failed to download provider subtitle %s: %v", sub.URL, err)
-				}
-			}
-		}
-		return nil, nil // TUI will use existing media.Subtitles
-	}
+	// Download all provider-supplied subtitles locally to avoid MPV remote URL issues
+	downloadedProvider := s.downloadProviderSubtitles(ctx, &media)
 
 	cacheKey := fmt.Sprintf("%d:%d:%d:%s", media.TMDBID, media.SeasonNumber, media.EpisodeNumber, media.SeriesTitle)
 	s.mu.Lock()
@@ -79,6 +66,11 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia) 
 		return tracks, nil
 	}
 	s.mu.Unlock()
+
+	// For anime/cartoon, use provider subs directly
+	if (media.MediaType == "anime" || media.MediaType == "cartoon") && downloadedProvider {
+		return media.Subtitles, nil
+	}
 
 	query := strings.TrimSpace(media.SeriesTitle)
 	if query == "" {
@@ -110,6 +102,11 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia) 
 		}
 	}
 
+	// Fallback to provider subtitles if downloaded
+	if downloadedProvider {
+		return media.Subtitles, nil
+	}
+
 	if openErr != nil {
 		return nil, openErr
 	}
@@ -119,6 +116,22 @@ done:
 	s.cache[cacheKey] = finalTracks
 	s.mu.Unlock()
 	return finalTracks, nil
+}
+
+func (s *SubtitleService) downloadProviderSubtitles(ctx context.Context, media *model.ResolvedMedia) bool {
+	downloaded := false
+	for i, sub := range media.Subtitles {
+		if sub.URL != "" && sub.Path == "" {
+			if localPath, err := s.downloadProviderSubtitle(ctx, sub.URL, sub.Referer); err == nil {
+				media.Subtitles[i].Path = localPath
+				media.Subtitles[i].URL = ""
+				downloaded = true
+			} else {
+				logging.Warnf("failed to download provider subtitle %s: %v", sub.URL, err)
+			}
+		}
+	}
+	return downloaded
 }
 
 func (s *SubtitleService) fetchYify(ctx context.Context, media model.ResolvedMedia) ([]model.SubtitleTrack, error) {
@@ -228,12 +241,15 @@ func isYifyNoResult(err error) bool {
 	return strings.Contains(msg, "no english subtitle found") || strings.Contains(msg, "subtitle file not found") || strings.Contains(msg, "no srt file found")
 }
 
-func (s *SubtitleService) downloadProviderSubtitle(ctx context.Context, subURL string) (string, error) {
+func (s *SubtitleService) downloadProviderSubtitle(ctx context.Context, subURL string, referer string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, subURL, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -249,20 +265,17 @@ func (s *SubtitleService) downloadProviderSubtitle(ctx context.Context, subURL s
 	if err != nil {
 		return "", err
 	}
+	if len(data) == 0 {
+		return "", fmt.Errorf("empty subtitle file")
+	}
 
 	subDir := filepath.Join(os.TempDir(), "kari-subs")
 	if err := os.MkdirAll(subDir, 0o755); err != nil {
 		return "", err
 	}
 
-	ext := ".vtt"
-	if strings.HasSuffix(strings.ToLower(subURL), ".srt") {
-		ext = ".srt"
-	} else if strings.HasSuffix(strings.ToLower(subURL), ".ass") {
-		ext = ".ass"
-	}
+	ext := detectSubtitleExt(subURL)
 
-	// Create a unique filename
 	filename := fmt.Sprintf("provider_sub_%d%s", time.Now().UnixNano(), ext)
 	localPath := filepath.Join(subDir, filename)
 
@@ -271,4 +284,19 @@ func (s *SubtitleService) downloadProviderSubtitle(ctx context.Context, subURL s
 	}
 
 	return localPath, nil
+}
+
+func detectSubtitleExt(subURL string) string {
+	parsed, err := url.Parse(subURL)
+	if err != nil {
+		return ".vtt"
+	}
+	path := strings.ToLower(parsed.Path)
+	if strings.HasSuffix(path, ".srt") {
+		return ".srt"
+	}
+	if strings.HasSuffix(path, ".ass") {
+		return ".ass"
+	}
+	return ".vtt"
 }
