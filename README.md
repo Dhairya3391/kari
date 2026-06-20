@@ -11,7 +11,7 @@ So I built Kari.
 
 Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
-![kari demo](demo.gif)
+![kari demo](https://github.com/user-attachments/assets/be296568-f5c1-4675-86e4-626434f2829c)
 
 ## Quick Start
 
