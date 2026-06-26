@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"kari/internal/downloader"
@@ -11,24 +12,82 @@ import (
 	"kari/internal/provider"
 )
 
-// DownloadService orchestrates download operations.
 type DownloadService struct {
-	downloadDir string
-	downloaders []downloader.Downloader
+	downloadDir  string
+	downloaders  []downloader.Downloader
+	mediaService *MediaService
 }
 
-// NewDownloadService constructs a DownloadService.
-func NewDownloadService(downloadDir string, downloaders []downloader.Downloader) *DownloadService {
-	return &DownloadService{downloadDir: downloadDir, downloaders: append([]downloader.Downloader(nil), downloaders...)}
+func NewDownloadService(downloadDir string, downloaders []downloader.Downloader, mediaService *MediaService) *DownloadService {
+	return &DownloadService{
+		downloadDir:  downloadDir,
+		downloaders:  append([]downloader.Downloader(nil), downloaders...),
+		mediaService: mediaService,
+	}
 }
 
-// Download starts a download for the resolved media.
-func (s *DownloadService) Download(ctx context.Context, resolved model.ResolvedMedia, progress func(float64)) error {
-	title := resolved.SeriesTitle
-	if ep := strings.TrimSpace(resolved.EpisodeTitle); ep != "" && ep != title {
-		title += " - " + ep
+func sanitizePathName(name string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			return '-'
+		case '\n', '\r', '\t':
+			return ' '
+		}
+		if r < 32 {
+			return -1
+		}
+		return r
+	}, name)
+	cleaned = strings.TrimSpace(strings.Join(strings.Fields(cleaned), " "))
+	if cleaned == "" {
+		return "Unknown"
+	}
+	return cleaned
+}
+
+func (s *DownloadService) OrganizedPath(resolved model.ResolvedMedia) (outputDir, title string) {
+	seriesDir := sanitizePathName(resolved.SeriesTitle)
+	outputDir = filepath.Join(s.downloadDir, seriesDir)
+	if resolved.SeasonNumber > 0 && resolved.MediaType != "movie" {
+		outputDir = filepath.Join(outputDir, fmt.Sprintf("Season %02d", resolved.SeasonNumber))
 	}
 
+	epTitle := strings.TrimSpace(resolved.EpisodeTitle)
+	if epTitle == resolved.SeriesTitle || epTitle == "" {
+		epTitle = ""
+	}
+
+	switch {
+	case resolved.SeasonNumber > 0 && resolved.EpisodeNumber > 0 && resolved.MediaType != "movie":
+		tag := fmt.Sprintf("S%02dE%02d", resolved.SeasonNumber, resolved.EpisodeNumber)
+		title = tag
+		if epTitle != "" {
+			title += " - " + epTitle
+		}
+	case resolved.EpisodeNumber > 0:
+		title = fmt.Sprintf("E%02d", resolved.EpisodeNumber)
+		if epTitle != "" {
+			title += " - " + epTitle
+		}
+	default:
+		title = epTitle
+		if title == "" {
+			title = resolved.SeriesTitle
+		}
+		if title == "" {
+			title = "download"
+		}
+	}
+	return
+}
+
+func (s *DownloadService) Download(ctx context.Context, resolved model.ResolvedMedia, progress func(float64)) error {
+	outputDir, title := s.OrganizedPath(resolved)
+	return s.downloadMedia(ctx, resolved, outputDir, title, progress)
+}
+
+func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.ResolvedMedia, outputDir, title string, progress func(float64)) error {
 	var firstSource provider.MediaSource
 	var firstResolver string
 	if len(resolved.Playback) > 0 {
@@ -49,7 +108,7 @@ func (s *DownloadService) Download(ctx context.Context, resolved model.ResolvedM
 
 	req := downloader.DownloadRequest{
 		Title:     title,
-		OutputDir: s.downloadDir,
+		OutputDir: outputDir,
 		Sources:   make([]provider.MediaSource, 0, len(resolved.Playback)),
 		Progress:  progress,
 	}
@@ -64,15 +123,14 @@ func (s *DownloadService) Download(ctx context.Context, resolved model.ResolvedM
 		})
 	}
 
-	logging.Debugf("download service: start download title=%q", title)
+	logging.Debugf("download service: start download title=%q outputDir=%q", title, outputDir)
 	dl := s.selectDownloader(firstSource, firstResolver)
 	return dl.Download(ctx, req)
 }
 
-// CleanupPartial cleans up partial download files.
-func (s *DownloadService) CleanupPartial(resolver, title string) {
+func (s *DownloadService) CleanupPartial(outputDir, resolver, title string) {
 	dl := s.selectDownloader(provider.MediaSource{}, resolver)
-	dl.CleanupPartial(s.downloadDir, title)
+	dl.CleanupPartial(outputDir, title)
 }
 
 func (s *DownloadService) selectDownloader(source provider.MediaSource, resolver string) downloader.Downloader {
@@ -82,4 +140,67 @@ func (s *DownloadService) selectDownloader(source provider.MediaSource, resolver
 		}
 	}
 	return downloader.NewYTDLPDownloader()
+}
+
+type BatchDownloadResult struct {
+	Episode model.EpisodeResult
+	Err     error
+}
+
+func (s *DownloadService) BatchDownload(
+	ctx context.Context,
+	series model.SearchResult,
+	episodes []model.EpisodeResult,
+	mode provider.ContentType,
+	onProgress func(current, total int, epTitle string, epProgress float64),
+) []BatchDownloadResult {
+	results := make([]BatchDownloadResult, len(episodes))
+
+	for i, ep := range episodes {
+		if ctx.Err() != nil {
+			results[i].Episode = ep
+			results[i].Err = ctx.Err()
+			continue
+		}
+
+		current := i + 1
+		epTitle := episodeResultTitle(ep)
+		logging.Debugf("batch download: starting episode %d/%d: %s", current, len(episodes), epTitle)
+		onProgress(current, len(episodes), epTitle, 0)
+
+		resolved, err := s.mediaService.Resolve(ctx, mode, series, ep, nil)
+		if err != nil {
+			onProgress(current, len(episodes), epTitle, 1.0)
+			results[i].Episode = ep
+			results[i].Err = fmt.Errorf("resolve %s: %w", epTitle, err)
+			continue
+		}
+
+		if err := s.Download(ctx, resolved, func(epProgress float64) {
+			onProgress(current, len(episodes), epTitle, epProgress)
+		}); err != nil {
+			onProgress(current, len(episodes), epTitle, 1.0)
+			results[i].Episode = ep
+			results[i].Err = fmt.Errorf("download %s: %w", epTitle, err)
+			continue
+		}
+
+		onProgress(current, len(episodes), epTitle, 1.0)
+		results[i].Episode = ep
+	}
+
+	return results
+}
+
+func episodeResultTitle(ep model.EpisodeResult) string {
+	if ep.Season > 0 && ep.Number > 0 {
+		return fmt.Sprintf("S%02dE%02d", ep.Season, ep.Number)
+	}
+	if ep.Number > 0 {
+		return fmt.Sprintf("E%02d", ep.Number)
+	}
+	if ep.Title != "" {
+		return ep.Title
+	}
+	return "Unknown"
 }

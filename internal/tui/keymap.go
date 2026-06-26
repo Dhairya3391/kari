@@ -6,27 +6,31 @@ import (
 )
 
 type keyMap struct {
-	Move         key.Binding
-	Filter       key.Binding
-	Search       key.Binding
-	Type         key.Binding
-	Audio        key.Binding
-	Select       key.Binding
-	Play         key.Binding
-	PlayNext     key.Binding
-	Player       key.Binding
-	Download     key.Binding
-	Autoplay     key.Binding
-	Debug        key.Binding
-	Back         key.Binding
-	Home         key.Binding
-	Quit         key.Binding
-	Stop         key.Binding
-	Restart      key.Binding
-	History      key.Binding
-	Settings     key.Binding
-	Delete       key.Binding
-	ClearHistory key.Binding
+	Move          key.Binding
+	Filter        key.Binding
+	Search        key.Binding
+	Type          key.Binding
+	Audio         key.Binding
+	Select        key.Binding
+	Play          key.Binding
+	PlayNext      key.Binding
+	Player        key.Binding
+	Download      key.Binding
+	Autoplay      key.Binding
+	Help          key.Binding
+	Back          key.Binding
+	Home          key.Binding
+	Quit          key.Binding
+	Stop          key.Binding
+	Restart       key.Binding
+	History       key.Binding
+	Settings      key.Binding
+	Delete        key.Binding
+	ClearHistory  key.Binding
+	ToggleSelect  key.Binding
+	SelectAll     key.Binding
+	DeselectAll   key.Binding
+	BatchDownload key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -75,9 +79,9 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("A"),
 			key.WithHelp("A", "autoplay"),
 		),
-		Debug: key.NewBinding(
-			key.WithKeys("ctrl+d"),
-			key.WithHelp("ctrl+d", "debug"),
+		Help: key.NewBinding(
+			key.WithKeys("?"),
+			key.WithHelp("?", "help"),
 		),
 		Back: key.NewBinding(
 			key.WithKeys("esc"),
@@ -115,6 +119,22 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("D"),
 			key.WithHelp("D", "clear all"),
 		),
+		ToggleSelect: key.NewBinding(
+			key.WithKeys(" "),
+			key.WithHelp("space", "toggle"),
+		),
+		SelectAll: key.NewBinding(
+			key.WithKeys("ctrl+a"),
+			key.WithHelp("ctrl+a", "select all"),
+		),
+		DeselectAll: key.NewBinding(
+			key.WithKeys("ctrl+d"),
+			key.WithHelp("ctrl+d", "deselect"),
+		),
+		BatchDownload: key.NewBinding(
+			key.WithKeys("D"),
+			key.WithHelp("D", "batch dl"),
+		),
 	}
 }
 
@@ -122,20 +142,16 @@ func (m *modelImpl) shortHelpBindings() []key.Binding {
 	var bindings []key.Binding
 	switch m.activeView {
 	case viewSearch:
-		bindings = []key.Binding{m.keys.Search, m.keys.Type, m.keys.History, m.keys.Settings, m.keys.Player, m.keys.Select, m.keys.Back, m.keys.Quit}
+		bindings = []key.Binding{m.keys.Search, m.keys.Type, m.keys.Select, m.keys.History, m.keys.Help, m.keys.Quit}
 	case viewEpisodes:
-		bindings = []key.Binding{m.keys.Move, m.keys.Filter, m.keys.Select, m.keys.Back, m.keys.Quit}
+		bindings = []key.Binding{m.keys.Move, m.keys.ToggleSelect, m.keys.BatchDownload, m.keys.Select, m.keys.Help, m.keys.Quit}
 		if m.selectedSeries != nil && m.appMode == provider.ModeAnime {
-			// Insert Audio binding before Select
 			bindings = append(bindings[:3], append([]key.Binding{m.keys.Audio}, bindings[3:]...)...)
 		}
-		if m.canPlayNextEpisode() {
-			bindings = append(bindings[:1], append([]key.Binding{m.keys.PlayNext}, bindings[1:]...)...)
-		}
 	case viewHistory:
-		bindings = []key.Binding{m.keys.Move, m.keys.Filter, m.keys.Select, m.keys.Delete, m.keys.ClearHistory, m.keys.Back, m.keys.Quit}
+		bindings = []key.Binding{m.keys.Move, m.keys.Select, m.keys.Delete, m.keys.Help, m.keys.Quit}
 	case viewSettings:
-		bindings = []key.Binding{m.keys.Move, m.keys.Select, m.keys.Back, m.keys.Quit}
+		bindings = []key.Binding{m.keys.Move, m.keys.Select, m.keys.Help, m.keys.Quit}
 	case viewPreview:
 		bindings = []key.Binding{m.keys.Play}
 		if m.resolved != nil && m.resolved.StartTime > 5 {
@@ -147,7 +163,7 @@ func (m *modelImpl) shortHelpBindings() []key.Binding {
 		if m.resolved != nil && (m.resolved.MediaType == "anime" || m.resolved.MediaType == "tv" || m.resolved.MediaType == "cartoon") {
 			bindings = append(bindings, m.keys.Autoplay)
 		}
-		bindings = append(bindings, m.keys.Player, m.keys.Download, m.keys.Back, m.keys.Quit)
+		bindings = append(bindings, m.keys.Download, m.keys.Help, m.keys.Quit)
 	}
 	return bindings
 }

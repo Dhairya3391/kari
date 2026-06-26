@@ -44,7 +44,11 @@ func (m *modelImpl) View() string {
 	finalContent := content + spacer + "\n" + footer
 
 	if m.width > dims.contentW+4 {
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Top, finalContent)
+		finalContent = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Top, finalContent)
+	}
+
+	if m.showHelp {
+		return m.renderHelpOverlay()
 	}
 	return finalContent
 }
@@ -249,8 +253,14 @@ func (m *modelImpl) renderEpisodesScreen(dims layoutDims) string {
 		seriesTitle = m.selectedSeries.Title
 	}
 
+	selCount := len(m.selectedEpisodes)
+	selInfo := ""
+	if selCount > 0 {
+		selInfo = lipgloss.NewStyle().Foreground(colorPrimary).Render(fmt.Sprintf(" · %d selected — [D]ownload", selCount))
+	}
+
 	rows := []string{
-		mutedStyle.Render("← ") + sectionTitleStyle.Render(shorten(seriesTitle, dims.contentW-12)),
+		mutedStyle.Render("← ") + sectionTitleStyle.Render(shorten(seriesTitle, dims.contentW-12)) + selInfo,
 		mutedStyle.Render(fmt.Sprintf("%d episodes", len(m.episodeResults))),
 		"",
 	}
@@ -258,7 +268,7 @@ func (m *modelImpl) renderEpisodesScreen(dims layoutDims) string {
 	if len(m.episodeResults) == 0 {
 		rows = append(rows, mutedStyle.Render("No episodes available."))
 	} else {
-		rows = append(rows, mutedStyle.Render("/ to filter  ·  g/G first/last"), "")
+		rows = append(rows, mutedStyle.Render("space toggle · ctrl+a all · ctrl+d none  ·  / to filter  ·  g/G first/last"), "")
 		rows = append(rows, m.episodeList.View())
 	}
 
@@ -456,14 +466,6 @@ func (m *modelImpl) renderPreviewCard(width int) string {
 		rows = append(rows, mutedStyle.Render("No subtitles"))
 	}
 
-	if m.debugMode && m.showDebugDetails {
-		rows = append(rows, "",
-			mutedStyle.Render("resolver="+r.Resolver),
-			mutedStyle.Render("type="+r.MediaType),
-			mutedStyle.Render(fmt.Sprintf("sources=%d", len(r.Playback))),
-		)
-	}
-
 	return cardStyle.Width(width).Render(strings.Join(rows, "\n"))
 }
 
@@ -531,4 +533,66 @@ func (m *modelImpl) renderPreviewControls(width int) string {
 
 func fillerBadge() string {
 	return fillerBadgeStr
+}
+
+func (m *modelImpl) renderHelpOverlay() string {
+	var sections []string
+
+	sections = append(sections, sectionTitleStyle.Render("Navigation"), "")
+	sections = append(sections,
+		"  "+keyStyle.Render("↑/↓ j/k")+"   "+mutedStyle.Render("move"),
+		"  "+keyStyle.Render("g/G")+"      "+mutedStyle.Render("top/bottom"),
+		"  "+keyStyle.Render("esc")+"      "+mutedStyle.Render("back / cancel"),
+		"  "+keyStyle.Render("ctrl+h")+"   "+mutedStyle.Render("home"),
+		"  "+keyStyle.Render("q")+"        "+mutedStyle.Render("quit"),
+	)
+
+	sections = append(sections, "", sectionTitleStyle.Render("Search"), "")
+	sections = append(sections,
+		"  "+keyStyle.Render("space")+"    "+mutedStyle.Render("focus search"),
+		"  "+keyStyle.Render("enter")+"    "+mutedStyle.Render("search / select"),
+		"  "+keyStyle.Render("tab")+"      "+mutedStyle.Render("switch mode"),
+		"  "+keyStyle.Render("/")+"        "+mutedStyle.Render("filter results"),
+	)
+
+	sections = append(sections, "", sectionTitleStyle.Render("Episodes"), "")
+	sections = append(sections,
+		"  "+keyStyle.Render("space")+"    "+mutedStyle.Render("toggle select"),
+		"  "+keyStyle.Render("ctrl+a")+"   "+mutedStyle.Render("select all"),
+		"  "+keyStyle.Render("ctrl+d")+"   "+mutedStyle.Render("deselect all"),
+		"  "+keyStyle.Render("D")+"        "+mutedStyle.Render("batch download"),
+		"  "+keyStyle.Render("a")+"        "+mutedStyle.Render("sub/dub (anime)"),
+	)
+
+	sections = append(sections, "", sectionTitleStyle.Render("Playback"), "")
+	sections = append(sections,
+		"  "+keyStyle.Render("enter/p")+"  "+mutedStyle.Render("play"),
+		"  "+keyStyle.Render("n")+"        "+mutedStyle.Render("play next"),
+		"  "+keyStyle.Render("r")+"        "+mutedStyle.Render("restart"),
+		"  "+keyStyle.Render("A")+"        "+mutedStyle.Render("autoplay toggle"),
+		"  "+keyStyle.Render("d")+"        "+mutedStyle.Render("download"),
+		"  "+keyStyle.Render("tab")+"      "+mutedStyle.Render("switch source"),
+		"  "+keyStyle.Render("ctrl+p")+"   "+mutedStyle.Render("switch player"),
+	)
+
+	sections = append(sections, "", sectionTitleStyle.Render("General"), "")
+	sections = append(sections,
+		"  "+keyStyle.Render("h")+"        "+mutedStyle.Render("history"),
+		"  "+keyStyle.Render("s")+"        "+mutedStyle.Render("settings"),
+		"  "+keyStyle.Render("x")+"        "+mutedStyle.Render("stop download"),
+		"  "+keyStyle.Render("?")+"        "+mutedStyle.Render("toggle this help"),
+	)
+
+	content := strings.Join(sections, "\n")
+	boxW := 48
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorPrimary).
+		Padding(1, 2).
+		Width(boxW).
+		Render(content)
+
+	overlay := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceChars(" "), lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
+
+	return overlay
 }

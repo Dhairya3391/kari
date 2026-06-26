@@ -69,7 +69,25 @@ func parseEpisodeNumber(title, episodeURL string) int {
 	if n := parseNumber(episodeNumRe.FindStringSubmatch(title)); n > 0 {
 		return n
 	}
-	return parseNumber(urlEpisodeRe.FindStringSubmatch(episodeURL))
+	if n := parseNumber(urlEpisodeRe.FindStringSubmatch(episodeURL)); n > 0 {
+		return n
+	}
+	// Fallback: extract last numeric segment from URL path
+	// e.g. "https://www.wco.tv/anime/series-name/42" → 42
+	u, err := url.Parse(episodeURL)
+	if err != nil {
+		return 0
+	}
+	parts := strings.Split(strings.TrimRight(u.Path, "/"), "/")
+	if len(parts) == 0 {
+		return 0
+	}
+	last := parts[len(parts)-1]
+	n, err := strconv.Atoi(last)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 func parseSeasonNumber(title, episodeURL string) int {

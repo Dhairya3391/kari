@@ -76,13 +76,13 @@ func Run() error {
 
 	players := player.NewRegistry(cfg.PreferredPlayer, aniskipClient)
 	mediaService := service.NewMediaService(registry)
-	downloadService := service.NewDownloadService(cfg.DownloadDir, []downloader.Downloader{downloader.NewWCODownloader(), downloader.NewMiruroDownloader(), downloader.NewYTDLPDownloader()})
+	downloadService := service.NewDownloadService(cfg.DownloadDir, []downloader.Downloader{downloader.NewWCODownloader(), downloader.NewMiruroDownloader(), downloader.NewYTDLPDownloader()}, mediaService)
 	subtitleService := service.NewSubtitleService(cfg)
 
 	traktClient := scrobble.NewTraktClient(cfg.TraktClientID, cfg.TraktClientSecret)
 	anilistClient := scrobble.NewAniListClient(cfg.AniListClientID, cfg.AniListClientSecret)
 
-	m := tui.NewModel(context.Background(), query, true, registry, players, cfg.DownloadDir, mediaService, downloadService, subtitleService, historyStore, traktClient, anilistClient)
+	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, downloadService, subtitleService, historyStore, traktClient, anilistClient)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	if err != nil {

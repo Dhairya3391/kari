@@ -539,7 +539,7 @@ func (c *Client) FetchBestSubtitle(ctx context.Context, query string, tmdbID, se
 		return model.SubtitleTrack{}, false, nil
 	}
 
-	titleLower := strings.ToLower(query)
+	normalizedTitle := normalizeForSearch(query)
 	var best *searchEntry
 	var bestScore int
 
@@ -555,16 +555,27 @@ func (c *Client) FetchBestSubtitle(ctx context.Context, query string, tmdbID, se
 			score += 10
 		}
 
-		if strings.Contains(strings.ToLower(entry.Attributes.Release), titleLower) {
-			score += 50 // Increased bonus for release title match
+		releaseLower := strings.ToLower(entry.Attributes.Release)
+		normalizedRelease := normalizeForSearch(entry.Attributes.Release)
+
+		if strings.Contains(normalizedRelease, normalizedTitle) {
+			score += 50
 		}
 
-		// Exact title match bonus
-		if strings.EqualFold(entry.Attributes.Release, query) {
+		if strings.EqualFold(releaseLower, strings.ToLower(query)) {
 			score += 100
 		}
 
-		countScore := entry.Attributes.DownloadCount / 200 // More conservative download count score
+		if episode > 0 && season > 0 {
+			releaseEp := parseEpisodeFromRelease(entry.Attributes.Release)
+			if releaseEp == episode {
+				score += 30
+			} else if releaseEp > 0 && releaseEp != episode {
+				score -= 40
+			}
+		}
+
+		countScore := entry.Attributes.DownloadCount / 200
 		if countScore > 30 {
 			countScore = 30
 		}
@@ -576,10 +587,9 @@ func (c *Client) FetchBestSubtitle(ctx context.Context, query string, tmdbID, se
 		}
 	}
 
-	// Score threshold: reject if score is too low and we have no TMDB ID (which increases confidence)
 	threshold := 40
 	if tmdbID > 0 {
-		threshold = 10 // Trust TMDB ID more
+		threshold = 10
 	}
 
 	if best == nil || len(best.Attributes.Files) == 0 || bestScore < threshold {
@@ -601,6 +611,39 @@ func (c *Client) FetchBestSubtitle(ctx context.Context, query string, tmdbID, se
 		Default:  true,
 	}
 	return track, true, nil
+}
+
+func normalizeForSearch(s string) string {
+	s = strings.ToLower(s)
+	replacer := strings.NewReplacer(
+		".", " ", "-", " ", "_", " ", "[", " ", "]", " ",
+		"!", " ", "?", " ", "(", " ", ")", " ", "'", " ", "\"", " ",
+	)
+	s = replacer.Replace(s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+var episodePattern = regexp.MustCompile(`(?i)(?:s\d+[._-]?e|e(?:p)?)(\d+)`)
+var seasonEpisodePattern = regexp.MustCompile(`(?i)S(\d+)[._-]E(\d+)`)
+var bareEpisodePattern = regexp.MustCompile(`(?i)(?:^|[\s._-])E(\d+)(?:[\s._-]|$)`)
+
+func parseEpisodeFromRelease(release string) int {
+	if m := seasonEpisodePattern.FindStringSubmatch(release); len(m) == 3 {
+		if ep, err := strconv.Atoi(m[2]); err == nil {
+			return ep
+		}
+	}
+	if m := episodePattern.FindStringSubmatch(release); len(m) >= 2 {
+		if ep, err := strconv.Atoi(m[1]); err == nil {
+			return ep
+		}
+	}
+	if m := bareEpisodePattern.FindStringSubmatch(release); len(m) >= 2 {
+		if ep, err := strconv.Atoi(m[1]); err == nil {
+			return ep
+		}
+	}
+	return 0
 }
 
 func (c *Client) setHeaders(req *http.Request, auth bool) {

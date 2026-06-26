@@ -117,7 +117,7 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 
 	logging.Infof("onEpisodesDone success opID=%d episodes_count=%d", msg.opID, len(msg.results))
 	m.episodeResults = msg.results
-	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle))
+	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle, m.selectedEpisodes))
 
 	// Auto-resolve for movies to skip the episode list screen
 	if m.selectedSeries != nil && m.selectedSeries.MediaType == "movie" && len(msg.results) > 0 {
@@ -194,7 +194,7 @@ func (m *modelImpl) onHistoryContinueEpisodes(msg historyContinueEpisodesMsg) (t
 	if m.selectedSeries != nil {
 		seriesTitle = m.selectedSeries.Title
 	}
-	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle))
+	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle, m.selectedEpisodes))
 
 	idx, ok := nextEpisodeAfterEntry(msg.results, msg.group.FarthestComplete)
 	if !ok {
@@ -426,7 +426,7 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 			if m.selectedSeries != nil {
 				seriesTitle = m.selectedSeries.Title
 			}
-			m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle))
+			m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.selectedEpisodes))
 		}
 
 		// Get updated entry to have correct PercentComplete for scrobbling
@@ -524,6 +524,44 @@ func (m *modelImpl) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch {
+		case key.Matches(keyMsg, m.keys.ToggleSelect):
+			if m.episodeList.SettingFilter() {
+				break
+			}
+			if len(m.episodeResults) == 0 {
+				return m, nil
+			}
+			idx := m.selectedEpisodeIndex()
+			if _, ok := m.selectedEpisodes[idx]; ok {
+				delete(m.selectedEpisodes, idx)
+			} else {
+				m.selectedEpisodes[idx] = struct{}{}
+			}
+			m.refreshEpisodeList()
+			return m, nil
+		case key.Matches(keyMsg, m.keys.SelectAll):
+			if m.episodeList.SettingFilter() {
+				break
+			}
+			m.selectAllEpisodes()
+			return m, nil
+		case key.Matches(keyMsg, m.keys.DeselectAll):
+			if m.episodeList.SettingFilter() {
+				break
+			}
+			m.selectedEpisodes = make(map[int]struct{})
+			m.refreshEpisodeList()
+			return m, nil
+		case key.Matches(keyMsg, m.keys.BatchDownload):
+			if len(m.selectedEpisodes) == 0 {
+				m.setStatus(statusWarn, "No episodes selected — press space to select")
+				return m, nil
+			}
+			if m.batchInProgress || m.downloadOpID != 0 {
+				m.setStatus(statusWarn, "A download is already in progress")
+				return m, nil
+			}
+			return m.startBatchDownload()
 		case key.Matches(keyMsg, m.keys.Select):
 			return m.selectEpisode(m.selectedEpisodeIndex())
 		case key.Matches(keyMsg, m.keys.Audio):
@@ -533,6 +571,7 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.audioMode = "sub"
 				}
+				m.selectedEpisodes = make(map[int]struct{})
 				m.setStatus(statusInfo, "Audio: "+strings.ToUpper(m.audioMode))
 				opID := m.newOpID()
 				m.episodesOpID = opID
@@ -551,6 +590,153 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.episodeList, cmd = m.episodeList.Update(msg)
 	return m, cmd
+}
+
+func (m *modelImpl) selectAllEpisodes() {
+	m.selectedEpisodes = make(map[int]struct{})
+	for i := range m.episodeResults {
+		m.selectedEpisodes[i] = struct{}{}
+	}
+	m.refreshEpisodeList()
+}
+
+func (m *modelImpl) refreshEpisodeList() {
+	seriesTitle := ""
+	if m.selectedSeries != nil {
+		seriesTitle = m.selectedSeries.Title
+	}
+	m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.selectedEpisodes))
+}
+
+func (m *modelImpl) startBatchDownload() (tea.Model, tea.Cmd) {
+	selected := m.orderedSelectedEpisodes()
+	if len(selected) == 0 {
+		m.setStatus(statusWarn, "No episodes selected")
+		return m, nil
+	}
+
+	m.batchInProgress = true
+	m.batchCurrent = 0
+	m.batchTotal = len(selected)
+	m.loading = true
+	m.loadingText = fmt.Sprintf("Downloading 0/%d...", m.batchTotal)
+
+	opID := m.newOpID()
+	m.downloadOpID = opID
+
+	var series model.SearchResult
+	var mode provider.ContentType
+	var hasSeries bool
+	if m.selectedSeries != nil {
+		series = *m.selectedSeries
+		mode = m.appMode
+		hasSeries = true
+	}
+
+	cmd := m.batchDownloadCmd(opID, selected, series, mode, hasSeries)
+	return m, tea.Batch(m.spinner.Tick, cmd)
+}
+
+func (m *modelImpl) orderedSelectedEpisodes() []model.EpisodeResult {
+	out := make([]model.EpisodeResult, 0, len(m.selectedEpisodes))
+	for i := range m.episodeResults {
+		if _, ok := m.selectedEpisodes[i]; ok {
+			out = append(out, m.episodeResults[i])
+		}
+	}
+	return out
+}
+
+func (m *modelImpl) batchDownloadCmd(opID int, episodes []model.EpisodeResult, series model.SearchResult, mode provider.ContentType, hasSeries bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(m.appCtx)
+
+		if !hasSeries {
+			cancel()
+			return batchDoneMsg{opID: opID, completed: 0, total: len(episodes)}
+		}
+
+		go func() {
+			defer cancel()
+
+			onProgress := func(current, total int, epTitle string, epProgress float64) {
+				select {
+				case m.batchChan <- batchProgressMsg{
+					opID:            opID,
+					current:         current,
+					total:           total,
+					episodeTitle:    epTitle,
+					episodeProgress: epProgress,
+				}:
+				default:
+				}
+			}
+
+			results := m.downloadService.BatchDownload(
+				ctx,
+				series,
+				episodes,
+				mode,
+				onProgress,
+			)
+
+			completed := 0
+			for _, r := range results {
+				if r.Err == nil {
+					completed++
+				}
+			}
+
+			select {
+			case m.batchChan <- batchDoneMsg{
+				opID:      opID,
+				completed: completed,
+				total:     len(episodes),
+			}:
+			default:
+			}
+		}()
+
+		return batchStartedMsg{opID: opID, cancel: cancel, total: len(episodes)}
+	}
+}
+
+func (m *modelImpl) onBatchProgress(msg batchProgressMsg) (tea.Model, tea.Cmd) {
+	if msg.opID != m.downloadOpID {
+		return m, nil
+	}
+	m.batchCurrent = msg.current
+	m.batchTotal = msg.total
+	m.loadingText = fmt.Sprintf("Downloading %d/%d: %s - %.0f%%",
+		msg.current, msg.total, msg.episodeTitle, msg.episodeProgress*100)
+	return m, m.batchSubscription()
+}
+
+func (m *modelImpl) onBatchDone(msg batchDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.opID != m.downloadOpID {
+		return m, nil
+	}
+	m.loading = false
+	m.loadingText = ""
+	m.batchInProgress = false
+	m.batchCancel = nil
+	m.batchCurrent = 0
+	m.batchTotal = 0
+	m.downloadOpID = 0
+
+	if msg.completed == 0 {
+		m.setStatus(statusError, "Batch download failed")
+	} else {
+		m.setStatus(statusSuccess, fmt.Sprintf("Downloaded %d/%d episodes", msg.completed, msg.total))
+	}
+
+	return m, nil
+}
+
+func (m *modelImpl) batchSubscription() tea.Cmd {
+	return func() tea.Msg {
+		return <-m.batchChan
+	}
 }
 
 func (m *modelImpl) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -800,7 +986,7 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.selectedSeries != nil {
 						seriesTitle = m.selectedSeries.Title
 					}
-					m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle))
+					m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.selectedEpisodes))
 				}
 
 				if updated, ok := m.historyStore.Get(entry.Key); ok {
@@ -892,12 +1078,6 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		opID := m.newOpID()
 		m.downloadOpID = opID
 		return m, tea.Batch(m.spinner.Tick, m.downloadCmd(opID, *m.resolved))
-	case "ctrl+d":
-		if !m.debugMode {
-			return m, nil
-		}
-		m.showDebugDetails = !m.showDebugDetails
-		return m, nil
 	}
 	return m, nil
 }
@@ -908,6 +1088,15 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 	}
 	if !key.Matches(msg, m.keys.Stop) {
 		m.confirmStop = false
+	}
+
+	// Help overlay captures all input except ? to dismiss and esc
+	if m.showHelp {
+		if msg.String() == "?" || msg.String() == "esc" {
+			m.showHelp = false
+			return nil, true
+		}
+		return nil, true
 	}
 
 	switch {
@@ -922,12 +1111,37 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return nil, false
 		}
 
+		if m.batchInProgress && m.batchCancel != nil {
+			if m.confirmQuit {
+				m.batchCancel()
+				m.batchCancel = nil
+				m.batchInProgress = false
+				m.downloadOpID = 0
+				m.loading = false
+				m.loadingText = ""
+			drainBatchQuit:
+				for {
+					select {
+					case <-m.batchChan:
+					default:
+						break drainBatchQuit
+					}
+				}
+				return tea.Quit, true
+			}
+			m.confirmQuit = true
+			m.setStatus(statusWarn, "Press q again to quit")
+			return tea.Tick(time.Second*5, func(t time.Time) tea.Msg {
+				return resetConfirmQuitMsg{}
+			}), true
+		}
+
 		if m.cancelDownload != nil {
 			if m.confirmQuit {
 				m.cancelDownload()
 				m.cancelDownload = nil
-				if m.downloadTitle != "" {
-					m.downloadService.CleanupPartial(m.downloadProvider, m.downloadTitle)
+				if m.downloadOutputDir != "" {
+					m.downloadService.CleanupPartial(m.downloadOutputDir, m.downloadProvider, m.downloadTitle)
 				}
 				return tea.Quit, true
 			}
@@ -963,13 +1177,39 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return nil, false
 		}
 
+		if m.batchInProgress && m.batchCancel != nil {
+			if m.confirmStop {
+				m.batchCancel()
+				m.batchCancel = nil
+				m.batchInProgress = false
+				m.downloadOpID = 0
+				m.loading = false
+				m.loadingText = ""
+			drainBatchStop:
+				for {
+					select {
+					case <-m.batchChan:
+					default:
+						break drainBatchStop
+					}
+				}
+				m.setStatus(statusInfo, "Batch download stopped")
+				return m.clearStatusAfter(3 * time.Second), true
+			}
+			m.confirmStop = true
+			m.setStatus(statusWarn, "Press x again to stop")
+			return tea.Tick(time.Second*5, func(t time.Time) tea.Msg {
+				return resetConfirmStopMsg{}
+			}), true
+		}
+
 		if m.cancelDownload != nil {
 			if m.confirmStop {
 				m.cancelDownload()
 				m.cancelDownload = nil
 				m.downloadOpID = 0
-				if m.downloadTitle != "" {
-					m.downloadService.CleanupPartial(m.downloadProvider, m.downloadTitle)
+				if m.downloadOutputDir != "" {
+					m.downloadService.CleanupPartial(m.downloadOutputDir, m.downloadProvider, m.downloadTitle)
 				}
 				m.loading = false
 				m.loadingText = ""
@@ -1007,6 +1247,18 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		m.goBackOne()
+		if m.loading {
+			logging.Debugf("handleGlobalKeys: ESC cancelled in-flight resolve (opID=%d)", m.resolveOpID)
+			m.loading = false
+			m.loadingText = ""
+			m.resolveOpID = m.newOpID()
+		}
+		return nil, true
+	case msg.String() == "?":
+		if m.queryInput.Focused() {
+			return nil, false
+		}
+		m.showHelp = !m.showHelp
 		return nil, true
 	}
 	return nil, false
@@ -1048,7 +1300,9 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 	}
 	m.selectedSeries = &m.seriesResults[idx]
 	m.searchIndex = idx
-	m.selectedEpisode = nil // Reset episode selection for new series
+	m.selectedEpisode = nil  // Reset episode selection for new series
+	m.selectedEpisodes = make(map[int]struct{})
+	m.episodeIndex = 0
 
 	if m.selectedSeries.MediaType == "movie" && m.selectedSeries.Provider != "miruro" {
 		logging.Debugf("selectSeries: movie detected, resolving playback directly for %q", m.selectedSeries.Title)
@@ -1233,14 +1487,7 @@ func (m *modelImpl) playCmd(opID int) tea.Cmd {
 func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(m.appCtx)
-		m.cancelDownload = cancel
-
-		title := resolved.SeriesTitle
-		if ep := strings.TrimSpace(resolved.EpisodeTitle); ep != "" && ep != title {
-			title += " - " + ep
-		}
-		m.downloadTitle = title
-		m.downloadProvider = resolved.Resolver
+		outputDir, title := m.downloadService.OrganizedPath(resolved)
 
 		go func() {
 			defer cancel()
@@ -1250,7 +1497,13 @@ func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd 
 			m.downloadChan <- downloadDoneMsg{opID: opID, err: err}
 		}()
 
-		return downloadProgressMsg{opID: opID, progress: 0}
+		return downloadStartedMsg{
+			opID:      opID,
+			cancel:    cancel,
+			outputDir: outputDir,
+			title:     title,
+			provider:  resolved.Resolver,
+		}
 	}
 }
 

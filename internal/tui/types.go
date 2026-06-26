@@ -100,6 +100,33 @@ type downloadProgressMsg struct {
 	progress float64
 }
 
+type batchProgressMsg struct {
+	opID            int
+	current, total  int
+	episodeTitle    string
+	episodeProgress float64
+}
+
+type batchDoneMsg struct {
+	opID      int
+	completed int
+	total     int
+}
+
+type downloadStartedMsg struct {
+	opID      int
+	cancel    context.CancelFunc
+	outputDir string
+	title     string
+	provider  string
+}
+
+type batchStartedMsg struct {
+	opID   int
+	cancel context.CancelFunc
+	total  int
+}
+
 type resetConfirmQuitMsg struct{}
 type resetConfirmStopMsg struct{}
 type resetStatusMsg struct{ id int }
@@ -141,13 +168,13 @@ type modelImpl struct {
 	searchIndex  int
 	episodeIndex int
 
-	loading              bool
-	loadingText          string
-	statusText           string
-	statusType           statusLevel
-	statusID             int
-	showDebugDetails     bool
-	selectedPlayback     int
+	loading          bool
+	loadingText      string
+	statusText       string
+	statusType       statusLevel
+	statusID         int
+	showHelp         bool
+	selectedPlayback int
 	availablePlayers     []string
 	selectedPlayer       int
 	autoPlayAfterResolve bool
@@ -155,7 +182,6 @@ type modelImpl struct {
 	pendingManualPlay    bool
 	autoplay             bool
 
-	debugMode bool
 	appMode   provider.ContentType
 	modes     []provider.ContentType
 
@@ -174,6 +200,7 @@ type modelImpl struct {
 	cancelDownload      context.CancelFunc
 	downloadTitle       string
 	downloadProvider    string
+	downloadOutputDir   string
 	confirmQuit         bool
 	confirmStop         bool
 	confirmDelete       bool
@@ -187,4 +214,11 @@ type modelImpl struct {
 	settingsIndex       int // 0 for Trakt, 1 for AniList
 	searchCache         map[string]searchCacheEntry
 	audioMode           string // "sub" or "dub"
+
+	selectedEpisodes map[int]struct{}
+	batchInProgress  bool
+	batchCurrent     int
+	batchTotal       int
+	batchCancel      context.CancelFunc
+	batchChan        chan tea.Msg
 }

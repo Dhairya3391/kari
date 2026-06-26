@@ -43,11 +43,13 @@ func seriesToItems(items []model.SearchResult) []list.Item {
 	return out
 }
 
-func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, seriesTitle string) []list.Item {
+func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, seriesTitle string, selected map[int]struct{}) []list.Item {
 	out := make([]list.Item, 0, len(items))
 	for idx, it := range items {
 		marker := "[    ] "
-		if historyStore != nil {
+		if _, sel := selected[idx]; sel {
+			marker = "[sel] "
+		} else if historyStore != nil {
 			entry, ok := historyStore.Get(history.EntryKey{
 				Provider: it.Provider,
 				Title:    seriesTitle,

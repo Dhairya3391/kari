@@ -18,7 +18,7 @@ import (
 	"kari/internal/service"
 )
 
-func NewModel(ctx context.Context, initialQuery string, showDebugPanel bool, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient) tea.Model {
+func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient) tea.Model {
 	ti := textinput.New()
 	ti.CharLimit = 150
 	ti.Width = 70
@@ -125,7 +125,6 @@ func NewModel(ctx context.Context, initialQuery string, showDebugPanel bool, reg
 
 		keys:             defaultKeyMap(),
 		searchQuery:      strings.TrimSpace(initialQuery),
-		debugMode:        showDebugPanel,
 		appMode:          initialMode,
 		registry:         registry,
 		modes:            modes,
@@ -135,6 +134,8 @@ func NewModel(ctx context.Context, initialQuery string, showDebugPanel bool, reg
 		downloadChan:     make(chan tea.Msg, 10),
 		resolveChan:      make(chan tea.Msg, 10),
 		audioMode:        "sub",
+		selectedEpisodes: make(map[int]struct{}),
+		batchChan:        make(chan tea.Msg, 50),
 	}
 	model.selectedPlayer = model.defaultPlayerIndex()
 	return model
@@ -204,6 +205,26 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case downloadProgressMsg:
 		mdl, cmd := m.onDownloadProgress(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)
+	case downloadStartedMsg:
+		m.cancelDownload = msg.cancel
+		m.downloadOutputDir = msg.outputDir
+		m.downloadTitle = msg.title
+		m.downloadProvider = msg.provider
+		return m, tea.Batch(spinnerCmd, func() tea.Msg {
+			return downloadProgressMsg{opID: msg.opID, progress: 0}
+		})
+	case batchProgressMsg:
+		mdl, cmd := m.onBatchProgress(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case batchDoneMsg:
+		mdl, cmd := m.onBatchDone(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case batchStartedMsg:
+		m.batchCancel = msg.cancel
+		m.batchCurrent = 0
+		m.batchTotal = msg.total
+		m.loadingText = fmt.Sprintf("Downloading 0/%d...", msg.total)
+		return m, tea.Batch(spinnerCmd, m.batchSubscription())
 	case playStartedMsg:
 		if m.playOpID == msg.opID && m.loading {
 			m.loading = false
@@ -216,6 +237,9 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cancelDownload != nil {
 			m.loadingText = fmt.Sprintf("Downloading... %.1f%%", m.downloadProgress)
 			m.setStatus(statusInfo, "")
+		} else if m.batchInProgress {
+			m.loadingText = fmt.Sprintf("Downloading %d/%d...", m.batchCurrent, m.batchTotal)
+			m.setStatus(statusInfo, "")
 		} else {
 			m.loadingText = ""
 		}
@@ -224,6 +248,9 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.confirmStop = false
 		if m.cancelDownload != nil {
 			m.loadingText = fmt.Sprintf("Downloading... %.1f%%", m.downloadProgress)
+			m.setStatus(statusInfo, "")
+		} else if m.batchInProgress {
+			m.loadingText = fmt.Sprintf("Downloading %d/%d...", m.batchCurrent, m.batchTotal)
 			m.setStatus(statusInfo, "")
 		} else {
 			m.loadingText = ""
