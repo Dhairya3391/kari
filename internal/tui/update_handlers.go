@@ -1315,6 +1315,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.resolved = nil
 		opID := m.newOpID()
 		m.resolveOpID = opID
+		m.pushView(viewPreview)
 		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode))
 	}
 
@@ -1326,6 +1327,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.resolved = nil
 		opID := m.newOpID()
 		m.resolveOpID = opID
+		m.pushView(viewPreview)
 		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, direct))
 	}
 
@@ -1392,6 +1394,7 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	}
 	opID := m.newOpID()
 	m.resolveOpID = opID
+	m.pushView(viewPreview)
 	logging.Debugf("selectEpisode: resolving playback for series=%q episode=%q autoPlay=%t", series.Title, m.selectedEpisode.Title, autoPlay)
 	return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, series, *m.selectedEpisode))
 }
