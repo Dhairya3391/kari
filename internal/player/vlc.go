@@ -113,6 +113,7 @@ func buildVLCArgs(source model.PlaybackSource, media model.ResolvedMedia) []stri
 
 	for _, sub := range media.SubtitlePaths() {
 		if strings.TrimSpace(sub) != "" {
+			sub = strings.ReplaceAll(sub, `\`, `/`)
 			args = append(args, "--sub-file="+sub)
 		}
 	}

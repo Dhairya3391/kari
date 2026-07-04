@@ -2,7 +2,6 @@ package defaults
 
 import (
 	"kari/internal/provider"
-	"kari/internal/provider/cineby"
 	"kari/internal/provider/miruro"
 	"kari/internal/provider/vidking"
 	"kari/internal/provider/vidnest"
@@ -11,17 +10,6 @@ import (
 )
 
 var DefaultProviders = []provider.Descriptor{
-	{
-		ID: "cineby",
-		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
-			return cineby.NewClient(kp)
-		},
-		Modes: []provider.Mode{
-			{Name: provider.ModeMovies, Priority: 1},
-			{Name: provider.ModeTV, Priority: 1},
-		},
-		Priority: 1,
-	},
 	{
 		ID: "vidnest",
 		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {

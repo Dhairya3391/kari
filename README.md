@@ -26,7 +26,7 @@ Type a query, press Space, pick a result.
 
 ## Features
 
-- **Multi-source search** — Searches 6+ providers at once (Cineby, Miruro, VidNest, VidKing, WCO, Jellyfin). Results grouped by source.
+- **Multi-source search** — Searches 5+ providers at once (Miruro, VidNest, VidKing, WCO, Jellyfin). Results grouped by source.
 - **5 media modes** — Anime, Movies, TV Shows, Cartoons, Jellyfin. Switch with Tab.
 - **Episode browsing** — Season/episode lists with filler badges and sub/dub toggles.
 - **Parallel source resolution** — Queries every provider at once, shows all available qualities.
@@ -181,8 +181,7 @@ The binary ships with fallback keys for Trakt, AniList, and TMDB. They work fine
 | Provider | Mode | Method | Priority |
 | --- | --- | --- | --- |
 | Miruro | Anime | API | 1 |
-| Cineby | Movies, TV | API (via TMDB) | 1 |
-| VidNest | Movies, TV | API (via TMDB) | 2 |
+| VidNest | Movies, TV | API (via TMDB) | 1 |
 | VidKing | Movies, TV | API (via TMDB) | disabled |
 | WCO | Cartoons, Anime | HTML scraping | 2 |
 | Jellyfin | Movies, TV | Jellyfin API | 1 |
@@ -199,10 +198,25 @@ Android support is a bit hacky (MPV Android doesn't expose a normal config direc
 2. Install dependencies:
 
    ```bash
-   pkg install golang mpv curl
+   pkg install golang curl termux-api yt-dlp
    ```
 
-3. Clone and build:
+   | Package | Why |
+   |---------|-----|
+   | `golang` | Build kari |
+   | `curl` | Cookie bootstrap + pipe-to-mpv playback |
+   | `termux-api` | Provides `termux-am-starter` to launch MPV/MX Player via Android intents (the bare `am` binary is broken on newer Android) |
+   | `yt-dlp` | Required for downloads (optional — skip if you only stream) |
+
+3. Grant storage access (needed to write mpv.conf to the MPV Android config dir):
+
+   ```bash
+   termux-setup-storage
+   ```
+
+   Then allow the storage permission when prompted. Without this, kari falls back to `~/.config/mpv/mpv.conf` (MPV Android may not read it).
+
+4. Clone and build:
 
    ```bash
    git clone https://github.com/Dhairya3391/kari.git
@@ -210,16 +224,18 @@ Android support is a bit hacky (MPV Android doesn't expose a normal config direc
    go build -o kari ./cmd/kari
    ```
 
-4. Install [MPV Android](https://play.google.com/store/apps/details?id=is.xyz.mpv) from Play Store
-5. Create a `mpv.conf` at `/storage/emulated/0/android/media/is.xyz.mpv/mpv.conf`:
+5. Install [MPV Android](https://play.google.com/store/apps/details?id=is.xyz.mpv) from Play Store
+6. Create a `mpv.conf` at `/storage/emulated/0/Android/media/is.xyz.mpv/mpv.conf`:
 
    ```ini
-   include=/storage/emulated/0/android/media/is.xyz.mpv/.mpv.conf
+   include=/storage/emulated/0/Android/media/is.xyz.mpv/.mpv.conf
    ```
 
-6. Run `./kari`
+7. Run `./kari`
 
 Kari launches MPV via Android `am start` intents. The mpv.conf redirect lets it write playback scripts where they can actually be read. See [docs/PLAYERS.md](docs/PLAYERS.md) for the details of this hack.
+
+> **Note:** On some Android versions, DNS resolution may fail for downloads. Kari includes a built-in fallback to Cloudflare (1.1.1.1) and Google (8.8.8.8) DNS for Android builds.
 
 ## Architecture
 
@@ -347,7 +363,11 @@ Click **More info** → **Run anyway**. SmartScreen flags unsigned binaries — 
 
 ### Android — MPV not launching
 
-MPV Android is installed from the Play Store, not from Termux packages. See the [Android setup](#android-setup-termux) section above.
+Ensure `termux-api` is installed (`pkg install termux-api`) and that you've run `termux-setup-storage`. MPV Android must be installed from the Play Store, not from Termux packages. On some devices, the `am` binary is blocked by SELinux — kari will automatically fall back to `termux-am` or `termux-am-starter` if available.
+
+### Android — Downloads fail with DNS errors
+
+Kari uses a built-in DNS fallback (Cloudflare/Google) on Android. If downloads still fail, check that your network connection is active. The system DNS resolver in Termux can be unreliable — this is a known Termux limitation.
 
 ### No player detected
 

@@ -790,6 +790,11 @@ func (c *Client) setCookieHeader(cookieHeader string) {
 }
 
 func (c *Client) bootstrapCookiesWithCurl(timeout time.Duration) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		logging.Debugf("bootstrapCookiesWithCurl: curl not found, falling back to HTTP client")
+		return
+	}
+
 	tmp, err := os.CreateTemp("", "kari-cookies-*.txt")
 	if err != nil {
 		logging.Debugf("bootstrapCookiesWithCurl: failed to create temp file: %v", err)

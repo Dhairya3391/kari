@@ -276,6 +276,7 @@ func appendSubtitleArgs(args []string, subtitleFiles []string) []string {
 	}
 	for _, sub := range subtitleFiles {
 		if strings.TrimSpace(sub) != "" {
+			sub = strings.ReplaceAll(sub, `\`, `/`)
 			logging.Debugf("appendSubtitleArgs: adding sub-file=%q", sub)
 			args = append(args, "--sub-file="+sub)
 		}

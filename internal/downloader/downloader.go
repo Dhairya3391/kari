@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -81,9 +82,31 @@ func downloadTransport() *http.Transport {
 		transport.IdleConnTimeout = 90 * time.Second
 		transport.TLSHandshakeTimeout = 10 * time.Second
 		transport.ExpectContinueTimeout = 1 * time.Second
+		if runtime.GOOS == "android" {
+			transport.DialContext = androidDialer().DialContext
+		}
 		sharedTransport = transport
 	})
 	return sharedTransport
+}
+
+func androidDialer() *net.Dialer {
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 5 * time.Second}
+			conn, err := d.DialContext(ctx, "udp", "1.1.1.1:53")
+			if err != nil {
+				return d.DialContext(ctx, "udp", "8.8.8.8:53")
+			}
+			return conn, err
+		},
+	}
+	return &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Resolver:  resolver,
+	}
 }
 
 func sanitizeDownloadTitle(title string) string {

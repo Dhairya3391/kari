@@ -62,7 +62,11 @@ func (p *MXPlayer) Play(sources []model.PlaybackSource, media model.ResolvedMedi
 }
 
 func isPackageAvailable(pkg string) bool {
-	cmd := exec.Command("pm", "list", "packages")
+	pmPath, err := exec.LookPath("pm")
+	if err != nil {
+		return false
+	}
+	cmd := exec.Command(pmPath, "list", "packages")
 	output, err := cmd.Output()
 	if err != nil {
 		return false
@@ -101,50 +105,7 @@ func playSingleSourceWithMPVAndroid(source model.PlaybackSource, media model.Res
 		return fmt.Errorf("mpv playback failed: termux-am not found (install termux-am)")
 	}
 
-	// Prepare mpv.conf for title, headers and subtitles
-	if err := os.MkdirAll(mpvAndroidDir, 0o755); err != nil {
-		logging.Errorf("failed to create mpv dir: %v", err)
-	}
-
-	var confBuilder strings.Builder
-	title := sanitizeMediaTitle(media.DisplayTitle())
-	if title != "" {
-		confBuilder.WriteString(fmt.Sprintf("force-media-title=%s\n", title))
-	}
-
-	if source.Referer != "" {
-		confBuilder.WriteString(fmt.Sprintf("referrer=%s\n", source.Referer))
-	}
-	userAgent := source.UserAgent
-	if userAgent == "" {
-		userAgent = "Mozilla/5.0"
-	}
-	confBuilder.WriteString(fmt.Sprintf("user-agent=%s\n", userAgent))
-
-	if source.CookieHeader != "" {
-		confBuilder.WriteString(fmt.Sprintf("http-header-fields=Cookie: %s\n", source.CookieHeader))
-	}
-
-	if media.StartTime > 5 {
-		confBuilder.WriteString(fmt.Sprintf("start=%d\n", int(media.StartTime)))
-	}
-
-	subtitleFiles := media.SubtitlePaths()
-	if len(subtitleFiles) > 0 && subtitleFiles[0] != "" {
-		subPath := subtitleFiles[0]
-		targetSubPath := mpvAndroidDir + "/sub.vtt"
-		if err := copyFile(subPath, targetSubPath); err == nil {
-			confBuilder.WriteString(fmt.Sprintf("sub-file=%s\n", targetSubPath))
-			confBuilder.WriteString("sid=1\n")
-		} else {
-			logging.Errorf("failed to copy subtitle to %s: %v", targetSubPath, err)
-		}
-	}
-
-	confPath := mpvAndroidDir + "/mpv.conf"
-	if err := os.WriteFile(confPath, []byte(confBuilder.String()), 0o644); err != nil {
-		logging.Errorf("failed to write mpv.conf: %v", err)
-	}
+	writeMpvConf(source, media)
 
 	args := []string{"start", "-n", mpvAndroidPackage + "/.MPVActivity", "-a", "android.intent.action.VIEW", "-d", source.URL}
 
@@ -170,6 +131,70 @@ func playSingleSourceWithMPVAndroid(source model.PlaybackSource, media model.Res
 		return fmt.Errorf("mpv exited unexpectedly")
 	case <-time.After(androidStartupTimeout):
 		return nil
+	}
+}
+
+func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
+	var confBuilder strings.Builder
+	title := sanitizeMediaTitle(media.DisplayTitle())
+	if title != "" {
+		confBuilder.WriteString(fmt.Sprintf("force-media-title=%s\n", title))
+	}
+
+	if source.Referer != "" {
+		confBuilder.WriteString(fmt.Sprintf("referrer=%s\n", source.Referer))
+	}
+	userAgent := source.UserAgent
+	if userAgent == "" {
+		userAgent = "Mozilla/5.0"
+	}
+	confBuilder.WriteString(fmt.Sprintf("user-agent=%s\n", userAgent))
+
+	if source.CookieHeader != "" {
+		confBuilder.WriteString(fmt.Sprintf("http-header-fields=Cookie: %s\n", source.CookieHeader))
+	}
+
+	if media.StartTime > 5 {
+		confBuilder.WriteString(fmt.Sprintf("start=%d\n", int(media.StartTime)))
+	}
+
+	confData := confBuilder.String()
+
+	paths := []string{
+		mpvAndroidDir + "/mpv.conf",
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, home+"/.config/mpv/mpv.conf")
+	}
+
+	wrote := false
+	for _, confPath := range paths {
+		dir := strings.TrimSuffix(confPath, "/mpv.conf")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			continue
+		}
+		if err := os.WriteFile(confPath, []byte(confData), 0o644); err != nil {
+			logging.Debugf("writeMpvConf: failed to write %s: %v", confPath, err)
+			continue
+		}
+		wrote = true
+		logging.Debugf("writeMpvConf: wrote %s", confPath)
+		break
+	}
+	if !wrote {
+		logging.Debugf("writeMpvConf: could not write mpv.conf to any path (title/referrer/user-agent won't be set)")
+	}
+
+	subtitleFiles := media.SubtitlePaths()
+	if len(subtitleFiles) > 0 && subtitleFiles[0] != "" {
+		subPath := subtitleFiles[0]
+		for _, dir := range []string{mpvAndroidDir, os.TempDir()} {
+			targetSubPath := dir + "/sub.vtt"
+			if err := copyFile(subPath, targetSubPath); err == nil {
+				logging.Debugf("writeMpvConf: copied subtitle to %s", targetSubPath)
+				break
+			}
+		}
 	}
 }
 
@@ -281,15 +306,31 @@ func buildMXPlayerAndroidIntent(source model.PlaybackSource, media model.Resolve
 
 func termuxAmAvailable() bool {
 	termuxAmPathOnce.Do(func() {
-		if path, err := exec.LookPath("am"); err == nil {
-			termuxAmPath = path
-			return
-		}
-		if path, err := exec.LookPath("termux-am"); err == nil {
-			termuxAmPath = path
+		for _, bin := range []string{"am", "termux-am", "termux-am-starter"} {
+			path, err := exec.LookPath(bin)
+			if err != nil {
+				continue
+			}
+			if testAmBinary(path) {
+				termuxAmPath = path
+				return
+			}
 		}
 	})
 	return termuxAmPath != ""
+}
+
+func testAmBinary(path string) bool {
+	cmd := exec.Command(path, "help")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return true
+	}
+	if strings.Contains(string(out), "permission denied") || strings.Contains(err.Error(), "permission denied") {
+		logging.Debugf("termuxAmAvailable: %s exists but not executable (permission denied)", path)
+		return false
+	}
+	return true
 }
 
 func termuxAmBinary() string {

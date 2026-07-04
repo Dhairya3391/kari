@@ -322,12 +322,6 @@ func keepBestSubtitle(tracks []model.SubtitleTrack) []model.SubtitleTrack {
 			return []model.SubtitleTrack{t}
 		}
 	}
-	for _, t := range tracks {
-		if strings.Contains(t.Label, "(cineby)") {
-			t.Label = "English"
-			return []model.SubtitleTrack{t}
-		}
-	}
 	track := tracks[0]
 	track.Label = "English"
 	return []model.SubtitleTrack{track}

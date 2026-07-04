@@ -15,12 +15,14 @@ On desktop platforms, we primarily use `exec.Command` to launch binaries.
 
 ## 3. Android (Termux)
 Android requires a specialized "hack" to bypass Intent limitations.
+- **Prerequisites**: The `termux-api` package must be installed (`pkg install termux-api`) to provide `termux-am-starter`. The bare `am` binary is blocked by SELinux on many newer Android versions.
+- **Storage**: Run `termux-setup-storage` to grant write access to `/storage/emulated/0/Android/media/`. Without this, kari falls back to `~/.config/mpv/mpv.conf` (MPV Android may not read it).
 - **Technique**: Since Android Intents cannot pass complex configuration strings (like custom headers) to every app, we use an **Injection Directory**.
-- **Location**: `/storage/emulated/0/android/media/is.xyz.mpv/` (for MPV).
+- **Location**: `/storage/emulated/0/Android/media/is.xyz.mpv/` (for MPV).
 - **Process**:
-  1. Kari writes a temporary `mpv.conf` to this directory.
+  1. Kari writes a temporary `mpv.conf` to this directory (or falls back to `~/.config/mpv/mpv.conf`).
   2. Subtitles are copied to this same directory as `sub.vtt`.
-  3. Kari launches the app via `am start`.
+  3. Kari launches the app via `am start` (or `termux-am-starter`).
   4. The MPV Android app (if configured with `include=/.../mpv.conf`) loads these settings dynamically.
 - **Cleanup**: Files are overwritten on every launch to ensure fresh settings.
 
