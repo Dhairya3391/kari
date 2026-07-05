@@ -1,7 +1,7 @@
 package config
 
 const (
-	MiruroAPIBase    = "https://miruro2-kappa.vercel.app"
+	MiruroAPIBase    = "https://noob2.broggl.farm"
 	MiruroOrigin     = "https://miruro.tv"
 	VidKingAPIBase   = "https://noob.broggl.farm"
 	VidKingReferer   = "https://www.vidking.net/"
