@@ -1,0 +1,127 @@
+version: 2
+
+project_name: kari
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: kari
+    main: ./cmd/kari
+    binary: kari
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X kari/internal/app.Version={{ .Version }}
+      - -X kari/internal/app.Commit={{ .Commit }}
+      - -X kari/internal/app.Date={{ .Date }}
+
+  - id: android
+    main: ./cmd/kari
+    binary: kari
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - android
+    goarch:
+      - arm64
+    flags:
+      - -trimpath
+      - -buildmode=pie
+    ldflags:
+      - -s -w
+      - -X kari/internal/app.Version={{ .Version }}
+      - -X kari/internal/app.Commit={{ .Commit }}
+      - -X kari/internal/app.Date={{ .Date }}
+
+archives:
+  - id: archive
+    ids: [kari]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+
+  - id: binary
+    ids: [kari, android]
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+    formats: [binary]
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-test"
+
+nfpms:
+  - id: packages
+    ids: [kari]
+    package_name: kari
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    homepage: https://github.com/Dhairya3391/kari
+    description: Terminal-based media browser and streamer
+    maintainer: Dhairya
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+
+homebrew_casks:
+  - name: kari
+    ids: [archive]
+    binaries: [kari]
+    repository:
+      owner: Dhairya3391
+      name: homebrew-kari
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    homepage: https://github.com/Dhairya3391/kari
+    description: Terminal-based media browser and streamer
+    license: MIT
+
+scoops:
+  - name: kari
+    ids: [archive]
+    repository:
+      owner: Dhairya3391
+      name: scoop-kari
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    homepage: https://github.com/Dhairya3391/kari
+    description: Terminal-based media browser and streamer
+    license: MIT
+
+release:
+  prerelease: auto
+  header: |
+    ## Kari {{ .Version }}
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+      - "^ci:"
