@@ -42,9 +42,20 @@ Type a query, press Space, pick a result.
 
 ## Installation
 
-### Prerequisites
+### Package managers
 
-- **Go 1.26+** — [Install Go](https://go.dev/doc/install)
+| Platform | Command | 
+| --- | --- |
+| **macOS** | `brew install Dhairya3391/kari/kari` |
+| **Linux** | `sudo apt install kari` — [set up the repo first](#apt-repo-setup) |
+| **Linux** | `sudo dpkg -i kari_*.deb` — grab a `.deb` from the [latest release](https://github.com/Dhairya3391/kari/releases/latest) |
+| **Windows** | `scoop bucket add kari https://github.com/Dhairya3391/scoop-kari && scoop install kari` |
+| **Android (Termux)** | `pkg install kari` — [pending upstream](https://github.com/termux/termux-packages) |
+| **Any OS** | `go install github.com/Dhairya3391/kari/cmd/kari@latest` |
+
+Or use the self-updater: `./kari -u` fetches the latest binary from GitHub releases.
+
+### Prerequisites
 
 At least one media player in `$PATH`:
 
@@ -76,7 +87,26 @@ The binary lands in the current directory as `./kari`.
 
 ### Pre-built binaries
 
-If you don't want to install Go, grab a binary from the [releases page](https://github.com/Dhairya3391/kari/releases).
+Every [release](https://github.com/Dhairya3391/kari/releases) includes binaries for:
+
+| OS | amd64 | arm64 |
+| --- | --- | --- |
+| Linux | ✅ | ✅ |
+| macOS | ✅ | ✅ |
+| Windows | ✅ | ✅ |
+| Android | — | ✅ |
+
+Grab the one for your platform, make it executable, and run.
+
+### Apt repo setup
+
+```bash
+echo "deb [trusted=yes] https://dhairya3391.github.io/kari-apt /" | sudo tee /etc/apt/sources.list.d/kari.list
+sudo apt update
+sudo apt install kari
+```
+
+<!-- Once accepted into official repos, replace the above with just `sudo apt install kari`. -->
 
 ## Configuration
 
