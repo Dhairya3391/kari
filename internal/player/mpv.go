@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -20,6 +21,7 @@ import (
 )
 
 const mpvStartupTimeout = 1500 * time.Millisecond
+const mpvReadinessTimeout = 15 * time.Second
 
 type MPVPlayer struct {
 	aniskip *aniskip.Client
@@ -222,7 +224,7 @@ func ipcPoller(ctx context.Context, client *IPCClient, stats *PlaybackResult, do
 func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, lite bool) []string {
 	args := []string{
 		"--no-ytdl",
-		"--msg-level=all=error",
+		"--msg-level=all=warn",
 		hwdecOptionArg(),
 		"--network-timeout=10",
 	}
@@ -309,6 +311,9 @@ var curlOptionalFlags = []string{
 }
 
 func startMPVWithStartupCheck(args []string, socketPath string) (stderr string, exitCode int, launched bool, stats PlaybackResult) {
+	// Clean up any stale socket from a previous run
+	os.Remove(socketPath)
+
 	cmd := exec.Command("mpv", args...)
 	cmd.Stdout = io.Discard
 	buf := &bytes.Buffer{}
@@ -332,27 +337,72 @@ func startMPVWithStartupCheck(args []string, socketPath string) (stderr string, 
 		}
 		return buf.String(), 1, false, PlaybackResult{}
 	case <-time.After(mpvStartupTimeout):
-		// Launched successfully, start IPC polling
-		ipcDone := make(chan struct{})
-		client := NewIPCClient(socketPath)
-		go ipcPoller(context.Background(), client, &stats, ipcDone)
-
-		err := <-done // Wait for the background goroutine to finish
-		close(ipcDone)
-
-		exitCode = 0
-		if err != nil {
-			if ee, ok := err.(*exec.ExitError); ok {
-				exitCode = ee.ExitCode()
-			} else {
-				exitCode = 1
-			}
-		}
-		return buf.String(), exitCode, true, stats
+		// Process stayed alive — now check actual playback readiness
+		return waitForMPVReadiness(cmd, done, socketPath, buf)
 	}
 }
 
+func waitForMPVReadiness(cmd *exec.Cmd, done <-chan error, socketPath string, buf *bytes.Buffer) (stderr string, exitCode int, launched bool, stats PlaybackResult) {
+	ipcDone := make(chan struct{})
+	client := NewIPCClient(socketPath)
+	go ipcPoller(context.Background(), client, &stats, ipcDone)
+
+	readinessTimeout := time.After(mpvReadinessTimeout)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	// Phase 1: Wait for playback readiness or exit
+	for {
+		select {
+		case err := <-done:
+			// MPV exited before becoming ready
+			close(ipcDone)
+			exitCode = 0
+			if err != nil {
+				if ee, ok := err.(*exec.ExitError); ok {
+					exitCode = ee.ExitCode()
+				} else {
+					exitCode = 1
+				}
+			}
+			return buf.String(), exitCode, true, PlaybackResult{}
+
+		case <-readinessTimeout:
+			// Playback didn't start — kill MPV and fall through
+			_ = cmd.Process.Kill()
+			<-done
+			close(ipcDone)
+			logging.Warnf("mpv readiness timeout — killed process (stderr: %s)", summarizeErr("", buf.String()))
+			return buf.String(), 1, true, PlaybackResult{}
+
+		case <-ticker.C:
+			if stats.DurationSecs > 0 || stats.FinalPositionSecs > 0 {
+				goto phase2
+			}
+		}
+	}
+
+phase2:
+	// Phase 2: Playback is active — wait for MPV to exit normally
+	err := <-done
+	close(ipcDone)
+
+	exitCode = 0
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			exitCode = ee.ExitCode()
+		} else {
+			exitCode = 1
+		}
+	}
+	return buf.String(), exitCode, true, stats
+}
+
+
+
 func startPipeWithStartupCheck(curlArgs, mpvArgs []string, socketPath string) (mpvStderr string, curlStderr string, exitCode int, launched bool, stats PlaybackResult, err error) {
+	os.Remove(socketPath)
+
 	p1 := exec.Command("curl", curlArgs...)
 	p2 := exec.Command("mpv", mpvArgs...)
 
@@ -398,6 +448,37 @@ func startPipeWithStartupCheck(curlArgs, mpvArgs []string, socketPath string) (m
 		ipcDone := make(chan struct{})
 		client := NewIPCClient(socketPath)
 		go ipcPoller(context.Background(), client, &stats, ipcDone)
+
+		// Wait for playback readiness with timeout
+		pipeReadinessTimeout := time.After(mpvReadinessTimeout)
+		pipeTick := time.NewTicker(500 * time.Millisecond)
+		defer pipeTick.Stop()
+
+	pipeCheck:
+		for {
+			select {
+			case waitErr := <-done:
+				close(ipcDone)
+				exitCode = 0
+				if waitErr != nil {
+					if ee, ok := waitErr.(*exec.ExitError); ok {
+						exitCode = ee.ExitCode()
+					} else {
+						exitCode = 1
+					}
+				}
+				return mpvBuf.String(), curlBuf.String(), exitCode, true, PlaybackResult{}, nil
+			case <-pipeReadinessTimeout:
+				_ = p2.Process.Kill()
+				<-done
+				close(ipcDone)
+				return mpvBuf.String(), curlBuf.String(), 1, true, PlaybackResult{}, nil
+			case <-pipeTick.C:
+				if stats.DurationSecs > 0 || stats.FinalPositionSecs > 0 {
+					break pipeCheck
+				}
+			}
+		}
 
 		waitErr := <-done
 		close(ipcDone)
