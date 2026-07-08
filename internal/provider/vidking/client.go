@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
@@ -26,14 +28,15 @@ type Client struct {
 	httpClient *http.Client
 }
 
-type VidKingSource struct {
-	URL string `json:"u"`
-}
-
 type VidKingSubtitle struct {
 	URL      string `json:"url"`
 	Language string `json:"lang"`
 	Name     string `json:"label"`
+}
+
+type vidKingResponse struct {
+	Sources   []string          `json:"sources"`
+	Subtitles []VidKingSubtitle `json:"subtitles"`
 }
 
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
@@ -74,32 +77,60 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	if episode.Season > 0 || episode.Episode > 0 {
 		mediaType = "tv"
 	}
-	result, subs, err := c.FetchVidKingSources(ctx, tmdbID, mediaType, episode.Season, episode.Episode)
+	resp, err := c.FetchVidKingSources(ctx, tmdbID, mediaType, episode.Season, episode.Episode)
 	if err != nil {
 		return nil, err
 	}
-	sources := make([]provider.MediaSource, 0, len(result))
-	for i, src := range result {
+	if len(resp.Sources) == 0 {
+		return nil, provider.ErrNoSources
+	}
+
+	sources := make([]provider.MediaSource, 0, len(resp.Sources))
+	for i, u := range resp.Sources {
+		q := qualityFromPath(u)
+		if q == "" {
+			q = fmt.Sprintf("Source %d", i+1)
+		}
 		ms := provider.MediaSource{
-			URL:       src.URL,
-			Quality:   fmt.Sprintf("[VIDKING] Source %d", i+1),
+			URL:       u,
+			Quality:   fmt.Sprintf("[VIDKING] %s", q),
 			Referer:   vidKingReferer,
 			UserAgent: vidKingUA,
 		}
-		for _, sub := range subs {
+		for _, sub := range resp.Subtitles {
 			if sub.Language == "en" {
 				ms.Subtitles = append(ms.Subtitles, sub.URL)
 			}
 		}
 		sources = append(sources, ms)
 	}
-	if len(sources) == 0 {
-		return nil, provider.ErrNoSources
-	}
 	return sources, nil
 }
 
-func (c *Client) FetchVidKingSources(ctx context.Context, tmdbID int, mediaType string, season, episode int) ([]VidKingSource, []VidKingSubtitle, error) {
+func qualityFromPath(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	mediaURL := parsed.Query().Get("url")
+	if mediaURL == "" {
+		return ""
+	}
+	decoded, err := url.QueryUnescape(mediaURL)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.TrimSuffix(decoded, "/"), "/")
+	if len(parts) >= 2 {
+		candidate := parts[len(parts)-2]
+		if candidate == "4k" || strings.HasSuffix(candidate, "p") {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func (c *Client) FetchVidKingSources(ctx context.Context, tmdbID int, mediaType string, season, episode int) (*vidKingResponse, error) {
 	logging.Debugf("vidking fetch start tmdbID=%d media_type=%q S%dE%d", tmdbID, mediaType, season, episode)
 	mt := "movie"
 	if mediaType == "tv" {
@@ -108,7 +139,7 @@ func (c *Client) FetchVidKingSources(ctx context.Context, tmdbID int, mediaType 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, vidKingAPI, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	q := req.URL.Query()
@@ -129,40 +160,27 @@ func (c *Client) FetchVidKingSources(ctx context.Context, tmdbID int, mediaType 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		logging.Errorf("vidking request failed err=%v", err)
-		return nil, nil, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		logging.Warnf("vidking API returned status %d", resp.StatusCode)
-		return nil, nil, &provider.HTTPError{Code: resp.StatusCode, URL: req.URL.String()}
+		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: req.URL.String()}
 	}
 
-	var result struct {
-		Sources   []string          `json:"sources"`
-		Subtitles []VidKingSubtitle `json:"subtitles"`
-	}
+	var result vidKingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		logging.Errorf("vidking parse failure err=%v", err)
-		return nil, nil, err
+		return nil, err
 	}
 	if len(result.Sources) == 0 {
 		logging.Warnf("vidking returned no sources tmdbID=%d", tmdbID)
-		return nil, nil, provider.ErrNoSources
+		return nil, provider.ErrNoSources
 	}
 
-	sources := make([]VidKingSource, len(result.Sources))
-	for i, u := range result.Sources {
-		sources[i] = VidKingSource{URL: u}
-	}
-
-	var subtitles []VidKingSubtitle
-	if len(result.Subtitles) > 0 {
-		subtitles = result.Subtitles
-	}
-
-	logging.Debugf("vidking fetch success sources=%d subs=%d", len(sources), len(subtitles))
-	return sources, subtitles, nil
+	logging.Debugf("vidking fetch success sources=%d subs=%d", len(result.Sources), len(result.Subtitles))
+	return &result, nil
 }
 
 var _ provider.Provider = (*Client)(nil)

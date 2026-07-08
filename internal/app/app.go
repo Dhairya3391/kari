@@ -34,7 +34,6 @@ func Run() error {
 	if showUpdate {
 		return Update()
 	}
-	BackgroundUpdate()
 	query := strings.TrimSpace(strings.Join(args, " "))
 	logging.Infof("starting app query=%q", query)
 	if p := logging.Path(); p != "" {

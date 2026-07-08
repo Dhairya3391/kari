@@ -31,12 +31,6 @@ func Update() error {
 	return update(false)
 }
 
-func BackgroundUpdate() {
-	go func() {
-		_ = update(true)
-	}()
-}
-
 func update(quiet bool) error {
 	if !quiet {
 		fmt.Printf("Checking for updates...\n")

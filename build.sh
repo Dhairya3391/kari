@@ -27,7 +27,7 @@ git diff-index --quiet HEAD 2>/dev/null || VERSION="${VERSION}-dirty"
 LDFLAGS="-s -w -X kari/internal/app.Version=$VERSION -X kari/internal/app.Commit=$COMMIT"
 
 get_host_os() {
-  if [ -n "$TERMUX_VERSION" ]; then
+  if [ -n "${TERMUX_VERSION:-}" ]; then
     echo "android"
     return
   fi
@@ -48,7 +48,7 @@ get_host_arch() {
   esac
 }
 
-if [ "$1" = "all" ]; then
+if [ "${1:-}" = "all" ]; then
   mkdir -p "$BUILD_DIR"
 
   platforms=(
@@ -123,7 +123,7 @@ if [ "$1" = "all" ]; then
   fi
 
   echo "All builds complete."
-elif [ "$1" = "target" ]; then
+elif [ "${1:-}" = "target" ]; then
   GOOS=$2
   GOARCH=$3
 
