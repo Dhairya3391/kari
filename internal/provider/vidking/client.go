@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
@@ -28,15 +26,20 @@ type Client struct {
 	httpClient *http.Client
 }
 
+type vidKingSourceItem struct {
+	URL     string `json:"url"`
+	Quality string `json:"quality"`
+}
+
 type VidKingSubtitle struct {
 	URL      string `json:"url"`
 	Language string `json:"lang"`
-	Name     string `json:"label"`
+	Name     string `json:"name"`
 }
 
 type vidKingResponse struct {
-	Sources   []string          `json:"sources"`
-	Subtitles []VidKingSubtitle `json:"subtitles"`
+	Sources   []vidKingSourceItem `json:"sources"`
+	Subtitles []VidKingSubtitle   `json:"subtitles"`
 }
 
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
@@ -86,13 +89,13 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	}
 
 	sources := make([]provider.MediaSource, 0, len(resp.Sources))
-	for i, u := range resp.Sources {
-		q := qualityFromPath(u)
+	for _, s := range resp.Sources {
+		q := s.Quality
 		if q == "" {
-			q = fmt.Sprintf("Source %d", i+1)
+			q = "unknown"
 		}
 		ms := provider.MediaSource{
-			URL:       u,
+			URL:       s.URL,
 			Quality:   fmt.Sprintf("[VIDKING] %s", q),
 			Referer:   vidKingReferer,
 			UserAgent: vidKingUA,
@@ -105,29 +108,6 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		sources = append(sources, ms)
 	}
 	return sources, nil
-}
-
-func qualityFromPath(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	mediaURL := parsed.Query().Get("url")
-	if mediaURL == "" {
-		return ""
-	}
-	decoded, err := url.QueryUnescape(mediaURL)
-	if err != nil {
-		return ""
-	}
-	parts := strings.Split(strings.TrimSuffix(decoded, "/"), "/")
-	if len(parts) >= 2 {
-		candidate := parts[len(parts)-2]
-		if candidate == "4k" || strings.HasSuffix(candidate, "p") {
-			return candidate
-		}
-	}
-	return ""
 }
 
 func (c *Client) FetchVidKingSources(ctx context.Context, tmdbID int, mediaType string, season, episode int) (*vidKingResponse, error) {
