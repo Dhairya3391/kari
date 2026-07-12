@@ -3,30 +3,56 @@ package tui
 import "kari/internal/model"
 
 func (m *modelImpl) playbackSelectionIndex() int {
-	if m.resolved == nil || len(m.resolved.Playback) == 0 {
-		return 0
+	for _, idx := range m.filteredPlayback() {
+		if idx == m.selectedPlayback {
+			return idx
+		}
 	}
-	if m.selectedPlayback < 0 || m.selectedPlayback >= len(m.resolved.Playback) {
-		return 0
-	}
-	return m.selectedPlayback
+	return -1
 }
 
 func (m *modelImpl) selectedPlaybackSource() (model.PlaybackSource, bool) {
-	if m.resolved == nil || len(m.resolved.Playback) == 0 {
+	idx := m.playbackSelectionIndex()
+	if idx < 0 {
 		return model.PlaybackSource{}, false
 	}
-	return m.resolved.Playback[m.playbackSelectionIndex()], true
+	return m.resolved.Playback[idx], true
 }
 
 func (m *modelImpl) orderedPlaybackSources() []model.PlaybackSource {
-	if m.resolved == nil || len(m.resolved.Playback) == 0 {
+	if m.resolved == nil {
 		return nil
 	}
-	idx := m.playbackSelectionIndex()
 
-	out := make([]model.PlaybackSource, 0, len(m.resolved.Playback))
-	out = append(out, m.resolved.Playback[idx:]...)
-	out = append(out, m.resolved.Playback[:idx]...)
+	indices := m.filteredPlayback()
+	if len(indices) == 0 {
+		return nil
+	}
+
+	selected := m.playbackSelectionIndex()
+	position := 0
+	for i, idx := range indices {
+		if idx == selected {
+			position = i
+			break
+		}
+	}
+
+	out := make([]model.PlaybackSource, 0, len(indices))
+	for offset := range indices {
+		idx := indices[(position+offset)%len(indices)]
+		out = append(out, m.resolved.Playback[idx])
+	}
 	return out
+}
+
+func (m *modelImpl) ensurePlaybackSelection() {
+	if m.playbackSelectionIndex() >= 0 {
+		return
+	}
+
+	indices := m.filteredPlayback()
+	if len(indices) > 0 {
+		m.selectedPlayback = indices[0]
+	}
 }

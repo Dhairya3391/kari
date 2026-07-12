@@ -44,9 +44,9 @@ var (
 	modeBadgeMovies   = badgeBase.Background(lipgloss.Color("#33b1ff"))
 	modeBadgeTV       = badgeBase.Background(lipgloss.Color("#08bdba"))
 	modeBadgeJellyfin = badgeBase.Background(lipgloss.Color("#ee5396"))
-	modeBadgeDefault = badgeBase.Background(colorMuted)
-	preparingBadge   = badgeBase.Background(colorInfo).Render("PREPARING")
-	fillerBadgeStr   = badgeBase.MarginLeft(1).Background(colorWarn).Render("FILLER")
+	modeBadgeDefault  = badgeBase.Background(colorMuted)
+	preparingBadge    = badgeBase.Background(colorInfo).Render("PREPARING")
+	fillerBadgeStr    = badgeBase.MarginLeft(1).Background(colorWarn).Render("FILLER")
 )
 
 func renderBadge(mode string) string {

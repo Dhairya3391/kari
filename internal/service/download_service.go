@@ -40,7 +40,7 @@ func sanitizePathName(name string) string {
 		return r
 	}, name)
 	cleaned = strings.TrimSpace(strings.Join(strings.Fields(cleaned), " "))
-	if cleaned == "" {
+	if cleaned == "" || cleaned == "." || cleaned == ".." {
 		return "Unknown"
 	}
 	return cleaned
@@ -152,6 +152,8 @@ func (s *DownloadService) BatchDownload(
 	series model.SearchResult,
 	episodes []model.EpisodeResult,
 	mode provider.ContentType,
+	qualityMode int,
+	languages map[string]bool,
 	onProgress func(current, total int, epTitle string, epProgress float64),
 ) []BatchDownloadResult {
 	results := make([]BatchDownloadResult, len(episodes))
@@ -173,6 +175,13 @@ func (s *DownloadService) BatchDownload(
 			onProgress(current, len(episodes), epTitle, 1.0)
 			results[i].Episode = ep
 			results[i].Err = fmt.Errorf("resolve %s: %w", epTitle, err)
+			continue
+		}
+		resolved.Playback = FilterPlaybackSources(resolved.Playback, qualityMode, languages)
+		if len(resolved.Playback) == 0 {
+			onProgress(current, len(episodes), epTitle, 1.0)
+			results[i].Episode = ep
+			results[i].Err = fmt.Errorf("filter %s: no playback source matches the current filters", epTitle)
 			continue
 		}
 

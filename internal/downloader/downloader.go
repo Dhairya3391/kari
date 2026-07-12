@@ -123,7 +123,7 @@ func sanitizeDownloadTitle(title string) string {
 		return r
 	}, title)
 	cleaned = strings.TrimSpace(strings.Join(strings.Fields(cleaned), " "))
-	if cleaned == "" {
+	if cleaned == "" || cleaned == "." || cleaned == ".." {
 		return "download"
 	}
 	return cleaned

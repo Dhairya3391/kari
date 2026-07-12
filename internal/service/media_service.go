@@ -233,6 +233,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 							UserAgent:    src.UserAgent,
 							CookieHeader: src.CookieHeader,
 							Resolver:     p.Name(),
+							Language:     src.Language,
 						})
 						// Collect subtitles
 						for _, subURL := range src.Subtitles {
@@ -273,6 +274,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 					UserAgent:    src.UserAgent,
 					CookieHeader: src.CookieHeader,
 					Resolver:     p.Name(),
+					Language:     src.Language,
 				})
 				// Collect subtitles
 				for _, subURL := range src.Subtitles {

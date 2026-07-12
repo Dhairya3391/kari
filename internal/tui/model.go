@@ -16,6 +16,7 @@ import (
 	"kari/internal/provider"
 	"kari/internal/scrobble"
 	"kari/internal/service"
+	"kari/internal/settings"
 )
 
 func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient) tea.Model {
@@ -134,10 +135,29 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		downloadChan:     make(chan tea.Msg, 10),
 		resolveChan:      make(chan tea.Msg, 10),
 		audioMode:        "sub",
+		qualityMode:      qualityAll,
+		languageFilter:   make(map[string]bool),
 		selectedEpisodes: make(map[int]struct{}),
 		batchChan:        make(chan tea.Msg, 50),
 	}
 	model.selectedPlayer = model.defaultPlayerIndex()
+	if s := settings.Load(); s != nil {
+		if s.QualityMode >= qualityAll && s.QualityMode <= qualityLowest {
+			model.qualityMode = s.QualityMode
+		}
+		if len(s.LanguageFilter) > 0 {
+			hasEnabled := false
+			for _, enabled := range s.LanguageFilter {
+				if enabled {
+					hasEnabled = true
+					break
+				}
+			}
+			if hasEnabled {
+				model.languageFilter = s.LanguageFilter
+			}
+		}
+	}
 	return model
 }
 

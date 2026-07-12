@@ -398,8 +398,6 @@ phase2:
 	return buf.String(), exitCode, true, stats
 }
 
-
-
 func startPipeWithStartupCheck(curlArgs, mpvArgs []string, socketPath string) (mpvStderr string, curlStderr string, exitCode int, launched bool, stats PlaybackResult, err error) {
 	os.Remove(socketPath)
 

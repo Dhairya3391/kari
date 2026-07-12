@@ -47,6 +47,7 @@ type MediaSource struct {
 	Subtitles    []string
 	UserAgent    string
 	CookieHeader string
+	Language     string
 }
 
 type Provider interface {

@@ -14,9 +14,9 @@ import (
 )
 
 type Client struct {
-	http    *http.Client
-	server  string
-	apiKey  string
+	http   *http.Client
+	server string
+	apiKey string
 }
 
 func NewClient(server, apiKey string) (*Client, error) {

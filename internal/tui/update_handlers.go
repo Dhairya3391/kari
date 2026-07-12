@@ -18,6 +18,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/provider"
+	"kari/internal/settings"
 	"kari/internal/util"
 )
 
@@ -262,6 +263,12 @@ func (m *modelImpl) finalizeResolved() (tea.Model, tea.Cmd) {
 			m.setStatus(statusInfo, "")
 			return m, nil
 		}
+		if len(m.orderedPlaybackSources()) == 0 {
+			m.autoPlayAfterResolve = false
+			m.pushView(viewPreview)
+			m.setStatus(statusWarn, "No playback source matches the current filters")
+			return m, nil
+		}
 		m.autoPlayAfterResolve = false
 		m.loading = true
 		m.loadingText = "Opening player..."
@@ -341,6 +348,7 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 			Subtitles:     append([]model.SubtitleTrack{}, resolved.Subtitles...),
 		}
 		m.selectedPlayback = 0
+		m.ensurePlaybackSelection()
 		m.applyResumeFromHistory(m.resolved)
 		return
 	}
@@ -362,6 +370,7 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 	if len(resolved.Subtitles) > 0 && !hasDownloadedSubtitles(m.resolved.Subtitles) {
 		m.resolved.Subtitles = append([]model.SubtitleTrack{}, resolved.Subtitles...)
 	}
+	m.ensurePlaybackSelection()
 }
 
 func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
@@ -565,7 +574,7 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(keyMsg, m.keys.Select):
 			return m.selectEpisode(m.selectedEpisodeIndex())
 		case key.Matches(keyMsg, m.keys.Audio):
-			if m.selectedSeries != nil && m.appMode == provider.ModeAnime {
+			if m.selectedSeries != nil {
 				if m.audioMode == "sub" {
 					m.audioMode = "dub"
 				} else {
@@ -677,6 +686,8 @@ func (m *modelImpl) batchDownloadCmd(opID int, episodes []model.EpisodeResult, s
 				series,
 				episodes,
 				mode,
+				m.qualityMode,
+				m.languageFilter,
 				onProgress,
 			)
 
@@ -1012,6 +1023,10 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch keyMsg.String() {
 	case "p", "enter":
+		if len(m.orderedPlaybackSources()) == 0 {
+			m.setStatus(statusWarn, "No playback source matches the current filters")
+			return m, nil
+		}
 		if m.subtitleOpID != 0 {
 			m.pendingManualPlay = true
 			m.loadingText = "Downloading subtitles..."
@@ -1023,6 +1038,10 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.playOpID = opID
 		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
 	case "r":
+		if len(m.orderedPlaybackSources()) == 0 {
+			m.setStatus(statusWarn, "No playback source matches the current filters")
+			return m, nil
+		}
 		if m.subtitleOpID != 0 {
 			m.pendingManualPlay = true
 			m.resolved.StartTime = 0
@@ -1050,14 +1069,23 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "tab", "shift+tab":
-		if len(m.resolved.Playback) <= 1 {
+		filtered := m.filteredPlayback()
+		if len(filtered) <= 1 {
 			return m, nil
 		}
 		step := 1
 		if keyMsg.String() == "shift+tab" {
 			step = -1
 		}
-		m.selectedPlayback = (m.selectedPlayback + step + len(m.resolved.Playback)) % len(m.resolved.Playback)
+		pos := 0
+		for i, idx := range filtered {
+			if idx == m.selectedPlayback {
+				pos = i
+				break
+			}
+		}
+		pos = (pos + step + len(filtered)) % len(filtered)
+		m.selectedPlayback = filtered[pos]
 		m.setStatus(statusInfo, "")
 		return m, nil
 	case "d":
@@ -1069,6 +1097,10 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if len(m.orderedPlaybackSources()) == 0 {
+			m.setStatus(statusWarn, "No playback source matches the current filters")
+			return m, nil
+		}
 		if m.downloadOpID != 0 {
 			m.setStatus(statusWarn, "A download is already in progress")
 			return m, nil
@@ -1077,7 +1109,9 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadingText = "Downloading..."
 		opID := m.newOpID()
 		m.downloadOpID = opID
-		return m, tea.Batch(m.spinner.Tick, m.downloadCmd(opID, *m.resolved))
+		resolved := *m.resolved
+		resolved.Playback = m.orderedPlaybackSources()
+		return m, tea.Batch(m.spinner.Tick, m.downloadCmd(opID, resolved))
 	}
 	return m, nil
 }
@@ -1300,7 +1334,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 	}
 	m.selectedSeries = &m.seriesResults[idx]
 	m.searchIndex = idx
-	m.selectedEpisode = nil  // Reset episode selection for new series
+	m.selectedEpisode = nil // Reset episode selection for new series
 	m.selectedEpisodes = make(map[int]struct{})
 	m.episodeIndex = 0
 
@@ -1473,16 +1507,22 @@ func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia) tea
 
 func (m *modelImpl) playCmd(opID int) tea.Cmd {
 	sources := m.orderedPlaybackSources()
+	if m.resolved == nil || len(sources) == 0 {
+		return func() tea.Msg {
+			return playDoneMsg{opID: opID, err: fmt.Errorf("no playback source matches the current filters")}
+		}
+	}
+	resolved := *m.resolved
+	playerName := m.selectedPlayerName()
 	provider := ""
 	if src, ok := m.selectedPlaybackSource(); ok {
 		provider = src.Label
 	}
 	return func() tea.Msg {
-		resolved := *m.resolved
 		logging.Debugf("playCmd: opID=%d media=%q provider=%q sources_count=%d", opID, resolved.DisplayTitle(), provider, len(sources))
 		subPaths := resolved.SubtitlePaths()
-		logging.Debugf("playCmd: launching playback for %q using player=%s subs=%d paths=%v", resolved.DisplayTitle(), m.selectedPlayerName(), len(subPaths), subPaths)
-		result, err := m.players.PlayWithSources(sources, resolved, m.selectedPlayerName())
+		logging.Debugf("playCmd: launching playback for %q using player=%s subs=%d paths=%v", resolved.DisplayTitle(), playerName, len(subPaths), subPaths)
+		result, err := m.players.PlayWithSources(sources, resolved, playerName)
 		return playDoneMsg{opID: opID, provider: provider, result: result, err: err}
 	}
 }
@@ -1500,12 +1540,17 @@ func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd 
 			m.downloadChan <- downloadDoneMsg{opID: opID, err: err}
 		}()
 
+		resolver := resolved.Resolver
+		if len(resolved.Playback) > 0 && resolved.Playback[0].Resolver != "" {
+			resolver = resolved.Playback[0].Resolver
+		}
+
 		return downloadStartedMsg{
 			opID:      opID,
 			cancel:    cancel,
 			outputDir: outputDir,
 			title:     title,
-			provider:  resolved.Resolver,
+			provider:  resolver,
 		}
 	}
 }
@@ -1684,20 +1729,84 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "up", "k":
-			m.settingsIndex = 0
+			if m.settingsIndex > 0 {
+				m.settingsIndex--
+			}
 		case "down", "j":
-			m.settingsIndex = 1
+			if m.settingsIndex == 2 {
+				m.settingsIndex++
+				m.languageIndex = 0
+			} else if m.settingsIndex < 3 {
+				m.settingsIndex++
+			}
+		case "left":
+			switch m.settingsIndex {
+			case 2:
+				if m.qualityMode > 0 {
+					m.qualityMode--
+					m.selectedPlayback = 0
+					if filtered := m.filteredPlayback(); len(filtered) > 0 {
+						m.selectedPlayback = filtered[0]
+					}
+					m.setStatus(statusInfo, "Quality: "+qualityLabel(m.qualityMode))
+					settings.Save(&settings.Data{QualityMode: m.qualityMode, LanguageFilter: m.languageFilter})
+				}
+			case 3:
+				if m.languageIndex > 0 {
+					m.languageIndex--
+				}
+			}
+		case "right":
+			switch m.settingsIndex {
+			case 2:
+				if m.qualityMode < qualityLowest {
+					m.qualityMode++
+					m.selectedPlayback = 0
+					if filtered := m.filteredPlayback(); len(filtered) > 0 {
+						m.selectedPlayback = filtered[0]
+					}
+					m.setStatus(statusInfo, "Quality: "+qualityLabel(m.qualityMode))
+					settings.Save(&settings.Data{QualityMode: m.qualityMode, LanguageFilter: m.languageFilter})
+				}
+			case 3:
+				languages := m.availableLanguages()
+				if m.languageIndex < len(languages)-1 {
+					m.languageIndex++
+				}
+			}
+		case " ":
+			if m.settingsIndex == 3 && m.languageFilter != nil {
+				languages := m.availableLanguages()
+				if len(languages) > 0 {
+					lang := languages[m.languageIndex]
+					m.languageFilter[lang] = !m.languageEnabled(lang)
+					if !m.hasEnabledLanguage() {
+						m.languageFilter[lang] = true
+					}
+					m.selectedPlayback = 0
+					if filtered := m.filteredPlayback(); len(filtered) > 0 {
+						m.selectedPlayback = filtered[0]
+					}
+					settings.Save(&settings.Data{QualityMode: m.qualityMode, LanguageFilter: m.languageFilter})
+				}
+			}
 		case "c", "C":
-			if m.settingsIndex == 0 {
+			switch m.settingsIndex {
+			case 0:
 				return m.startTraktAuth()
-			} else {
+			case 1:
 				return m.startAniListAuth()
 			}
 		case "r", "R":
-			if m.settingsIndex == 0 && m.traktClient != nil {
-				_ = m.traktClient.Revoke()
-			} else if m.settingsIndex == 1 && m.anilistClient != nil {
-				_ = m.anilistClient.Revoke()
+			switch m.settingsIndex {
+			case 0:
+				if m.traktClient != nil {
+					_ = m.traktClient.Revoke()
+				}
+			case 1:
+				if m.anilistClient != nil {
+					_ = m.anilistClient.Revoke()
+				}
 			}
 		}
 	case authDoneMsg:

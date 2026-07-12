@@ -35,6 +35,26 @@ const (
 	statusError   statusLevel = "error"
 )
 
+const (
+	qualityAll       = 0
+	qualityHighest   = 1
+	qualityDataSaver = 2
+	qualityLowest    = 3
+)
+
+func qualityLabel(mode int) string {
+	switch mode {
+	case qualityHighest:
+		return "Highest"
+	case qualityDataSaver:
+		return "Data Saver"
+	case qualityLowest:
+		return "Lowest"
+	default:
+		return "All"
+	}
+}
+
 type searchCacheEntry struct {
 	results   []model.SearchResult
 	usedQuery string
@@ -168,13 +188,13 @@ type modelImpl struct {
 	searchIndex  int
 	episodeIndex int
 
-	loading          bool
-	loadingText      string
-	statusText       string
-	statusType       statusLevel
-	statusID         int
-	showHelp         bool
-	selectedPlayback int
+	loading              bool
+	loadingText          string
+	statusText           string
+	statusType           statusLevel
+	statusID             int
+	showHelp             bool
+	selectedPlayback     int
 	availablePlayers     []string
 	selectedPlayer       int
 	autoPlayAfterResolve bool
@@ -182,8 +202,8 @@ type modelImpl struct {
 	pendingManualPlay    bool
 	autoplay             bool
 
-	appMode   provider.ContentType
-	modes     []provider.ContentType
+	appMode provider.ContentType
+	modes   []provider.ContentType
 
 	nextOpID int
 
@@ -211,9 +231,12 @@ type modelImpl struct {
 	traktAuthDeviceCode string
 	anilistAuthURL      string
 	authInput           textinput.Model
-	settingsIndex       int // 0 for Trakt, 1 for AniList
+	settingsIndex       int // 0 for Trakt, 1 for AniList, 2 for Quality, 3 for Languages
+	languageIndex       int // selected language index in settings
 	searchCache         map[string]searchCacheEntry
-	audioMode           string // "sub" or "dub"
+	audioMode           string          // "sub" or "dub"
+	qualityMode         int             // 0=all, 1=highest, 2=datasaver, 3=lowest
+	languageFilter      map[string]bool // enabled languages (nil = show all)
 
 	selectedEpisodes map[int]struct{}
 	batchInProgress  bool

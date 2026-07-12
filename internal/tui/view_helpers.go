@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"kari/internal/service"
 )
 
 func (m *modelImpl) View() string {
@@ -382,7 +384,93 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 		rows = append(rows, anilistStyle.Render(m.authInput.View()))
 	}
 
+	rows = append(rows, "")
+
+	// Quality section
+	qualityStyle := lipgloss.NewStyle().PaddingLeft(2)
+	if m.settingsIndex == 2 {
+		qualityStyle = qualityStyle.BorderLeft(true).BorderStyle(lipgloss.ThickBorder()).BorderForeground(colorPrimary)
+	}
+
+	allMarker, highestMarker, dataSaverMarker, lowestMarker := "○", "○", "○", "○"
+	switch m.qualityMode {
+	case qualityAll:
+		allMarker = "●"
+	case qualityHighest:
+		highestMarker = "●"
+	case qualityDataSaver:
+		dataSaverMarker = "●"
+	case qualityLowest:
+		lowestMarker = "●"
+	}
+
+	modeColor := lipgloss.NewStyle().Foreground(colorPrimary).Render
+
+	rows = append(rows, "Quality")
+	qualityLine := fmt.Sprintf(
+		"%s All    %s Highest    %s Data Saver    %s Lowest",
+		modeColor(allMarker), modeColor(highestMarker), modeColor(dataSaverMarker), modeColor(lowestMarker),
+	)
+	rows = append(rows, qualityStyle.Render(shorten(qualityLine, dims.contentW-4)))
+	rows = append(rows, qualityStyle.Render(mutedStyle.Render("[←] [→] to change")))
+	rows = append(rows, "")
+
+	// Language section
+	languages := m.availableLanguages()
+	langStyle := lipgloss.NewStyle().PaddingLeft(2)
+	if m.settingsIndex == 3 {
+		langStyle = langStyle.BorderLeft(true).BorderStyle(lipgloss.ThickBorder()).BorderForeground(colorPrimary)
+	}
+
+	rows = append(rows, "Languages (MovieBox only)")
+	if len(languages) == 0 {
+		rows = append(rows, langStyle.Render(mutedStyle.Render("No languages configured")))
+	} else {
+		for i, lang := range languages {
+			marker := "○"
+			if m.languageEnabled(lang) {
+				marker = "●"
+			}
+			entry := marker + " " + lang
+			if m.settingsIndex == 3 && i == m.languageIndex {
+				entry = lipgloss.NewStyle().Foreground(colorPrimary).Render(entry)
+			}
+			rows = append(rows, langStyle.Render(entry))
+		}
+		rows = append(rows, langStyle.Render(mutedStyle.Render("[←] [→] navigate    [space] toggle")))
+	}
+	rows = append(rows, "")
+
 	return strings.Join(rows, "\n")
+}
+
+func (m *modelImpl) hasEnabledLanguage() bool {
+	for _, lang := range m.availableLanguages() {
+		if m.languageEnabled(lang) {
+			return true
+		}
+	}
+	return false
+}
+
+// movieboxLanguages is the hardcoded list of all languages the MovieBox API can return.
+// Derived from testing across 17 movies and 12 TV series.
+var movieboxLanguages = []string{
+	"Original",
+	"English",
+	"English sub",
+	"Bengali",
+	"esla",
+	"Hindi",
+	"Kannada",
+	"Malayalam",
+	"ptbr",
+	"Tamil",
+	"Telugu",
+}
+
+func (m *modelImpl) availableLanguages() []string {
+	return movieboxLanguages
 }
 
 func cleanEpisodeTitle(epTitle, seriesTitle string) string {
@@ -469,17 +557,41 @@ func (m *modelImpl) renderPreviewCard(width int) string {
 	return cardStyle.Width(width).Render(strings.Join(rows, "\n"))
 }
 
+func (m *modelImpl) languageEnabled(lang string) bool {
+	if m.languageFilter == nil || lang == "" {
+		return true
+	}
+	enabled, configured := m.languageFilter[lang]
+	return !configured || enabled
+}
+
+func (m *modelImpl) filteredPlayback() []int {
+	if m.resolved == nil {
+		return nil
+	}
+	if len(m.resolved.Playback) == 0 {
+		return nil
+	}
+	return service.FilterPlaybackIndices(m.resolved.Playback, m.qualityMode, m.languageFilter)
+}
+
 func (m *modelImpl) renderPreviewControls(width int) string {
 	r := m.resolved
 	var rows []string
 
+	filtered := m.filteredPlayback()
+	if len(filtered) == 0 {
+		return mutedStyle.Render("No sources available")
+	}
+
 	rows = append(rows, sectionTitleStyle.Render("Source"), "")
-	for i, src := range r.Playback {
+	for _, actualIdx := range filtered {
+		src := r.Playback[actualIdx]
 		label := src.Label
 		if strings.TrimSpace(label) == "" {
 			label = "Unknown"
 		}
-		if i == m.selectedPlayback {
+		if actualIdx == m.selectedPlayback {
 			rows = append(rows, lipgloss.NewStyle().
 				Foreground(colorPrimary).
 				BorderLeft(true).
@@ -561,7 +673,7 @@ func (m *modelImpl) renderHelpOverlay() string {
 		"  "+keyStyle.Render("ctrl+a")+"   "+mutedStyle.Render("select all"),
 		"  "+keyStyle.Render("ctrl+d")+"   "+mutedStyle.Render("deselect all"),
 		"  "+keyStyle.Render("D")+"        "+mutedStyle.Render("batch download"),
-		"  "+keyStyle.Render("a")+"        "+mutedStyle.Render("sub/dub (anime)"),
+		"  "+keyStyle.Render("a")+"        "+mutedStyle.Render("sub/dub"),
 	)
 
 	sections = append(sections, "", sectionTitleStyle.Render("Playback"), "")

@@ -28,6 +28,7 @@ type PlaybackSource struct {
 	CookieHeader string
 	UserAgent    string
 	Resolver     string
+	Language     string
 }
 
 type SubtitleTrack struct {

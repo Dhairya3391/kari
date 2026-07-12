@@ -5,7 +5,7 @@ const (
 	MiruroOrigin     = "https://miruro.tv"
 	VidKingAPIBase   = "https://noob.broggl.farm"
 	VidKingReferer   = "https://www.vidking.net/"
-	VidNestAPIBase   = "https://vidnest-ebon.vercel.app"
+	MovieboxAPIBase  = "https://noob3.broggl.farm"
 	WCOBaseURL       = "https://www.wco.tv"
 	WCOEmbedOrigin   = "https://embed.wcostream.com"
 	TMDBAPIBase      = "https://api.themoviedb.org/3"
