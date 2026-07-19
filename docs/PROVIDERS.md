@@ -39,6 +39,7 @@ type Provider interface {
 ## 5. Existing Providers
 
 - **Miruro**: API-based, high performance Anime provider.
-- **VidNest**: Movie/TV provider with multi-stream support (via TMDB).
-- **VidKing**: Fast movie/TV scraper with multi-server support (currently disabled).
+- **MovieBox**: Movie/TV provider with multi-stream support (via TMDB).
+- **VidKing**: Fast movie/TV scraper with multi-server support (via TMDB).
 - **WCO**: HTML scraping for Cartoons and Anime.
+- **Jellyfin**: Optional Movies/TV provider backed by a self-hosted Jellyfin server (enabled via `JELLYFIN_URL` + `JELLYFIN_API_KEY`).

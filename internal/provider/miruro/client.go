@@ -136,6 +136,13 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 		return nil, provider.ErrNoEpisodes
 	}
 
+	sort.Slice(eps, func(i, j int) bool {
+		if eps[i].Season != eps[j].Season {
+			return eps[i].Season < eps[j].Season
+		}
+		return eps[i].Episode < eps[j].Episode
+	})
+
 	logging.Debugf("miruro fetch episodes done count=%d", len(eps))
 	return eps, nil
 }

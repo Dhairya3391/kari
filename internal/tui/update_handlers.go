@@ -165,6 +165,10 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if m.episodeIndex < 0 {
+		m.episodeIndex = targetIdx
+	}
+
 	if m.episodeIndex >= 0 && m.episodeIndex < len(m.episodeResults) {
 		m.episodeList.Select(m.episodeIndex)
 	} else {
@@ -855,6 +859,7 @@ func (m *modelImpl) fetchHistoryNextEpisode(group history.Group) (tea.Model, tea
 	m.resolved = nil
 	m.selectedPlayback = 0
 	m.episodeResults = nil
+	m.episodeIndex = -1
 	m.autoPlayAfterResolve = false
 	m.loading = true
 	m.loadingText = "Finding next episode..."
@@ -891,6 +896,7 @@ func (m *modelImpl) resolveHistoryEntry(entry history.Entry) (tea.Model, tea.Cmd
 	m.resolved = nil
 	m.selectedPlayback = 0
 	m.episodeResults = nil
+	m.episodeIndex = -1
 	m.autoPlayAfterResolve = false
 	m.loading = true
 	m.loadingText = "Resolving..."

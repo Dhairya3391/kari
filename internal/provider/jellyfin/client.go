@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"kari/internal/httpclient"
@@ -123,7 +124,7 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 	mediaID := series.ID
 	logging.Debugf("jellyfin fetch episodes mediaID=%q", mediaID)
 
-	u := fmt.Sprintf("%s/Items?parentId=%s&includeItemTypes=Episode&Recursive=true&sortBy=SortName", c.server, mediaID)
+	u := fmt.Sprintf("%s/Items?parentId=%s&includeItemTypes=Episode&Recursive=true&sortBy=ParentIndexNumber,IndexNumber", c.server, mediaID)
 	resp, err := c.authGET(ctx, u)
 	if err != nil {
 		return nil, err
@@ -152,6 +153,13 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 	if len(eps) == 0 {
 		return nil, provider.ErrNoEpisodes
 	}
+
+	sort.Slice(eps, func(i, j int) bool {
+		if eps[i].Season != eps[j].Season {
+			return eps[i].Season < eps[j].Season
+		}
+		return eps[i].Episode < eps[j].Episode
+	})
 
 	logging.Debugf("jellyfin fetch episodes done count=%d", len(eps))
 	return eps, nil
