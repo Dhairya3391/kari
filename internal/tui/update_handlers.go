@@ -1319,6 +1319,7 @@ func (m *modelImpl) cycleMode(reverse bool) tea.Cmd {
 	}
 	m.appMode = m.modes[idx]
 	m.setStatus(statusInfo, "Mode: "+strings.ToUpper(string(m.modes[idx])))
+	m.updateQueryPlaceholder()
 
 	// Clear current results and selection to avoid cross-mode provider errors
 	m.allSeriesResults = nil
@@ -1330,6 +1331,15 @@ func (m *modelImpl) cycleMode(reverse bool) tea.Cmd {
 	m.searchIndex = 0
 
 	return m.clearStatusAfter(3 * time.Second)
+}
+
+// updateQueryPlaceholder adjusts the search prompt hint for the active mode.
+func (m *modelImpl) updateQueryPlaceholder() {
+	if m.appMode == provider.ModeJellyfin {
+		m.queryInput.Placeholder = "Search… (Enter on empty = browse library)"
+		return
+	}
+	m.queryInput.Placeholder = "Search… (Esc for controls)"
 }
 
 func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
@@ -1442,14 +1452,19 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 	return func() tea.Msg {
 		mode := string(m.appMode)
 		cacheKey := fmt.Sprintf("%s:%s", mode, query)
-		if entry, ok := m.searchCache[cacheKey]; ok {
-			logging.Debugf("search cache hit mode=%s query=%q", mode, query)
-			return searchDoneMsg{results: entry.results, usedQuery: entry.usedQuery, warnings: entry.warnings, opID: opID, err: nil}
+		// Jellyfin searches are ranked locally against the provider's own
+		// library cache, so caching here would only serve stale results.
+		cacheable := m.appMode != provider.ModeJellyfin
+		if cacheable {
+			if entry, ok := m.searchCache[cacheKey]; ok {
+				logging.Debugf("search cache hit mode=%s query=%q", mode, query)
+				return searchDoneMsg{results: entry.results, usedQuery: entry.usedQuery, warnings: entry.warnings, opID: opID, err: nil}
+			}
 		}
 
 		logging.Debugf("search start mode=%s query=%q", mode, query)
 		results, usedQuery, warnings, err := m.mediaService.Search(m.appCtx, m.appMode, query)
-		if err == nil {
+		if err == nil && cacheable {
 			m.searchCache[cacheKey] = searchCacheEntry{
 				results:   results,
 				usedQuery: usedQuery,
@@ -1666,13 +1681,17 @@ func (m *modelImpl) startSearchFromInput() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	q := strings.TrimSpace(m.queryInput.Value())
-	if q == "" {
+	if q == "" && m.appMode != provider.ModeJellyfin {
 		m.setStatus(statusWarn, "Enter a query")
 		return m, nil
 	}
 	m.searchQuery = q
 	m.loading = true
-	m.loadingText = "Searching..."
+	if q == "" {
+		m.loadingText = "Loading library..."
+	} else {
+		m.loadingText = "Searching..."
+	}
 	m.setStatus(statusInfo, "")
 	m.resolved = nil
 	m.selectedPlayback = 0

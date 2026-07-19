@@ -19,12 +19,13 @@ type itemsResult struct {
 }
 
 type item struct {
-	ID            string `json:"Id"`
-	Name          string `json:"Name"`
-	SeasonNumber  int    `json:"ParentIndexNumber"`
-	EpisodeNumber int    `json:"IndexNumber"`
-	SeriesID      string `json:"SeriesId"`
-	SeriesName    string `json:"SeriesName"`
-	RunTimeTicks  int64  `json:"RunTimeTicks"`
-	Type          string `json:"Type"`
+	ID             string `json:"Id"`
+	Name           string `json:"Name"`
+	SeasonNumber   int    `json:"ParentIndexNumber"`
+	EpisodeNumber  int    `json:"IndexNumber"`
+	SeriesID       string `json:"SeriesId"`
+	SeriesName     string `json:"SeriesName"`
+	RunTimeTicks   int64  `json:"RunTimeTicks"`
+	Type           string `json:"Type"`
+	ProductionYear int    `json:"ProductionYear"`
 }

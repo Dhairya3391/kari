@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"kari/internal/httpclient"
 	"kari/internal/logging"
@@ -18,6 +20,10 @@ type Client struct {
 	http   *http.Client
 	server string
 	apiKey string
+
+	mu        sync.Mutex
+	library   []provider.SearchResult
+	libraryAt time.Time
 }
 
 func NewClient(server, apiKey string) (*Client, error) {
@@ -53,6 +59,26 @@ func (c *Client) authGET(ctx context.Context, url string) (*http.Response, error
 
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	logging.Debugf("jellyfin search start query=%q", query)
+
+	// Match against the cached library so short and partial queries work;
+	// an empty query browses the whole library.
+	library, err := c.getLibrary(ctx)
+	if err != nil {
+		logging.Debugf("jellyfin library fetch failed, falling back to server search: %v", err)
+		return c.searchHints(ctx, query)
+	}
+
+	results := rankLibrary(library, query)
+	logging.Debugf("jellyfin search done results=%d", len(results))
+	if len(results) == 0 {
+		return nil, provider.ErrNoResults
+	}
+	return results, nil
+}
+
+// searchHints queries the server-side /Search/Hints endpoint. Used as a
+// fallback when the library listing is unavailable.
+func (c *Client) searchHints(ctx context.Context, query string) ([]provider.SearchResult, error) {
 	if query == "" {
 		return nil, fmt.Errorf("empty query")
 	}

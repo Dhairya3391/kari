@@ -141,6 +141,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		batchChan:        make(chan tea.Msg, 50),
 	}
 	model.selectedPlayer = model.defaultPlayerIndex()
+	model.updateQueryPlaceholder()
 	if s := settings.Load(); s != nil {
 		if s.QualityMode >= qualityAll && s.QualityMode <= qualityLowest {
 			model.qualityMode = s.QualityMode
