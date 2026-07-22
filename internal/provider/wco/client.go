@@ -365,9 +365,8 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		sources = appendUniqueMediaSource(sources, wcoMediaSource(mediaURL, finalReferer, c.CookieHeader(), label))
 	}
 
-	// Keeping only the highest quality source as requested
 	if len(sources) > 0 {
-		return []provider.MediaSource{sources[0]}, nil
+		return sources, nil
 	}
 
 	return nil, fmt.Errorf("no media sources found")

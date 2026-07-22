@@ -477,9 +477,21 @@ func (m *modelImpl) onDownloadProgress(msg downloadProgressMsg) (tea.Model, tea.
 	if msg.opID != m.downloadOpID {
 		return m, nil
 	}
-	m.downloadProgress = msg.progress
-	m.loadingText = fmt.Sprintf("Downloading... %.1f%%", msg.progress)
+	if msg.progress < 0 {
+		m.downloadProgress = -1
+		m.loadingText = downloadLoadingText(m.downloadProgress)
+		return m, m.downloadSubscription()
+	}
+	m.downloadProgress = msg.progress * 100
+	m.loadingText = downloadLoadingText(m.downloadProgress)
 	return m, m.downloadSubscription()
+}
+
+func downloadLoadingText(progress float64) string {
+	if progress < 0 {
+		return "Downloading..."
+	}
+	return fmt.Sprintf("Downloading... %.1f%%", progress)
 }
 
 func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
@@ -1181,7 +1193,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 				m.cancelDownload()
 				m.cancelDownload = nil
 				if m.downloadOutputDir != "" {
-					m.downloadService.CleanupPartial(m.downloadOutputDir, m.downloadProvider, m.downloadTitle)
+					m.downloadService.CleanupPartial(m.downloadOutputDir, m.downloadTitle)
 				}
 				return tea.Quit, true
 			}
@@ -1249,7 +1261,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 				m.cancelDownload = nil
 				m.downloadOpID = 0
 				if m.downloadOutputDir != "" {
-					m.downloadService.CleanupPartial(m.downloadOutputDir, m.downloadProvider, m.downloadTitle)
+					m.downloadService.CleanupPartial(m.downloadOutputDir, m.downloadTitle)
 				}
 				m.loading = false
 				m.loadingText = ""

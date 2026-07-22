@@ -188,6 +188,16 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	for i, p := range providers {
 		providerPriority[p.Name()] = i
 	}
+	sortPlaybackSources := func(sources []model.PlaybackSource) {
+		sort.SliceStable(sources, func(i, j int) bool {
+			leftQuality := sourceQuality(sources[i].Label)
+			rightQuality := sourceQuality(sources[j].Label)
+			if leftQuality != rightQuality {
+				return leftQuality > rightQuality
+			}
+			return providerPriority[sources[i].Resolver] < providerPriority[sources[j].Resolver]
+		})
+	}
 
 	g, gCtx := errgroup.WithContext(ctx)
 
@@ -225,7 +235,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 				for playback := range updates {
 					mu.Lock()
 					for _, src := range playback {
-						allPlaybackSources = append(allPlaybackSources, model.PlaybackSource{
+						allPlaybackSources = appendUniquePlaybackSource(allPlaybackSources, model.PlaybackSource{
 							Label:        src.Quality,
 							URL:          src.URL,
 							Referer:      src.Referer,
@@ -248,6 +258,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 							}
 						}
 					}
+					sortPlaybackSources(allPlaybackSources)
 					current := buildResolved(allPlaybackSources, keepBestSubtitle(allSubtitleTracks))
 					mu.Unlock()
 					if onResult != nil {
@@ -266,7 +277,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 
 			mu.Lock()
 			for _, src := range sources {
-				allPlaybackSources = append(allPlaybackSources, model.PlaybackSource{
+				allPlaybackSources = appendUniquePlaybackSource(allPlaybackSources, model.PlaybackSource{
 					Label:        src.Quality,
 					URL:          src.URL,
 					Referer:      src.Referer,
@@ -289,6 +300,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 					}
 				}
 			}
+			sortPlaybackSources(allPlaybackSources)
 			current := buildResolved(allPlaybackSources, keepBestSubtitle(allSubtitleTracks))
 			mu.Unlock()
 
@@ -307,9 +319,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		return model.ResolvedMedia{}, provider.ErrNoSources
 	}
 
-	sort.SliceStable(allPlaybackSources, func(i, j int) bool {
-		return providerPriority[allPlaybackSources[i].Resolver] < providerPriority[allPlaybackSources[j].Resolver]
-	})
+	sortPlaybackSources(allPlaybackSources)
 
 	return buildResolved(allPlaybackSources, keepBestSubtitle(allSubtitleTracks)), nil
 }
@@ -334,4 +344,19 @@ func firstPlaybackURL(playback []model.PlaybackSource) string {
 		return ""
 	}
 	return playback[0].URL
+}
+
+func appendUniquePlaybackSource(sources []model.PlaybackSource, candidate model.PlaybackSource) []model.PlaybackSource {
+	if strings.TrimSpace(candidate.URL) == "" {
+		return sources
+	}
+	for _, source := range sources {
+		if source.URL == candidate.URL &&
+			source.Referer == candidate.Referer &&
+			source.UserAgent == candidate.UserAgent &&
+			source.CookieHeader == candidate.CookieHeader {
+			return sources
+		}
+	}
+	return append(sources, candidate)
 }

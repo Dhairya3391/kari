@@ -75,7 +75,7 @@ func Run() error {
 
 	players := player.NewRegistry(cfg.PreferredPlayer, aniskipClient)
 	mediaService := service.NewMediaService(registry)
-	downloadService := service.NewDownloadService(cfg.DownloadDir, []downloader.Downloader{downloader.NewWCODownloader(), downloader.NewMiruroDownloader(), downloader.NewYTDLPDownloader()}, mediaService)
+	downloadService := service.NewDownloadService(cfg.DownloadDir, downloader.NewYTDLPDownloader(), mediaService)
 	subtitleService := service.NewSubtitleService(cfg)
 
 	traktClient := scrobble.NewTraktClient(cfg.TraktClientID, cfg.TraktClientSecret)

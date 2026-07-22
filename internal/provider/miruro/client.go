@@ -236,7 +236,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 
 	seen := make(map[string]struct{}, len(streams))
 	sources := make([]provider.MediaSource, 0, len(streams))
-	for i, raw := range streams {
+	for _, raw := range streams {
 		s := normalizeMiruroStream(raw)
 		key := miruroStreamKey(s)
 		if _, ok := seen[key]; ok {
@@ -248,10 +248,17 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		if referer == "" {
 			referer = config.MiruroOrigin
 		}
+		quality := s.Quality
+		if quality == "" {
+			quality = "Auto"
+		}
+		if s.Server != "" {
+			quality = fmt.Sprintf("%s (%s)", quality, s.Server)
+		}
 
 		sources = append(sources, provider.MediaSource{
 			URL:       s.URL,
-			Quality:   fmt.Sprintf("[MIRURO] Source %d", i+1),
+			Quality:   fmt.Sprintf("[MIRURO] %s", quality),
 			Referer:   referer,
 			Type:      s.Type,
 			UserAgent: config.DesktopUserAgent, // Use desktop UA for better compatibility

@@ -129,6 +129,9 @@ func buildIINAArgs(source model.PlaybackSource, media model.ResolvedMedia, socke
 }
 
 func startPlayerWithStartupCheck(binary string, args []string, timeout time.Duration, socketPath string) (stderr string, exitCode int, launched bool, stats PlaybackResult) {
+	// Clean up any stale socket from a previous run
+	os.Remove(socketPath)
+
 	cmd := exec.Command(binary, args...)
 	cmd.Stdout = io.Discard
 	buf := &bytes.Buffer{}

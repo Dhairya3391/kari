@@ -35,7 +35,7 @@ Type a query, press Space, pick a result.
 - **Auto-skip intro/outro** — Pulls timestamps from AniSkip, generates an MPV Lua script on the fly.
 - **Scrobbling** — Syncs watch status to Trakt.tv (movies/TV) via device auth (no tokens to copy) and AniList (anime) via OAuth.
 - **Watch history** — Local JSON store, grouped by series, remembers your position.
-- **Downloading** — Built-in HLS segment downloader (Miruro) and HTTP range-request downloader (WCO), with yt-dlp as fallback for everything else.
+- **Downloading** — yt-dlp powered downloads with aria2c multi-connection acceleration for HLS, DASH, and direct HTTP sources.
 - **Subtitles** — Pulls from OpenSubtitles automatically, Yify as fallback.
 - **Self-update** — `./kari -u` fetches the latest release from GitHub.
 - **Cross-platform** — Linux, macOS, Windows, Android (Termux).
@@ -59,10 +59,21 @@ Optional tools:
 
 | Tool | Used for | In `$PATH` |
 | --- | --- | --- |
-| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Downloading non-Miruro/WCO sources | Yes |
-| [aria2c](https://aria2.github.io/) | Speeds up yt-dlp downloads | Yes |
-| [curl](https://curl.se/) | WCO cookie bootstrap + MPV pipe playback | Yes |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | All downloads (HLS, DASH, MP4, etc.) | **Required for downloads** |
+| [aria2c](https://aria2.github.io/) | Multi-connection parallel downloads — **strongly recommended** for fast speeds (16 connections per file) | Recommended |
+| [curl](https://curl.se/) | MPV pipe playback fallback | Yes |
 | [upx](https://upx.github.io/) | Compressing build artifacts (build script only) | No |
+
+> **Tip:** Install [aria2c](https://aria2.github.io/) for significantly faster downloads. yt-dlp uses it as an external downloader with 16 parallel connections per file. Without it, downloads use yt-dlp's single-connection HTTP client which is much slower.
+>
+> ```bash
+> # macOS
+> brew install aria2
+> # Ubuntu/Debian
+> sudo apt install aria2
+> # Arch
+> sudo pacman -S aria2
+> ```
 
 ### Build from source
 
@@ -198,15 +209,16 @@ Android support is a bit hacky (MPV Android doesn't expose a normal config direc
 2. Install dependencies:
 
    ```bash
-   pkg install golang curl termux-api yt-dlp
+   pkg install golang curl termux-api yt-dlp aria2
    ```
 
    | Package | Why |
    |---------|-----|
    | `golang` | Build kari |
-   | `curl` | Cookie bootstrap + pipe-to-mpv playback |
+   | `curl` | MPV pipe playback fallback |
    | `termux-api` | Provides `termux-am-starter` to launch MPV/MX Player via Android intents (the bare `am` binary is broken on newer Android) |
-   | `yt-dlp` | Required for downloads (optional — skip if you only stream) |
+   | `yt-dlp` | Required for downloads |
+   | `aria2` | Multi-connection parallel downloads — strongly recommended for fast speeds |
 
 3. Grant storage access (needed to write mpv.conf to the MPV Android config dir):
 
@@ -253,7 +265,7 @@ internal/
     ├── tui/           — Bubble Tea model-view-update
     ├── scrobble/      — Trakt.tv + AniList sync
     ├── history/       — Local JSON watch storage
-    ├── downloader/    — HLS segment downloader + yt-dlp wrapper
+    ├── downloader/    — yt-dlp wrapper with aria2c acceleration
     ├── subtitles/     — OpenSubtitles + Yify clients
     ├── aniskip/       — Fetches intro/outro timestamps
     ├── tmdb/          — Key pool with rotation

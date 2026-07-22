@@ -256,7 +256,7 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resetConfirmQuitMsg:
 		m.confirmQuit = false
 		if m.cancelDownload != nil {
-			m.loadingText = fmt.Sprintf("Downloading... %.1f%%", m.downloadProgress)
+			m.loadingText = downloadLoadingText(m.downloadProgress)
 			m.setStatus(statusInfo, "")
 		} else if m.batchInProgress {
 			m.loadingText = fmt.Sprintf("Downloading %d/%d...", m.batchCurrent, m.batchTotal)
@@ -268,7 +268,7 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resetConfirmStopMsg:
 		m.confirmStop = false
 		if m.cancelDownload != nil {
-			m.loadingText = fmt.Sprintf("Downloading... %.1f%%", m.downloadProgress)
+			m.loadingText = downloadLoadingText(m.downloadProgress)
 			m.setStatus(statusInfo, "")
 		} else if m.batchInProgress {
 			m.loadingText = fmt.Sprintf("Downloading %d/%d...", m.batchCurrent, m.batchTotal)

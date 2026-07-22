@@ -42,6 +42,7 @@ type Episode struct {
 type MediaSource struct {
 	URL          string
 	Quality      string
+	Resolver     string
 	Referer      string
 	Type         string
 	Subtitles    []string

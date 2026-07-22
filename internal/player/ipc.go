@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -95,11 +99,46 @@ func (c *IPCClient) Close() error {
 	defer c.mu.Unlock()
 	if c.conn != nil {
 		c.closed = true
-		return c.conn.Close()
+		err := c.conn.Close()
+		// Remove the socket file if it belongs to our process.
+		if c.socketPath != "" {
+			os.Remove(c.socketPath)
+		}
+		return err
 	}
 	return nil
 }
 
 func DefaultMPVSocketPath() string {
+	cleanupStaleSockets()
 	return fmt.Sprintf("/tmp/kari-mpv-%d.sock", os.Getpid())
+}
+
+// cleanupStaleSockets removes /tmp/kari-mpv-*.sock files whose owning
+// process is no longer running (e.g. after a crash or SIGKILL).
+func cleanupStaleSockets() {
+	matches, err := filepath.Glob("/tmp/kari-mpv-*.sock")
+	if err != nil {
+		return
+	}
+	for _, path := range matches {
+		base := filepath.Base(path)
+		// Extract PID from "kari-mpv-<pid>.sock"
+		name := strings.TrimPrefix(base, "kari-mpv-")
+		name = strings.TrimSuffix(name, ".sock")
+		pid, err := strconv.Atoi(name)
+		if err != nil {
+			continue
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			os.Remove(path)
+			continue
+		}
+		// Signal 0 checks if the process exists without actually signaling it.
+		err = proc.Signal(syscall.Signal(0))
+		if err != nil {
+			os.Remove(path)
+		}
+	}
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -14,14 +15,14 @@ import (
 
 type DownloadService struct {
 	downloadDir  string
-	downloaders  []downloader.Downloader
+	dl           downloader.Downloader
 	mediaService *MediaService
 }
 
-func NewDownloadService(downloadDir string, downloaders []downloader.Downloader, mediaService *MediaService) *DownloadService {
+func NewDownloadService(downloadDir string, dl downloader.Downloader, mediaService *MediaService) *DownloadService {
 	return &DownloadService{
 		downloadDir:  downloadDir,
-		downloaders:  append([]downloader.Downloader(nil), downloaders...),
+		dl:           dl,
 		mediaService: mediaService,
 	}
 }
@@ -88,22 +89,8 @@ func (s *DownloadService) Download(ctx context.Context, resolved model.ResolvedM
 }
 
 func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.ResolvedMedia, outputDir, title string, progress func(float64)) error {
-	var firstSource provider.MediaSource
-	var firstResolver string
-	if len(resolved.Playback) > 0 {
-		p := resolved.Playback[0]
-		firstSource = provider.MediaSource{
-			URL:          p.URL,
-			Quality:      p.Label,
-			Referer:      p.Referer,
-			Type:         p.Type,
-			UserAgent:    p.UserAgent,
-			CookieHeader: p.CookieHeader,
-		}
-		firstResolver = p.Resolver
-		if firstSource.URL == "" {
-			return fmt.Errorf("no playback URL")
-		}
+	if len(resolved.Playback) == 0 || resolved.Playback[0].URL == "" {
+		return fmt.Errorf("no playback URL")
 	}
 
 	req := downloader.DownloadRequest{
@@ -116,6 +103,7 @@ func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.Reso
 		req.Sources = append(req.Sources, provider.MediaSource{
 			URL:          p.URL,
 			Quality:      p.Label,
+			Resolver:     p.Resolver,
 			Referer:      p.Referer,
 			Type:         p.Type,
 			UserAgent:    p.UserAgent,
@@ -123,23 +111,32 @@ func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.Reso
 		})
 	}
 
-	logging.Debugf("download service: start download title=%q outputDir=%q", title, outputDir)
-	dl := s.selectDownloader(firstSource, firstResolver)
-	return dl.Download(ctx, req)
+	logging.Debugf("download service: start title=%q outputDir=%q", title, outputDir)
+	return s.dl.Download(ctx, req)
 }
 
-func (s *DownloadService) CleanupPartial(outputDir, resolver, title string) {
-	dl := s.selectDownloader(provider.MediaSource{}, resolver)
-	dl.CleanupPartial(outputDir, title)
+func (s *DownloadService) CleanupPartial(outputDir, title string) {
+	s.dl.CleanupPartial(outputDir, title)
+	removeEmptyDirs(outputDir, s.downloadDir)
 }
 
-func (s *DownloadService) selectDownloader(source provider.MediaSource, resolver string) downloader.Downloader {
-	for _, dl := range s.downloaders {
-		if dl != nil && dl.Accepts(source, resolver) {
-			return dl
-		}
+// removeEmptyDirs removes outputDir and any parent directories up to (but not
+// including) rootDir if they are empty after cleanup.
+func removeEmptyDirs(dir, rootDir string) {
+	if dir == "" || rootDir == "" {
+		return
 	}
-	return downloader.NewYTDLPDownloader()
+	dir = filepath.Clean(dir)
+	rootDir = filepath.Clean(rootDir)
+	for dir != rootDir && strings.HasPrefix(dir, rootDir) {
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		parent := filepath.Dir(dir)
+		os.Remove(dir)
+		dir = parent
+	}
 }
 
 type BatchDownloadResult struct {
