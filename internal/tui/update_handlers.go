@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/history"
+	"kari/internal/downloader"
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/player"
@@ -477,19 +478,28 @@ func (m *modelImpl) onDownloadProgress(msg downloadProgressMsg) (tea.Model, tea.
 	if msg.opID != m.downloadOpID {
 		return m, nil
 	}
-	if msg.progress < 0 {
-		m.downloadProgress = -1
-		m.loadingText = downloadLoadingText(m.downloadProgress)
-		return m, m.downloadSubscription()
-	}
 	m.downloadProgress = msg.progress * 100
-	m.loadingText = downloadLoadingText(m.downloadProgress)
+	m.downloadTotalSize = msg.totalSize
+	m.downloadSpeed = msg.speed
+	m.downloadDownloaded = msg.downloaded
+	m.downloadETA = msg.eta
+	m.loadingText = downloadLoadingText(m.downloadProgress, m.downloadTotalSize, m.downloadSpeed, m.downloadDownloaded, m.downloadETA)
 	return m, m.downloadSubscription()
 }
 
-func downloadLoadingText(progress float64) string {
+func downloadLoadingText(progress float64, totalSize, speed, downloaded, eta string) string {
 	if progress < 0 {
 		return "Downloading..."
+	}
+	if totalSize != "" && speed != "" && downloaded != "" {
+		text := fmt.Sprintf("Downloading %.1f%% — %s / %s at %s", progress, downloaded, totalSize, speed)
+		if eta != "" {
+			text += fmt.Sprintf(", ETA %s", eta)
+		}
+		return text
+	}
+	if progress >= 100 && totalSize != "" {
+		return fmt.Sprintf("Downloaded %s", totalSize)
 	}
 	return fmt.Sprintf("Downloading... %.1f%%", progress)
 }
@@ -500,7 +510,17 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.loading = false
 	m.loadingText = ""
+
+	statusMsg := "Download complete"
+	if m.downloadTotalSize != "" {
+		statusMsg = fmt.Sprintf("Downloaded %s", m.downloadTotalSize)
+	}
+
 	m.downloadProgress = 0
+	m.downloadTotalSize = ""
+	m.downloadSpeed = ""
+	m.downloadDownloaded = ""
+	m.downloadETA = ""
 	m.cancelDownload = nil
 	m.downloadOpID = 0
 	if msg.err != nil {
@@ -513,7 +533,7 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 		return m, m.clearStatusAfter(7 * time.Second)
 	}
 
-	m.setStatus(statusSuccess, "Download complete")
+	m.setStatus(statusSuccess, statusMsg)
 	return m, m.clearStatusAfter(7 * time.Second)
 }
 
@@ -1260,6 +1280,11 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 				m.cancelDownload()
 				m.cancelDownload = nil
 				m.downloadOpID = 0
+				m.downloadProgress = 0
+				m.downloadTotalSize = ""
+				m.downloadSpeed = ""
+				m.downloadDownloaded = ""
+				m.downloadETA = ""
 				if m.downloadOutputDir != "" {
 					m.downloadService.CleanupPartial(m.downloadOutputDir, m.downloadTitle)
 				}
@@ -1567,8 +1592,15 @@ func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd 
 
 		go func() {
 			defer cancel()
-			err := m.downloadService.Download(ctx, resolved, func(progress float64) {
-				m.downloadChan <- downloadProgressMsg{opID: opID, progress: progress}
+			err := m.downloadService.Download(ctx, resolved, func(dp downloader.DownloadProgress) {
+				m.downloadChan <- downloadProgressMsg{
+					opID:       opID,
+					progress:   dp.Percent,
+					totalSize:  dp.TotalSize,
+					speed:      dp.Speed,
+					downloaded: dp.Downloaded,
+					eta:        dp.ETA,
+				}
 			})
 			m.downloadChan <- downloadDoneMsg{opID: opID, err: err}
 		}()

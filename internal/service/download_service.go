@@ -83,12 +83,12 @@ func (s *DownloadService) OrganizedPath(resolved model.ResolvedMedia) (outputDir
 	return
 }
 
-func (s *DownloadService) Download(ctx context.Context, resolved model.ResolvedMedia, progress func(float64)) error {
+func (s *DownloadService) Download(ctx context.Context, resolved model.ResolvedMedia, progress func(downloader.DownloadProgress)) error {
 	outputDir, title := s.OrganizedPath(resolved)
 	return s.downloadMedia(ctx, resolved, outputDir, title, progress)
 }
 
-func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.ResolvedMedia, outputDir, title string, progress func(float64)) error {
+func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.ResolvedMedia, outputDir, title string, progress func(downloader.DownloadProgress)) error {
 	if len(resolved.Playback) == 0 || resolved.Playback[0].URL == "" {
 		return fmt.Errorf("no playback URL")
 	}
@@ -182,8 +182,8 @@ func (s *DownloadService) BatchDownload(
 			continue
 		}
 
-		if err := s.Download(ctx, resolved, func(epProgress float64) {
-			onProgress(current, len(episodes), epTitle, epProgress)
+		if err := s.Download(ctx, resolved, func(dp downloader.DownloadProgress) {
+			onProgress(current, len(episodes), epTitle, dp.Percent)
 		}); err != nil {
 			onProgress(current, len(episodes), epTitle, 1.0)
 			results[i].Episode = ep

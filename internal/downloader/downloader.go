@@ -21,11 +21,19 @@ import (
 	"kari/internal/provider"
 )
 
+type DownloadProgress struct {
+	Percent    float64 // 0.0 to 1.0
+	TotalSize  string  // e.g. "1.35GiB"
+	Speed      string  // e.g. "3.47MiB/s"
+	Downloaded string  // e.g. "612MiB"
+	ETA        string  // e.g. "00:36"
+}
+
 type DownloadRequest struct {
 	Sources   []provider.MediaSource
 	Title     string
 	OutputDir string
-	Progress  func(progress float64)
+	Progress  func(p DownloadProgress)
 }
 
 type Downloader interface {
@@ -44,6 +52,10 @@ var knownMediaExts = map[string]struct{}{
 }
 
 var progressRe = regexp.MustCompile(`^KARI_PROGRESS:\s*(\d+(?:\.\d+)?)%$`)
+
+var extendedProgressRe = regexp.MustCompile(
+	`^KARI_PROGRESS:\s*(\d+(?:\.\d+)?)%\|\s*TOTAL:\s*(.*?)\|\s*TOTAL_EST:\s*(.+?)\|\s*SPEED:\s*(.+?)\|\s*ETA:\s*(.+?)\|\s*DOWNLOADED:\s*(.+)$`,
+)
 
 func downloadParallelism() int {
 	n := runtime.NumCPU() * 2
@@ -110,22 +122,20 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 	}
 
 	baseTitle, _ := splitTitleExt(req.Title)
-	for ext := range knownMediaExts {
-		path := filepath.Join(req.OutputDir, baseTitle+ext)
-		if info, err := os.Stat(path); err == nil && info.Size() > 1024*1024 {
-			logging.Infof("ytdlp: file already exists, skipping: %s", path)
-			if req.Progress != nil {
-				req.Progress(1.0)
-			}
-			return nil
+	existingSize := d.findOutputSize(req.OutputDir, baseTitle)
+	if existingSize != "" {
+		logging.Infof("ytdlp: file already exists, skipping")
+		if req.Progress != nil {
+			req.Progress(DownloadProgress{Percent: 1.0, TotalSize: existingSize})
 		}
+		return nil
 	}
 
 	if err := ensureOutputDir(req.OutputDir); err != nil {
 		return fmt.Errorf("ytdlp: create output directory: %w", err)
 	}
 	if req.Progress != nil {
-		req.Progress(0.0)
+		req.Progress(DownloadProgress{Percent: 0.0})
 	}
 
 	var errs []error
@@ -157,7 +167,8 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 		)
 		if err := d.downloadSource(ctx, req, source); err == nil {
 			if req.Progress != nil {
-				req.Progress(1.0)
+				finalSize := d.findOutputSize(req.OutputDir, baseTitle)
+				req.Progress(DownloadProgress{Percent: 1.0, TotalSize: finalSize})
 			}
 			logging.Infof("ytdlp: download complete title=%q source=%d", req.Title, i+1)
 			return nil
@@ -175,6 +186,29 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 		return fmt.Errorf("ytdlp: no usable sources provided")
 	}
 	return fmt.Errorf("ytdlp: all %d usable sources failed: %w", len(errs), errors.Join(errs...))
+}
+
+func (d *YTDLPDownloader) findOutputSize(outputDir, baseTitle string) string {
+	for ext := range knownMediaExts {
+		path := filepath.Join(outputDir, baseTitle+ext)
+		if info, err := os.Stat(path); err == nil && info.Size() > 1024*1024 {
+			return formatFileSize(info.Size())
+		}
+	}
+	return ""
+}
+
+func formatFileSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
 func (d *YTDLPDownloader) downloadSource(ctx context.Context, req DownloadRequest, source provider.MediaSource) error {
@@ -201,7 +235,7 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	if req.Progress != nil && strategy == "aria2c" {
 		// yt-dlp does not expose structured progress from external downloaders.
 		// Signal an indeterminate state instead of reporting a stale percentage.
-		req.Progress(-1)
+		req.Progress(DownloadProgress{Percent: -1})
 	}
 
 	baseTitle, _ := splitTitleExt(req.Title)
@@ -217,7 +251,7 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 		"--socket-timeout", "30",
 		"--hls-use-mpegts",
 		"--newline",
-		"--progress-template", "download:KARI_PROGRESS:%(progress._percent_str)s",
+		"--progress-template", "download:KARI_PROGRESS:%(progress._percent_str)s|TOTAL:%(progress._total_bytes_str)s|TOTAL_EST:%(progress._total_bytes_estimate_str)s|SPEED:%(progress._speed_str)s|ETA:%(progress._eta_str)s|DOWNLOADED:%(progress._downloaded_bytes_str)s",
 		"--progress-delta", "0.5",
 	}
 
@@ -278,18 +312,56 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 			if isStderr {
 				stderrBuf.Write(append([]byte(line), '\n'))
 			}
-			if matches := progressRe.FindStringSubmatch(line); len(matches) > 1 && req.Progress != nil {
-				if val, err := strconv.ParseFloat(matches[1], 64); err == nil {
-					p := val / 100.0
-					current := int64(p * 10000)
-					for {
-						old := maxProgress.Load()
-						if current <= old {
-							break
+			if req.Progress != nil {
+				if ematches := extendedProgressRe.FindStringSubmatch(line); len(ematches) > 1 {
+					if val, err := strconv.ParseFloat(ematches[1], 64); err == nil {
+						p := val / 100.0
+						totalSize := strings.TrimSpace(ematches[2])
+						totalSizeEst := strings.TrimSpace(ematches[3])
+						speed := strings.TrimSpace(ematches[4])
+						eta := strings.TrimSpace(ematches[5])
+						downloaded := strings.TrimSpace(ematches[6])
+						if totalSize == "N/A" || totalSize == "Unknown" || totalSize == "" {
+							totalSize = totalSizeEst
 						}
-						if maxProgress.CompareAndSwap(old, current) {
-							req.Progress(p)
-							break
+						if totalSize == "N/A" || totalSize == "Unknown" {
+							totalSize = ""
+						}
+						if speed == "Unknown B/s" || speed == "N/A" || speed == "" {
+							speed = ""
+						}
+						if eta == "Unknown" || eta == "N/A" || eta == "" {
+							eta = ""
+						}
+						if downloaded == "N/A" || downloaded == "Unknown" {
+							downloaded = ""
+						}
+						current := int64(p * 10000)
+						for {
+							old := maxProgress.Load()
+							if current <= old {
+								break
+							}
+							if maxProgress.CompareAndSwap(old, current) {
+								req.Progress(DownloadProgress{Percent: p, TotalSize: totalSize, Speed: speed, Downloaded: downloaded, ETA: eta})
+								break
+							}
+						}
+					}
+				} else if matches := progressRe.FindStringSubmatch(line); len(matches) > 1 {
+					logging.Debugf("ytdlp: extended progress regex did not match line, using simple fallback: %s", line)
+					if val, err := strconv.ParseFloat(matches[1], 64); err == nil {
+						p := val / 100.0
+						current := int64(p * 10000)
+						for {
+							old := maxProgress.Load()
+							if current <= old {
+								break
+							}
+							if maxProgress.CompareAndSwap(old, current) {
+								req.Progress(DownloadProgress{Percent: p})
+								break
+							}
 						}
 					}
 				}

@@ -116,8 +116,12 @@ type downloadDoneMsg struct {
 }
 
 type downloadProgressMsg struct {
-	opID     int
-	progress float64
+	opID       int
+	progress   float64
+	totalSize  string
+	speed      string
+	downloaded string
+	eta        string
 }
 
 type batchProgressMsg struct {
@@ -215,6 +219,10 @@ type modelImpl struct {
 	playOpID            int
 	downloadOpID        int
 	downloadProgress    float64
+	downloadTotalSize   string
+	downloadSpeed       string
+	downloadDownloaded  string
+	downloadETA         string
 	downloadChan        chan tea.Msg
 	resolveChan         chan tea.Msg
 	cancelDownload      context.CancelFunc
