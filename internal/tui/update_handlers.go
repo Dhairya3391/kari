@@ -19,6 +19,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/provider"
+	"kari/internal/service"
 	"kari/internal/settings"
 	"kari/internal/util"
 )
@@ -1472,6 +1473,13 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 		m.loadingText = "Preparing next episode..."
 	} else {
 		m.loadingText = "Preparing playback..."
+	}
+	if src, ok := m.selectedPlaybackSource(); ok {
+		m.prevSourceLanguage = src.Language
+		m.prevSourceQuality = service.SourceQuality(src.Label)
+	} else {
+		m.prevSourceLanguage = ""
+		m.prevSourceQuality = 0
 	}
 	m.resolved = nil
 	m.autoPlayAfterResolve = autoPlay

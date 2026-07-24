@@ -199,6 +199,8 @@ type modelImpl struct {
 	statusID             int
 	showHelp             bool
 	selectedPlayback     int
+	prevSourceLanguage   string // language of previously selected source, for carry-over
+	prevSourceQuality    int    // quality of previously selected source, for carry-over
 	availablePlayers     []string
 	selectedPlayer       int
 	autoPlayAfterResolve bool

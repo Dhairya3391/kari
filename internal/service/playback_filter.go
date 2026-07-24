@@ -58,7 +58,7 @@ func filterByQuality(playback []model.PlaybackSource, candidates []int, keep fun
 		indices := groups[resolver].indices
 		maxQ, minQ := 0, 99999
 		for _, idx := range indices {
-			quality := sourceQuality(playback[idx].Label)
+			quality := SourceQuality(playback[idx].Label)
 			maxQ = max(maxQ, quality)
 			if quality > 0 && quality < minQ {
 				minQ = quality
@@ -68,7 +68,7 @@ func filterByQuality(playback []model.PlaybackSource, candidates []int, keep fun
 			minQ = maxQ
 		}
 		for _, idx := range indices {
-			if keep(sourceQuality(playback[idx].Label), maxQ, minQ) {
+			if keep(SourceQuality(playback[idx].Label), maxQ, minQ) {
 				result = append(result, idx)
 			}
 		}
@@ -76,7 +76,7 @@ func filterByQuality(playback []model.PlaybackSource, candidates []int, keep fun
 	return result
 }
 
-func sourceQuality(label string) int {
+func SourceQuality(label string) int {
 	normalized := strings.ToLower(label)
 	if strings.Contains(normalized, "4k") || strings.Contains(normalized, "uhd") {
 		return 2160

@@ -190,8 +190,8 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	}
 	sortPlaybackSources := func(sources []model.PlaybackSource) {
 		sort.SliceStable(sources, func(i, j int) bool {
-			leftQuality := sourceQuality(sources[i].Label)
-			rightQuality := sourceQuality(sources[j].Label)
+			leftQuality := SourceQuality(sources[i].Label)
+			rightQuality := SourceQuality(sources[j].Label)
 			if leftQuality != rightQuality {
 				return leftQuality > rightQuality
 			}
