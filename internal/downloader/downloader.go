@@ -143,6 +143,7 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 	for i, source := range req.Sources {
 		if err := ctx.Err(); err != nil {
 			d.CleanupPartial(req.OutputDir, req.Title)
+			d.cleanupAriaControlFiles(req.OutputDir, req.Title)
 			return err
 		}
 
@@ -174,12 +175,19 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 			return nil
 		} else if ctx.Err() != nil {
 			d.CleanupPartial(req.OutputDir, req.Title)
+			d.cleanupAriaControlFiles(req.OutputDir, req.Title)
 			return ctx.Err()
 		} else {
+			// Preserve .aria2 control files so the next source can resume.
 			d.CleanupPartial(req.OutputDir, req.Title)
 			errs = append(errs, fmt.Errorf("source %d (%s): %w", i+1, source.Quality, err))
 			logging.Warnf("ytdlp: source %d/%d failed: %v", i+1, len(req.Sources), err)
 		}
+	}
+
+	// All sources exhausted — abandon is final, so clean .aria2 control files too.
+	if len(errs) > 0 {
+		d.cleanupAriaControlFiles(req.OutputDir, req.Title)
 	}
 
 	if len(errs) == 0 {
@@ -232,10 +240,16 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	source provider.MediaSource,
 	strategy string,
 ) error {
-	if req.Progress != nil && strategy == "aria2c" {
-		// yt-dlp does not expose structured progress from external downloaders.
-		// Signal an indeterminate state instead of reporting a stale percentage.
-		req.Progress(DownloadProgress{Percent: -1})
+	// Direct-media downloads use aria2c through its JSON-RPC interface,
+	// providing structured progress (speed, ETA, downloaded size) instead
+	// of yt-dlp's opaque external-downloader passthrough.
+	if strategy == "aria2c" {
+		if _, err := exec.LookPath("aria2c"); err != nil {
+			return fmt.Errorf("aria2c: binary not found: %w", err)
+		}
+		baseTitle, _ := splitTitleExt(req.Title)
+		adl := &Aria2Downloader{}
+		return adl.Download(ctx, source, req.OutputDir, baseTitle, req.Progress)
 	}
 
 	baseTitle, _ := splitTitleExt(req.Title)
@@ -253,18 +267,6 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 		"--newline",
 		"--progress-template", "download:KARI_PROGRESS:%(progress._percent_str)s|TOTAL:%(progress._total_bytes_str)s|TOTAL_EST:%(progress._total_bytes_estimate_str)s|SPEED:%(progress._speed_str)s|ETA:%(progress._eta_str)s|DOWNLOADED:%(progress._downloaded_bytes_str)s",
 		"--progress-delta", "0.5",
-	}
-
-	// Native yt-dlp handles HLS manifests, encrypted streams, and provider
-	// URLs whose media type cannot be inferred reliably. aria2c is only used
-	// for explicit direct-media types declared by the provider.
-	if strategy == "aria2c" {
-		if _, err := exec.LookPath("aria2c"); err == nil {
-			args = append(args,
-				"--external-downloader", "aria2c",
-				"--external-downloader-args", "aria2c:-x 16 -s 16 -k 1M -j 5 --file-allocation=none",
-			)
-		}
 	}
 
 	// Pass headers from the source.
@@ -394,11 +396,33 @@ func (d *YTDLPDownloader) CleanupPartial(outputDir, title string) {
 		if strings.HasPrefix(name, baseTitle) {
 			if strings.HasSuffix(name, ".part") ||
 				strings.HasSuffix(name, ".ytdl") ||
-				strings.HasSuffix(name, ".aria2") ||
 				strings.Contains(name, ".part-Frag") {
 				if err := os.Remove(filepath.Join(outputDir, name)); err != nil {
 					logging.Debugf("ytdlp: cleanup failed remove %s: %v", name, err)
 				}
+			}
+		}
+	}
+}
+
+// cleanupAriaControlFiles removes aria2c .aria2 control files that were
+// intentionally preserved across retries. Call this only when a download is
+// truly abandoned (all sources exhausted or context cancelled) so that future
+// retries with the same source can resume from the .aria2 checkpoint.
+func (d *YTDLPDownloader) cleanupAriaControlFiles(outputDir, title string) {
+	baseTitle, _ := splitTitleExt(title)
+	files, err := os.ReadDir(outputDir)
+	if err != nil {
+		return
+	}
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		name := f.Name()
+		if strings.HasPrefix(name, baseTitle) && strings.HasSuffix(name, ".aria2") {
+			if err := os.Remove(filepath.Join(outputDir, name)); err != nil {
+				logging.Debugf("ytdlp: cleanup aria2 failed remove %s: %v", name, err)
 			}
 		}
 	}

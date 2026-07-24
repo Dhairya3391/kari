@@ -705,14 +705,18 @@ func (m *modelImpl) batchDownloadCmd(opID int, episodes []model.EpisodeResult, s
 		go func() {
 			defer cancel()
 
-			onProgress := func(current, total int, epTitle string, epProgress float64) {
+			onProgress := func(current, total int, epTitle string, dp downloader.DownloadProgress) {
 				select {
 				case m.batchChan <- batchProgressMsg{
 					opID:            opID,
 					current:         current,
 					total:           total,
 					episodeTitle:    epTitle,
-					episodeProgress: epProgress,
+					episodeProgress: dp.Percent,
+					totalSize:       dp.TotalSize,
+					speed:           dp.Speed,
+					downloaded:      dp.Downloaded,
+					eta:             dp.ETA,
 				}:
 				default:
 				}
@@ -755,8 +759,18 @@ func (m *modelImpl) onBatchProgress(msg batchProgressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.batchCurrent = msg.current
 	m.batchTotal = msg.total
-	m.loadingText = fmt.Sprintf("Downloading %d/%d: %s - %.0f%%",
-		msg.current, msg.total, msg.episodeTitle, msg.episodeProgress*100)
+	if msg.totalSize != "" && msg.speed != "" && msg.downloaded != "" {
+		text := fmt.Sprintf("Downloading %d/%d: %s — %.1f%% — %s / %s at %s",
+			msg.current, msg.total, msg.episodeTitle, msg.episodeProgress*100,
+			msg.downloaded, msg.totalSize, msg.speed)
+		if msg.eta != "" {
+			text += fmt.Sprintf(", ETA %s", msg.eta)
+		}
+		m.loadingText = text
+	} else {
+		m.loadingText = fmt.Sprintf("Downloading %d/%d: %s — %.0f%%",
+			msg.current, msg.total, msg.episodeTitle, msg.episodeProgress*100)
+	}
 	return m, m.batchSubscription()
 }
 

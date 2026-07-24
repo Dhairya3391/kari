@@ -151,7 +151,7 @@ func (s *DownloadService) BatchDownload(
 	mode provider.ContentType,
 	qualityMode int,
 	languages map[string]bool,
-	onProgress func(current, total int, epTitle string, epProgress float64),
+	onProgress func(current, total int, epTitle string, dp downloader.DownloadProgress),
 ) []BatchDownloadResult {
 	results := make([]BatchDownloadResult, len(episodes))
 
@@ -165,33 +165,33 @@ func (s *DownloadService) BatchDownload(
 		current := i + 1
 		epTitle := episodeResultTitle(ep)
 		logging.Debugf("batch download: starting episode %d/%d: %s", current, len(episodes), epTitle)
-		onProgress(current, len(episodes), epTitle, 0)
+		onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 0})
 
 		resolved, err := s.mediaService.Resolve(ctx, mode, series, ep, nil)
 		if err != nil {
-			onProgress(current, len(episodes), epTitle, 1.0)
+			onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 			results[i].Episode = ep
 			results[i].Err = fmt.Errorf("resolve %s: %w", epTitle, err)
 			continue
 		}
 		resolved.Playback = FilterPlaybackSources(resolved.Playback, qualityMode, languages)
 		if len(resolved.Playback) == 0 {
-			onProgress(current, len(episodes), epTitle, 1.0)
+			onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 			results[i].Episode = ep
 			results[i].Err = fmt.Errorf("filter %s: no playback source matches the current filters", epTitle)
 			continue
 		}
 
 		if err := s.Download(ctx, resolved, func(dp downloader.DownloadProgress) {
-			onProgress(current, len(episodes), epTitle, dp.Percent)
+			onProgress(current, len(episodes), epTitle, dp)
 		}); err != nil {
-			onProgress(current, len(episodes), epTitle, 1.0)
+			onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 			results[i].Episode = ep
 			results[i].Err = fmt.Errorf("download %s: %w", epTitle, err)
 			continue
 		}
 
-		onProgress(current, len(episodes), epTitle, 1.0)
+		onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 		results[i].Episode = ep
 	}
 

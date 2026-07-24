@@ -129,6 +129,10 @@ type batchProgressMsg struct {
 	current, total  int
 	episodeTitle    string
 	episodeProgress float64
+	totalSize       string
+	speed           string
+	downloaded      string
+	eta             string
 }
 
 type batchDoneMsg struct {
