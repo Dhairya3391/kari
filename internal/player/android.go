@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -150,8 +151,20 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 	}
 	confBuilder.WriteString(fmt.Sprintf("user-agent=%s\n", userAgent))
 
-	if source.CookieHeader != "" {
-		confBuilder.WriteString(fmt.Sprintf("http-header-fields=Cookie: %s\n", source.CookieHeader))
+	var headers []string
+	if userAgent != "" {
+		headers = append(headers, "User-Agent: "+userAgent)
+	}
+	if strings.TrimSpace(source.Referer) != "" {
+		headers = append(headers, "Referer: "+source.Referer)
+		ref := strings.TrimSuffix(source.Referer, "/")
+		headers = append(headers, "Origin: "+ref)
+	}
+	if strings.TrimSpace(source.CookieHeader) != "" {
+		headers = append(headers, "Cookie: "+source.CookieHeader)
+	}
+	if len(headers) > 0 {
+		confBuilder.WriteString(fmt.Sprintf("http-header-fields=%s\n", strings.Join(headers, "\\r\\n")))
 	}
 
 	if media.StartTime > 5 {
@@ -161,15 +174,16 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 	confData := confBuilder.String()
 
 	paths := []string{
+		mpvAndroidDir + "/.mpv.conf",
 		mpvAndroidDir + "/mpv.conf",
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, home+"/.config/mpv/mpv.conf")
+		paths = append(paths, home+"/.config/mpv/mpv.conf", home+"/.mpv/mpv.conf")
 	}
 
-	wrote := false
+	wroteCount := 0
 	for _, confPath := range paths {
-		dir := strings.TrimSuffix(confPath, "/mpv.conf")
+		dir := filepath.Dir(confPath)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			continue
 		}
@@ -177,11 +191,10 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 			logging.Debugf("writeMpvConf: failed to write %s: %v", confPath, err)
 			continue
 		}
-		wrote = true
+		wroteCount++
 		logging.Debugf("writeMpvConf: wrote %s", confPath)
-		break
 	}
-	if !wrote {
+	if wroteCount == 0 {
 		logging.Debugf("writeMpvConf: could not write mpv.conf to any path (title/referrer/user-agent won't be set)")
 	}
 

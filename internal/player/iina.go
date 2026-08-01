@@ -102,7 +102,7 @@ func buildIINAArgs(source model.PlaybackSource, media model.ResolvedMedia, socke
 	args := []string{"--no-stdin", "--keep-running", source.URL, "--"}
 	args = append(args,
 		"--no-ytdl",
-		"--network-timeout=10",
+		"--network-timeout=5",
 		"--input-ipc-server="+socketPath,
 	)
 
@@ -120,9 +120,23 @@ func buildIINAArgs(source model.PlaybackSource, media model.ResolvedMedia, socke
 	if strings.TrimSpace(source.Referer) != "" {
 		args = append(args, "--referrer="+source.Referer)
 	}
-	if strings.TrimSpace(source.CookieHeader) != "" {
-		args = append(args, "--http-header-fields=Cookie: "+source.CookieHeader)
+
+	var headers []string
+	if userAgent != "" {
+		headers = append(headers, "User-Agent: "+userAgent)
 	}
+	if strings.TrimSpace(source.Referer) != "" {
+		headers = append(headers, "Referer: "+source.Referer)
+		ref := strings.TrimSuffix(source.Referer, "/")
+		headers = append(headers, "Origin: "+ref)
+	}
+	if strings.TrimSpace(source.CookieHeader) != "" {
+		headers = append(headers, "Cookie: "+source.CookieHeader)
+	}
+	if len(headers) > 0 {
+		args = append(args, "--http-header-fields="+strings.Join(headers, "\r\n"))
+	}
+
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendSubtitleArgs(args, media.SubtitlePaths())
 	return args

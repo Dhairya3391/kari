@@ -203,10 +203,10 @@ Want to add another provider? See [docs/PROVIDERS.md](docs/PROVIDERS.md) and [PR
 
 ## Android Setup (Termux)
 
-Android support is a bit hacky (MPV Android doesn't expose a normal config directory), but it works:
+Kari supports MPV and MX Player on Android via Termux intents and automatic configuration injection:
 
-1. Install [Termux](https://termux.dev/) from F-Droid (not Play Store — the Play Store version is abandoned)
-2. Install dependencies:
+1. Install [Termux](https://termux.dev/) from F-Droid (do not use Play Store — the Play Store version is obsolete).
+2. Install required packages:
 
    ```bash
    pkg install golang curl termux-api yt-dlp aria2
@@ -215,18 +215,18 @@ Android support is a bit hacky (MPV Android doesn't expose a normal config direc
    | Package | Why |
    |---------|-----|
    | `golang` | Build kari |
-   | `curl` | MPV pipe playback fallback |
-   | `termux-api` | Provides `termux-am-starter` to launch MPV/MX Player via Android intents (the bare `am` binary is broken on newer Android) |
+   | `curl` | Direct/pipe fallback playback |
+   | `termux-api` | Provides `termux-am` / `termux-am-starter` to launch MPV/MX Player via Android intents |
    | `yt-dlp` | Required for downloads |
-   | `aria2` | Multi-connection parallel downloads — strongly recommended for fast speeds |
+   | `aria2` | Multi-connection parallel downloads for fast speeds |
 
-3. Grant storage access (needed to write mpv.conf to the MPV Android config dir):
+3. Grant storage access:
 
    ```bash
    termux-setup-storage
    ```
 
-   Then allow the storage permission when prompted. Without this, kari falls back to `~/.config/mpv/mpv.conf` (MPV Android may not read it).
+   Allow storage permission when prompted. This allows Kari to write headers (Referer, Origin, User-Agent, Cookies) and subtitle files directly to the MPV Android media folder.
 
 4. Clone and build:
 
@@ -236,16 +236,19 @@ Android support is a bit hacky (MPV Android doesn't expose a normal config direc
    go build -o kari ./cmd/kari
    ```
 
-5. Install [MPV Android](https://play.google.com/store/apps/details?id=is.xyz.mpv) from Play Store
-6. Create a `mpv.conf` at `/storage/emulated/0/Android/media/is.xyz.mpv/mpv.conf`:
+5. Install [MPV Android](https://play.google.com/store/apps/details?id=is.xyz.mpv) (or MX Player) from Play Store.
+
+6. (Recommended) Create `/storage/emulated/0/Android/media/is.xyz.mpv/mpv.conf`:
 
    ```ini
    include=/storage/emulated/0/Android/media/is.xyz.mpv/.mpv.conf
    ```
 
+   *Note: Kari automatically writes playback headers to both `.mpv.conf` and `mpv.conf` in the MPV directory as well as `~/.config/mpv/mpv.conf` on every play launch, so headers and subtitles work seamlessly out of the box.*
+
 7. Run `./kari`
 
-Kari launches MPV via Android `am start` intents. The mpv.conf redirect lets it write playback scripts where they can actually be read. See [docs/PLAYERS.md](docs/PLAYERS.md) for the details of this hack.
+Kari launches MPV via Android `am start` / `termux-am` intents. The automatic config file writing allows MPV Android to receive stream headers (`Referer`, `Origin`, `User-Agent`, `Cookie`) and subtitles cleanly without requiring manual flag passing. See [docs/PLAYERS.md](docs/PLAYERS.md) for architectural details.
 
 > **Note:** On some Android versions, DNS resolution may fail for downloads. Kari includes a built-in fallback to Cloudflare (1.1.1.1) and Google (8.8.8.8) DNS for Android builds.
 
