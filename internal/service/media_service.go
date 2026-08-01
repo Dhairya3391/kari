@@ -164,8 +164,14 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	var allSubtitleTracks []model.SubtitleTrack
 	seenSubs := make(map[string]struct{})
 
-	// Helper to build ResolvedMedia from current aggregated sources
+	// Helper to build ResolvedMedia from current aggregated sources.
+	// Slices are copied so the snapshot handed to callers never aliases the
+	// shared backing arrays that other goroutines keep mutating.
 	buildResolved := func(playback []model.PlaybackSource, subs []model.SubtitleTrack) model.ResolvedMedia {
+		playbackCopy := make([]model.PlaybackSource, len(playback))
+		copy(playbackCopy, playback)
+		subsCopy := make([]model.SubtitleTrack, len(subs))
+		copy(subsCopy, subs)
 		return model.ResolvedMedia{
 			SeriesTitle:   series.Title,
 			SeriesURL:     series.URL,
@@ -178,8 +184,8 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			SeasonNumber:  episode.Season,
 			EpisodeNumber: episode.Number,
 			Resolver:      "Aggregated",
-			Playback:      playback,
-			Subtitles:     subs,
+			Playback:      playbackCopy,
+			Subtitles:     subsCopy,
 		}
 	}
 

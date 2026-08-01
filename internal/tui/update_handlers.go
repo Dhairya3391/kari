@@ -544,6 +544,16 @@ func (m *modelImpl) downloadSubscription() tea.Cmd {
 	}
 }
 
+func (m *modelImpl) drainDownloadChan() {
+	for {
+		select {
+		case <-m.downloadChan:
+		default:
+			return
+		}
+	}
+}
+
 func (m *modelImpl) resolveSubscription() tea.Cmd {
 	return func() tea.Msg {
 		return <-m.resolveChan
@@ -1243,8 +1253,8 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		if m.activeView == viewSearch && !m.queryInput.Focused() {
 			m.loading = true
 			m.loadingText = "Loading history..."
+			m.refreshHistory()
 			return tea.Batch(m.spinner.Tick, func() tea.Msg {
-				m.refreshHistory()
 				return historyLoadedMsg{}
 			}), true
 		}
@@ -1615,16 +1625,22 @@ func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd 
 		go func() {
 			defer cancel()
 			err := m.downloadService.Download(ctx, resolved, func(dp downloader.DownloadProgress) {
-				m.downloadChan <- downloadProgressMsg{
+				select {
+				case m.downloadChan <- downloadProgressMsg{
 					opID:       opID,
 					progress:   dp.Percent,
 					totalSize:  dp.TotalSize,
 					speed:      dp.Speed,
 					downloaded: dp.Downloaded,
 					eta:        dp.ETA,
+				}:
+				default:
 				}
 			})
-			m.downloadChan <- downloadDoneMsg{opID: opID, err: err}
+			select {
+			case m.downloadChan <- downloadDoneMsg{opID: opID, err: err}:
+			default:
+			}
 		}()
 
 		resolver := resolved.Resolver
@@ -1915,7 +1931,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.traktAuthCode = msg.userCode
 		m.traktAuthURL = msg.verificationURL
 		m.traktAuthDeviceCode = msg.deviceCode
-		return m, m.pollTraktAuth(msg.deviceCode, msg.interval)
+		return m, m.pollTraktAuth(msg.deviceCode, msg.interval, msg.expiresIn)
 	}
 	return m, nil
 }
@@ -1941,9 +1957,9 @@ func (m *modelImpl) startTraktAuth() (tea.Model, tea.Cmd) {
 	}
 }
 
-func (m *modelImpl) pollTraktAuth(deviceCode string, interval int) tea.Cmd {
+func (m *modelImpl) pollTraktAuth(deviceCode string, interval, expiresIn int) tea.Cmd {
 	return func() tea.Msg {
-		err := m.traktClient.PollDeviceAuth(m.appCtx, deviceCode, interval)
+		err := m.traktClient.PollDeviceAuth(m.appCtx, deviceCode, interval, expiresIn)
 		m.traktAuthCode = ""
 		m.traktAuthURL = ""
 		return authDoneMsg{err: err}

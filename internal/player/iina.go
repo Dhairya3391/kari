@@ -128,7 +128,7 @@ func buildIINAArgs(source model.PlaybackSource, media model.ResolvedMedia, socke
 	return args
 }
 
-func startPlayerWithStartupCheck(binary string, args []string, timeout time.Duration, socketPath string) (stderr string, exitCode int, launched bool, stats PlaybackResult) {
+func startPlayerWithStartupCheck(binary string, args []string, timeout time.Duration, socketPath string) (stderr string, exitCode int, launched bool, result PlaybackResult) {
 	// Clean up any stale socket from a previous run
 	os.Remove(socketPath)
 
@@ -160,7 +160,8 @@ func startPlayerWithStartupCheck(binary string, args []string, timeout time.Dura
 		// Launched successfully, start IPC polling
 		ipcDone := make(chan struct{})
 		client := NewIPCClient(socketPath)
-		go ipcPoller(context.Background(), client, &stats, ipcDone)
+		ps := newPlaybackStats()
+		go ipcPoller(context.Background(), client, ps, ipcDone)
 
 		err := <-done
 		close(ipcDone)
@@ -174,6 +175,6 @@ func startPlayerWithStartupCheck(binary string, args []string, timeout time.Dura
 				exitCode = 1
 			}
 		}
-		return "", exitCode, true, stats
+		return "", exitCode, true, ps.snapshot()
 	}
 }

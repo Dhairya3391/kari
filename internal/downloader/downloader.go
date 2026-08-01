@@ -200,6 +200,11 @@ func (d *YTDLPDownloader) findOutputSize(outputDir, baseTitle string) string {
 	for ext := range knownMediaExts {
 		path := filepath.Join(outputDir, baseTitle+ext)
 		if info, err := os.Stat(path); err == nil && info.Size() > 1024*1024 {
+			// A .aria2 control file next to the media file means the
+			// download was interrupted and the file is incomplete.
+			if _, err := os.Stat(path + ".aria2"); err == nil {
+				continue
+			}
 			return formatFileSize(info.Size())
 		}
 	}

@@ -112,13 +112,26 @@ func (c *TraktClient) StartDeviceAuth(ctx context.Context) (userCode, verificati
 	return res.UserCode, res.VerificationURL, res.DeviceCode, res.Interval, res.ExpiresIn, nil
 }
 
-func (c *TraktClient) PollDeviceAuth(ctx context.Context, deviceCode string, interval int) error {
+func (c *TraktClient) PollDeviceAuth(ctx context.Context, deviceCode string, interval, expiresIn int) error {
+	if interval <= 0 {
+		interval = 5
+	}
+	deadline := time.Duration(expiresIn)*time.Second + 30*time.Second
+	if expiresIn <= 0 {
+		deadline = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				return fmt.Errorf("trakt device auth timed out")
+			}
 			return ctx.Err()
 		case <-ticker.C:
 			body := map[string]string{
@@ -135,7 +148,6 @@ func (c *TraktClient) PollDeviceAuth(ctx context.Context, deviceCode string, int
 			if err != nil {
 				continue
 			}
-			defer resp.Body.Close()
 
 			if resp.StatusCode == 200 {
 				var res struct {
@@ -144,6 +156,7 @@ func (c *TraktClient) PollDeviceAuth(ctx context.Context, deviceCode string, int
 					ExpiresIn    int    `json:"expires_in"`
 				}
 				if err := json.NewDecoder(resp.Body).Decode(&res); err == nil {
+					resp.Body.Close()
 					c.token = &TraktToken{
 						AccessToken:  res.AccessToken,
 						RefreshToken: res.RefreshToken,
@@ -151,10 +164,19 @@ func (c *TraktClient) PollDeviceAuth(ctx context.Context, deviceCode string, int
 					}
 					return c.saveToken()
 				}
-			} else if resp.StatusCode == 400 || resp.StatusCode == 404 || resp.StatusCode == 409 || resp.StatusCode == 410 {
-				// pending, slow_down, expired, etc.
+				resp.Body.Close()
 				continue
-			} else {
+			}
+
+			switch resp.StatusCode {
+			case http.StatusBadRequest, http.StatusTooManyRequests:
+				resp.Body.Close()
+				continue
+			case http.StatusNotFound, http.StatusConflict, http.StatusGone:
+				resp.Body.Close()
+				return fmt.Errorf("trakt auth failed: device code invalid or expired (%d)", resp.StatusCode)
+			default:
+				resp.Body.Close()
 				return fmt.Errorf("trakt auth failed: %d", resp.StatusCode)
 			}
 		}

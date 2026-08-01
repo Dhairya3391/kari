@@ -199,7 +199,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		itemID = mediaID
 	}
 
-	streamURL := fmt.Sprintf("%s/Videos/%s/stream?static=true", c.server, itemID)
+	streamURL := fmt.Sprintf("%s/Videos/%s/stream?static=true&api_key=%s", c.server, itemID, url.QueryEscape(c.apiKey))
 
 	sources := []provider.MediaSource{
 		{

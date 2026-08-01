@@ -19,7 +19,7 @@ var (
 	nonDigitRe         = regexp.MustCompile(`\D`)
 	iframeSrcRe        = regexp.MustCompile(`(?is)<iframe[^>]+src="([^"]+)"`)
 	getvidlinkRe       = regexp.MustCompile(`(/inc/embed/getvidlink\.php\?[^"]+)`)
-	directMediaURLRe   = regexp.MustCompile(`(?is)https?://[^"'<>\s\\]+?\.(?:m3u8|mp4)(?:\?[^"'<>\s\\]*)?`)
+	directMediaURLRe   = regexp.MustCompile(`(?is)https?://[^"'<>\s\\]+?\.(?:m3u8|mp4)[^"'<>\s\\]*`)
 )
 
 func containsStr(ss []string, s string) bool {

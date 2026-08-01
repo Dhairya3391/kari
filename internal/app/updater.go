@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"kari/internal/logging"
@@ -143,7 +144,7 @@ func applyUpdate(url string) error {
 		return err
 	}
 
-	var written int64
+	var written atomic.Int64
 	done := make(chan struct{})
 	go func() {
 		tick := time.NewTicker(200 * time.Millisecond)
@@ -153,7 +154,7 @@ func applyUpdate(url string) error {
 			case <-tick.C:
 				pct := 0
 				if total > 0 {
-					pct = int(written * 100 / int64(total))
+					pct = int(written.Load() * 100 / int64(total))
 				}
 				fmt.Printf("\r  Downloading... %d%%", pct)
 			case <-done:
@@ -197,11 +198,11 @@ func applyUpdate(url string) error {
 }
 
 type progressWriter struct {
-	written *int64
+	written *atomic.Int64
 }
 
 func (pw *progressWriter) Write(p []byte) (int, error) {
 	n := len(p)
-	*pw.written += int64(n)
+	pw.written.Add(int64(n))
 	return n, nil
 }

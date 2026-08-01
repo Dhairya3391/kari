@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	movieboxAPI = config.MovieboxAPIBase
-	movieboxUA  = config.DesktopUserAgent
+	movieboxAPI     = config.MovieboxAPIBase
+	movieboxUA      = config.DesktopUserAgent
+	movieboxMediaUA = "curl/8.7.1"
 )
 
 type Client struct {
@@ -123,7 +124,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 				URL:       item.URL,
 				Quality:   label,
 				Referer:   "",
-				UserAgent: movieboxUA,
+				UserAgent: movieboxMediaUA,
 				Language:  lang,
 				Subtitles: englishSubs,
 			}

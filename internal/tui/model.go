@@ -231,6 +231,7 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.downloadOutputDir = msg.outputDir
 		m.downloadTitle = msg.title
 		m.downloadProvider = msg.provider
+		m.drainDownloadChan()
 		return m, tea.Batch(spinnerCmd, func() tea.Msg {
 			return downloadProgressMsg{opID: msg.opID, progress: 0}
 		})

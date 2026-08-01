@@ -181,7 +181,7 @@ func playSingleSource(source model.PlaybackSource, media model.ResolvedMedia, an
 	return PlaybackResult{}, fmt.Errorf("%s: %s", summary, details)
 }
 
-func ipcPoller(ctx context.Context, client *IPCClient, stats *PlaybackResult, done <-chan struct{}) {
+func ipcPoller(ctx context.Context, client *IPCClient, stats *playbackStats, done <-chan struct{}) {
 	if err := client.Connect(3 * time.Second); err != nil {
 		logging.Debugf("ipcPoller: connect failed: %v", err)
 		return
@@ -199,23 +199,21 @@ func ipcPoller(ctx context.Context, client *IPCClient, stats *PlaybackResult, do
 			return
 		case <-ticker.C:
 			pos, err := client.GetProperty("time-pos")
+			var posF float64
 			if err == nil {
 				if f, ok := pos.(float64); ok {
-					stats.FinalPositionSecs = f
+					posF = f
 				}
 			}
 			dur, err := client.GetProperty("duration")
+			var durF float64
 			if err == nil {
 				if f, ok := dur.(float64); ok {
-					stats.DurationSecs = f
+					durF = f
 				}
 			}
-			if stats.DurationSecs > 0 {
-				if stats.FinalPositionSecs/stats.DurationSecs > 0.85 {
-					stats.Completed = true
-				} else {
-					stats.Completed = false
-				}
+			if posF > 0 || durF > 0 {
+				stats.update(posF, durF)
 			}
 		}
 	}
@@ -345,7 +343,8 @@ func startMPVWithStartupCheck(args []string, socketPath string) (stderr string, 
 func waitForMPVReadiness(cmd *exec.Cmd, done <-chan error, socketPath string, buf *bytes.Buffer) (stderr string, exitCode int, launched bool, stats PlaybackResult) {
 	ipcDone := make(chan struct{})
 	client := NewIPCClient(socketPath)
-	go ipcPoller(context.Background(), client, &stats, ipcDone)
+	ps := newPlaybackStats()
+	go ipcPoller(context.Background(), client, ps, ipcDone)
 
 	readinessTimeout := time.After(mpvReadinessTimeout)
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -365,7 +364,7 @@ func waitForMPVReadiness(cmd *exec.Cmd, done <-chan error, socketPath string, bu
 					exitCode = 1
 				}
 			}
-			return buf.String(), exitCode, true, PlaybackResult{}
+			return buf.String(), exitCode, true, ps.snapshot()
 
 		case <-readinessTimeout:
 			// Playback didn't start — kill MPV and fall through
@@ -373,10 +372,10 @@ func waitForMPVReadiness(cmd *exec.Cmd, done <-chan error, socketPath string, bu
 			<-done
 			close(ipcDone)
 			logging.Warnf("mpv readiness timeout — killed process (stderr: %s)", summarizeErr("", buf.String()))
-			return buf.String(), 1, true, PlaybackResult{}
+			return buf.String(), 1, true, ps.snapshot()
 
 		case <-ticker.C:
-			if stats.DurationSecs > 0 || stats.FinalPositionSecs > 0 {
+			if ps.playing() {
 				goto phase2
 			}
 		}
@@ -395,7 +394,7 @@ phase2:
 			exitCode = 1
 		}
 	}
-	return buf.String(), exitCode, true, stats
+	return buf.String(), exitCode, true, ps.snapshot()
 }
 
 func startPipeWithStartupCheck(curlArgs, mpvArgs []string, socketPath string) (mpvStderr string, curlStderr string, exitCode int, launched bool, stats PlaybackResult, err error) {
@@ -430,22 +429,25 @@ func startPipeWithStartupCheck(curlArgs, mpvArgs []string, socketPath string) (m
 		done <- err
 	}()
 
+	exitFromErr := func(waitErr error) int {
+		if waitErr == nil {
+			return 0
+		}
+		if ee, ok := waitErr.(*exec.ExitError); ok {
+			return ee.ExitCode()
+		}
+		return 1
+	}
+
 	select {
 	case waitErr := <-done:
-		exitCode = 0
-		if waitErr != nil {
-			if ee, ok := waitErr.(*exec.ExitError); ok {
-				exitCode = ee.ExitCode()
-			} else {
-				exitCode = 1
-			}
-		}
-		return mpvBuf.String(), curlBuf.String(), exitCode, false, PlaybackResult{}, nil
+		return mpvBuf.String(), curlBuf.String(), exitFromErr(waitErr), false, PlaybackResult{}, nil
 	case <-time.After(mpvStartupTimeout):
 		// Launched successfully, start IPC polling
 		ipcDone := make(chan struct{})
 		client := NewIPCClient(socketPath)
-		go ipcPoller(context.Background(), client, &stats, ipcDone)
+		ps := newPlaybackStats()
+		go ipcPoller(context.Background(), client, ps, ipcDone)
 
 		// Wait for playback readiness with timeout
 		pipeReadinessTimeout := time.After(mpvReadinessTimeout)
@@ -457,22 +459,14 @@ func startPipeWithStartupCheck(curlArgs, mpvArgs []string, socketPath string) (m
 			select {
 			case waitErr := <-done:
 				close(ipcDone)
-				exitCode = 0
-				if waitErr != nil {
-					if ee, ok := waitErr.(*exec.ExitError); ok {
-						exitCode = ee.ExitCode()
-					} else {
-						exitCode = 1
-					}
-				}
-				return mpvBuf.String(), curlBuf.String(), exitCode, true, PlaybackResult{}, nil
+				return mpvBuf.String(), curlBuf.String(), exitFromErr(waitErr), true, ps.snapshot(), nil
 			case <-pipeReadinessTimeout:
 				_ = p2.Process.Kill()
 				<-done
 				close(ipcDone)
-				return mpvBuf.String(), curlBuf.String(), 1, true, PlaybackResult{}, nil
+				return mpvBuf.String(), curlBuf.String(), 1, true, ps.snapshot(), nil
 			case <-pipeTick.C:
-				if stats.DurationSecs > 0 || stats.FinalPositionSecs > 0 {
+				if ps.playing() {
 					break pipeCheck
 				}
 			}
@@ -481,15 +475,7 @@ func startPipeWithStartupCheck(curlArgs, mpvArgs []string, socketPath string) (m
 		waitErr := <-done
 		close(ipcDone)
 
-		exitCode = 0
-		if waitErr != nil {
-			if ee, ok := waitErr.(*exec.ExitError); ok {
-				exitCode = ee.ExitCode()
-			} else {
-				exitCode = 1
-			}
-		}
-		return mpvBuf.String(), curlBuf.String(), exitCode, true, stats, nil
+		return mpvBuf.String(), curlBuf.String(), exitFromErr(waitErr), true, ps.snapshot(), nil
 	}
 }
 
@@ -519,15 +505,23 @@ func summarizeErr(label, stderr string) string {
 }
 
 func attemptSucceeded(launched bool, exitCode int, stats PlaybackResult) bool {
-	if exitCode == 0 || exitCode == 4 {
-		return true
-	}
-	// If it exited with an error code, but we managed to play some video, we can consider it a "success"
-	// in the sense that the stream worked but maybe it crashed later, or user quit abnormally.
+	// Evidence that the stream actually started playing (position or
+	// duration observed over IPC) always counts as a success, even if mpv
+	// crashed or was quit abnormally afterwards.
 	if stats.DurationSecs > 0 || stats.FinalPositionSecs > 0 {
 		return true
 	}
-	return false
+	// A process that exits before the startup window elapses — even with a 0
+	// exit code — means playback never started (e.g. mpv fails to open the
+	// URL and quits cleanly). Treat that as a failure so the caller falls
+	// through to the next strategy instead of reporting a bogus success.
+	if !launched {
+		return false
+	}
+	// Survived the startup window but exited cleanly before we could observe
+	// playback (e.g. the user quit quickly): accept it so we don't relaunch
+	// another window for nothing.
+	return exitCode == 0 || exitCode == 4
 }
 
 func hwdecOptionArg() string {

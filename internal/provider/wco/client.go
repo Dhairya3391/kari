@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"golang.org/x/sync/errgroup"
 
@@ -148,33 +149,45 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 		}
 	}
 
-	if len(filtered) == 0 {
-		// Fallback to index lists
-		logging.Debugf("wco no direct results, trying index candidates query=%q", query)
-		indexCandidates := c.fetchIndexCandidates(ctx)
-		if len(indexCandidates) > 0 {
-			ranked := c.rankSeriesByQuery(indexCandidates, query)
+	if len(filtered) > 0 {
+		return c.rankSeriesByQuery(filtered, bestQuery), nil
+	}
 
-			// Filter index candidates by mode
-			var modeFiltered []provider.SearchResult
-			for _, r := range ranked {
-				if mode == provider.ModeMovies {
-					continue
+	// Fallback to index lists
+	logging.Debugf("wco no direct results, trying index candidates query=%q", query)
+	indexCandidates := c.fetchIndexCandidates(ctx)
+	if len(indexCandidates) > 0 {
+		ranked := c.rankSeriesByQuery(indexCandidates, query)
+
+		// Filter index candidates by mode, consistent with the direct path.
+		var modeFiltered []provider.SearchResult
+		for _, r := range ranked {
+			switch mode {
+			case provider.ModeMovies:
+				if !strings.Contains(r.ID, "/anime/") {
+					modeFiltered = append(modeFiltered, r)
 				}
+			case provider.ModeAnime, provider.ModeCartoon:
+				if strings.Contains(r.ID, "/anime/") {
+					modeFiltered = append(modeFiltered, r)
+				}
+			default:
 				modeFiltered = append(modeFiltered, r)
 			}
+		}
+		if len(modeFiltered) > 0 {
 			logging.Debugf("wco index candidates found count=%d", len(modeFiltered))
 			return modeFiltered, nil
 		}
-		if len(filtered) == 0 && len(allSeen) > 0 {
-			results := make([]provider.SearchResult, 0, len(allSeen))
-			for _, r := range allSeen {
-				results = append(results, r)
-			}
-			return c.rankSeriesByQuery(results, bestQuery), nil
+	}
+
+	// Best-effort: return whatever direct matches we had even if the mode
+	// filter excluded them, unless the mode explicitly asked for movies.
+	if len(allSeen) > 0 && mode != provider.ModeMovies {
+		results := make([]provider.SearchResult, 0, len(allSeen))
+		for _, r := range allSeen {
+			results = append(results, r)
 		}
-	} else {
-		results := filtered
 		return c.rankSeriesByQuery(results, bestQuery), nil
 	}
 
@@ -356,6 +369,17 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			continue
 		}
 
+		// The getvid hop only serves browser user agents and dead mappings
+		// return 404, so probe the mapped URL and keep it only if it serves video.
+		playable, certain := c.probeMediaURL(ctx, mediaURL)
+		switch {
+		case certain && !playable:
+			logging.Warnf("wco ResolveSource: dropping quality %q (media URL not playable)", key)
+			continue
+		case !certain:
+			logging.Debugf("wco ResolveSource: could not verify quality %q, keeping URL", key)
+		}
+
 		label := strings.ToUpper(key)
 		if key == "enc" {
 			label = "HD" // Default
@@ -527,8 +551,13 @@ func (c *Client) fetchIndexCandidates(ctx context.Context) []provider.SearchResu
 
 				parts := strings.Split(fullURL, "/")
 				slug := parts[len(parts)-1]
+				if slug == "" {
+					continue
+				}
 				title := strings.ReplaceAll(slug, "-", " ")
-				title = strings.ToUpper(title[:1]) + title[1:]
+				runes := []rune(title)
+				runes[0] = unicode.ToUpper(runes[0])
+				title = string(runes)
 
 				allItems[fullURL] = provider.SearchResult{
 					Title:     title,
@@ -770,6 +799,36 @@ func (c *Client) resolveFinalMediaURL(ctx context.Context, server, token string)
 	// Fallback cleanup
 	fallback := strings.ReplaceAll(strings.Trim(text, `"`), `\/`, `/`)
 	return fallback, nil
+}
+
+// probeMediaURL issues a small Range request to confirm the URL actually
+// serves video before emitting it as a playable source. certain is false when
+// the request failed at the network level, in which case the caller should
+// keep the URL rather than drop it.
+func (c *Client) probeMediaURL(ctx context.Context, mediaURL string) (playable bool, certain bool) {
+	headers := map[string]string{
+		"Range":            "bytes=0-0",
+		"Referer":          "https://www.wcostream.com/",
+		"X-Requested-With": "XMLHttpRequest",
+		"Accept":           "video/*, */*",
+	}
+	resp, err := c.doRequest(ctx, http.MethodGet, mediaURL, headers, nil)
+	if err != nil {
+		logging.Debugf("wco probeMediaURL request failed for %q: %v", mediaURL, err)
+		return false, false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return false, true
+	}
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.HasPrefix(ct, "video/") || strings.Contains(ct, "mp4") ||
+		strings.Contains(ct, "mpegurl") || strings.Contains(ct, "octet-stream") {
+		return true, true
+	}
+	return false, true
 }
 
 func (c *Client) setCookieHeader(cookieHeader string) {
