@@ -6,11 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -29,15 +25,19 @@ type IPCClient struct {
 type playbackStats struct {
 	mu     sync.Mutex
 	result PlaybackResult
+	loaded bool
 }
 
 func newPlaybackStats() *playbackStats { return &playbackStats{} }
 
-func (s *playbackStats) update(pos, dur float64) {
+func (s *playbackStats) update(pos, dur float64, loaded bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.result.FinalPositionSecs = pos
 	s.result.DurationSecs = dur
+	if loaded {
+		s.loaded = true
+	}
 	if s.result.DurationSecs > 0 {
 		s.result.Completed = s.result.FinalPositionSecs/s.result.DurationSecs > 0.85
 	} else {
@@ -54,7 +54,7 @@ func (s *playbackStats) snapshot() PlaybackResult {
 func (s *playbackStats) playing() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.result.DurationSecs > 0 || s.result.FinalPositionSecs > 0
+	return s.loaded || s.result.DurationSecs > 0 || s.result.FinalPositionSecs > 0
 }
 
 func newIPCSerializer(conn net.Conn) *bufio.Scanner {
@@ -72,20 +72,16 @@ func NewIPCClient(socketPath string) *IPCClient {
 }
 
 func (c *IPCClient) Connect(timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("unix", c.socketPath, 1*time.Second)
-		if err == nil {
-			c.mu.Lock()
-			c.conn = conn
-			c.scanner = newIPCSerializer(conn)
-			c.closed = false
-			c.mu.Unlock()
-			return nil
-		}
-		time.Sleep(200 * time.Millisecond)
+	conn, err := dialIPC(c.socketPath, timeout)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("timeout connecting to mpv IPC socket: %s", c.socketPath)
+	c.mu.Lock()
+	c.conn = conn
+	c.scanner = newIPCSerializer(conn)
+	c.closed = false
+	c.mu.Unlock()
+	return nil
 }
 
 func (c *IPCClient) GetProperty(property string) (interface{}, error) {
@@ -158,38 +154,4 @@ func (c *IPCClient) Close() error {
 		return err
 	}
 	return nil
-}
-
-func DefaultMPVSocketPath() string {
-	cleanupStaleSockets()
-	return fmt.Sprintf("/tmp/kari-mpv-%d.sock", os.Getpid())
-}
-
-// cleanupStaleSockets removes /tmp/kari-mpv-*.sock files whose owning
-// process is no longer running (e.g. after a crash or SIGKILL).
-func cleanupStaleSockets() {
-	matches, err := filepath.Glob("/tmp/kari-mpv-*.sock")
-	if err != nil {
-		return
-	}
-	for _, path := range matches {
-		base := filepath.Base(path)
-		// Extract PID from "kari-mpv-<pid>.sock"
-		name := strings.TrimPrefix(base, "kari-mpv-")
-		name = strings.TrimSuffix(name, ".sock")
-		pid, err := strconv.Atoi(name)
-		if err != nil {
-			continue
-		}
-		proc, err := os.FindProcess(pid)
-		if err != nil {
-			os.Remove(path)
-			continue
-		}
-		// Signal 0 checks if the process exists without actually signaling it.
-		err = proc.Signal(syscall.Signal(0))
-		if err != nil {
-			os.Remove(path)
-		}
-	}
 }

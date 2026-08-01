@@ -388,6 +388,7 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 		logging.Warnf("onPlayDone: opID mismatch (got %d, want %d)", msg.opID, m.playOpID)
 		return m, nil
 	}
+	m.playOpID = 0
 
 	var needsConfirm *player.NeedsCompletionConfirmError
 	isConfirmErr := errors.As(msg.err, &needsConfirm)
@@ -1090,6 +1091,9 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus(statusWarn, "No playback source matches the current filters")
 			return m, nil
 		}
+		if m.loading || m.playOpID != 0 || m.pendingManualPlay {
+			return m, nil
+		}
 		if m.subtitleOpID != 0 {
 			m.pendingManualPlay = true
 			m.loadingText = "Downloading subtitles..."
@@ -1103,6 +1107,9 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "r":
 		if len(m.orderedPlaybackSources()) == 0 {
 			m.setStatus(statusWarn, "No playback source matches the current filters")
+			return m, nil
+		}
+		if m.loading || m.playOpID != 0 || m.pendingManualPlay {
 			return m, nil
 		}
 		if m.subtitleOpID != 0 {

@@ -21,7 +21,7 @@ import (
 )
 
 const mpvStartupTimeout = 1500 * time.Millisecond
-const mpvReadinessTimeout = 15 * time.Second
+const mpvReadinessTimeout = 5 * time.Second
 
 type MPVPlayer struct {
 	aniskip *aniskip.Client
@@ -82,19 +82,8 @@ func playSingleSource(source model.PlaybackSource, media model.ResolvedMedia, an
 	logging.Debugf("playSingleSource: trying direct playback for URL=%q", source.URL)
 	socketPath := DefaultMPVSocketPath()
 
-	buildArgsWithSocket := func(lite bool) []string {
-		args := buildMPVArgs(source, media, lite)
-		// Pop the URL
-		url := args[len(args)-1]
-		args = args[:len(args)-1]
-		// Append extra args
-		args = append(args, aniskipArgs...)
-		args = append(args, "--input-ipc-server="+socketPath)
-		// Push the URL back
-		return append(args, url)
-	}
-
-	directArgs := buildArgsWithSocket(false)
+	// 1. Direct MPV playback (primary)
+	directArgs := buildMPVArgs(source, media, socketPath, aniskipArgs)
 	directErr, directRC, directLaunched, stats := startMPVWithStartupCheck(directArgs, socketPath)
 	if attemptSucceeded(directLaunched, directRC, stats) {
 		logging.Debugf("playSingleSource: direct playback succeeded")
@@ -102,15 +91,7 @@ func playSingleSource(source model.PlaybackSource, media model.ResolvedMedia, an
 	}
 	logging.Warnf("playSingleSource: direct playback failed (rc=%d, err=%q)", directRC, directErr)
 
-	logging.Debugf("playSingleSource: trying direct-lite playback for URL=%q", source.URL)
-	directLiteArgs := buildArgsWithSocket(true)
-	directLiteErr, directLiteRC, directLiteLaunched, statsLite := startMPVWithStartupCheck(directLiteArgs, socketPath)
-	if attemptSucceeded(directLiteLaunched, directLiteRC, statsLite) {
-		logging.Debugf("playSingleSource: direct-lite playback succeeded")
-		return statsLite, nil
-	}
-	logging.Warnf("playSingleSource: direct-lite playback failed (rc=%d, err=%q)", directLiteRC, directLiteErr)
-
+	// 2. Curl-to-MPV pipe (fallback for streams requiring custom headers/TLS connection handling)
 	userAgent := config.AndroidUA()
 	if strings.TrimSpace(source.UserAgent) != "" {
 		userAgent = source.UserAgent
@@ -137,7 +118,7 @@ func playSingleSource(source model.PlaybackSource, media model.ResolvedMedia, an
 		"--msg-level=all=error",
 		"--cache=no",
 		"--demuxer-max-bytes=50M",
-		"--network-timeout=10",
+		"--network-timeout=5",
 		"--input-ipc-server=" + socketPath,
 		hwdecOptionArg(),
 	}
@@ -163,15 +144,9 @@ func playSingleSource(source model.PlaybackSource, media model.ResolvedMedia, an
 	}
 	logging.Warnf("playSingleSource: curl-to-mpv pipe failed (rc=%d, mpv_err=%q, curl_err=%q)", mpvRC, mpvErr, curlErr)
 
-	summary := fmt.Sprintf(
-		"mpv playback failed (direct rc=%d, direct-lite rc=%d, pipe rc=%d)",
-		directRC,
-		directLiteRC,
-		mpvRC,
-	)
+	summary := fmt.Sprintf("mpv playback failed (direct rc=%d, pipe rc=%d)", directRC, mpvRC)
 	details := joinNonEmpty(
 		summarizeErr("direct", directErr),
-		summarizeErr("direct-lite", directLiteErr),
 		summarizeErr("pipe-mpv", mpvErr),
 		summarizeErr("pipe-curl", curlErr),
 	)
@@ -188,7 +163,42 @@ func ipcPoller(ctx context.Context, client *IPCClient, stats *playbackStats, don
 	}
 	defer client.Close()
 
-	ticker := time.NewTicker(5 * time.Second)
+	poll := func() {
+		pos, posErr := client.GetProperty("time-pos")
+		var posF float64
+		if posErr == nil {
+			if f, ok := pos.(float64); ok {
+				posF = f
+			}
+		}
+		dur, durErr := client.GetProperty("duration")
+		var durF float64
+		if durErr == nil {
+			if f, ok := dur.(float64); ok {
+				durF = f
+			}
+		}
+		idle, idleErr := client.GetProperty("idle-active")
+		var isIdle bool
+		if idleErr == nil {
+			if b, ok := idle.(bool); ok {
+				isIdle = b
+			}
+		}
+
+		// Media is loaded if time-pos is available (even if 0.0), duration is > 0,
+		// or MPV is actively loading/playing media (not idle).
+		loaded := (posErr == nil) || (durErr == nil && durF > 0) || (idleErr == nil && !isIdle)
+
+		if loaded || posF > 0 || durF > 0 {
+			stats.update(posF, durF, loaded)
+		}
+	}
+
+	// Poll immediately on connection so readiness is detected without waiting for ticker delay.
+	poll()
+
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -198,33 +208,22 @@ func ipcPoller(ctx context.Context, client *IPCClient, stats *playbackStats, don
 		case <-done:
 			return
 		case <-ticker.C:
-			pos, err := client.GetProperty("time-pos")
-			var posF float64
-			if err == nil {
-				if f, ok := pos.(float64); ok {
-					posF = f
-				}
-			}
-			dur, err := client.GetProperty("duration")
-			var durF float64
-			if err == nil {
-				if f, ok := dur.(float64); ok {
-					durF = f
-				}
-			}
-			if posF > 0 || durF > 0 {
-				stats.update(posF, durF)
-			}
+			poll()
 		}
 	}
 }
 
-func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, lite bool) []string {
+func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, socketPath string, aniskipArgs []string) []string {
 	args := []string{
 		"--no-ytdl",
 		"--msg-level=all=warn",
 		hwdecOptionArg(),
-		"--network-timeout=10",
+		"--network-timeout=5",
+		"--cache=auto",
+		"--demuxer-seekable-cache=yes",
+		"--demuxer-max-bytes=200M",
+		"--demuxer-readahead-secs=5",
+		"--hls-bitrate=max",
 	}
 
 	if media.StartTime > 5 {
@@ -241,22 +240,27 @@ func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, lite b
 	if strings.TrimSpace(source.Referer) != "" {
 		args = append(args, "--referrer="+source.Referer)
 	}
-	if lite {
-		args = append(args, "--profile=low-latency")
-	} else {
-		args = append(args,
-			"--cache=auto",
-			"--demuxer-seekable-cache=yes",
-			"--demuxer-max-bytes=200M",
-			"--demuxer-readahead-secs=5",
-		)
+
+	var headers []string
+	if userAgent != "" {
+		headers = append(headers, "User-Agent: "+userAgent)
+	}
+	if strings.TrimSpace(source.Referer) != "" {
+		headers = append(headers, "Referer: "+source.Referer)
+		ref := strings.TrimSuffix(source.Referer, "/")
+		headers = append(headers, "Origin: "+ref)
+	}
+	if strings.TrimSpace(source.CookieHeader) != "" {
+		headers = append(headers, "Cookie: "+source.CookieHeader)
+	}
+	if len(headers) > 0 {
+		args = append(args, "--http-header-fields="+strings.Join(headers, "\r\n"))
 	}
 
-	if strings.TrimSpace(source.CookieHeader) != "" {
-		args = append(args, "--http-header-fields=Cookie: "+source.CookieHeader)
-	}
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendSubtitleArgs(args, media.SubtitlePaths())
+	args = append(args, aniskipArgs...)
+	args = append(args, "--input-ipc-server="+socketPath)
 
 	return append(args, source.URL)
 }
@@ -304,8 +308,8 @@ func optionalCurlFlags(finalURL string) []string {
 
 var curlOptionalFlags = []string{
 	"--compressed",
-	"--connect-timeout", "10",
-	"--retry", "3",
+	"--connect-timeout", "5",
+	"--retry", "2",
 }
 
 func startMPVWithStartupCheck(args []string, socketPath string) (stderr string, exitCode int, launched bool, stats PlaybackResult) {
