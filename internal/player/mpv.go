@@ -116,12 +116,14 @@ func playSingleSource(source model.PlaybackSource, media model.ResolvedMedia, an
 		"--no-ytdl",
 		"--really-quiet",
 		"--msg-level=all=error",
+		"--vo=gpu-next",
 		"--cache=no",
 		"--demuxer-max-bytes=50M",
 		"--network-timeout=8",
 		"--input-ipc-server=" + socketPath,
 		hwdecOptionArg(),
 	}
+	pipeMpvArgs = append(pipeMpvArgs, renderQualityArgs()...)
 
 	if media.StartTime > 5 {
 		pipeMpvArgs = append(pipeMpvArgs, fmt.Sprintf("--start=%d", int(media.StartTime)))
@@ -217,6 +219,7 @@ func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, socket
 	args := []string{
 		"--no-ytdl",
 		"--msg-level=all=warn",
+		"--vo=gpu-next",
 		hwdecOptionArg(),
 		"--network-timeout=8",
 		"--cache=yes",
@@ -227,6 +230,7 @@ func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, socket
 		"--stream-buffer-size=16M",
 		"--hls-bitrate=max",
 	}
+	args = append(args, renderQualityArgs()...)
 
 	if media.StartTime > 5 {
 		args = append(args, fmt.Sprintf("--start=%d", int(media.StartTime)))
@@ -265,6 +269,26 @@ func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, socket
 	args = append(args, "--input-ipc-server="+socketPath)
 
 	return append(args, source.URL)
+}
+
+func renderQualityArgs() []string {
+	return []string{
+		"--scale=ewa_lanczossharp",
+		"--cscale=ewa_lanczossharp",
+		"--dscale=mitchell",
+		"--scale-antiring=0.6",
+		"--cscale-antiring=0.6",
+		"--dscale-antiring=0.6",
+		"--correct-downscaling=yes",
+		"--sigmoid-upscaling=yes",
+		"--dither-depth=auto",
+		"--dither=fruit",
+		"--deband=yes",
+		"--deband-iterations=3",
+		"--deband-threshold=35",
+		"--deband-range=16",
+		"--deband-grain=4",
+	}
 }
 
 func appendTitleArgs(args []string, title string) []string {
