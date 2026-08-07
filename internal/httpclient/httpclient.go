@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"runtime"
@@ -47,21 +48,28 @@ func newClient(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 
 	// Termux/Android cross-compiled binaries often fail DNS resolution
-	// because they lack /etc/resolv.conf. Use a fallback public DNS.
+	// because they lack a working /etc/resolv.conf (the stub resolver on
+	// [::1]:53 refuses connections). Dial public resolvers directly instead.
+	// TCP is tried first because a TCP handshake proves the server is
+	// reachable — UDP connects always "succeed" even when the server is
+	// unreachable, so a UDP-only fallback chain never triggers on timeouts.
 	if runtime.GOOS == "android" {
 		resolver := &net.Resolver{
-			PreferGo: true,
+			PreferGo:     true,
+			StrictErrors: false,
 			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				d := net.Dialer{
-					Timeout: 5 * time.Second,
+				d := net.Dialer{Timeout: 5 * time.Second}
+				var lastErr error
+				for _, proto := range []string{"tcp", "udp"} {
+					for _, server := range []string{"1.1.1.1:53", "8.8.8.8:53", "8.8.4.4:53", "9.9.9.9:53"} {
+						conn, err := d.DialContext(ctx, proto, server)
+						if err == nil {
+							return conn, nil
+						}
+						lastErr = err
+					}
 				}
-				// Force UDP to Cloudflare DNS
-				conn, err := d.DialContext(ctx, "udp", "1.1.1.1:53")
-				if err != nil {
-					// Fallback to Google DNS
-					return d.DialContext(ctx, "udp", "8.8.8.8:53")
-				}
-				return conn, err
+				return nil, fmt.Errorf("no reachable public DNS server: %w", lastErr)
 			},
 		}
 

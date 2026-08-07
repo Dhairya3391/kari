@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"kari/internal/httpclient"
 	"kari/internal/logging"
 )
 
@@ -95,7 +96,10 @@ func update(quiet bool) error {
 }
 
 func getLatestRelease() (*GitHubRelease, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Use the shared client: on Termux/Android it swaps in a public DNS
+	// resolver (Cloudflare/Google) because the system resolver can be broken
+	// (e.g. "lookup api.github.com on [::1]:53: connection refused").
+	client := httpclient.New()
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
 	resp, err := client.Get(url)
 	if err != nil {
@@ -116,7 +120,8 @@ func getLatestRelease() (*GitHubRelease, error) {
 }
 
 func applyUpdate(url string) error {
-	client := &http.Client{Timeout: 120 * time.Second}
+	// Shared client: gets Android DNS fallback + retries on the binary download too.
+	client := httpclient.NewWithTimeout(120 * time.Second)
 	resp, err := client.Get(url)
 	if err != nil {
 		return err
