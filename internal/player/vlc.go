@@ -101,6 +101,10 @@ func buildVLCArgs(source model.PlaybackSource, media model.ResolvedMedia) []stri
 		args = append(args, "--http-referrer="+source.Referer)
 	}
 
+	if strings.TrimSpace(source.CookieHeader) != "" {
+		args = append(args, "--http-set-cookie="+strings.TrimSpace(source.CookieHeader))
+	}
+
 	if media.StartTime > 5 {
 		args = append(args, fmt.Sprintf("--start-time=%d", int(media.StartTime)))
 	}

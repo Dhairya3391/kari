@@ -108,7 +108,20 @@ func playSingleSourceWithMPVAndroid(source model.PlaybackSource, media model.Res
 
 	writeMpvConf(source, media)
 
-	args := []string{"start", "-n", mpvAndroidPackage + "/.MPVActivity", "-a", "android.intent.action.VIEW", "-d", source.URL}
+	// mpv-android's intent accepts options only via extras for title, start
+	// position and subtitle tracks; it cannot receive HTTP headers/UA/referrer
+	// (see parseIntentExtras in the upstream app). Use -t video/any so the URL
+	// is opened regardless of a missing/odd file extension, and pass title and
+	// resume position as supported extras.
+	args := []string{"start", "-n", mpvAndroidPackage + "/.MPVActivity", "-a", "android.intent.action.VIEW", "-t", "video/any", "-d", source.URL}
+
+	if title := sanitizeMediaTitle(media.DisplayTitle()); title != "" {
+		args = append(args, "--es", "title", title)
+	}
+	if media.StartTime > 5 {
+		// mpv-android expects the start position in milliseconds.
+		args = append(args, "--ei", "position", fmt.Sprintf("%d", int(media.StartTime*1000)))
+	}
 
 	binary := termuxAmBinary()
 	logging.Debugf("android playback launch player=mpv-android binary=%q args=%v", binary, args)
@@ -136,11 +149,28 @@ func playSingleSourceWithMPVAndroid(source model.PlaybackSource, media model.Res
 }
 
 func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
+	// mpv-android always loads libmpv's config-dir (its internal filesDir) plus
+	// any file it pulls in via an `include=` line. Kari writes this playback
+	// config to the external MPV media dir, and the user's own mpv.conf (see
+	// README "Android Setup") contains:
+	//
+	//   include=/storage/emulated/0/Android/media/is.xyz.mpv/.mpv.conf
+	//
+	// That include is what makes headers (Referer/Origin/User-Agent/Cookie) and
+	// the network tuning below reach libmpv. Writing mpv.conf (the include
+	// source) alongside .mpv.conf handles both the file directly and, if the
+	// include is already in place, nothing else is needed.
 	var confBuilder strings.Builder
 	title := sanitizeMediaTitle(media.DisplayTitle())
 	if title != "" {
 		confBuilder.WriteString(fmt.Sprintf("force-media-title=%s\n", title))
 	}
+
+	confBuilder.WriteString("network-timeout=8\n")
+	confBuilder.WriteString("cache=yes\n")
+	confBuilder.WriteString("cache-pause-initial=no\n")
+	confBuilder.WriteString("stream-buffer-size=16M\n")
+	confBuilder.WriteString("demuxer-readahead-secs=2\n")
 
 	if source.Referer != "" {
 		confBuilder.WriteString(fmt.Sprintf("referrer=%s\n", source.Referer))
@@ -164,7 +194,12 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 		headers = append(headers, "Cookie: "+source.CookieHeader)
 	}
 	if len(headers) > 0 {
-		confBuilder.WriteString(fmt.Sprintf("http-header-fields=%s\n", strings.Join(headers, "\\r\\n")))
+		// mpv list-typed options (http-header-fields) are cumulative and can be
+		// given on repeated lines in a config file; do that instead of relying on
+		// an escaped \r\n separator which mpv.conf would not decode.
+		for _, h := range headers {
+			confBuilder.WriteString("http-header-fields=" + h + "\n")
+		}
 	}
 
 	if media.StartTime > 5 {

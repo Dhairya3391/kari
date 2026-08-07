@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
@@ -19,6 +20,14 @@ const (
 	vidKingAPI     = config.VidKingAPIBase
 	vidKingReferer = config.VidKingReferer
 	vidKingUA      = config.DesktopUserAgent
+
+	// preferredVidKingCDN is the host substring treated as the preferred CDN
+	// for each quality level. Prefer the direct MP4 (mbph) over the HLS
+	// playlist (moon): the MP4 is a single byte-range-requestable file with
+	// stable playback and instant seeking, while HLS fetches per segment (on a
+	// different CDN) and is prone to transient per-segment failures. Qualities
+	// only served by the other CDN (e.g. 4K only on moon) are still kept.
+	preferredVidKingCDN = "mbph"
 )
 
 type Client struct {
@@ -88,14 +97,36 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		return nil, provider.ErrNoSources
 	}
 
-	sources := make([]provider.MediaSource, 0, len(resp.Sources))
+	// Deduplicate by quality. The API returns the same rendition from two
+	// CDNs (a direct MP4 and an HLS playlist). Pick one source per quality,
+	// preferring the direct MP4 CDN and only keeping the other CDN for
+	// qualities the preferred CDN lacks, so no quality (e.g. 4K-only HLS) is
+	// dropped.
+	type chosenQuality struct {
+		item vidKingSourceItem
+	}
+	chosen := make(map[string]*chosenQuality, len(resp.Sources))
+	order := make([]string, 0, len(resp.Sources))
 	for _, s := range resp.Sources {
 		q := s.Quality
 		if q == "" {
 			q = "unknown"
 		}
+		cur, exists := chosen[q]
+		preferred := strings.Contains(s.URL, preferredVidKingCDN)
+		if !exists {
+			order = append(order, q)
+		} else if !preferred && cur.item.URL != "" {
+			continue
+		}
+		chosen[q] = &chosenQuality{item: s}
+	}
+
+	sources := make([]provider.MediaSource, 0, len(chosen))
+	for _, q := range order {
+		entry := chosen[q]
 		ms := provider.MediaSource{
-			URL:       s.URL,
+			URL:       entry.item.URL,
 			Quality:   fmt.Sprintf("[VIDKING] %s", q),
 			Referer:   vidKingReferer,
 			UserAgent: vidKingUA,

@@ -21,7 +21,7 @@ import (
 )
 
 const mpvStartupTimeout = 1500 * time.Millisecond
-const mpvReadinessTimeout = 5 * time.Second
+const mpvReadinessTimeout = 8 * time.Second
 
 type MPVPlayer struct {
 	aniskip *aniskip.Client
@@ -118,7 +118,7 @@ func playSingleSource(source model.PlaybackSource, media model.ResolvedMedia, an
 		"--msg-level=all=error",
 		"--cache=no",
 		"--demuxer-max-bytes=50M",
-		"--network-timeout=5",
+		"--network-timeout=8",
 		"--input-ipc-server=" + socketPath,
 		hwdecOptionArg(),
 	}
@@ -218,11 +218,13 @@ func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, socket
 		"--no-ytdl",
 		"--msg-level=all=warn",
 		hwdecOptionArg(),
-		"--network-timeout=5",
-		"--cache=auto",
+		"--network-timeout=8",
+		"--cache=yes",
+		"--cache-pause-initial=no",
 		"--demuxer-seekable-cache=yes",
 		"--demuxer-max-bytes=200M",
-		"--demuxer-readahead-secs=5",
+		"--demuxer-readahead-secs=2",
+		"--stream-buffer-size=16M",
 		"--hls-bitrate=max",
 	}
 

@@ -102,7 +102,10 @@ func buildIINAArgs(source model.PlaybackSource, media model.ResolvedMedia, socke
 	args := []string{"--no-stdin", "--keep-running", source.URL, "--"}
 	args = append(args,
 		"--no-ytdl",
-		"--network-timeout=5",
+		"--network-timeout=8",
+		"--cache=yes",
+		"--cache-pause-initial=no",
+		"--stream-buffer-size=16M",
 		"--input-ipc-server="+socketPath,
 	)
 
