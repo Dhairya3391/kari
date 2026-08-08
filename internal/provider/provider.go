@@ -39,13 +39,21 @@ type Episode struct {
 	TMDBID  int
 }
 
+// SubtitleOption is a subtitle track a provider offers alongside a
+// MediaSource, tagged with its language so callers can pick one matching
+// the user's preferred subtitle language instead of assuming English.
+type SubtitleOption struct {
+	URL      string
+	Language string
+}
+
 type MediaSource struct {
 	URL          string
 	Quality      string
 	Resolver     string
 	Referer      string
 	Type         string
-	Subtitles    []string
+	Subtitles    []SubtitleOption
 	UserAgent    string
 	CookieHeader string
 	Language     string

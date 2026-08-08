@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 )
 
 var (
@@ -166,20 +165,6 @@ func Debugf(format string, args ...any) { Debug(fmt.Sprintf(format, args...)) }
 func Infof(format string, args ...any)  { Info(fmt.Sprintf(format, args...)) }
 func Warnf(format string, args ...any)  { Warn(fmt.Sprintf(format, args...)) }
 func Errorf(format string, args ...any) { Error(fmt.Sprintf(format, args...)) }
-
-// Preview truncates text to max runes (not bytes).
-func Preview(text string, max int) string {
-	if max <= 0 {
-		max = 200
-	}
-	flat := strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(text)
-	flat = strings.TrimSpace(flat)
-	if utf8.RuneCountInString(flat) <= max {
-		return flat
-	}
-	runes := []rune(flat)
-	return string(runes[:max]) + "..."
-}
 
 func resolveLogPath() (string, error) {
 	if path := firstEnv("KARI_LOG_FILE"); path != "" {

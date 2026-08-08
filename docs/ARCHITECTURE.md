@@ -27,6 +27,7 @@ Handles the "wiring" of the system. Loads the configuration, instantiates all pr
 The orchestration layer. 
 - `MediaService`: Manages concurrent searches across providers, episode fetching, and source resolution.
 - `DownloadService`: Selects the appropriate downloader for a source and manages the download lifecycle.
+- `SubtitleService`: Picks a subtitle for the resolved media — the active playback provider's own track in the preferred language first, then that provider's English, then other providers, then OpenSubtitles, then Yify. Never returns a track in an unrelated language.
 
 ### 4. Provider Layer (`internal/provider`)
 Implementations of different media scrapers/APIs.
@@ -42,3 +43,4 @@ Abstractions for external media players.
 Built with `charmbracelet/bubbletea`. 
 - Completely decoupled from external networking or file system logic.
 - Uses messages and commands to interact with Services.
+- Renders posters via `internal/poster` (TMDB/AniList lookup, LRU-cached) and `internal/termimg` (Kitty graphics protocol when the terminal supports it, Unicode half-block art otherwise).

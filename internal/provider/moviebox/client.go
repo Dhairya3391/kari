@@ -109,11 +109,9 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	}
 	sort.Strings(sortedLangs)
 
-	var englishSubs []string
+	var subs []provider.SubtitleOption
 	for _, sub := range result.Subtitles {
-		if sub.Lang == "en" {
-			englishSubs = append(englishSubs, sub.URL)
-		}
+		subs = append(subs, provider.SubtitleOption{URL: sub.URL, Language: sub.Lang})
 	}
 
 	for _, lang := range sortedLangs {
@@ -126,7 +124,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 				Referer:   "",
 				UserAgent: movieboxMediaUA,
 				Language:  lang,
-				Subtitles: englishSubs,
+				Subtitles: subs,
 			}
 			sources = append(sources, ms)
 		}

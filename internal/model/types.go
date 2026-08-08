@@ -38,6 +38,7 @@ type SubtitleTrack struct {
 	URL      string
 	Referer  string
 	Default  bool
+	Resolver string
 }
 
 type ResolvedMedia struct {

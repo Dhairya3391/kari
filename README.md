@@ -36,7 +36,8 @@ Type a query, press Space, pick a result.
 - **Scrobbling** — Syncs watch status to Trakt.tv (movies/TV) via device auth (no tokens to copy) and AniList (anime) via OAuth.
 - **Watch history** — Local JSON store, grouped by series, remembers your position.
 - **Downloading** — yt-dlp powered downloads with aria2c multi-connection acceleration for HLS, DASH, and direct HTTP sources.
-- **Subtitles** — Pulls from OpenSubtitles automatically, Yify as fallback.
+- **Posters & metadata** — TMDB/AniList poster art in search results and the preview screen, plus overview, genres, and rating. Renders as real pixel images on Kitty/WezTerm/Ghostty, and falls back to Unicode half-block art everywhere else — no config needed, capability is auto-detected.
+- **Subtitles** — Tries the playback provider's own subtitles first (matching your preferred language, then English), falls back to other providers, then OpenSubtitles, then Yify — never a random unrelated language. Re-syncs automatically if you switch source or change the subtitle language setting.
 - **Self-update** — `./kari -u` fetches the latest release from GitHub.
 - **Cross-platform** — Linux, macOS, Windows, Android (Termux).
 
@@ -183,9 +184,9 @@ The binary ships with fallback keys for Trakt, AniList, and TMDB. They work fine
 
 1. **Search** — Type a query, hit Space. Results come back grouped by provider.
 2. **Episodes** — Season/episode list with filler badges. Sub/dub toggle is there for anime.
-3. **Preview** — Shows resolved sources, subtitles, and any saved position. Hit Enter to play.
+3. **Preview** — Poster, description, genres, rating, resolved sources, selected subtitle, and any saved position. Hit Enter to play.
 4. **History** — Grouped by series. Resume or delete.
-5. **Settings** — Authenticate with Trakt or AniList via device auth (no manual token fiddling).
+5. **Settings** — Authenticate with Trakt or AniList via device auth (no manual token fiddling), set quality mode, toggle MovieBox languages, and pick a preferred subtitle language.
 
 ### Media Providers
 

@@ -191,10 +191,10 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		return nil, err
 	}
 
-	subtitleURLs := make([]string, 0, len(lr.Subtitles))
+	subtitleOptions := make([]provider.SubtitleOption, 0, len(lr.Subtitles))
 	for _, sub := range lr.Subtitles {
 		if sub.File != "" {
-			subtitleURLs = append(subtitleURLs, sub.File)
+			subtitleOptions = append(subtitleOptions, provider.SubtitleOption{URL: sub.File, Language: sub.Language})
 		}
 	}
 
@@ -262,7 +262,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			Referer:   referer,
 			Type:      s.Type,
 			UserAgent: config.DesktopUserAgent, // Use desktop UA for better compatibility
-			Subtitles: subtitleURLs,
+			Subtitles: subtitleOptions,
 		})
 	}
 	logging.Debugf("miruro resolve source done count=%d", len(sources))

@@ -21,11 +21,18 @@ func FilterPlaybackIndices(playback []model.PlaybackSource, qualityMode int, lan
 
 	switch qualityMode {
 	case 1:
-		return filterByQuality(playback, candidates, func(q, maxQ, _ int) bool { return q == maxQ })
+		// Keep the top quality tier plus the next one down (when one
+		// exists), not just the single highest: a resolver's highest tier
+		// is sometimes HLS and unreliable (seen with Vidking's 2160p), so
+		// the next tier down needs to stay visible as a fallback rather
+		// than being filtered out entirely.
+		return filterByQuality(playback, candidates, func(q, maxQ, _, secondQ int) bool {
+			return q == maxQ || (secondQ > 0 && q == secondQ)
+		})
 	case 2:
-		return filterByQuality(playback, candidates, func(q, maxQ, minQ int) bool { return maxQ == minQ || q < maxQ })
+		return filterByQuality(playback, candidates, func(q, maxQ, minQ, _ int) bool { return maxQ == minQ || q < maxQ })
 	case 3:
-		return filterByQuality(playback, candidates, func(q, _, minQ int) bool { return q == minQ })
+		return filterByQuality(playback, candidates, func(q, _, minQ, _ int) bool { return q == minQ })
 	default:
 		return candidates
 	}
@@ -40,7 +47,7 @@ func FilterPlaybackSources(playback []model.PlaybackSource, qualityMode int, lan
 	return sources
 }
 
-func filterByQuality(playback []model.PlaybackSource, candidates []int, keep func(q, maxQ, minQ int) bool) []int {
+func filterByQuality(playback []model.PlaybackSource, candidates []int, keep func(q, maxQ, minQ, secondQ int) bool) []int {
 	type group struct{ indices []int }
 	groups := make(map[string]*group)
 	order := make([]string, 0, len(candidates))
@@ -56,7 +63,7 @@ func filterByQuality(playback []model.PlaybackSource, candidates []int, keep fun
 	result := make([]int, 0, len(candidates))
 	for _, resolver := range order {
 		indices := groups[resolver].indices
-		maxQ, minQ := 0, 99999
+		maxQ, minQ, secondQ := 0, 99999, 0
 		for _, idx := range indices {
 			quality := SourceQuality(playback[idx].Label)
 			maxQ = max(maxQ, quality)
@@ -68,7 +75,13 @@ func filterByQuality(playback []model.PlaybackSource, candidates []int, keep fun
 			minQ = maxQ
 		}
 		for _, idx := range indices {
-			if keep(SourceQuality(playback[idx].Label), maxQ, minQ) {
+			quality := SourceQuality(playback[idx].Label)
+			if quality < maxQ && quality > secondQ {
+				secondQ = quality
+			}
+		}
+		for _, idx := range indices {
+			if keep(SourceQuality(playback[idx].Label), maxQ, minQ, secondQ) {
 				result = append(result, idx)
 			}
 		}

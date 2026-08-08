@@ -17,6 +17,7 @@ import (
 	"kari/internal/httpclient"
 	"kari/internal/logging"
 	"kari/internal/player"
+	"kari/internal/poster"
 	"kari/internal/provider/defaults"
 	"kari/internal/provider/jellyfin"
 	"kari/internal/scrobble"
@@ -80,8 +81,9 @@ func Run() error {
 
 	traktClient := scrobble.NewTraktClient(cfg.TraktClientID, cfg.TraktClientSecret)
 	anilistClient := scrobble.NewAniListClient(cfg.AniListClientID, cfg.AniListClientSecret)
+	posterClient := poster.NewClient(keyPool)
 
-	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, downloadService, subtitleService, historyStore, traktClient, anilistClient)
+	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, downloadService, subtitleService, historyStore, traktClient, anilistClient, posterClient)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	if err != nil {

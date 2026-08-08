@@ -24,6 +24,7 @@ import (
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
+	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/model"
 )
@@ -205,14 +206,17 @@ type subtitleFile struct {
 	FileName string `json:"file_name"`
 }
 
-func (c *Client) Search(ctx context.Context, query string, tmdbID, season, episode int) ([]searchEntry, error) {
-	logging.Debugf("opensubtitles search start query=%q tmdbID=%d S%dE%d", query, tmdbID, season, episode)
+func (c *Client) Search(ctx context.Context, query, language string, tmdbID, season, episode int) ([]searchEntry, error) {
+	if language == "" {
+		language = "en"
+	}
+	logging.Debugf("opensubtitles search start query=%q language=%q tmdbID=%d S%dE%d", query, language, tmdbID, season, episode)
 	if err := c.ensureToken(ctx); err != nil {
 		return nil, err
 	}
 
 	params := url.Values{}
-	params.Set("languages", "en")
+	params.Set("languages", language)
 	if tmdbID > 0 {
 		params.Set("tmdb_id", strconv.Itoa(tmdbID))
 		if season > 0 {
@@ -528,9 +532,12 @@ func detectFormatByContent(data []byte) string {
 	return "unknown"
 }
 
-func (c *Client) FetchBestSubtitle(ctx context.Context, query string, tmdbID, season, episode int) (model.SubtitleTrack, bool, error) {
-	logging.Debugf("opensubtitles FetchBestSubtitle start query=%q tmdbID=%d S%dE%d", query, tmdbID, season, episode)
-	results, err := c.Search(ctx, query, tmdbID, season, episode)
+func (c *Client) FetchBestSubtitle(ctx context.Context, query, language string, tmdbID, season, episode int) (model.SubtitleTrack, bool, error) {
+	if language == "" {
+		language = "en"
+	}
+	logging.Debugf("opensubtitles FetchBestSubtitle start query=%q language=%q tmdbID=%d S%dE%d", query, language, tmdbID, season, episode)
+	results, err := c.Search(ctx, query, language, tmdbID, season, episode)
 	if err != nil {
 		return model.SubtitleTrack{}, false, err
 	}
@@ -605,8 +612,8 @@ func (c *Client) FetchBestSubtitle(ctx context.Context, query string, tmdbID, se
 	}
 
 	track := model.SubtitleTrack{
-		Label:    "English (OpenSubtitles)",
-		Language: "en",
+		Label:    fmt.Sprintf("%s (OpenSubtitles)", lang.Name(language)),
+		Language: lang.Normalize(language),
 		Path:     localPath,
 		Default:  true,
 	}

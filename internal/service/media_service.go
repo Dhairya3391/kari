@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/provider"
@@ -252,20 +253,22 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 							Language:     src.Language,
 						})
 						// Collect subtitles
-						for _, subURL := range src.Subtitles {
-							if _, ok := seenSubs[subURL]; !ok {
-								seenSubs[subURL] = struct{}{}
+						for _, sub := range src.Subtitles {
+							if _, ok := seenSubs[sub.URL]; !ok {
+								seenSubs[sub.URL] = struct{}{}
+								subLang := lang.Normalize(sub.Language)
 								allSubtitleTracks = append(allSubtitleTracks, model.SubtitleTrack{
-									Label:    fmt.Sprintf("English (%s)", p.Name()),
-									Language: "en",
-									URL:      subURL,
+									Label:    fmt.Sprintf("%s (%s)", lang.Name(subLang), p.Name()),
+									Language: subLang,
+									URL:      sub.URL,
 									Referer:  src.Referer,
+									Resolver: p.Name(),
 								})
 							}
 						}
 					}
 					sortPlaybackSources(allPlaybackSources)
-					current := buildResolved(allPlaybackSources, keepBestSubtitle(allSubtitleTracks))
+					current := buildResolved(allPlaybackSources, allSubtitleTracks)
 					mu.Unlock()
 					if onResult != nil {
 						onResult(current)
@@ -294,20 +297,22 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 					Language:     src.Language,
 				})
 				// Collect subtitles
-				for _, subURL := range src.Subtitles {
-					if _, ok := seenSubs[subURL]; !ok {
-						seenSubs[subURL] = struct{}{}
+				for _, sub := range src.Subtitles {
+					if _, ok := seenSubs[sub.URL]; !ok {
+						seenSubs[sub.URL] = struct{}{}
+						subLang := lang.Normalize(sub.Language)
 						allSubtitleTracks = append(allSubtitleTracks, model.SubtitleTrack{
-							Label:    fmt.Sprintf("English (%s)", p.Name()),
-							Language: "en",
-							URL:      subURL,
+							Label:    fmt.Sprintf("%s (%s)", lang.Name(subLang), p.Name()),
+							Language: subLang,
+							URL:      sub.URL,
 							Referer:  src.Referer,
+							Resolver: p.Name(),
 						})
 					}
 				}
 			}
 			sortPlaybackSources(allPlaybackSources)
-			current := buildResolved(allPlaybackSources, keepBestSubtitle(allSubtitleTracks))
+			current := buildResolved(allPlaybackSources, allSubtitleTracks)
 			mu.Unlock()
 
 			if onResult != nil {
@@ -327,22 +332,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 
 	sortPlaybackSources(allPlaybackSources)
 
-	return buildResolved(allPlaybackSources, keepBestSubtitle(allSubtitleTracks)), nil
-}
-
-func keepBestSubtitle(tracks []model.SubtitleTrack) []model.SubtitleTrack {
-	if len(tracks) == 0 {
-		return nil
-	}
-	for _, t := range tracks {
-		if strings.Contains(t.Label, "(vidking)") {
-			t.Label = "English"
-			return []model.SubtitleTrack{t}
-		}
-	}
-	track := tracks[0]
-	track.Label = "English"
-	return []model.SubtitleTrack{track}
+	return buildResolved(allPlaybackSources, allSubtitleTracks), nil
 }
 
 func firstPlaybackURL(playback []model.PlaybackSource) string {

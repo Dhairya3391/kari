@@ -11,9 +11,12 @@ import (
 	"kari/internal/history"
 	"kari/internal/model"
 	"kari/internal/player"
+	"kari/internal/poster"
 	"kari/internal/provider"
 	"kari/internal/scrobble"
 	"kari/internal/service"
+	"kari/internal/termimg"
+	"kari/internal/util"
 )
 
 type viewState string
@@ -159,6 +162,28 @@ type resetConfirmQuitMsg struct{}
 type resetConfirmStopMsg struct{}
 type resetStatusMsg struct{ id int }
 
+type posterSlot string
+
+const (
+	posterSlotSearch  posterSlot = "search"
+	posterSlotPreview posterSlot = "preview"
+)
+
+type posterLoadedMsg struct {
+	slot     posterSlot
+	opID     int
+	rendered string
+	err      error
+}
+
+type previewDetailsMsg struct {
+	opID     int
+	overview string
+	genres   []string
+	rating   string
+	err      error
+}
+
 type modelImpl struct {
 	mediaService    *service.MediaService
 	subtitleService *service.SubtitleService
@@ -203,8 +228,8 @@ type modelImpl struct {
 	statusID             int
 	showHelp             bool
 	selectedPlayback     int
-	prevSourceLanguage   string // language of previously selected source, for carry-over
-	prevSourceQuality    int    // quality of previously selected source, for carry-over
+	prevSourceLanguage   string
+	prevSourceQuality    int
 	availablePlayers     []string
 	selectedPlayer       int
 	autoPlayAfterResolve bool
@@ -217,40 +242,44 @@ type modelImpl struct {
 
 	nextOpID int
 
-	searchOpID          int
-	episodesOpID        int
-	historyContinueOpID int
-	resolveOpID         int
-	subtitleOpID        int
-	playOpID            int
-	downloadOpID        int
-	downloadProgress    float64
-	downloadTotalSize   string
-	downloadSpeed       string
-	downloadDownloaded  string
-	downloadETA         string
-	downloadChan        chan tea.Msg
-	resolveChan         chan tea.Msg
-	cancelDownload      context.CancelFunc
-	downloadTitle       string
-	downloadProvider    string
-	downloadOutputDir   string
-	confirmQuit         bool
-	confirmStop         bool
-	confirmDelete       bool
-	confirmClearHistory bool
-	confirmCompletion   bool
-	traktAuthCode       string
-	traktAuthURL        string
-	traktAuthDeviceCode string
-	anilistAuthURL      string
-	authInput           textinput.Model
-	settingsIndex       int // 0 for Trakt, 1 for AniList, 2 for Quality, 3 for Languages
-	languageIndex       int // selected language index in settings
-	searchCache         map[string]searchCacheEntry
-	audioMode           string          // "sub" or "dub"
-	qualityMode         int             // 0=all, 1=highest, 2=datasaver, 3=lowest
-	languageFilter      map[string]bool // enabled languages (nil = show all)
+	searchOpID            int
+	episodesOpID          int
+	historyContinueOpID   int
+	resolveOpID           int
+	subtitleOpID          int
+	subtitleResolverUsed  string
+	subtitleLangUsed      string
+	playOpID              int
+	downloadOpID          int
+	downloadProgress      float64
+	downloadTotalSize     string
+	downloadSpeed         string
+	downloadDownloaded    string
+	downloadETA           string
+	downloadChan          chan tea.Msg
+	resolveChan           chan tea.Msg
+	cancelDownload        context.CancelFunc
+	downloadTitle         string
+	downloadProvider      string
+	downloadOutputDir     string
+	confirmQuit           bool
+	confirmStop           bool
+	confirmDelete         bool
+	confirmClearHistory   bool
+	confirmCompletion     bool
+	traktAuthCode         string
+	traktAuthURL          string
+	traktAuthDeviceCode   string
+	anilistAuthURL        string
+	authInput             textinput.Model
+	settingsIndex         int
+	languageIndex         int
+	searchCache           *util.BoundedCache[searchCacheEntry]
+	audioMode             string
+	qualityMode           int
+	languageFilter        map[string]bool
+	subtitleLanguage      string
+	subtitleLanguageIndex int
 
 	selectedEpisodes map[int]struct{}
 	batchInProgress  bool
@@ -258,4 +287,17 @@ type modelImpl struct {
 	batchTotal       int
 	batchCancel      context.CancelFunc
 	batchChan        chan tea.Msg
+
+	posterClient             *poster.Client
+	imgProtocol              termimg.Protocol
+	posterCache              *util.BoundedCache[string]
+	searchPoster             string
+	searchPosterOpID         int
+	searchPosterUnavailable  bool
+	previewPoster            string
+	previewPosterOpID        int
+	previewPosterUnavailable bool
+	previewOverview          string
+	previewGenres            []string
+	previewRating            string
 }

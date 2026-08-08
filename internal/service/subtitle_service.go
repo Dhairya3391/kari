@@ -16,6 +16,7 @@ import (
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
+	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/provider"
@@ -55,11 +56,17 @@ func NewSubtitleService(cfg *config.Config) *SubtitleService {
 	}
 }
 
-func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia) ([]model.SubtitleTrack, error) {
+func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, preferredLang, preferredResolver string) ([]model.SubtitleTrack, error) {
+	preferredLang = lang.Normalize(preferredLang)
+	if preferredLang == "" {
+		preferredLang = "en"
+	}
+	media.Subtitles = selectSubtitleCandidates(media.Subtitles, preferredLang, preferredResolver)
+
 	// Download all provider-supplied subtitles locally to avoid MPV remote URL issues
 	downloadedProvider := s.downloadProviderSubtitles(ctx, &media)
 
-	cacheKey := fmt.Sprintf("%d:%d:%d:%s", media.TMDBID, media.SeasonNumber, media.EpisodeNumber, media.SeriesTitle)
+	cacheKey := fmt.Sprintf("%d:%d:%d:%s:%s:%s", media.TMDBID, media.SeasonNumber, media.EpisodeNumber, media.SeriesTitle, preferredLang, preferredResolver)
 	s.mu.Lock()
 	if tracks, ok := s.cache[cacheKey]; ok {
 		s.mu.Unlock()
@@ -67,16 +74,17 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia) 
 	}
 	s.mu.Unlock()
 
-	// Priority 1: Use a single provider subtitle (VidKing > Cineby > first available)
+	// Priority 1: a provider subtitle — selectSubtitleCandidates already put
+	// the active provider's matches first, so the first one that actually
+	// downloaded is the best pick.
 	if downloadedProvider && len(media.Subtitles) > 0 {
 		logging.Debugf("subtitle fetch: %d provider subs available after download, trying pickBestSubtitle", len(media.Subtitles))
 		for i, t := range media.Subtitles {
-			logging.Debugf("subtitle fetch:   sub[%d] label=%q path=%q url=%q", i, t.Label, t.Path, t.URL)
+			logging.Debugf("subtitle fetch:   sub[%d] label=%q lang=%q resolver=%q path=%q url=%q", i, t.Label, t.Language, t.Resolver, t.Path, t.URL)
 		}
 		if track, ok := s.pickBestSubtitle(media.Subtitles); ok {
-			track.Label = "English"
 			tracks := []model.SubtitleTrack{track}
-			logging.Debugf("subtitle fetch: selected provider sub path=%q", track.Path)
+			logging.Debugf("subtitle fetch: selected provider sub path=%q lang=%q resolver=%q", track.Path, track.Language, track.Resolver)
 			s.mu.Lock()
 			s.cache[cacheKey] = tracks
 			s.mu.Unlock()
@@ -92,9 +100,8 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia) 
 
 	// Priority 2: Try OpenSubtitles
 	if s.openSubtitles != nil && s.openSubtitles.Configured() {
-		track, found, err := s.openSubtitles.FetchBestSubtitle(ctx, query, media.TMDBID, media.SeasonNumber, media.EpisodeNumber)
+		track, found, err := s.openSubtitles.FetchBestSubtitle(ctx, query, preferredLang, media.TMDBID, media.SeasonNumber, media.EpisodeNumber)
 		if err == nil && found {
-			track.Label = "English"
 			tracks := []model.SubtitleTrack{track}
 			s.mu.Lock()
 			s.cache[cacheKey] = tracks
@@ -106,11 +113,10 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia) 
 		}
 	}
 
-	// Priority 3: Try YIFY
+	// Priority 3: Try YIFY (English only, regardless of preference)
 	{
 		tracks, err := s.fetchYify(ctx, media)
 		if err == nil && len(tracks) > 0 {
-			tracks[0].Label = "English"
 			s.mu.Lock()
 			s.cache[cacheKey] = tracks
 			s.mu.Unlock()
@@ -121,21 +127,14 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia) 
 		}
 	}
 
-	// Fallback to provider subtitles if downloaded
-	if downloadedProvider && len(media.Subtitles) > 0 {
-		if track, ok := s.pickBestSubtitle(media.Subtitles); ok {
-			track.Label = "English"
-			tracks := []model.SubtitleTrack{track}
-			s.mu.Lock()
-			s.cache[cacheKey] = tracks
-			s.mu.Unlock()
-			return tracks, nil
-		}
-	}
-
 	return nil, fmt.Errorf("no subtitles found")
 }
 
+// pickBestSubtitle returns the first successfully-downloaded candidate.
+// It doesn't need to check language itself — selectSubtitleCandidates has
+// already restricted and ordered the list (active provider before others,
+// preferred language before English, never any other language), so "first
+// downloaded" is already the best available choice.
 func (s *SubtitleService) pickBestSubtitle(tracks []model.SubtitleTrack) (model.SubtitleTrack, bool) {
 	for _, t := range tracks {
 		if t.Path != "" {
@@ -143,6 +142,38 @@ func (s *SubtitleService) pickBestSubtitle(tracks []model.SubtitleTrack) (model.
 		}
 	}
 	return model.SubtitleTrack{}, false
+}
+
+// selectSubtitleCandidates narrows and orders a title's full provider
+// subtitle list down to only tracks in preferredLang or English — nothing
+// else is ever considered, so a title whose provider subtitles are all in
+// some unrelated language falls through to OpenSubtitles/YIFY instead of
+// showing that unrelated language. Within that language restriction, the
+// active provider's (preferredResolver's) subtitles are tried before any
+// other provider's, matching where the video itself is playing from.
+func selectSubtitleCandidates(tracks []model.SubtitleTrack, preferredLang, preferredResolver string) []model.SubtitleTrack {
+	var currentExact, currentEnglish, otherExact, otherEnglish []model.SubtitleTrack
+
+	for _, t := range tracks {
+		isCurrentProvider := preferredResolver != "" && strings.EqualFold(t.Resolver, preferredResolver)
+		switch {
+		case t.Language == preferredLang && isCurrentProvider:
+			currentExact = append(currentExact, t)
+		case t.Language == preferredLang:
+			otherExact = append(otherExact, t)
+		case preferredLang != "en" && t.Language == "en" && isCurrentProvider:
+			currentEnglish = append(currentEnglish, t)
+		case preferredLang != "en" && t.Language == "en":
+			otherEnglish = append(otherEnglish, t)
+		}
+	}
+
+	candidates := make([]model.SubtitleTrack, 0, len(currentExact)+len(currentEnglish)+len(otherExact)+len(otherEnglish))
+	candidates = append(candidates, currentExact...)
+	candidates = append(candidates, currentEnglish...)
+	candidates = append(candidates, otherExact...)
+	candidates = append(candidates, otherEnglish...)
+	return candidates
 }
 
 func (s *SubtitleService) downloadProviderSubtitles(ctx context.Context, media *model.ResolvedMedia) bool {

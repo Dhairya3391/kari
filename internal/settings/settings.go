@@ -7,8 +7,9 @@ import (
 )
 
 type Data struct {
-	QualityMode    int             `json:"quality_mode"`
-	LanguageFilter map[string]bool `json:"language_filter"`
+	QualityMode      int             `json:"quality_mode"`
+	LanguageFilter   map[string]bool `json:"language_filter"`
+	SubtitleLanguage string          `json:"subtitle_language"`
 }
 
 func path() string {

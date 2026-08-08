@@ -1,15 +1,10 @@
 package app
 
-// Version is set at build time via -ldflags.
-// Scheme:
-//
-//	Tag v1.0.0       → "1.0.0"        (exact release)
-//	Commits after tag → "1.0.3"        (patch auto-increments)
-//	No tags           → "1.0.42"       (commit count as patch)
-//	Dirty tree        → "1.0.0-dirty"  (uncommitted changes)
-//	go run/build      → "0.0.0-dev"    (no ldflags injected)
+// Version and Commit are set at build time via -ldflags (see build.sh),
+// which derives Version from git tags/commit count — there's nothing to
+// keep in sync here manually. The defaults below are only what a plain
+// `go run`/`go build` without those ldflags will show.
 var (
-	Version = "1.3.0"
-	Commit  = ""
-	Date    = ""
+	Version = "0.0.0-dev"
+	Commit  = "dev"
 )

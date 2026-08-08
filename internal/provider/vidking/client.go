@@ -132,9 +132,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			UserAgent: vidKingUA,
 		}
 		for _, sub := range resp.Subtitles {
-			if sub.Language == "en" {
-				ms.Subtitles = append(ms.Subtitles, sub.URL)
-			}
+			ms.Subtitles = append(ms.Subtitles, provider.SubtitleOption{URL: sub.URL, Language: sub.Language})
 		}
 		sources = append(sources, ms)
 	}

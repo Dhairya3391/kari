@@ -13,8 +13,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"kari/internal/history"
 	"kari/internal/downloader"
+	"kari/internal/history"
+	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/player"
@@ -98,7 +99,7 @@ func (m *modelImpl) onSearchDone(msg searchDoneMsg) (tea.Model, tea.Cmd) {
 		m.queryInput.Blur()
 	}
 	m.setStatus(statusInfo, "")
-	return m, nil
+	return m, m.triggerSearchPoster(m.selectedSeriesIndex())
 }
 
 func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
@@ -229,7 +230,13 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.mergeResolved(msg.resolved)
-	return m.finalizeResolved()
+
+	// All providers have now reported in, so this is the first point where
+	// every provider's subtitles are actually known — fetch now rather than
+	// on the first (possibly incomplete) progress update.
+	subCmd := m.triggerSubtitleSync()
+	mdl, cmd := m.finalizeResolved()
+	return mdl, tea.Batch(cmd, subCmd)
 }
 
 func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
@@ -237,8 +244,14 @@ func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.subtitleOpID = 0
-	if msg.err == nil && len(msg.tracks) > 0 {
-		m.mergeResolved(model.ResolvedMedia{Subtitles: msg.tracks})
+	if msg.err == nil && len(msg.tracks) > 0 && m.resolved != nil {
+		// Set directly rather than through mergeResolved: its subtitle merge
+		// deliberately refuses to replace an already-downloaded subtitle
+		// (to protect against a stale/duplicate progress update undoing a
+		// real fetch), but this IS a deliberate replacement — the whole
+		// point of a re-sync triggered by switching sources is to swap out
+		// whatever subtitle was already there for the new source's own one.
+		m.resolved.Subtitles = msg.tracks
 	}
 	if m.pendingManualPlay {
 		m.pendingManualPlay = false
@@ -319,10 +332,15 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 	m.mergeResolved(msg.resolved)
 	m.pushView(viewPreview)
 
-	if wasNil && m.subtitleService != nil {
-		opID := m.newOpID()
-		m.subtitleOpID = opID
-		return m, tea.Batch(m.resolveSubscription(), m.subtitleFetchCmd(opID, *m.resolved))
+	// Subtitles are deliberately NOT fetched here even on the first result:
+	// this only reflects whichever provider happened to respond first, and
+	// fetching now risks missing another provider's (e.g. VidKing's) own
+	// subtitle that just hasn't reported back yet — which used to make an
+	// available provider subtitle look absent and fall back to OpenSubtitles
+	// for no reason. onResolveDone triggers it instead, once every
+	// provider's data (and so every provider's subtitles) is in.
+	if wasNil {
+		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails())
 	}
 
 	return m, m.resolveSubscription()
@@ -915,6 +933,7 @@ func (m *modelImpl) fetchHistoryNextEpisode(group history.Group) (tea.Model, tea
 	m.selectedSeries = &series
 	m.selectedEpisode = nil
 	m.resolved = nil
+	m.clearPreviewPoster()
 	m.selectedPlayback = 0
 	m.episodeResults = nil
 	m.episodeIndex = -1
@@ -952,6 +971,7 @@ func (m *modelImpl) resolveHistoryEntry(entry history.Entry) (tea.Model, tea.Cmd
 	m.selectedSeries = &series
 	m.selectedEpisode = &episode
 	m.resolved = nil
+	m.clearPreviewPoster()
 	m.selectedPlayback = 0
 	m.episodeResults = nil
 	m.episodeIndex = -1
@@ -987,6 +1007,7 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.seriesResults = nil
 			m.seriesList.SetItems(nil)
 			m.allSeriesResults = nil
+			m.clearSearchPoster()
 		}
 
 		return m, cmd
@@ -1009,9 +1030,14 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	prevSel := m.selectedSeriesIndex()
 	var cmd tea.Cmd
 	m.seriesList, cmd = m.seriesList.Update(msg)
-	return m, cmd
+	cmds := []tea.Cmd{cmd}
+	if newSel := m.selectedSeriesIndex(); newSel != prevSel {
+		cmds = append(cmds, m.triggerSearchPoster(newSel))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1157,7 +1183,7 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pos = (pos + step + len(filtered)) % len(filtered)
 		m.selectedPlayback = filtered[pos]
 		m.setStatus(statusInfo, "")
-		return m, nil
+		return m, m.triggerSubtitleSync()
 	case "d":
 		if m.resolved == nil || len(m.resolved.Playback) == 0 {
 			if m.loading {
@@ -1346,8 +1372,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		m.selectedPlayer = (m.selectedPlayer + 1) % len(m.availablePlayers)
-		m.setStatus(statusInfo, "Player: "+strings.ToUpper(m.selectedPlayerName()))
-		return m.clearStatusAfter(3 * time.Second), true
+		return nil, true
 	case key.Matches(msg, m.keys.Back):
 		if m.clearActiveFilter() {
 			return nil, true
@@ -1371,6 +1396,17 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// saveSettings persists every setting the settings screen can change.
+// Centralized so adding a new setting can't accidentally blank out an
+// existing one by building a settings.Data literal that omits it.
+func (m *modelImpl) saveSettings() {
+	settings.Save(&settings.Data{
+		QualityMode:      m.qualityMode,
+		LanguageFilter:   m.languageFilter,
+		SubtitleLanguage: m.subtitleLanguage,
+	})
 }
 
 func (m *modelImpl) cycleMode(reverse bool) tea.Cmd {
@@ -1398,6 +1434,7 @@ func (m *modelImpl) cycleMode(reverse bool) tea.Cmd {
 	m.searchQuery = ""
 	m.usedQuery = ""
 	m.searchIndex = 0
+	m.clearSearchPoster()
 
 	return m.clearStatusAfter(3 * time.Second)
 }
@@ -1432,6 +1469,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.loading = true
 		m.loadingText = "Preparing playback..."
 		m.resolved = nil
+		m.clearPreviewPoster()
 		opID := m.newOpID()
 		m.resolveOpID = opID
 		m.pushView(viewPreview)
@@ -1444,6 +1482,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.loading = true
 		m.loadingText = "Preparing playback..."
 		m.resolved = nil
+		m.clearPreviewPoster()
 		opID := m.newOpID()
 		m.resolveOpID = opID
 		m.pushView(viewPreview)
@@ -1454,6 +1493,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 	m.loading = true
 	m.loadingText = "Loading episodes..."
 	m.resolved = nil
+	m.clearPreviewPoster()
 	m.setStatus(statusInfo, "")
 	opID := m.newOpID()
 	m.episodesOpID = opID
@@ -1513,6 +1553,7 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 		m.prevSourceQuality = 0
 	}
 	m.resolved = nil
+	m.clearPreviewPoster()
 	m.autoPlayAfterResolve = autoPlay
 	series := model.SearchResult{}
 	if m.selectedSeries != nil {
@@ -1532,7 +1573,7 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 		// library cache, so caching here would only serve stale results.
 		cacheable := m.appMode != provider.ModeJellyfin
 		if cacheable {
-			if entry, ok := m.searchCache[cacheKey]; ok {
+			if entry, ok := m.searchCache.Get(cacheKey); ok {
 				logging.Debugf("search cache hit mode=%s query=%q", mode, query)
 				return searchDoneMsg{results: entry.results, usedQuery: entry.usedQuery, warnings: entry.warnings, opID: opID, err: nil}
 			}
@@ -1541,11 +1582,11 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 		logging.Debugf("search start mode=%s query=%q", mode, query)
 		results, usedQuery, warnings, err := m.mediaService.Search(m.appCtx, m.appMode, query)
 		if err == nil && cacheable {
-			m.searchCache[cacheKey] = searchCacheEntry{
+			m.searchCache.Set(cacheKey, searchCacheEntry{
 				results:   results,
 				usedQuery: usedQuery,
 				warnings:  warnings,
-			}
+			})
 		}
 
 		return searchDoneMsg{results: results, usedQuery: usedQuery, warnings: warnings, opID: opID, err: err}
@@ -1590,11 +1631,43 @@ func (m *modelImpl) resolveCmd(opID int, series model.SearchResult, episode mode
 	)
 }
 
+// triggerSubtitleSync (re-)fetches subtitles if either the currently
+// selected playback source's provider, or the preferred subtitle language,
+// no longer matches what the last fetch targeted — e.g. the user switched
+// sources with tab/shift+tab, a quality/language filter change moved the
+// default selection to a different provider, or the subtitle language
+// setting itself changed. It's a no-op if nothing changed, so it's safe to
+// call after any selectedPlayback/subtitleLanguage update without spamming
+// fetches.
+func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
+	if m.resolved == nil || m.subtitleService == nil {
+		return nil
+	}
+	src, ok := m.selectedPlaybackSource()
+	if !ok {
+		return nil
+	}
+	if src.Resolver == m.subtitleResolverUsed && m.subtitleLanguage == m.subtitleLangUsed {
+		return nil
+	}
+
+	m.subtitleResolverUsed = src.Resolver
+	m.subtitleLangUsed = m.subtitleLanguage
+	opID := m.newOpID()
+	m.subtitleOpID = opID
+	return m.subtitleFetchCmd(opID, *m.resolved)
+}
+
 func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
+	preferredLang := m.subtitleLanguage
+	preferredResolver := ""
+	if src, ok := m.selectedPlaybackSource(); ok {
+		preferredResolver = src.Resolver
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.appCtx, 30*time.Second)
 		defer cancel()
-		tracks, err := m.subtitleService.Fetch(ctx, resolved)
+		tracks, err := m.subtitleService.Fetch(ctx, resolved, preferredLang, preferredResolver)
 		if err != nil {
 			logging.Debugf("subtitle fetch failed: %v", err)
 		}
@@ -1783,6 +1856,7 @@ func (m *modelImpl) startSearchFromInput() (tea.Model, tea.Cmd) {
 	}
 	m.setStatus(statusInfo, "")
 	m.resolved = nil
+	m.clearPreviewPoster()
 	m.selectedPlayback = 0
 	opID := m.newOpID()
 	m.searchOpID = opID
@@ -1850,7 +1924,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.settingsIndex == 2 {
 				m.settingsIndex++
 				m.languageIndex = 0
-			} else if m.settingsIndex < 3 {
+			} else if m.settingsIndex < 4 {
 				m.settingsIndex++
 			}
 		case "left":
@@ -1863,13 +1937,21 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.selectedPlayback = filtered[0]
 					}
 					m.setStatus(statusInfo, "Quality: "+qualityLabel(m.qualityMode))
-					settings.Save(&settings.Data{QualityMode: m.qualityMode, LanguageFilter: m.languageFilter})
+					m.saveSettings()
 				}
 			case 3:
 				if m.languageIndex > 0 {
 					m.languageIndex--
 				}
+			case 4:
+				if m.subtitleLanguageIndex > 0 {
+					m.subtitleLanguageIndex--
+					m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
+					m.setStatus(statusInfo, "Subtitle language: "+lang.Name(m.subtitleLanguage))
+					m.saveSettings()
+				}
 			}
+			return m, m.triggerSubtitleSync()
 		case "right":
 			switch m.settingsIndex {
 			case 2:
@@ -1880,30 +1962,39 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.selectedPlayback = filtered[0]
 					}
 					m.setStatus(statusInfo, "Quality: "+qualityLabel(m.qualityMode))
-					settings.Save(&settings.Data{QualityMode: m.qualityMode, LanguageFilter: m.languageFilter})
+					m.saveSettings()
 				}
 			case 3:
 				languages := m.availableLanguages()
 				if m.languageIndex < len(languages)-1 {
 					m.languageIndex++
 				}
+			case 4:
+				if m.subtitleLanguageIndex < len(lang.SubtitleOptions)-1 {
+					m.subtitleLanguageIndex++
+					m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
+					m.setStatus(statusInfo, "Subtitle language: "+lang.Name(m.subtitleLanguage))
+					m.saveSettings()
+				}
 			}
+			return m, m.triggerSubtitleSync()
 		case " ":
 			if m.settingsIndex == 3 && m.languageFilter != nil {
 				languages := m.availableLanguages()
 				if len(languages) > 0 {
-					lang := languages[m.languageIndex]
-					m.languageFilter[lang] = !m.languageEnabled(lang)
+					selected := languages[m.languageIndex]
+					m.languageFilter[selected] = !m.languageEnabled(selected)
 					if !m.hasEnabledLanguage() {
-						m.languageFilter[lang] = true
+						m.languageFilter[selected] = true
 					}
 					m.selectedPlayback = 0
 					if filtered := m.filteredPlayback(); len(filtered) > 0 {
 						m.selectedPlayback = filtered[0]
 					}
-					settings.Save(&settings.Data{QualityMode: m.qualityMode, LanguageFilter: m.languageFilter})
+					m.saveSettings()
 				}
 			}
+			return m, m.triggerSubtitleSync()
 		case "c", "C":
 			switch m.settingsIndex {
 			case 0:

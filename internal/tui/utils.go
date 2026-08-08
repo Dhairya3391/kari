@@ -36,7 +36,12 @@ func (m *modelImpl) resizeLists() {
 		w = 24
 	}
 	h := max(10, m.height-13)
-	m.seriesList.SetSize(w, h)
+
+	seriesW := searchLeftWidth(dims.bodyW) - 4
+	if seriesW < 24 {
+		seriesW = 24
+	}
+	m.seriesList.SetSize(seriesW, h)
 	m.episodeList.SetSize(w, h)
 	m.historyList.SetSize(w, h)
 }
@@ -136,12 +141,6 @@ func sideBySide(left, right string, totalWidth int) string {
 		gap = 1
 	}
 	return left + strings.Repeat(" ", gap) + right
-}
-
-func twoColumns(left, right string, leftW, rightW int) string {
-	leftFixed := lipgloss.NewStyle().Width(leftW).Render(left)
-	rightFixed := lipgloss.NewStyle().Width(rightW).Render(right)
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftFixed, "  ", rightFixed)
 }
 
 func modeBadge(mode string) string {

@@ -12,14 +12,18 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/history"
+	"kari/internal/lang"
 	"kari/internal/player"
+	"kari/internal/poster"
 	"kari/internal/provider"
 	"kari/internal/scrobble"
 	"kari/internal/service"
 	"kari/internal/settings"
+	"kari/internal/termimg"
+	"kari/internal/util"
 )
 
-func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient) tea.Model {
+func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client) tea.Model {
 	ti := textinput.New()
 	ti.CharLimit = 150
 	ti.Width = 70
@@ -131,14 +135,22 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		modes:            modes,
 		players:          players,
 		availablePlayers: players.AvailablePlayers(),
-		searchCache:      make(map[string]searchCacheEntry),
+		searchCache:      util.NewBoundedCache[searchCacheEntry](60),
 		downloadChan:     make(chan tea.Msg, 10),
 		resolveChan:      make(chan tea.Msg, 10),
 		audioMode:        "sub",
 		qualityMode:      qualityAll,
 		languageFilter:   make(map[string]bool),
+		subtitleLanguage: "en",
 		selectedEpisodes: make(map[int]struct{}),
 		batchChan:        make(chan tea.Msg, 50),
+		posterClient:     posterClient,
+		imgProtocol:      termimg.Detect(),
+		// Rendered poster strings, not the images themselves — for the Kitty
+		// protocol these are base64-encoded PNGs and can be well over 1MB
+		// each, so this stays smaller than the image caches upstream in
+		// internal/poster to keep a long browsing session's memory bounded.
+		posterCache: util.NewBoundedCache[string](30),
 	}
 	model.selectedPlayer = model.defaultPlayerIndex()
 	model.updateQueryPlaceholder()
@@ -157,6 +169,15 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			if hasEnabled {
 				model.languageFilter = s.LanguageFilter
 			}
+		}
+		if code := lang.Normalize(s.SubtitleLanguage); code != "" {
+			model.subtitleLanguage = code
+		}
+	}
+	for i, code := range lang.SubtitleOptions {
+		if code == model.subtitleLanguage {
+			model.subtitleLanguageIndex = i
+			break
 		}
 	}
 	return model
@@ -281,6 +302,27 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resetStatusMsg:
 		if m.statusID == msg.id {
 			m.setStatus(statusInfo, "")
+		}
+		return m, spinnerCmd
+	case posterLoadedMsg:
+		switch msg.slot {
+		case posterSlotSearch:
+			if msg.opID == m.searchPosterOpID {
+				m.searchPoster = msg.rendered
+				m.searchPosterUnavailable = msg.err != nil
+			}
+		case posterSlotPreview:
+			if msg.opID == m.previewPosterOpID {
+				m.previewPoster = msg.rendered
+				m.previewPosterUnavailable = msg.err != nil
+			}
+		}
+		return m, spinnerCmd
+	case previewDetailsMsg:
+		if msg.opID == m.previewPosterOpID && msg.err == nil {
+			m.previewOverview = msg.overview
+			m.previewGenres = msg.genres
+			m.previewRating = msg.rating
 		}
 		return m, spinnerCmd
 	}
