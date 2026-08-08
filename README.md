@@ -238,17 +238,21 @@ Kari supports MPV and MX Player on Android via Termux intents and automatic conf
 
 5. Install [MPV Android](https://play.google.com/store/apps/details?id=is.xyz.mpv) (or MX Player) from Play Store.
 
-6. (Recommended) Create `/storage/emulated/0/Android/media/is.xyz.mpv/mpv.conf`:
+6. (Required, one-time) Link Kari's playback config into MPV Android — no root needed:
+
+   Open the **MPV Android** app → **Settings** → **Advanced** → **Edit mpv.conf**, and add this single line:
 
    ```ini
    include=/storage/emulated/0/Android/media/is.xyz.mpv/.mpv.conf
    ```
 
-   *Note: Kari automatically writes playback headers to both `.mpv.conf` and `mpv.conf` in the MPV directory as well as `~/.config/mpv/mpv.conf` on every play launch, so headers and subtitles work seamlessly out of the box.*
+   *Why this step matters:* mpv-android only reads configuration from its own app-data directory, which Termux apps cannot write (and it has no Intent-extra for HTTP headers). This one `include=` line is the sole bridge — Kari rewrites `.mpv.conf` in the MPV media folder on every play with fresh playback headers (`Referer`, `Origin`, `User-Agent`, `Cookie`), the title, resume position, and the subtitle track, so they reach MPV on the next launch. Do it once and every episode just works.
+
+> **Note:** Kari writes the playback config to `.mpv.conf` (and a mirrored `mpv.conf`) under `/storage/emulated/0/Android/media/is.xyz.mpv/` on every play launch. It does **not** write to Termux's `~/.config/mpv/` — mpv-android's libmpv never reads that path, so headers only apply once your own app config above contains the `include=` line.
 
 7. Run `./kari`
 
-Kari launches MPV via Android `am start` / `termux-am` intents. The automatic config file writing allows MPV Android to receive stream headers (`Referer`, `Origin`, `User-Agent`, `Cookie`) and subtitles cleanly without requiring manual flag passing. See [docs/PLAYERS.md](docs/PLAYERS.md) for architectural details.
+Kari launches MPV via Android `termux-am` / `am start` intents. Since Android intents can't carry stream headers, Kari injects them through the config bridge from step 6 (the `include=` line). See [docs/PLAYERS.md](docs/PLAYERS.md) for architectural details.
 
 > **Note:** On some Android versions, DNS resolution may fail for downloads. Kari includes a built-in fallback to Cloudflare (1.1.1.1) and Google (8.8.8.8) DNS for Android builds.
 

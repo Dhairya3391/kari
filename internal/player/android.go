@@ -149,17 +149,26 @@ func playSingleSourceWithMPVAndroid(source model.PlaybackSource, media model.Res
 }
 
 func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
-	// mpv-android always loads libmpv's config-dir (its internal filesDir) plus
-	// any file it pulls in via an `include=` line. Kari writes this playback
-	// config to the external MPV media dir, and the user's own mpv.conf (see
-	// README "Android Setup") contains:
+	// mpv-android loads libmpv's config only from its own internal files dir
+	// (/data/user/0/is.xyz.mpv/files/), which the app sets via
+	// `config-dir=<filesDir>` (see BaseMPVView.initialize upstream). That
+	// directory is UNWRITABLE by Termux without root, and mpv-android never
+	// auto-reads /storage/emulated/0/Android/media/.
+	//
+	// The one hook that works on every Android is an `include=` line in a
+	// config that mpv DOES load. The user adds it once via the app
+	// (Settings -> Advanced -> Edit mpv.conf):
 	//
 	//   include=/storage/emulated/0/Android/media/is.xyz.mpv/.mpv.conf
 	//
-	// That include is what makes headers (Referer/Origin/User-Agent/Cookie) and
-	// the network tuning below reach libmpv. Writing mpv.conf (the include
-	// source) alongside .mpv.conf handles both the file directly and, if the
-	// include is already in place, nothing else is needed.
+	// Every play launch this function rewrites that target (and mpv.conf
+	// alongside it for includes that point there instead) with the fresh
+	// playback options: Referer/Origin/User-Agent/Cookie via
+	// `http-header-fields`, title, resume position, network tuning and the
+	// subtitle. Because the file is regenerated per play, per-stream tokens
+	// always reach libmpv when the app next starts. Note that writing
+	// `~/.config/mpv/mpv.conf` in the Termux home is pointless here: the
+	// mpv-android libmpv process does not read the Termux HOME path.
 	var confBuilder strings.Builder
 	title := sanitizeMediaTitle(media.DisplayTitle())
 	if title != "" {
@@ -194,11 +203,14 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 		headers = append(headers, "Cookie: "+source.CookieHeader)
 	}
 	if len(headers) > 0 {
-		// mpv list-typed options (http-header-fields) are cumulative and can be
-		// given on repeated lines in a config file; do that instead of relying on
-		// an escaped \r\n separator which mpv.conf would not decode.
+		// mpv list-typed options (http-header-fields) are cumulative: each
+		// repeated line in a config file appends one entry. Do that instead of
+		// a single value joined with "\r\n" (mpv.conf does not decode that
+		// escape, unlike the command line parser).
 		for _, h := range headers {
-			confBuilder.WriteString("http-header-fields=" + h + "\n")
+			confBuilder.WriteString("http-header-fields=")
+			confBuilder.WriteString(h)
+			confBuilder.WriteString("\n")
 		}
 	}
 
@@ -206,14 +218,33 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 		confBuilder.WriteString(fmt.Sprintf("start=%d\n", int(media.StartTime)))
 	}
 
+	// Subtitles: mpv-android's VIEW intent CANNOT carry subtitles here — its
+	// `subs` extra is a Parcelable (Uri) array which `am`/termux-am has no
+	// `--eua` flag capable of building. Instead copy the downloaded track next
+	// to our include target and attach it with a sub-file line so it loads for
+	// this session. (mpv's sub-file is a list option, so a repeated line works.)
+	subPath := ""
+	subtitleFiles := media.SubtitlePaths()
+	if len(subtitleFiles) > 0 && subtitleFiles[0] != "" {
+		target := mpvAndroidDir + "/sub.vtt"
+		if err := copyFile(subtitleFiles[0], target); err == nil {
+			subPath = target
+			logging.Debugf("writeMpvConf: copied subtitle to %s", target)
+		} else {
+			logging.Debugf("writeMpvConf: failed to copy subtitle to %s: %v", target, err)
+		}
+	}
+	if subPath != "" {
+		confBuilder.WriteString("sub-file=")
+		confBuilder.WriteString(subPath)
+		confBuilder.WriteString("\n")
+	}
+
 	confData := confBuilder.String()
 
 	paths := []string{
 		mpvAndroidDir + "/.mpv.conf",
 		mpvAndroidDir + "/mpv.conf",
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, home+"/.config/mpv/mpv.conf", home+"/.mpv/mpv.conf")
 	}
 
 	wroteCount := 0
@@ -230,19 +261,7 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 		logging.Debugf("writeMpvConf: wrote %s", confPath)
 	}
 	if wroteCount == 0 {
-		logging.Debugf("writeMpvConf: could not write mpv.conf to any path (title/referrer/user-agent won't be set)")
-	}
-
-	subtitleFiles := media.SubtitlePaths()
-	if len(subtitleFiles) > 0 && subtitleFiles[0] != "" {
-		subPath := subtitleFiles[0]
-		for _, dir := range []string{mpvAndroidDir, os.TempDir()} {
-			targetSubPath := dir + "/sub.vtt"
-			if err := copyFile(subPath, targetSubPath); err == nil {
-				logging.Debugf("writeMpvConf: copied subtitle to %s", targetSubPath)
-				break
-			}
-		}
+		logging.Debugf("writeMpvConf: could not write mpv.conf to any path (headers/title won't be set)")
 	}
 }
 
@@ -354,7 +373,10 @@ func buildMXPlayerAndroidIntent(source model.PlaybackSource, media model.Resolve
 
 func termuxAmAvailable() bool {
 	termuxAmPathOnce.Do(func() {
-		for _, bin := range []string{"am", "termux-am", "termux-am-starter"} {
+		// Prefer Termux's own termux-am: it talks to the ActivityManager from
+		// the app's own uid, so it is not blocked by SELinux like the raw
+		// /system/bin/am shell entrypoint is on many Android 11+ devices.
+		for _, bin := range []string{"termux-am", "am", "termux-am-starter"} {
 			path, err := exec.LookPath(bin)
 			if err != nil {
 				continue
