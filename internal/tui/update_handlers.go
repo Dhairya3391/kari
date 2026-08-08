@@ -1029,6 +1029,13 @@ func episodeIndexForEntry(episodes []model.EpisodeResult, entry history.Entry) (
 			return i, true
 		}
 	}
+	if entry.Episode > 0 {
+		for i, ep := range episodes {
+			if ep.Number == entry.Episode {
+				return i, true
+			}
+		}
+	}
 	return 0, false
 }
 
