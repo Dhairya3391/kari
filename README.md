@@ -206,7 +206,7 @@ Want to add another provider? See [docs/PROVIDERS.md](docs/PROVIDERS.md) and [PR
 
 Kari supports MPV and MX Player on Android via Termux intents and automatic configuration injection:
 
-1. Install [Termux](https://termux.dev/) from F-Droid (do not use Play Store — the Play Store version is obsolete).
+1. Install [Termux](https://termux.dev/) ([source](https://github.com/termux/termux-app)) from F-Droid (do not use Play Store — the Play Store version is obsolete).
 2. Install required packages:
 
    ```bash
@@ -217,9 +217,11 @@ Kari supports MPV and MX Player on Android via Termux intents and automatic conf
    |---------|-----|
    | `golang` | Build kari |
    | `curl` | Direct/pipe fallback playback |
-   | `termux-api` | Provides `termux-am` / `termux-am-starter` to launch MPV/MX Player via Android intents |
+   | `termux-api` | Provides the `termux-am`/`termux-am-starter` fallback for launching MPV/MX Player via Android intents ([source](https://github.com/termux/termux-api)) |
    | `yt-dlp` | Required for downloads |
    | `aria2` | Multi-connection parallel downloads for fast speeds |
+
+   Kari launches players by trying `am start` first (works out of the box on most devices), then falling back to `termux-am`/`termux-am-starter` if `am` is blocked. That fallback needs the **[Termux:API app](https://f-droid.org/packages/com.termux.api/)** — a separate APK from the `termux-api` package above, install it from F-Droid too — and it must be **opened once** after install to start its background socket service. If you ever see a playback error mentioning `Could not connect to socket`, that service isn't running: reopen the Termux:API app (or reboot).
 
 3. Grant storage access:
 
@@ -253,7 +255,7 @@ Kari supports MPV and MX Player on Android via Termux intents and automatic conf
 
 7. Run `./kari`
 
-Kari launches MPV via Android `termux-am` / `am start` intents. Since Android intents can't carry stream headers, Kari injects them through the config bridge from step 6 (the `include=` line). See [docs/PLAYERS.md](docs/PLAYERS.md) for architectural details.
+Kari launches MPV via Android `am start` intents (falling back to `termux-am`/`termux-am-starter` automatically if `am` is blocked on your device). Since Android intents can't carry stream headers, Kari injects them through the config bridge from step 6 (the `include=` line). See [docs/PLAYERS.md](docs/PLAYERS.md) for architectural details.
 
 > **Note:** On some Android versions, DNS resolution may fail for downloads. Kari includes a built-in fallback to Cloudflare (1.1.1.1) and Google (8.8.8.8) DNS for Android builds.
 

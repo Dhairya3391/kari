@@ -21,7 +21,7 @@ On desktop platforms, we primarily use `exec.Command` to launch binaries.
 
 Android requires a specialized "hack" to bypass Intent limitations.
 
-- **Prerequisites**: The `termux-am` package must be installed (provides the `termux-am` binary; `termux-api` also ships `termux-am-starter`). The bare `am` binary is blocked by SELinux on many newer Android versions, so `termux-am` — which runs in the Termux app's own uid — is preferred.
+- **Prerequisites**: Kari launches the player via an Android intent, trying `am` first, then `termux-am`, then `termux-am-starter` — whichever actually succeeds — and remembers the working one for next time. Plain `am` needs nothing extra and works on most devices; `termux-am`/`termux-am-starter` (from the [termux-api](https://github.com/termux/termux-api) package, run `pkg install termux-api`) are the fallback for hardened Android builds that SELinux-block a shell-UID `am` call, but they only work once the separate [Termux:API app](https://f-droid.org/packages/com.termux.api/) ([source](https://github.com/termux/termux-api)) is installed **and** has been opened at least once to start its background [am.sock service](https://github.com/termux/termux-am-socket) — otherwise they fail with `Could not connect to socket`.
 - **Storage**: Run `termux-setup-storage` to grant write access to `/storage/emulated/0/Android/media/`. Without this, Kari cannot write the playback config where MPV can read it.
 - **Technique**: Android Intents cannot pass complex configuration strings (like custom HTTP headers) to mpv — mpv-android's intent only accepts `title`, `position`, and `subs` extras, nothing else. So Kari uses an **include-file injection bridge**:
 - **Bridge**: mpv-android loads config exclusively from its own app-data directory (`/data/user/0/is.xyz.mpv/files/`), which Termux cannot write. The user adds ONE line to that config once (via the app: Settings → Advanced → Edit mpv.conf):
@@ -33,7 +33,7 @@ Android requires a specialized "hack" to bypass Intent limitations.
 - **Process**:
   1. Kari writes the fresh playback config (`Referer`, `Origin`, `User-Agent`, `Cookie` via `http-header-fields`, `force-media-title`, `start`, network tuning, and `sub-file`) to `.mpv.conf` (mirrored as `mpv.conf`) in the MPV media directory.
   2. Downloaded subtitles are copied to `sub.vtt` in that directory and attached via a `sub-file=` line (mpv-android's `subs` intent extra requires a `Parcelable[] Uri` array that `am` cannot build).
-  3. Kari launches the app via `termux-am` / `am start`, passing the stream URL plus the `title` and `position` extras it does support.
+  3. Kari launches the app via `am start` (falling back to `termux-am`/`termux-am-starter`), passing the stream URL plus the `title` and `position` extras it does support.
   4. On startup, mpv-android reads its internal `mpv.conf`, which `include`s `.mpv.conf`, applying the injected headers/subtitle.
 - **Cleanup**: The `.mpv.conf` file is rewritten on every launch, so fresh stream tokens and titles always get applied.
 
