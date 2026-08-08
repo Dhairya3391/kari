@@ -10,17 +10,22 @@ import (
 	"time"
 )
 
+// EntryKey identifies a single watched episode (or movie) purely by what it
+// is — title, kind, and position in the series — never by which provider it
+// was played from. Providers come and go; a saved watch position shouldn't.
 type EntryKey struct {
-	Provider string
-	Title    string
-	Season   int
-	Episode  int
+	Title     string
+	Mode      string
+	MediaType string
+	Season    int
+	Episode   int
 }
 
 func (k EntryKey) String() string {
-	return fmt.Sprintf("%s:%s:s%02de%02d",
-		strings.ToLower(strings.TrimSpace(k.Provider)),
-		strings.ToLower(strings.TrimSpace(k.Title)),
+	return fmt.Sprintf("%s:%s:%s:s%02de%02d",
+		normalizeKeyPart(k.Mode),
+		normalizeKeyPart(k.MediaType),
+		normalizeKeyPart(k.Title),
 		k.Season,
 		k.Episode,
 	)
@@ -28,9 +33,8 @@ func (k EntryKey) String() string {
 
 type Entry struct {
 	Key             EntryKey  `json:"key"`
-	ProviderName    string    `json:"provider_name"`
 	Title           string    `json:"title"`
-	EpisodeTitle    string    `json:"episode_title"`
+	EpisodeTitle    string    `json:"episode_title,omitempty"`
 	Season          int       `json:"season"`
 	Episode         int       `json:"episode"`
 	WatchedAt       time.Time `json:"watched_at"`
@@ -42,24 +46,23 @@ type Entry struct {
 	// Metadata for scrobble idempotency
 	LastScrobbledPercent float64 `json:"last_scrobbled_percent,omitempty"`
 
-	// Metadata for re-play
-	Mode       string `json:"mode,omitempty"`
-	SeriesURL  string `json:"series_url,omitempty"`
-	EpisodeURL string `json:"episode_url,omitempty"`
-	MediaType  string `json:"media_type,omitempty"`
-	TMDBID     int    `json:"tmdb_id,omitempty"`
+	// Metadata for re-play — deliberately provider-agnostic. Resuming
+	// re-searches whichever providers are currently registered by Title/
+	// TMDBID rather than trusting a stored provider name or URL, so history
+	// keeps working even if providers are added, removed, or renamed later.
+	Mode      string `json:"mode,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+	TMDBID    int    `json:"tmdb_id,omitempty"`
 }
 
 type GroupKey struct {
-	Provider  string
 	Mode      string
 	MediaType string
 	Title     string
 }
 
 func (k GroupKey) String() string {
-	return fmt.Sprintf("%s:%s:%s:%s",
-		normalizeKeyPart(k.Provider),
+	return fmt.Sprintf("%s:%s:%s",
 		normalizeKeyPart(k.Mode),
 		normalizeKeyPart(k.MediaType),
 		normalizeKeyPart(k.Title),
@@ -69,7 +72,6 @@ func (k GroupKey) String() string {
 type Group struct {
 	Key              GroupKey
 	Title            string
-	ProviderName     string
 	Mode             string
 	MediaType        string
 	LastPlayed       Entry
@@ -91,12 +93,11 @@ func BuildGroups(entries []Entry) []Group {
 		group, ok := groupsByKey[keyStr]
 		if !ok {
 			group = &Group{
-				Key:          key,
-				Title:        entry.Title,
-				ProviderName: FirstNonEmpty(entry.ProviderName, entry.Key.Provider),
-				Mode:         entry.Mode,
-				MediaType:    entry.MediaType,
-				LastPlayed:   entry,
+				Key:        key,
+				Title:      entry.Title,
+				Mode:       entry.Mode,
+				MediaType:  entry.MediaType,
+				LastPlayed: entry,
 			}
 			groupsByKey[keyStr] = group
 			order = append(order, keyStr)
@@ -108,9 +109,6 @@ func BuildGroups(entries []Entry) []Group {
 		}
 		if group.Title == "" {
 			group.Title = entry.Title
-		}
-		if group.ProviderName == "" {
-			group.ProviderName = FirstNonEmpty(entry.ProviderName, entry.Key.Provider)
 		}
 		if group.Mode == "" {
 			group.Mode = entry.Mode
@@ -337,7 +335,6 @@ func (s *Store) save() error {
 
 func groupKeyForEntry(entry Entry) GroupKey {
 	return GroupKey{
-		Provider:  FirstNonEmpty(entry.ProviderName, entry.Key.Provider),
 		Mode:      entry.Mode,
 		MediaType: entry.MediaType,
 		Title:     FirstNonEmpty(entry.Title, entry.Key.Title),

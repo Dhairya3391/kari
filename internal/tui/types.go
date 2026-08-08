@@ -85,6 +85,17 @@ type historyContinueEpisodesMsg struct {
 	err     error
 }
 
+// historyResolveSeriesMsg carries the result of re-searching currently
+// registered providers for a history entry's title, so resume never depends
+// on a provider name/URL saved from a possibly-removed provider.
+type historyResolveSeriesMsg struct {
+	entry  history.Entry
+	group  *history.Group
+	series model.SearchResult
+	opID   int
+	err    error
+}
+
 type resolveDoneMsg struct {
 	resolved model.ResolvedMedia
 	opID     int
@@ -245,6 +256,7 @@ type modelImpl struct {
 	searchOpID            int
 	episodesOpID          int
 	historyContinueOpID   int
+	pendingHistoryTarget  *history.Entry
 	resolveOpID           int
 	subtitleOpID          int
 	subtitleResolverUsed  string

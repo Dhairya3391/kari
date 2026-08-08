@@ -115,13 +115,23 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 	}
 
 	seriesTitle := ""
+	mediaType := ""
 	if m.selectedSeries != nil {
 		seriesTitle = m.selectedSeries.Title
+		mediaType = m.selectedSeries.MediaType
 	}
 
 	logging.Infof("onEpisodesDone success opID=%d episodes_count=%d", msg.opID, len(msg.results))
 	m.episodeResults = msg.results
-	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle, m.selectedEpisodes))
+	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle, m.appMode, mediaType, m.selectedEpisodes))
+
+	if target := m.pendingHistoryTarget; target != nil {
+		m.pendingHistoryTarget = nil
+		if idx, ok := episodeIndexForEntry(msg.results, *target); ok {
+			return m.startEpisodeResolution(idx, false)
+		}
+		m.setStatus(statusWarn, "Saved episode no longer available, opening series")
+	}
 
 	// Auto-resolve for movies to skip the episode list screen
 	if m.selectedSeries != nil && m.selectedSeries.MediaType == "movie" && len(msg.results) > 0 {
@@ -137,10 +147,11 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 		lastCompleteIdx := -1
 		for i, it := range msg.results {
 			entry, ok := m.historyStore.Get(history.EntryKey{
-				Provider: it.Provider,
-				Title:    seriesTitle,
-				Season:   it.Season,
-				Episode:  it.Number,
+				Title:     seriesTitle,
+				Mode:      string(m.appMode),
+				MediaType: mediaType,
+				Season:    it.Season,
+				Episode:   it.Number,
 			})
 			if !ok || !entry.Complete {
 				targetIdx = i
@@ -193,23 +204,33 @@ func (m *modelImpl) onHistoryContinueEpisodes(msg historyContinueEpisodesMsg) (t
 	m.loadingText = ""
 	if msg.err != nil {
 		logging.Errorf("history continue episode load failed title=%q err=%v", msg.group.Title, msg.err)
-		m.setStatus(statusWarn, "Could not find next episode, opening last watched")
-		return m.resolveHistoryEntry(msg.group.ContinueEntry)
+		m.setStatus(statusWarn, "Could not load episodes for "+msg.group.Title)
+		if m.selectedEpisode == nil {
+			m.pushView(viewEpisodes)
+		}
+		return m, nil
 	}
 
 	m.episodeResults = msg.results
-	seriesTitle := msg.group.Title
+	seriesTitle, mediaType := msg.group.Title, msg.group.MediaType
 	if m.selectedSeries != nil {
 		seriesTitle = m.selectedSeries.Title
+		mediaType = m.selectedSeries.MediaType
 	}
-	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle, m.selectedEpisodes))
+	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle, m.appMode, mediaType, m.selectedEpisodes))
 
-	idx, ok := nextEpisodeAfterEntry(msg.results, msg.group.FarthestComplete)
-	if !ok {
-		m.setStatus(statusWarn, "No next episode found, opening last watched")
-		return m.resolveHistoryEntry(msg.group.ContinueEntry)
+	if idx, ok := nextEpisodeAfterEntry(msg.results, msg.group.FarthestComplete); ok {
+		return m.startEpisodeResolution(idx, false)
 	}
-	return m.startEpisodeResolution(idx, false)
+	if idx, ok := episodeIndexForEntry(msg.results, msg.group.ContinueEntry); ok {
+		m.setStatus(statusWarn, "No next episode found, opening last watched")
+		return m.startEpisodeResolution(idx, false)
+	}
+	if m.selectedEpisode == nil {
+		m.pushView(viewEpisodes)
+	}
+	m.setStatus(statusWarn, "No next episode found")
+	return m, nil
 }
 
 func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
@@ -305,16 +326,12 @@ func (m *modelImpl) applyResumeFromHistory(resolved *model.ResolvedMedia) {
 		return
 	}
 
-	providerName := resolved.Resolver
-	if m.selectedSeries != nil && m.selectedSeries.Provider != "" {
-		providerName = m.selectedSeries.Provider
-	}
-
 	entry, ok := m.historyStore.Get(history.EntryKey{
-		Provider: providerName,
-		Title:    resolved.SeriesTitle,
-		Season:   resolved.SeasonNumber,
-		Episode:  resolved.EpisodeNumber,
+		Title:     resolved.SeriesTitle,
+		Mode:      string(m.appMode),
+		MediaType: resolved.MediaType,
+		Season:    resolved.SeasonNumber,
+		Episode:   resolved.EpisodeNumber,
 	})
 
 	if ok && !entry.Complete && entry.PositionSecs > 5 {
@@ -420,19 +437,14 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 
 	// Update history
 	if m.historyStore != nil && m.resolved != nil {
-		providerName := m.resolved.Resolver
-		if m.selectedSeries != nil && m.selectedSeries.Provider != "" {
-			providerName = m.selectedSeries.Provider
-		}
-
 		entry := history.Entry{
 			Key: history.EntryKey{
-				Provider: providerName,
-				Title:    m.resolved.SeriesTitle,
-				Season:   m.resolved.SeasonNumber,
-				Episode:  m.resolved.EpisodeNumber,
+				Title:     m.resolved.SeriesTitle,
+				Mode:      string(m.appMode),
+				MediaType: m.resolved.MediaType,
+				Season:    m.resolved.SeasonNumber,
+				Episode:   m.resolved.EpisodeNumber,
 			},
-			ProviderName:    providerName,
 			Title:           m.resolved.SeriesTitle,
 			EpisodeTitle:    m.resolved.EpisodeTitle,
 			Season:          m.resolved.SeasonNumber,
@@ -444,11 +456,9 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 			Complete:        msg.result.Completed,
 
 			// Metadata for re-play
-			Mode:       string(m.appMode),
-			SeriesURL:  m.resolved.SeriesURL,
-			EpisodeURL: m.resolved.EpisodeURL,
-			MediaType:  m.resolved.MediaType,
-			TMDBID:     m.resolved.TMDBID,
+			Mode:      string(m.appMode),
+			MediaType: m.resolved.MediaType,
+			TMDBID:    m.resolved.TMDBID,
 		}
 		if err := m.historyStore.Upsert(entry); err != nil {
 			logging.Errorf("failed to upsert history: %v", err)
@@ -456,11 +466,12 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 
 		// Refresh episode list markers if it exists
 		if len(m.episodeResults) > 0 {
-			seriesTitle := ""
+			seriesTitle, mediaType := "", ""
 			if m.selectedSeries != nil {
 				seriesTitle = m.selectedSeries.Title
+				mediaType = m.selectedSeries.MediaType
 			}
-			m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.selectedEpisodes))
+			m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.appMode, mediaType, m.selectedEpisodes))
 		}
 
 		// Get updated entry to have correct PercentComplete for scrobbling
@@ -676,11 +687,12 @@ func (m *modelImpl) selectAllEpisodes() {
 }
 
 func (m *modelImpl) refreshEpisodeList() {
-	seriesTitle := ""
+	seriesTitle, mediaType := "", ""
 	if m.selectedSeries != nil {
 		seriesTitle = m.selectedSeries.Title
+		mediaType = m.selectedSeries.MediaType
 	}
-	m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.selectedEpisodes))
+	m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.appMode, mediaType, m.selectedEpisodes))
 }
 
 func (m *modelImpl) startBatchDownload() (tea.Model, tea.Cmd) {
@@ -909,27 +921,75 @@ func (m *modelImpl) playHistoryGroup(keyStr string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if shouldFetchNextEpisode(*group) {
-		return m.fetchHistoryNextEpisode(*group)
-	}
-
-	return m.resolveHistoryEntry(group.ContinueEntry)
+	entry := group.ContinueEntry
+	m.appMode = modeForHistoryEntry(entry)
+	m.selectedSeries = nil
+	m.selectedEpisode = nil
+	m.resolved = nil
+	m.clearPreviewPoster()
+	m.pendingHistoryTarget = nil
+	m.loading = true
+	m.loadingText = fmt.Sprintf("Finding %s...", entry.Title)
+	opID := m.newOpID()
+	m.historyContinueOpID = opID
+	grp := *group
+	logging.Infof("playHistoryGroup: searching current providers for %q (mode=%s)", entry.Title, m.appMode)
+	return m, tea.Batch(m.spinner.Tick, m.historyResolveSeriesCmd(opID, entry, &grp))
 }
 
-func (m *modelImpl) fetchHistoryNextEpisode(group history.Group) (tea.Model, tea.Cmd) {
-	entry := group.ContinueEntry
-	series := searchResultFromHistoryEntry(entry)
-	targetMode := modeForHistoryEntry(entry)
-	m.appMode = targetMode
-	if series.URL == "" {
-		logging.Infof("fetchHistoryNextEpisode: missing series URL, falling back to search for %q via %s", entry.Title, entry.ProviderName)
-		m.loading = true
-		m.loadingText = fmt.Sprintf("Searching %s...", entry.Title)
-		opID := m.newOpID()
-		m.searchOpID = opID
-		return m, m.searchCmd(opID, entry.Title)
+// historyResolveSeriesCmd re-searches whichever providers are CURRENTLY
+// registered for the entry's mode, rather than trusting a provider name/URL
+// that may have been saved from a provider that's since been removed or
+// renamed. This is what lets watch history keep working across provider
+// changes.
+func (m *modelImpl) historyResolveSeriesCmd(opID int, entry history.Entry, group *history.Group) tea.Cmd {
+	mode := modeForHistoryEntry(entry)
+	return func() tea.Msg {
+		results, _, _, err := m.mediaService.Search(m.appCtx, mode, entry.Title)
+		if err == nil && len(results) == 0 {
+			err = fmt.Errorf("no provider currently has %q", entry.Title)
+		}
+		if err != nil {
+			return historyResolveSeriesMsg{entry: entry, group: group, opID: opID, err: err}
+		}
+		return historyResolveSeriesMsg{entry: entry, group: group, series: bestHistorySeriesMatch(results, entry), opID: opID}
+	}
+}
+
+// bestHistorySeriesMatch picks the live search result that most likely
+// corresponds to a history entry: an exact TMDBID match first (most
+// reliable, provider-independent), falling back to an exact title match,
+// and finally just the top result.
+func bestHistorySeriesMatch(results []model.SearchResult, entry history.Entry) model.SearchResult {
+	if entry.TMDBID > 0 {
+		for _, r := range results {
+			if r.TMDBID == entry.TMDBID {
+				return r
+			}
+		}
+	}
+	target := strings.ToLower(strings.TrimSpace(entry.Title))
+	for _, r := range results {
+		if strings.ToLower(strings.TrimSpace(r.Title)) == target {
+			return r
+		}
+	}
+	return results[0]
+}
+
+func (m *modelImpl) onHistoryResolveSeries(msg historyResolveSeriesMsg) (tea.Model, tea.Cmd) {
+	if msg.opID != m.historyContinueOpID {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.loading = false
+		m.loadingText = ""
+		logging.Warnf("history resume: %v", msg.err)
+		m.setStatus(statusWarn, fmt.Sprintf("%q not found on any current provider", msg.entry.Title))
+		return m, nil
 	}
 
+	series := msg.series
 	m.selectedSeries = &series
 	m.selectedEpisode = nil
 	m.resolved = nil
@@ -938,61 +998,38 @@ func (m *modelImpl) fetchHistoryNextEpisode(group history.Group) (tea.Model, tea
 	m.episodeResults = nil
 	m.episodeIndex = -1
 	m.autoPlayAfterResolve = false
-	m.loading = true
-	m.loadingText = "Finding next episode..."
-	opID := m.newOpID()
-	m.historyContinueOpID = opID
-	logging.Infof("fetchHistoryNextEpisode: loading episodes for %q after S%dE%d", group.Title, group.FarthestComplete.Season, group.FarthestComplete.Episode)
-	return m, tea.Batch(m.spinner.Tick, m.historyContinueEpisodesCmd(opID, group, series, targetMode))
-}
+	m.pushView(viewPreview)
 
-func (m *modelImpl) resolveHistoryEntry(entry history.Entry) (tea.Model, tea.Cmd) {
-	// Reconstruct results to call Resolve directly
-	series := searchResultFromHistoryEntry(entry)
-	episode := episodeResultFromHistoryEntry(entry)
-	targetMode := modeForHistoryEntry(entry)
-
-	// If missing critical URLs, fallback to search using the CORRECT provider and mode
-	if series.URL == "" || (episode.URL == "" && series.MediaType != "movie") {
-		logging.Infof("playHistoryEntry: missing URLs, falling back to search for %q via %s", entry.Title, entry.ProviderName)
-
-		m.appMode = targetMode
-
-		m.loading = true
-		m.loadingText = fmt.Sprintf("Searching %s...", entry.Title)
+	if msg.group != nil && shouldFetchNextEpisode(*msg.group) {
+		m.loadingText = "Finding next episode..."
 		opID := m.newOpID()
-		m.searchOpID = opID
-		return m, m.searchCmd(opID, entry.Title)
+		m.historyContinueOpID = opID
+		logging.Infof("onHistoryResolveSeries: loading episodes for %q after S%dE%d", msg.group.Title, msg.group.FarthestComplete.Season, msg.group.FarthestComplete.Episode)
+		return m, m.historyContinueEpisodesCmd(opID, *msg.group, series, m.appMode)
 	}
 
-	// URLs are present, set the mode correctly before resolving
-	m.appMode = targetMode
-
-	m.selectedSeries = &series
-	m.selectedEpisode = &episode
-	m.resolved = nil
-	m.clearPreviewPoster()
-	m.selectedPlayback = 0
-	m.episodeResults = nil
-	m.episodeIndex = -1
-	m.autoPlayAfterResolve = false
-	m.loading = true
-	m.loadingText = "Resolving..."
+	target := msg.entry
+	m.pendingHistoryTarget = &target
+	m.loadingText = "Loading episodes..."
 	opID := m.newOpID()
-	m.resolveOpID = opID
+	m.episodesOpID = opID
+	logging.Infof("onHistoryResolveSeries: re-resolving %q S%dE%d from history for preview", target.Title, target.Season, target.Episode)
+	return m, m.episodesCmd(opID, series)
+}
 
-	// Also fetch episodes in background to enable "Play Next"
-	epOpID := m.newOpID()
-	m.episodesOpID = epOpID
-
-	logging.Infof("playHistoryEntry: re-resolving %q S%dE%d from history for preview", entry.Title, entry.Season, entry.Episode)
-
-	m.pushView(viewPreview)
-	return m, tea.Batch(
-		m.spinner.Tick,
-		m.resolveCmd(opID, series, episode),
-		m.episodesCmd(epOpID, series),
-	)
+// episodeIndexForEntry finds the live episode matching a history entry's
+// season/episode. Movies have no season/episode numbering, so any single
+// live "episode" result is treated as the match.
+func episodeIndexForEntry(episodes []model.EpisodeResult, entry history.Entry) (int, bool) {
+	if entry.Season == 0 && entry.Episode == 0 && len(episodes) > 0 {
+		return 0, true
+	}
+	for i, ep := range episodes {
+		if ep.Season == entry.Season && ep.Number == entry.Episode {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1050,19 +1087,14 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch keyMsg.String() {
 		case "y", "Y":
 			if m.historyStore != nil && m.resolved != nil {
-				providerName := m.resolved.Resolver
-				if m.selectedSeries != nil && m.selectedSeries.Provider != "" {
-					providerName = m.selectedSeries.Provider
-				}
-
 				entry := history.Entry{
 					Key: history.EntryKey{
-						Provider: providerName,
-						Title:    m.resolved.SeriesTitle,
-						Season:   m.resolved.SeasonNumber,
-						Episode:  m.resolved.EpisodeNumber,
+						Title:     m.resolved.SeriesTitle,
+						Mode:      string(m.appMode),
+						MediaType: m.resolved.MediaType,
+						Season:    m.resolved.SeasonNumber,
+						Episode:   m.resolved.EpisodeNumber,
 					},
-					ProviderName: providerName,
 					Title:        m.resolved.SeriesTitle,
 					EpisodeTitle: m.resolved.EpisodeTitle,
 					Season:       m.resolved.SeasonNumber,
@@ -1073,21 +1105,20 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Complete:     true,
 
 					// Metadata
-					Mode:       string(m.appMode),
-					SeriesURL:  m.resolved.SeriesURL,
-					EpisodeURL: m.resolved.EpisodeURL,
-					MediaType:  m.resolved.MediaType,
-					TMDBID:     m.resolved.TMDBID,
+					Mode:      string(m.appMode),
+					MediaType: m.resolved.MediaType,
+					TMDBID:    m.resolved.TMDBID,
 				}
 				_ = m.historyStore.Upsert(entry)
 
 				// Refresh episode list markers
 				if len(m.episodeResults) > 0 {
-					seriesTitle := ""
+					seriesTitle, mediaType := "", ""
 					if m.selectedSeries != nil {
 						seriesTitle = m.selectedSeries.Title
+						mediaType = m.selectedSeries.MediaType
 					}
-					m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.selectedEpisodes))
+					m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.appMode, mediaType, m.selectedEpisodes))
 				}
 
 				if updated, ok := m.historyStore.Get(entry.Key); ok {
@@ -1789,26 +1820,6 @@ func modeForHistoryEntry(entry history.Entry) provider.ContentType {
 		return provider.ModeCartoon
 	default:
 		return provider.ModeTV
-	}
-}
-
-func searchResultFromHistoryEntry(entry history.Entry) model.SearchResult {
-	return model.SearchResult{
-		Title:     entry.Title,
-		URL:       entry.SeriesURL,
-		Provider:  history.FirstNonEmpty(entry.ProviderName, entry.Key.Provider),
-		MediaType: entry.MediaType,
-		TMDBID:    entry.TMDBID,
-	}
-}
-
-func episodeResultFromHistoryEntry(entry history.Entry) model.EpisodeResult {
-	return model.EpisodeResult{
-		Title:    entry.EpisodeTitle,
-		URL:      entry.EpisodeURL,
-		Number:   entry.Episode,
-		Season:   entry.Season,
-		Provider: history.FirstNonEmpty(entry.ProviderName, entry.Key.Provider),
 	}
 }
 

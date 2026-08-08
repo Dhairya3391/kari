@@ -25,6 +25,30 @@ func resultTypeLabel(item model.SearchResult) string {
 	}
 }
 
+// historyKindLabel produces a short human-readable content kind (e.g. "Anime
+// Movie", "TV", "Cartoon") from a history entry's Mode+MediaType — the two
+// fields together disambiguate cases resultTypeLabel can't from MediaType
+// alone, like an anime movie (Mode="anime", MediaType="movie") vs a
+// live-action movie (Mode="movies", MediaType="movie").
+func historyKindLabel(mode, mediaType string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	mt := strings.ToLower(strings.TrimSpace(mediaType))
+	switch {
+	case mode == "anime" && mt == "movie":
+		return "Anime Movie"
+	case mode == "anime":
+		return "Anime"
+	case mt == "movie":
+		return "Movie"
+	case mt == "cartoon" || mode == "cartoon":
+		return "Cartoon"
+	case mt == "tv":
+		return "TV"
+	default:
+		return "Title"
+	}
+}
+
 func directEpisodeForResult(item model.SearchResult) (model.EpisodeResult, bool) {
 	if strings.EqualFold(item.Provider, "tmdb") && strings.EqualFold(item.MediaType, "movie") {
 		return model.EpisodeResult{

@@ -7,6 +7,7 @@ import (
 
 	"kari/internal/history"
 	"kari/internal/model"
+	"kari/internal/provider"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
@@ -43,7 +44,7 @@ func seriesToItems(items []model.SearchResult) []list.Item {
 	return out
 }
 
-func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, seriesTitle string, selected map[int]struct{}) []list.Item {
+func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, seriesTitle string, mode provider.ContentType, mediaType string, selected map[int]struct{}) []list.Item {
 	out := make([]list.Item, 0, len(items))
 	for idx, it := range items {
 		marker := "[    ] "
@@ -51,10 +52,11 @@ func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, s
 			marker = "[sel] "
 		} else if historyStore != nil {
 			entry, ok := historyStore.Get(history.EntryKey{
-				Provider: it.Provider,
-				Title:    seriesTitle,
-				Season:   it.Season,
-				Episode:  it.Number,
+				Title:     seriesTitle,
+				Mode:      string(mode),
+				MediaType: mediaType,
+				Season:    it.Season,
+				Episode:   it.Number,
 			})
 			if ok {
 				pct := int(entry.PercentComplete * 100)
@@ -127,7 +129,7 @@ func historyGroupsToItems(groups []history.Group) []list.Item {
 
 		action := historyGroupActionLabel(group)
 		title := lipgloss.NewStyle().Foreground(colorMuted).Render(marker) +
-			lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("%s · ", group.ProviderName)) +
+			lipgloss.NewStyle().Foreground(colorMuted).Render(fmt.Sprintf("%s · ", historyKindLabel(group.Mode, group.MediaType))) +
 			group.Title
 
 		if action != "" {

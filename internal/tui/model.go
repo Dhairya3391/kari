@@ -229,6 +229,9 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case historyContinueEpisodesMsg:
 		mdl, cmd := m.onHistoryContinueEpisodes(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)
+	case historyResolveSeriesMsg:
+		mdl, cmd := m.onHistoryResolveSeries(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
 	case resolveDoneMsg:
 		mdl, cmd := m.onResolveDone(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)
