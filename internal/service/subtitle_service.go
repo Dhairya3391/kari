@@ -29,29 +29,23 @@ type SubtitleService struct {
 	yify          *subtitles.YifyClient
 	httpClient    *http.Client
 	keyPool       *tmdb.KeyPool
-	downloadDir   string
 	cache         map[string][]model.SubtitleTrack
 	mu            sync.Mutex
 }
 
 func NewSubtitleService(cfg *config.Config) *SubtitleService {
 	if cfg == nil {
-		cfg = &config.Config{DownloadDir: "./downloads"}
+		cfg = &config.Config{}
 	}
 	var openSubtitles *subtitles.Client
 	if strings.TrimSpace(cfg.OpenSubtitlesKey) != "" && strings.TrimSpace(cfg.OpenSubtitlesUser) != "" && strings.TrimSpace(cfg.OpenSubtitlesPass) != "" {
 		openSubtitles = subtitles.NewClient(cfg.OpenSubtitlesKey, cfg.OpenSubtitlesUser, cfg.OpenSubtitlesPass)
-	}
-	downloadDir := strings.TrimSpace(cfg.DownloadDir)
-	if downloadDir == "" {
-		downloadDir = "./downloads"
 	}
 	return &SubtitleService{
 		openSubtitles: openSubtitles,
 		yify:          subtitles.NewYifyClient(),
 		httpClient:    httpclient.New(),
 		keyPool:       tmdb.NewKeyPool(cfg.TMDBAPIKeys),
-		downloadDir:   downloadDir,
 		cache:         make(map[string][]model.SubtitleTrack),
 	}
 }
@@ -61,7 +55,12 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 	if preferredLang == "" {
 		preferredLang = "en"
 	}
+	originalSubtitles := media.Subtitles
+	for i, t := range originalSubtitles {
+		logging.Debugf("subtitle fetch: incoming[%d] label=%q lang=%q resolver=%q url=%q path=%q", i, t.Label, t.Language, t.Resolver, t.URL, t.Path)
+	}
 	media.Subtitles = selectSubtitleCandidates(media.Subtitles, preferredLang, preferredResolver)
+	logging.Debugf("subtitle fetch: preferredLang=%q preferredResolver=%q matched=%d of %d incoming", preferredLang, preferredResolver, len(media.Subtitles), len(originalSubtitles))
 
 	// Download all provider-supplied subtitles locally to avoid MPV remote URL issues
 	downloadedProvider := s.downloadProviderSubtitles(ctx, &media)
@@ -124,6 +123,19 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 		}
 		if err != nil {
 			logging.Debugf("yify: %v", err)
+		}
+	}
+
+	if len(originalSubtitles) > 0 {
+		fallback := model.ResolvedMedia{Subtitles: originalSubtitles}
+		if s.downloadProviderSubtitles(ctx, &fallback) {
+			if track, ok := s.pickBestSubtitle(fallback.Subtitles); ok {
+				tracks := []model.SubtitleTrack{track}
+				s.mu.Lock()
+				s.cache[cacheKey] = tracks
+				s.mu.Unlock()
+				return tracks, nil
+			}
 		}
 	}
 
@@ -209,7 +221,12 @@ func (s *SubtitleService) fetchYify(ctx context.Context, media model.ResolvedMed
 		return nil, err
 	}
 
-	path, err := s.yify.SaveSubtitle(data, media.SeriesTitle, s.downloadDir)
+	subDir, err := subtitles.CacheDir()
+	if err != nil {
+		return nil, err
+	}
+
+	path, err := s.yify.SaveSubtitle(data, media.SeriesTitle, subDir)
 	if err != nil {
 		return nil, err
 	}

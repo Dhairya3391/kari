@@ -207,6 +207,10 @@ func (c *YifyClient) SaveSubtitle(data []byte, movieTitle, targetDir string) (st
 		safeTitle = strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(safeTitle)
 		outPath := filepath.Join(targetDir, safeTitle+".srt")
 
+		if err := os.MkdirAll(targetDir, 0o755); err != nil {
+			return "", fmt.Errorf("yify mkdir: %w", err)
+		}
+
 		dst, err := os.Create(outPath)
 		if err != nil {
 			return "", fmt.Errorf("yify write: %w", err)
