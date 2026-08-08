@@ -226,6 +226,9 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 	subPath := ""
 	subtitleFiles := media.SubtitlePaths()
 	if len(subtitleFiles) > 0 && subtitleFiles[0] != "" {
+		if err := os.MkdirAll(mpvAndroidDir, 0o755); err != nil {
+			logging.Debugf("writeMpvConf: failed to create %s: %v", mpvAndroidDir, err)
+		}
 		target := mpvAndroidDir + "/sub.vtt"
 		if err := copyFile(subtitleFiles[0], target); err == nil {
 			subPath = target

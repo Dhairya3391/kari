@@ -330,8 +330,8 @@ func (c *Client) Download(ctx context.Context, fileID int) (string, error) {
 
 	processedData, detectedFormat := c.processSubtitleData(rawData)
 
-	subDir := filepath.Join(os.TempDir(), "kari-subs")
-	if err := os.MkdirAll(subDir, 0o755); err != nil {
+	subDir, err := CacheDir()
+	if err != nil {
 		return "", fmt.Errorf("opensubtitles download mkdir: %w", err)
 	}
 

@@ -327,8 +327,8 @@ func (s *SubtitleService) downloadProviderSubtitle(ctx context.Context, subURL s
 		return "", fmt.Errorf("empty subtitle file")
 	}
 
-	subDir := filepath.Join(os.TempDir(), "kari-subs")
-	if err := os.MkdirAll(subDir, 0o755); err != nil {
+	subDir, err := subtitles.CacheDir()
+	if err != nil {
 		return "", err
 	}
 
