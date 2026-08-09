@@ -10,6 +10,7 @@ import (
 
 	"github.com/hashicorp/go-retryablehttp"
 
+	"kari/internal/config"
 	"kari/internal/logging"
 )
 
@@ -82,9 +83,22 @@ func newClient(timeout time.Duration) *http.Client {
 		transport.DialContext = dialer.DialContext
 	}
 
-	retryClient.HTTPClient.Transport = transport
+	retryClient.HTTPClient.Transport = &kariClientRoundTripper{next: transport}
 	retryClient.Logger = &leveledLogger{}
 	return retryClient.StandardClient()
+}
+
+// kariClientRoundTripper tags every outgoing request as coming from this app.
+// Our own Cloudflare-fronted APIs (broggl.farm) use it to bypass bot
+// challenges that otherwise intermittently misclassify the app's non-browser
+// TLS fingerprint and return an HTML challenge page instead of JSON.
+type kariClientRoundTripper struct {
+	next http.RoundTripper
+}
+
+func (t *kariClientRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set(config.KariClientHeader, config.KariClientToken)
+	return t.next.RoundTrip(req)
 }
 
 type uaRoundTripper struct {

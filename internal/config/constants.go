@@ -19,6 +19,8 @@ const (
 	YifyBase         = "https://yifysubtitles.ch"
 	YifyUserAgent    = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	SearchAPIBase    = "https://noobsearch.broggl.farm"
+	KariClientHeader = "X-Kari-Client"
+	KariClientToken  = "kari-app-v1"
 	BaseURL          = WCOBaseURL
 	EmbedOrigin      = WCOEmbedOrigin
 	AndroidUAConst   = WCOUserAgent
