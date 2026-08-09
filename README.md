@@ -88,7 +88,21 @@ The binary lands in the current directory as `./kari`.
 
 ### Pre-built binaries
 
-If you don't want to install Go, grab a binary from the [releases page](https://github.com/Dhairya3391/kari/releases).
+**macOS / Linux / Termux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dhairya3391/kari/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/Dhairya3391/kari/main/install.ps1 | iex
+```
+
+Both scripts detect your OS/architecture, download the matching binary from the [latest release](https://github.com/Dhairya3391/kari/releases/latest), and put `kari` on your `PATH` — no admin/sudo required. Set `KARI_INSTALL_DIR` before running to install somewhere other than the default.
+
+Or grab a binary manually from the [releases page](https://github.com/Dhairya3391/kari/releases).
 
 ## Configuration
 
