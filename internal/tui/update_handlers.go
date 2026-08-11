@@ -2152,19 +2152,23 @@ func (m *modelImpl) triggerScrobble(entry history.Entry) {
 			}
 		} else {
 			if trakt != nil && trakt.IsAuthenticated() {
-				logging.Debugf("triggerScrobble: scrobbling %q to trakt (progress=%.2f)", e.Title, progress)
-				_ = trakt.RefreshIfNeeded(ctx)
-				var err error
-				if resolved.MediaType == "movie" {
-					err = trakt.ScrobbleMovie(ctx, resolved, progress)
+				if progress*100 < 1.0 {
+					logging.Debugf("triggerScrobble: skipping trakt scrobble below 1%% progress (%.2f%%)", progress*100)
 				} else {
-					err = trakt.ScrobbleEpisode(ctx, resolved, progress)
-				}
-				if err != nil {
-					logging.Errorf("trakt scrobble failed: %v", err)
-				} else {
-					logging.Infof("trakt scrobble successful for %q", e.Title)
-					success = true
+					logging.Debugf("triggerScrobble: scrobbling %q to trakt (progress=%.2f)", e.Title, progress)
+					_ = trakt.RefreshIfNeeded(ctx)
+					var err error
+					if resolved.MediaType == "movie" {
+						err = trakt.ScrobbleMovie(ctx, resolved, progress)
+					} else {
+						err = trakt.ScrobbleEpisode(ctx, resolved, progress)
+					}
+					if err != nil {
+						logging.Errorf("trakt scrobble failed: %v", err)
+					} else {
+						logging.Infof("trakt scrobble successful for %q", e.Title)
+						success = true
+					}
 				}
 			}
 		}

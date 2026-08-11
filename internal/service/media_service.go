@@ -9,11 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/errgroup"
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/provider"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // MediaService orchestrates provider operations for the TUI.
@@ -33,7 +34,7 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 		return nil, query, nil, fmt.Errorf("no providers available for mode %q", mode)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 
 	type providerSearchResult struct {
