@@ -3,10 +3,10 @@
 This file is a mandatory set of rules for any AI agent modifying this codebase. 
 
 ## 1. Core Mandates
-- **No Global Mutables**: Do not add global variables. Use dependency injection.
+- **No Global Mutables**: Do not add global variables. Use dependency injection. The one sanctioned exception is `internal/tui/styles.go`'s theme/style vars (`colorPrimary` and friends) — lipgloss's idiomatic pattern, read by every `view_*.go` render function; `SetAccentColor` mutates them for the accent-color setting. Don't use this as precedent for global state anywhere else.
 - **Dependency-Safe Wiring**: All new components MUST be instantiated in `internal/app/app.go` and passed down.
 - **Strict Typing**: Use `provider.ContentType` for modes. Do not use raw strings.
-- **Shared HTTP Client**: Use `internal/httpclient`. Never instantiate a raw `http.Client`.
+- **Shared HTTP Client**: Use `internal/httpclient`. Never instantiate a raw `http.Client` — except for one-off local calls that aren't safely retryable (e.g. a non-idempotent JSON-RPC method), where the shared client's automatic retry could double-submit; use a plain bounded-timeout `http.Client` there instead, as `internal/downloader/aria2_rpc.go` does.
 
 ## 2. Refactor Logic (The "Must Needed" Flexibility)
 While these rules are strict, you are encouraged to propose or implement improvements IF:

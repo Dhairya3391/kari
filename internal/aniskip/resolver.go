@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"kari/internal/config"
 )
 
 type graphqlQuery struct {
@@ -45,7 +47,7 @@ func (c *Client) GetMALID(ctx context.Context, title string) (int, error) {
 		return 0, fmt.Errorf("anilist marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://graphql.anilist.co", bytes.NewBuffer(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, config.AniListAPIBase, bytes.NewBuffer(data))
 	if err != nil {
 		return 0, fmt.Errorf("anilist request: %w", err)
 	}

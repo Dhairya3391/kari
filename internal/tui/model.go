@@ -23,7 +23,18 @@ import (
 	"kari/internal/util"
 )
 
-func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client) tea.Model {
+func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client) tea.Model {
+	// Loaded up front (rather than where settings used to be applied,
+	// further down) so the accent color is in effect before any of the
+	// list delegates or the download bar below are built — those cache
+	// colorPrimary at construction time, not at render time.
+	savedSettings := settings.Load()
+	if savedSettings != nil {
+		if normalized, ok := normalizeHexColor(savedSettings.AccentColor); ok {
+			SetAccentColor(normalized)
+		}
+	}
+
 	ti := textinput.New()
 	ti.CharLimit = 150
 	ti.Width = 70
@@ -102,9 +113,17 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
+	downloadBar := newDownloadBar()
+
 	ai := textinput.New()
 	ai.Placeholder = "Paste code here"
 	ai.CharLimit = 4096
+
+	hexInput := textinput.New()
+	hexInput.Prompt = "#"
+	hexInput.Placeholder = "be95ff"
+	hexInput.CharLimit = 6
+	hexInput.Width = 10
 
 	modes := registry.AllModes()
 	initialMode := provider.ContentType("")
@@ -123,10 +142,12 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		activeView:      viewSearch,
 		queryInput:      ti,
 		authInput:       ai,
+		hexInput:        hexInput,
 		seriesList:      seriesList,
 		episodeList:     episodeList,
 		historyList:     historyList,
 		spinner:         sp,
+		downloadBar:     downloadBar,
 
 		keys:             defaultKeyMap(),
 		searchQuery:      strings.TrimSpace(initialQuery),
@@ -155,7 +176,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 	}
 	model.selectedPlayer = model.defaultPlayerIndex()
 	model.updateQueryPlaceholder()
-	if s := settings.Load(); s != nil {
+	if s := savedSettings; s != nil {
 		if s.QualityMode >= qualityAll && s.QualityMode <= qualityLowest {
 			model.qualityMode = s.QualityMode
 		}
@@ -178,12 +199,29 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			model.subtitleLanguage = code
 		}
 		model.imagesEnabled = !s.DisableImages
+		if normalized, ok := normalizeHexColor(s.AccentColor); ok {
+			model.accentIndex = len(accentPresets) // default: custom slot
+			for i, preset := range accentPresets {
+				if preset.hex == normalized {
+					model.accentIndex = i
+					normalized = ""
+					break
+				}
+			}
+			model.customAccentHex = normalized // "" when it matched a preset
+		}
 	}
 	for i, code := range lang.SubtitleOptions {
 		if code == model.subtitleLanguage {
 			model.subtitleLanguageIndex = i
 			break
 		}
+	}
+	if historyLoadErr != nil {
+		// historyStore is nil in this case, silently disabling watch
+		// history/resume for the whole session — surface it instead of
+		// leaving the user to wonder why "Continue Watching" is empty.
+		model.setStatus(statusWarn, "Watch history unavailable: "+historyLoadErr.Error())
 	}
 	return model
 }
@@ -196,6 +234,9 @@ func (m *modelImpl) Init() tea.Cmd {
 		opID := m.newOpID()
 		m.searchOpID = opID
 		cmds = append(cmds, m.searchCmd(opID, m.searchQuery))
+	}
+	if m.statusType == statusWarn && m.statusText != "" {
+		cmds = append(cmds, m.clearStatusAfter(statusClearDuration(statusWarn)))
 	}
 	return tea.Batch(cmds...)
 }
@@ -280,7 +321,6 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.playOpID == msg.opID && m.loading {
 			m.loading = false
 			m.loadingText = ""
-			m.setStatus(statusInfo, "Playback in progress...")
 		}
 		return m, spinnerCmd
 	case resetConfirmQuitMsg:

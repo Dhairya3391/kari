@@ -27,6 +27,13 @@ const (
 	sepLine     = "────────────────────────────────────────────────────────────────"
 )
 
+// maxLogSizeBytes bounds kari.log so a long-running or frequently-launched
+// install doesn't grow it forever. Once it crosses this size, the previous
+// file is kept as one rotated backup (kari.log.1) and a fresh file starts —
+// simple size-based rotation, no need for anything time-based or multi-
+// generation given this is a single local debug log, not a service log.
+const maxLogSizeBytes = 10 * 1024 * 1024 // 10MB
+
 func init() {
 	// default no-op logger so callers are safe before Init
 	noop := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -51,6 +58,8 @@ func Init(debug bool) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create log directory: %w", err)
 	}
+
+	rotateIfOversized(path)
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -165,6 +174,18 @@ func Debugf(format string, args ...any) { Debug(fmt.Sprintf(format, args...)) }
 func Infof(format string, args ...any)  { Info(fmt.Sprintf(format, args...)) }
 func Warnf(format string, args ...any)  { Warn(fmt.Sprintf(format, args...)) }
 func Errorf(format string, args ...any) { Error(fmt.Sprintf(format, args...)) }
+
+// rotateIfOversized moves an existing oversized log file to path+".1"
+// (replacing any prior backup) before Init opens path fresh. Best-effort:
+// if stat or rename fails (e.g. permissions), it silently leaves the
+// existing file in place rather than blocking startup or losing logs.
+func rotateIfOversized(path string) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() < maxLogSizeBytes {
+		return
+	}
+	_ = os.Rename(path, path+".1")
+}
 
 func resolveLogPath() (string, error) {
 	if path := firstEnv("KARI_LOG_FILE"); path != "" {

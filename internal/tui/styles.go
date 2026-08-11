@@ -1,6 +1,12 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"regexp"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/progress"
+	"github.com/charmbracelet/lipgloss"
+)
 
 var (
 	colorSurface = lipgloss.Color("#161616")
@@ -48,6 +54,56 @@ var (
 	preparingBadge    = badgeBase.Background(colorInfo).Render("PREPARING")
 	fillerBadgeStr    = badgeBase.MarginLeft(1).Background(colorWarn).Render("FILLER")
 )
+
+// accentPresets is the curated list of accent colors offered in Settings —
+// all Carbon-family hues already used elsewhere in the app (mode badges,
+// info/success colors), so picking any of them keeps the palette cohesive
+// rather than clashing with the rest of the UI.
+var accentPresets = []struct{ name, hex string }{
+	{"Purple", "#be95ff"}, // default
+	{"Blue", "#33b1ff"},
+	{"Green", "#42be65"},
+	{"Pink", "#ee5396"},
+	{"Teal", "#08bdba"},
+	{"Orange", "#ff832b"},
+}
+
+// SetAccentColor repoints the app's accent color. colorPrimary itself is a
+// plain var re-read at call time everywhere else it's used (list delegates,
+// every view_*.go render function), so those pick up the change on their
+// own. sectionTitleStyle and modeBadgeAnime are the only two styles that
+// cache colorPrimary at Go package-init time (before any settings are
+// loaded) rather than at render time, so they're rebuilt explicitly here.
+func SetAccentColor(hex string) {
+	if hex == "" {
+		return
+	}
+	colorPrimary = lipgloss.Color(hex)
+	sectionTitleStyle = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	modeBadgeAnime = badgeBase.Background(colorPrimary)
+}
+
+// newDownloadBar builds a progress bar filled with the current accent
+// color. Called at startup and again whenever the accent color changes, so
+// an in-progress download's bar isn't left showing a stale color.
+func newDownloadBar() progress.Model {
+	return progress.New(progress.WithSolidFill(string(colorPrimary)))
+}
+
+var hexColorRe = regexp.MustCompile(`^[0-9a-fA-F]{6}$`)
+
+// normalizeHexColor validates a user-typed or persisted color string (with
+// or without a leading '#') and returns it in canonical "#rrggbb" form. ok
+// is false for anything that isn't exactly 6 hex digits — used both for
+// the custom-accent text input and defensively when loading settings.json,
+// in case it was hand-edited to something invalid.
+func normalizeHexColor(s string) (string, bool) {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "#")
+	if !hexColorRe.MatchString(s) {
+		return "", false
+	}
+	return "#" + strings.ToLower(s), true
+}
 
 func renderBadge(mode string) string {
 	switch mode {

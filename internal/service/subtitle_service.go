@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"kari/internal/config"
@@ -22,15 +21,23 @@ import (
 	"kari/internal/provider"
 	"kari/internal/subtitles"
 	"kari/internal/tmdb"
+	"kari/internal/util"
 )
+
+// subtitleCacheSize bounds SubtitleService's in-memory result cache so a
+// long session watching many different titles doesn't grow it forever.
+const subtitleCacheSize = 100
+
+// subtitleCacheMaxAge is how long downloaded subtitle files are kept on
+// disk in internal/subtitles.CacheDir() before being pruned on startup.
+const subtitleCacheMaxAge = 7 * 24 * time.Hour
 
 type SubtitleService struct {
 	openSubtitles *subtitles.Client
 	yify          *subtitles.YifyClient
 	httpClient    *http.Client
 	keyPool       *tmdb.KeyPool
-	cache         map[string][]model.SubtitleTrack
-	mu            sync.Mutex
+	cache         *util.BoundedCache[[]model.SubtitleTrack]
 }
 
 func NewSubtitleService(cfg *config.Config) *SubtitleService {
@@ -41,12 +48,17 @@ func NewSubtitleService(cfg *config.Config) *SubtitleService {
 	if strings.TrimSpace(cfg.OpenSubtitlesKey) != "" && strings.TrimSpace(cfg.OpenSubtitlesUser) != "" && strings.TrimSpace(cfg.OpenSubtitlesPass) != "" {
 		openSubtitles = subtitles.NewClient(cfg.OpenSubtitlesKey, cfg.OpenSubtitlesUser, cfg.OpenSubtitlesPass)
 	}
+	go func() {
+		if err := subtitles.PruneCacheDir(subtitleCacheMaxAge); err != nil {
+			logging.Debugf("subtitle cache prune failed: %v", err)
+		}
+	}()
 	return &SubtitleService{
 		openSubtitles: openSubtitles,
 		yify:          subtitles.NewYifyClient(),
 		httpClient:    httpclient.New(),
 		keyPool:       tmdb.NewKeyPool(cfg.TMDBAPIKeys),
-		cache:         make(map[string][]model.SubtitleTrack),
+		cache:         util.NewBoundedCache[[]model.SubtitleTrack](subtitleCacheSize),
 	}
 }
 
@@ -66,12 +78,9 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 	downloadedProvider := s.downloadProviderSubtitles(ctx, &media)
 
 	cacheKey := fmt.Sprintf("%d:%d:%d:%s:%s:%s", media.TMDBID, media.SeasonNumber, media.EpisodeNumber, media.SeriesTitle, preferredLang, preferredResolver)
-	s.mu.Lock()
-	if tracks, ok := s.cache[cacheKey]; ok {
-		s.mu.Unlock()
+	if tracks, ok := s.cache.Get(cacheKey); ok {
 		return tracks, nil
 	}
-	s.mu.Unlock()
 
 	// Priority 1: a provider subtitle — selectSubtitleCandidates already put
 	// the active provider's matches first, so the first one that actually
@@ -84,9 +93,7 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 		if track, ok := s.pickBestSubtitle(media.Subtitles); ok {
 			tracks := []model.SubtitleTrack{track}
 			logging.Debugf("subtitle fetch: selected provider sub path=%q lang=%q resolver=%q", track.Path, track.Language, track.Resolver)
-			s.mu.Lock()
-			s.cache[cacheKey] = tracks
-			s.mu.Unlock()
+			s.cache.Set(cacheKey, tracks)
 			return tracks, nil
 		}
 		logging.Debugf("subtitle fetch: pickBestSubtitle found nothing")
@@ -102,13 +109,11 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 		track, found, err := s.openSubtitles.FetchBestSubtitle(ctx, query, preferredLang, media.TMDBID, media.SeasonNumber, media.EpisodeNumber)
 		if err == nil && found {
 			tracks := []model.SubtitleTrack{track}
-			s.mu.Lock()
-			s.cache[cacheKey] = tracks
-			s.mu.Unlock()
+			s.cache.Set(cacheKey, tracks)
 			return tracks, nil
 		}
 		if err != nil {
-			logging.Debugf("opensubtitles: %v", err)
+			logging.Warnf("opensubtitles: %v", err)
 		}
 	}
 
@@ -116,13 +121,11 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 	{
 		tracks, err := s.fetchYify(ctx, media)
 		if err == nil && len(tracks) > 0 {
-			s.mu.Lock()
-			s.cache[cacheKey] = tracks
-			s.mu.Unlock()
+			s.cache.Set(cacheKey, tracks)
 			return tracks, nil
 		}
 		if err != nil {
-			logging.Debugf("yify: %v", err)
+			logging.Warnf("yify: %v", err)
 		}
 	}
 
@@ -131,9 +134,7 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 		if s.downloadProviderSubtitles(ctx, &fallback) {
 			if track, ok := s.pickBestSubtitle(fallback.Subtitles); ok {
 				tracks := []model.SubtitleTrack{track}
-				s.mu.Lock()
-				s.cache[cacheKey] = tracks
-				s.mu.Unlock()
+				s.cache.Set(cacheKey, tracks)
 				return tracks, nil
 			}
 		}

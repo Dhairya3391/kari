@@ -164,6 +164,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	var mu sync.Mutex
 	var allPlaybackSources []model.PlaybackSource
 	var allSubtitleTracks []model.SubtitleTrack
+	var failures []string
 	seenSubs := make(map[string]struct{})
 
 	// Helper to build ResolvedMedia from current aggregated sources.
@@ -237,6 +238,9 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 					defer close(updates)
 					if err := sp.ResolveStream(gCtx, mediaID, mediaEpisode, updates); err != nil {
 						logging.Debugf("streaming provider %q failed: %v", p.Name(), err)
+						mu.Lock()
+						failures = append(failures, fmt.Sprintf("%s: %v", p.Name(), err))
+						mu.Unlock()
 					}
 				}()
 
@@ -282,6 +286,9 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			sources, err := p.ResolveSource(gCtx, mediaID, mediaEpisode)
 			if err != nil {
 				logging.Debugf("provider %q failed to resolve: %v", p.Name(), err)
+				mu.Lock()
+				failures = append(failures, fmt.Sprintf("%s: %v", p.Name(), err))
+				mu.Unlock()
 				return nil
 			}
 
@@ -328,6 +335,9 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	}
 
 	if len(allPlaybackSources) == 0 {
+		if len(failures) > 0 {
+			logging.Warnf("resolve: all %d provider(s) failed: %s", len(providers), strings.Join(failures, " | "))
+		}
 		return model.ResolvedMedia{}, provider.ErrNoSources
 	}
 

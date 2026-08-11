@@ -48,6 +48,16 @@ func newClient(timeout time.Duration) *http.Client {
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 
+	// Go's default MaxIdleConnsPerHost is 2, which is too low for providers
+	// that fan out several concurrent requests to their own host (e.g.
+	// wco's query-variant search and index-page fallback both run multiple
+	// requests to the same host in parallel) — with only 2 idle connections
+	// kept warm, a burst beyond that forces extra TCP+TLS handshakes instead
+	// of reusing connections.
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
+
 	// Termux/Android cross-compiled binaries often fail DNS resolution
 	// because they lack a working /etc/resolv.conf (the stub resolver on
 	// [::1]:53 refuses connections). Dial public resolvers directly instead.

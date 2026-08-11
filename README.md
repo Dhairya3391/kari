@@ -37,6 +37,8 @@ Type a query, press Space, pick a result.
 - **Watch history** — Local JSON store, grouped by series, remembers your position.
 - **Downloading** — yt-dlp powered downloads with aria2c multi-connection acceleration for HLS, DASH, and direct HTTP sources.
 - **Posters & metadata** — TMDB/AniList poster art in search results and the preview screen, plus overview, genres, and rating. Renders as real pixel images on Kitty/WezTerm/Ghostty, and falls back to Unicode half-block art everywhere else — no config needed, capability is auto-detected.
+- **Customizable accent color** — Pick from curated presets or type your own hex code in Settings; applies immediately across the whole UI.
+- **Download progress bar** — Live byte-percentage (single downloads) or episode-count (batch downloads) progress bar during downloads.
 - **Subtitles** — Tries the playback provider's own subtitles first (matching your preferred language, then English), falls back to other providers, then OpenSubtitles, then Yify — never a random unrelated language. Re-syncs automatically if you switch source or change the subtitle language setting.
 - **Self-update** — `./kari -u` fetches the latest release from GitHub.
 - **Cross-platform** — Linux, macOS, Windows, Android (Termux).
@@ -200,7 +202,7 @@ The binary ships with fallback keys for Trakt, AniList, and TMDB. They work fine
 2. **Episodes** — Season/episode list with filler badges. Sub/dub toggle is there for anime.
 3. **Preview** — Poster, description, genres, rating, resolved sources, selected subtitle, and any saved position. Hit Enter to play.
 4. **History** — Grouped by series. Resume or delete.
-5. **Settings** — Authenticate with Trakt or AniList via device auth (no manual token fiddling), set quality mode, toggle MovieBox languages, and pick a preferred subtitle language.
+5. **Settings** — Authenticate with Trakt or AniList via device auth (no manual token fiddling), set quality mode, toggle MovieBox languages, pick a preferred subtitle language, toggle image rendering, and pick an accent color (curated presets or your own hex code).
 
 ### Media Providers
 
@@ -411,7 +413,7 @@ Make sure your player is in `$PATH`. Run `which mpv` (or `which iina`, `which vl
 
 ### Logs
 
-Written to `~/.config/kari/kari.log`. Set `KARI_LOG_DEBUG=true` for verbose output.
+Written to `~/.config/kari/kari.log`. Set `KARI_LOG_DEBUG=true` for verbose output. The log rotates once it passes 10MB — the previous file is kept as `kari.log.1`.
 
 ## License
 

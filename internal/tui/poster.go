@@ -111,11 +111,6 @@ func (m *modelImpl) setImagesEnabled(enabled bool) tea.Cmd {
 	}
 	m.imagesEnabled = enabled
 	m.saveSettings()
-	if enabled {
-		m.setStatus(statusInfo, "Image rendering: Enabled")
-	} else {
-		m.setStatus(statusInfo, "Image rendering: Disabled")
-	}
 	if !enabled {
 		return nil
 	}

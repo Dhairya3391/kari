@@ -3,11 +3,8 @@
 package player
 
 import (
-	"bytes"
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -36,35 +33,14 @@ func (p *IINAPlayer) Play(sources []model.PlaybackSource, media model.ResolvedMe
 }
 
 func PlayWithIINASources(sources []model.PlaybackSource, media model.ResolvedMedia) (PlaybackResult, error) {
-	if len(sources) == 0 {
-		return PlaybackResult{}, errors.New("iina playback failed: no playback sources available")
-	}
-
 	bin := iinaBinary()
 	if bin == "" {
 		return PlaybackResult{}, errors.New("iina playback failed: iina-cli not found")
 	}
 
-	errs := make([]string, 0, len(sources))
-	for idx, source := range sources {
-		if strings.TrimSpace(source.URL) == "" {
-			continue
-		}
-		if result, err := playSingleSourceWithIINA(bin, source, media); err == nil {
-			return result, nil
-		} else {
-			label := strings.TrimSpace(source.Label)
-			if label == "" {
-				label = fmt.Sprintf("source %d", idx+1)
-			}
-			errs = append(errs, fmt.Sprintf("%s: %v", label, err))
-		}
-	}
-
-	if len(errs) == 0 {
-		return PlaybackResult{}, errors.New("iina playback failed: no usable playback sources available")
-	}
-	return PlaybackResult{}, fmt.Errorf("iina playback failed: %s", strings.Join(errs, " | "))
+	return attemptSources("iina", sources, func(source model.PlaybackSource) (PlaybackResult, error) {
+		return playSingleSourceWithIINA(bin, source, media)
+	})
 }
 
 func iinaAvailable() bool {
@@ -88,8 +64,8 @@ func iinaBinary() string {
 func playSingleSourceWithIINA(binary string, source model.PlaybackSource, media model.ResolvedMedia) (PlaybackResult, error) {
 	socketPath := DefaultMPVSocketPath()
 	args := buildIINAArgs(source, media, socketPath)
-	stderr, exitCode, launched, stats := startPlayerWithStartupCheck(binary, args, iinaStartupTimeout, socketPath)
-	if attemptSucceeded(launched, exitCode, stats) {
+	stderr, exitCode, launched, quickExit, stats := startPlayerWithStartupCheck(binary, args, iinaStartupTimeout, socketPath)
+	if attemptSucceeded(launched, exitCode, quickExit, stats) {
 		return stats, nil
 	}
 	if stderr == "" {
@@ -143,55 +119,4 @@ func buildIINAArgs(source model.PlaybackSource, media model.ResolvedMedia, socke
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendSubtitleArgs(args, media.SubtitlePaths())
 	return args
-}
-
-func startPlayerWithStartupCheck(binary string, args []string, timeout time.Duration, socketPath string) (stderr string, exitCode int, launched bool, result PlaybackResult) {
-	// Clean up any stale socket from a previous run
-	os.Remove(socketPath)
-
-	cmd := exec.Command(binary, args...)
-	cmd.Stdout = io.Discard
-	buf := &bytes.Buffer{}
-	cmd.Stderr = buf
-	if err := cmd.Start(); err != nil {
-		return err.Error(), 1, false, PlaybackResult{}
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
-	select {
-	case err := <-done:
-		if err == nil {
-			return buf.String(), 0, false, PlaybackResult{}
-		}
-		exitCode = 1
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		}
-		return buf.String(), exitCode, false, PlaybackResult{}
-	case <-time.After(timeout):
-		// Launched successfully, start IPC polling
-		ipcDone := make(chan struct{})
-		client := NewIPCClient(socketPath)
-		ps := newPlaybackStats()
-		go ipcPoller(context.Background(), client, ps, ipcDone)
-
-		err := <-done
-		close(ipcDone)
-
-		exitCode = 0
-		if err != nil {
-			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
-				exitCode = exitErr.ExitCode()
-			} else {
-				exitCode = 1
-			}
-		}
-		return "", exitCode, true, ps.snapshot()
-	}
 }

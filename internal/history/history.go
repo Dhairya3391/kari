@@ -8,6 +8,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"kari/internal/logging"
+	"kari/internal/util"
 )
 
 // EntryKey identifies a single watched episode (or movie) purely by what it
@@ -163,9 +166,10 @@ func BuildGroupLookup(entries []Entry) map[string]GroupKey {
 }
 
 type Store struct {
-	path  string
-	mu    sync.Mutex
-	items []Entry
+	path   string
+	mu     sync.Mutex
+	items  []Entry
+	saveWG sync.WaitGroup
 }
 
 type storageFormat struct {
@@ -314,23 +318,45 @@ func (s *Store) Clear() error {
 	return s.save()
 }
 
+// save persists the store to disk. The actual marshal+write happens on a
+// background goroutine so callers (in particular the TUI's Update loop,
+// which calls Upsert synchronously on every playback event) never block on
+// disk I/O. entries is copied here, under the caller's lock, rather than
+// captured by reference — some callers (Delete) mutate s.items in place via
+// append-in-place, which would otherwise race with the goroutine's read of
+// the same backing array.
 func (s *Store) save() error {
-	format := storageFormat{
-		Version: 1,
-		Entries: s.items,
-	}
+	entries := make([]Entry, len(s.items))
+	copy(entries, s.items)
+	path := s.path
 
-	data, err := json.MarshalIndent(format, "", "  ")
-	if err != nil {
-		return err
-	}
+	s.saveWG.Go(func() {
+		format := storageFormat{
+			Version: 1,
+			Entries: entries,
+		}
 
-	tmpPath := s.path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
+		data, err := json.MarshalIndent(format, "", "  ")
+		if err != nil {
+			logging.Errorf("history: failed to marshal for save: %v", err)
+			return
+		}
 
-	return os.Rename(tmpPath, s.path)
+		if err := util.AtomicWriteFile(path, data, 0644); err != nil {
+			logging.Errorf("history: failed to write %s: %v", path, err)
+		}
+	})
+
+	return nil
+}
+
+// Close blocks until any in-flight background save has finished writing to
+// disk. Call it during shutdown, after the TUI has exited, so the most
+// recent watch-progress update (e.g. from an onPlayDone right before the
+// user quits) isn't lost to the process exiting before its async save
+// completes.
+func (s *Store) Close() {
+	s.saveWG.Wait()
 }
 
 func groupKeyForEntry(entry Entry) GroupKey {

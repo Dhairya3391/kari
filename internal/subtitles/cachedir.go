@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func CacheDir() (string, error) {
@@ -19,4 +20,35 @@ func CacheDir() (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+// PruneCacheDir deletes cached subtitle files older than maxAge. Every
+// download (provider, OpenSubtitles, YIFY) writes a new file here and
+// nothing else ever removes them, so without this the directory grows
+// without bound over a long-lived install. Safe to call while playback is
+// in progress: an in-use subtitle file was just written, so it's always
+// far younger than maxAge.
+func PruneCacheDir(maxAge time.Duration) error {
+	dir, err := CacheDir()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
+	return nil
 }

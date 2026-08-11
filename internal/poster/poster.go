@@ -23,6 +23,8 @@ import (
 	"kari/internal/logging"
 	"kari/internal/tmdb"
 	"kari/internal/util"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const tmdbPosterSize = "w500"
@@ -52,6 +54,16 @@ type Client struct {
 
 	imgCache     *util.BoundedCache[image.Image]
 	detailsCache *util.BoundedCache[Details]
+
+	// rawCache and sf dedupe the underlying TMDB "/movie|tv/{id}" fetch: a
+	// title's poster (FetchImage) and its overview/genres (FetchDetails) are
+	// both derived from the same TMDB response, but arrive as two separate
+	// concurrent calls (see triggerPreviewPoster/triggerPreviewDetails in the
+	// TUI). rawCache remembers that response by (tmdbID, mediaType) so the
+	// second caller reuses it instead of re-fetching, and sf collapses the
+	// two calls into a single in-flight HTTP request when they race.
+	rawCache *util.BoundedCache[tmdbDetails]
+	sf       singleflight.Group
 }
 
 // NewClient builds a poster Client. keyPool is the same TMDB key pool used
@@ -62,6 +74,7 @@ func NewClient(keyPool *tmdb.KeyPool) *Client {
 		keyPool:      keyPool,
 		imgCache:     util.NewBoundedCache[image.Image](maxCachedImages),
 		detailsCache: util.NewBoundedCache[Details](maxCachedDetails),
+		rawCache:     util.NewBoundedCache[tmdbDetails](maxCachedDetails),
 	}
 }
 

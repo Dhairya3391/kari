@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -44,19 +45,6 @@ const (
 	qualityDataSaver = 2
 	qualityLowest    = 3
 )
-
-func qualityLabel(mode int) string {
-	switch mode {
-	case qualityHighest:
-		return "Highest"
-	case qualityDataSaver:
-		return "Data Saver"
-	case qualityLowest:
-		return "Lowest"
-	default:
-		return "All"
-	}
-}
 
 type searchCacheEntry struct {
 	results   []model.SearchResult
@@ -216,6 +204,7 @@ type modelImpl struct {
 	episodeList list.Model
 	historyList list.Model
 	spinner     spinner.Model
+	downloadBar progress.Model
 
 	keys keyMap
 
@@ -292,6 +281,10 @@ type modelImpl struct {
 	languageFilter        map[string]bool
 	subtitleLanguage      string
 	subtitleLanguageIndex int
+	accentIndex           int
+	customAccentHex       string
+	editingAccentHex      bool
+	hexInput              textinput.Model
 
 	selectedEpisodes map[int]struct{}
 	batchInProgress  bool

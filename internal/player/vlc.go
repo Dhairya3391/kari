@@ -1,7 +1,6 @@
 package player
 
 import (
-	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -32,30 +31,12 @@ func (p *VLCPlayer) Play(sources []model.PlaybackSource, media model.ResolvedMed
 }
 
 func PlayWithVLCSources(sources []model.PlaybackSource, media model.ResolvedMedia) (PlaybackResult, error) {
-	if len(sources) == 0 {
-		return PlaybackResult{}, errors.New("vlc playback failed: no playback sources available")
-	}
-
-	errs := make([]string, 0, len(sources))
-	for idx, source := range sources {
-		if strings.TrimSpace(source.URL) == "" {
-			continue
+	return attemptSources("vlc", sources, func(source model.PlaybackSource) (PlaybackResult, error) {
+		if err := playSingleSourceWithVLC(source, media); err != nil {
+			return PlaybackResult{}, err
 		}
-		if err := playSingleSourceWithVLC(source, media); err == nil {
-			return PlaybackResult{}, &NeedsCompletionConfirmError{Media: media}
-		} else {
-			label := strings.TrimSpace(source.Label)
-			if label == "" {
-				label = fmt.Sprintf("source %d", idx+1)
-			}
-			errs = append(errs, fmt.Sprintf("%s: %v", label, err))
-		}
-	}
-
-	if len(errs) == 0 {
-		return PlaybackResult{}, errors.New("vlc playback failed: no usable playback sources available")
-	}
-	return PlaybackResult{}, fmt.Errorf("vlc playback failed: %s", strings.Join(errs, " | "))
+		return PlaybackResult{}, &NeedsCompletionConfirmError{Media: media}
+	})
 }
 
 func playSingleSourceWithVLC(source model.PlaybackSource, media model.ResolvedMedia) error {

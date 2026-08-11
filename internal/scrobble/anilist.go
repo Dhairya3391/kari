@@ -15,6 +15,7 @@ import (
 	"kari/internal/httpclient"
 	"kari/internal/logging"
 	"kari/internal/model"
+	"kari/internal/util"
 )
 
 type AniListToken struct {
@@ -69,12 +70,15 @@ func (c *AniListClient) saveToken() error {
 		return err
 	}
 	_ = os.MkdirAll(filepath.Dir(c.tokenPath), 0755)
-	return os.WriteFile(c.tokenPath, data, 0644)
+	return util.AtomicWriteFile(c.tokenPath, data, 0600)
 }
 
 func (c *AniListClient) Revoke() error {
 	c.token = nil
-	return os.Remove(c.tokenPath)
+	if err := os.Remove(c.tokenPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (c *AniListClient) IsAuthenticated() bool {

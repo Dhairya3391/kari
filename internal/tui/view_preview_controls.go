@@ -1,0 +1,209 @@
+package tui
+
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"kari/internal/service"
+)
+
+func (m *modelImpl) filteredPlayback() []int {
+	if m.resolved == nil {
+		return nil
+	}
+	if len(m.resolved.Playback) == 0 {
+		return nil
+	}
+	return service.FilterPlaybackIndices(m.resolved.Playback, m.qualityMode, m.languageFilter)
+}
+
+// renderPreviewControlsRow lays Source, Players (+Autoplay), and Actions out
+// as three side-by-side columns spanning the full width instead of one tall
+// column pinned to the right with the rest of the screen sitting empty
+// beside it, falling back to a stacked single column on narrow terminals.
+func (m *modelImpl) renderPreviewControlsRow(width int) string {
+	filtered := m.filteredPlayback()
+	if len(filtered) == 0 {
+		return mutedStyle.Render("No sources available")
+	}
+
+	sourceW := width * 44 / 100
+	playersW := width * 26 / 100
+	actionsW := width - sourceW - playersW - 4
+	if width < 90 {
+		sourceW, playersW, actionsW = width, width, width
+	}
+
+	source := m.renderSourceColumn(filtered, sourceW)
+	players := m.renderPlayersColumn()
+	actions := m.renderActionsColumn()
+
+	if width < 90 {
+		return lipgloss.JoinVertical(lipgloss.Left, source, "", players, "", actions)
+	}
+
+	cols := []string{
+		lipgloss.NewStyle().Width(sourceW).Render(source),
+		lipgloss.NewStyle().Width(playersW).Render(players),
+		lipgloss.NewStyle().Width(actionsW).Render(actions),
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, cols[0], "  ", cols[1], "  ", cols[2])
+}
+
+// sourceSplitThreshold is how many playback sources trigger splitting the
+// list into two side-by-side columns instead of one tall one — otherwise a
+// title with a dozen quality/language variants makes Source towers over
+// Players and Actions next to it.
+const sourceSplitThreshold = 8
+
+func (m *modelImpl) renderSourceColumn(filtered []int, width int) string {
+	r := m.resolved
+	items := make([]string, 0, len(filtered))
+	for _, actualIdx := range filtered {
+		src := r.Playback[actualIdx]
+		label := src.Label
+		if strings.TrimSpace(label) == "" {
+			label = "Unknown"
+		}
+		if actualIdx == m.selectedPlayback {
+			items = append(items, lipgloss.NewStyle().
+				Foreground(colorPrimary).
+				BorderLeft(true).
+				BorderStyle(lipgloss.ThickBorder()).
+				BorderForeground(colorPrimary).
+				PaddingLeft(1).
+				Render("● "+label))
+		} else {
+			items = append(items, mutedStyle.Render("  ○ "+label))
+		}
+	}
+
+	rows := []string{sectionTitleStyle.Render("Source"), "", layoutSourceItems(items, width), "", mutedStyle.Render("tab / shift+tab to switch")}
+	return strings.Join(rows, "\n")
+}
+
+// layoutSourceItems splits items into two side-by-side columns once there
+// are more than sourceSplitThreshold of them and width can actually fit two
+// columns without wrapping the longer labels (e.g. "[MOVIEBOX] 1080p
+// Hindi") — otherwise it's just one column, same as before.
+func layoutSourceItems(items []string, width int) string {
+	itemW := 0
+	for _, it := range items {
+		if w := lipgloss.Width(it); w > itemW {
+			itemW = w
+		}
+	}
+
+	if len(items) <= sourceSplitThreshold || itemW*2+2 > width {
+		return strings.Join(items, "\n")
+	}
+
+	half := (len(items) + 1) / 2
+	left := lipgloss.NewStyle().Width(itemW).Render(strings.Join(items[:half], "\n"))
+	right := strings.Join(items[half:], "\n")
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
+}
+
+func (m *modelImpl) renderPlayersColumn() string {
+	r := m.resolved
+	rows := []string{sectionTitleStyle.Render("Players"), ""}
+	for _, p := range m.availablePlayers {
+		if p == m.selectedPlayerName() {
+			rows = append(rows, lipgloss.NewStyle().Foreground(colorPrimary).Render("● "+strings.ToUpper(p)))
+		} else {
+			rows = append(rows, mutedStyle.Render("○ "+strings.ToUpper(p)))
+		}
+	}
+	rows = append(rows, "", mutedStyle.Render("[ctrl+p] to switch player"))
+
+	if r.MediaType == "anime" || r.MediaType == "tv" || r.MediaType == "cartoon" {
+		status := mutedStyle.Render("OFF")
+		if m.autoplay {
+			status = lipgloss.NewStyle().Foreground(colorSuccess).Render("ON")
+		}
+		rows = append(rows, "", sectionTitleStyle.Render("Autoplay"), "")
+		rows = append(rows, lipgloss.NewStyle().Foreground(colorPrimary).Render("[A]")+"  "+textStyle.Render("Status: ")+status)
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m *modelImpl) renderActionsColumn() string {
+	r := m.resolved
+	rows := []string{sectionTitleStyle.Render("Actions"), ""}
+	rows = append(rows, lipgloss.NewStyle().Foreground(colorPrimary).Render("[enter]")+"  "+textStyle.Render("Play"))
+	if r.StartTime > 5 {
+		rows = append(rows, lipgloss.NewStyle().Foreground(colorWarn).Render("[r]")+"      "+textStyle.Render("Restart"))
+	}
+	if m.canPlayNextEpisode() {
+		rows = append(rows, lipgloss.NewStyle().Foreground(colorPrimary).Render("[n]")+"      "+textStyle.Render("Play next"))
+	}
+	rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Render("[d]")+"      "+mutedStyle.Render("Download"))
+	return strings.Join(rows, "\n")
+}
+
+func fillerBadge() string {
+	return fillerBadgeStr
+}
+
+func (m *modelImpl) renderHelpOverlay() string {
+	var sections []string
+
+	sections = append(sections, sectionTitleStyle.Render("Navigation"), "")
+	sections = append(sections,
+		"  "+keyStyle.Render("↑/↓ j/k")+"   "+mutedStyle.Render("move"),
+		"  "+keyStyle.Render("g/G")+"      "+mutedStyle.Render("top/bottom"),
+		"  "+keyStyle.Render("esc")+"      "+mutedStyle.Render("back / cancel"),
+		"  "+keyStyle.Render("ctrl+h")+"   "+mutedStyle.Render("home"),
+		"  "+keyStyle.Render("q")+"        "+mutedStyle.Render("quit"),
+	)
+
+	sections = append(sections, "", sectionTitleStyle.Render("Search"), "")
+	sections = append(sections,
+		"  "+keyStyle.Render("space")+"    "+mutedStyle.Render("focus search"),
+		"  "+keyStyle.Render("enter")+"    "+mutedStyle.Render("search / select"),
+		"  "+keyStyle.Render("tab")+"      "+mutedStyle.Render("switch mode"),
+		"  "+keyStyle.Render("/")+"        "+mutedStyle.Render("filter results"),
+	)
+
+	sections = append(sections, "", sectionTitleStyle.Render("Episodes"), "")
+	sections = append(sections,
+		"  "+keyStyle.Render("space")+"    "+mutedStyle.Render("toggle select"),
+		"  "+keyStyle.Render("ctrl+a")+"   "+mutedStyle.Render("select all"),
+		"  "+keyStyle.Render("ctrl+d")+"   "+mutedStyle.Render("deselect all"),
+		"  "+keyStyle.Render("D")+"        "+mutedStyle.Render("batch download"),
+		"  "+keyStyle.Render("a")+"        "+mutedStyle.Render("sub/dub"),
+	)
+
+	sections = append(sections, "", sectionTitleStyle.Render("Playback"), "")
+	sections = append(sections,
+		"  "+keyStyle.Render("enter/p")+"  "+mutedStyle.Render("play"),
+		"  "+keyStyle.Render("n")+"        "+mutedStyle.Render("play next"),
+		"  "+keyStyle.Render("r")+"        "+mutedStyle.Render("restart"),
+		"  "+keyStyle.Render("A")+"        "+mutedStyle.Render("autoplay toggle"),
+		"  "+keyStyle.Render("d")+"        "+mutedStyle.Render("download"),
+		"  "+keyStyle.Render("tab")+"      "+mutedStyle.Render("switch source"),
+		"  "+keyStyle.Render("ctrl+p")+"   "+mutedStyle.Render("switch player"),
+	)
+
+	sections = append(sections, "", sectionTitleStyle.Render("General"), "")
+	sections = append(sections,
+		"  "+keyStyle.Render("h")+"        "+mutedStyle.Render("history"),
+		"  "+keyStyle.Render("s")+"        "+mutedStyle.Render("settings"),
+		"  "+keyStyle.Render("x")+"        "+mutedStyle.Render("stop download"),
+		"  "+keyStyle.Render("?")+"        "+mutedStyle.Render("toggle this help"),
+	)
+
+	content := strings.Join(sections, "\n")
+	boxW := 48
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorPrimary).
+		Padding(1, 2).
+		Width(boxW).
+		Render(content)
+
+	overlay := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceChars(" "), lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
+
+	return overlay
+}

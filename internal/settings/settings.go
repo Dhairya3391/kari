@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"kari/internal/logging"
+	"kari/internal/util"
 )
 
 type Data struct {
@@ -16,6 +17,9 @@ type Data struct {
 	// on for both fresh configs and existing settings.json files saved
 	// before this option existed.
 	DisableImages bool `json:"disable_images"`
+	// AccentColor is a hex color string; empty means the default purple, so
+	// existing settings.json files need no migration.
+	AccentColor string `json:"accent_color,omitempty"`
 }
 
 func path() string {
@@ -63,7 +67,7 @@ func Save(s *Data) {
 		logging.Warnf("settings: failed to marshal settings: %v", err)
 		return
 	}
-	if err := os.WriteFile(path(), data, 0644); err != nil {
+	if err := util.AtomicWriteFile(path(), data, 0644); err != nil {
 		logging.Warnf("settings: failed to write %s: %v", path(), err)
 	}
 }

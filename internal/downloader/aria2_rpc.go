@@ -21,6 +21,13 @@ import (
 	"kari/internal/provider"
 )
 
+// aria2HTTPClient is deliberately a plain bounded-timeout client rather than
+// the shared retryable one in internal/httpclient — retrying a POST to a
+// non-idempotent JSON-RPC method (e.g. aria2.addUri) could submit the same
+// command twice. The timeout alone is enough to keep a wedged local aria2c
+// process from hanging this call forever.
+var aria2HTTPClient = &http.Client{Timeout: 15 * time.Second}
+
 // ── JSON-RPC types ────────────────────────────────────────────────────────────
 
 type aria2RPCRequest struct {
@@ -211,7 +218,7 @@ func aria2RPC(port int, secret string, req *aria2RPCRequest) (json.RawMessage, e
 	}
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/jsonrpc", port)
-	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := aria2HTTPClient.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("rpc http: %w", err)
 	}

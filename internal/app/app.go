@@ -26,6 +26,30 @@ import (
 	"kari/internal/tui"
 )
 
+// Version and Commit are set at build time via -ldflags (see build.sh),
+// which derives Version from git tags/commit count — there's nothing to
+// keep in sync here manually. The defaults below are only what a plain
+// `go run`/`go build` without those ldflags will show.
+var (
+	Version = "0.0.0-dev"
+	Commit  = "dev"
+)
+
+func getArgs() (args []string, version bool, update bool) {
+	for _, arg := range os.Args[1:] {
+		if arg == "-v" || arg == "--version" {
+			version = true
+			continue
+		}
+		if arg == "-u" || arg == "-U" || arg == "--update" {
+			update = true
+			continue
+		}
+		args = append(args, arg)
+	}
+	return args, version, update
+}
+
 func Run() error {
 	args, showVersion, showUpdate := getArgs()
 	if showVersion {
@@ -51,9 +75,9 @@ func Run() error {
 		home = os.Getenv("HOME")
 	}
 	histPath := filepath.Join(home, ".config", "kari", "history.json")
-	historyStore, err := history.NewStore(histPath)
-	if err != nil {
-		logging.Errorf("failed to initialize history store: %v", err)
+	historyStore, historyErr := history.NewStore(histPath)
+	if historyErr != nil {
+		logging.Errorf("failed to initialize history store: %v", historyErr)
 	}
 
 	keyPool := tmdb.NewKeyPool(cfg.TMDBAPIKeys)
@@ -83,11 +107,14 @@ func Run() error {
 	anilistClient := scrobble.NewAniListClient(cfg.AniListClientID, cfg.AniListClientSecret)
 	posterClient := poster.NewClient(keyPool)
 
-	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, downloadService, subtitleService, historyStore, traktClient, anilistClient, posterClient)
+	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	if err != nil {
 		logging.Errorf("program exited with error: %v", err)
+	}
+	if historyStore != nil {
+		historyStore.Close()
 	}
 	return err
 }
