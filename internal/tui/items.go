@@ -44,6 +44,34 @@ func seriesToItems(items []model.SearchResult) []list.Item {
 	return out
 }
 
+// watchedDoneThreshold is how far into an episode or movie counts as
+// "done" for display purposes — past this point the progress marker shows
+// a checkmark instead of a specific percentage, since a number like 99%
+// (or 96%, 97%...) reads as unfinished when really it's just credits.
+const watchedDoneThreshold = 95
+
+// progressMarker renders the left-hand marker for a history entry: a
+// checkmark once it's effectively finished (either past
+// watchedDoneThreshold, or already flagged Complete by the history store's
+// own — lower — completion threshold), a percentage while partway through,
+// a squiggle for a bare resume position with no known percent, or blank.
+func progressMarker(entry history.Entry) string {
+	pct := int(entry.PercentComplete * 100)
+	switch {
+	case pct >= watchedDoneThreshold || entry.Complete:
+		return "[ ✓  ] "
+	case pct > 0:
+		if pct > 100 {
+			pct = 100
+		}
+		return fmt.Sprintf("[%3d%%] ", pct)
+	case entry.PositionSecs > 0:
+		return "[ ~  ] "
+	default:
+		return "[    ] "
+	}
+}
+
 func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, seriesTitle string, mode provider.ContentType, mediaType string, selected map[int]struct{}) []list.Item {
 	out := make([]list.Item, 0, len(items))
 	for idx, it := range items {
@@ -59,17 +87,7 @@ func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, s
 				Episode:   it.Number,
 			})
 			if ok {
-				pct := int(entry.PercentComplete * 100)
-				if pct > 0 {
-					if pct > 100 {
-						pct = 100
-					}
-					marker = fmt.Sprintf("[%3d%%] ", pct)
-				} else if entry.Complete {
-					marker = "[ ✓  ] "
-				} else if entry.PositionSecs > 0 {
-					marker = "[ ~  ] "
-				}
+				marker = progressMarker(entry)
 			}
 		}
 
@@ -114,18 +132,7 @@ func historyGroupsToItems(groups []history.Group) []list.Item {
 	out := make([]list.Item, 0, len(groups))
 	for idx, group := range groups {
 		entry := group.ContinueEntry
-		marker := "[    ] "
-		pct := int(entry.PercentComplete * 100)
-		if pct > 0 {
-			if pct > 100 {
-				pct = 100
-			}
-			marker = fmt.Sprintf("[%3d%%] ", pct)
-		} else if entry.Complete {
-			marker = "[ ✓  ] "
-		} else if entry.PositionSecs > 0 {
-			marker = "[ ~  ] "
-		}
+		marker := progressMarker(entry)
 
 		action := historyGroupActionLabel(group)
 		title := lipgloss.NewStyle().Foreground(colorMuted).Render(marker) +

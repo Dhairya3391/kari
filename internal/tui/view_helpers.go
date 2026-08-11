@@ -262,7 +262,7 @@ func (m *modelImpl) renderSearchScreen(dims layoutDims) string {
 	// slice straight through it and corrupt the rest of the frame.
 	// JoinVertical/JoinHorizontal only pad blocks to align them — they never
 	// wrap — so this is safe regardless of terminal width.
-	if block := posterBlock(m.searchPoster, m.searchPosterUnavailable, m.imgProtocol, kittySearchImageID); block != "" {
+	if block := posterBlock(m.searchPoster, m.searchPosterUnavailable, m.imgProtocol, kittySearchImageID, m.imagesEnabled); block != "" {
 		rightCol = lipgloss.JoinVertical(lipgloss.Left, rightCol, "", block)
 	}
 
@@ -271,25 +271,30 @@ func (m *modelImpl) renderSearchScreen(dims layoutDims) string {
 
 // posterBlock returns rendered (the image) if present, a muted "no image
 // available" line once a fetch has definitively failed or found no artwork,
-// or "" while still loading — callers should omit the block entirely in
-// that last case rather than reserving space for it, to avoid a layout
-// jump when the fetch resolves.
-func posterBlock(rendered string, unavailable bool, protocol termimg.Protocol, imageID uint32) string {
-	if rendered != "" {
+// a muted "image rendering disabled" line when the user has turned image
+// rendering off in settings, or "" while still loading — callers should
+// omit the block entirely in that last case rather than reserving space for
+// it, to avoid a layout jump when the fetch resolves.
+func posterBlock(rendered string, unavailable bool, protocol termimg.Protocol, imageID uint32, imagesEnabled bool) string {
+	if imagesEnabled && rendered != "" {
 		return rendered
 	}
 
 	// Whenever this slot has no image to show — cleared results, a mode
-	// switch, a fetch that hasn't finished yet, or one that failed — any
-	// previous Kitty placement in it needs to be explicitly deleted too.
-	// Unlike text, it doesn't just get overwritten by whatever renders in
-	// its place next; nothing here even mentions that image again unless we
-	// say so, so without this it keeps showing the last thing it had.
+	// switch, a fetch that hasn't finished yet, one that failed, or images
+	// being turned off — any previous Kitty placement in it needs to be
+	// explicitly deleted too. Unlike text, it doesn't just get overwritten
+	// by whatever renders in its place next; nothing here even mentions
+	// that image again unless we say so, so without this it keeps showing
+	// the last thing it had.
 	var cleanup string
 	if protocol == termimg.ProtocolKitty {
 		cleanup = termimg.DeleteKitty(imageID)
 	}
 
+	if !imagesEnabled {
+		return cleanup + mutedStyle.Render("Image rendering disabled")
+	}
 	if unavailable {
 		return cleanup + mutedStyle.Render("No image available")
 	}
@@ -429,7 +434,7 @@ func (m *modelImpl) renderPreviewScreen(dims layoutDims) string {
 	// through it and corrupt the rest of the frame. JoinVertical/
 	// JoinHorizontal only pad blocks to align them — they never wrap — so
 	// composing everything with those is what keeps this safe.
-	previewBlock := posterBlock(m.previewPoster, m.previewPosterUnavailable, m.imgProtocol, kittyPreviewImageID)
+	previewBlock := posterBlock(m.previewPoster, m.previewPosterUnavailable, m.imgProtocol, kittyPreviewImageID, m.imagesEnabled)
 
 	header := m.renderPreviewHeader(dims.contentW, previewBlock)
 	controls := m.renderPreviewControlsRow(dims.contentW)
@@ -732,6 +737,26 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 	rows = append(rows, subLangStyle.Render(lipgloss.NewStyle().Foreground(colorPrimary).Render(lang.Name(m.subtitleLanguage))))
 	rows = append(rows, subLangStyle.Render(mutedStyle.Render("[←] [→] to change")))
 	rows = append(rows, subLangStyle.Render(mutedStyle.Render("Preferred when a provider or OpenSubtitles offers more than one language")))
+	rows = append(rows, "")
+
+	// Image rendering section
+	imagesStyle := lipgloss.NewStyle().PaddingLeft(2)
+	if m.settingsIndex == 5 {
+		imagesStyle = imagesStyle.BorderLeft(true).BorderStyle(lipgloss.ThickBorder()).BorderForeground(colorPrimary)
+	}
+
+	enabledMarker, disabledMarker := "○", "○"
+	if m.imagesEnabled {
+		enabledMarker = "●"
+	} else {
+		disabledMarker = "●"
+	}
+	imagesLine := fmt.Sprintf("%s Enabled    %s Disabled", modeColor(enabledMarker), modeColor(disabledMarker))
+
+	rows = append(rows, "Image Rendering")
+	rows = append(rows, imagesStyle.Render(imagesLine))
+	rows = append(rows, imagesStyle.Render(mutedStyle.Render("[←] [→] to change")))
+	rows = append(rows, imagesStyle.Render(mutedStyle.Render("Posters are shown as \"Image rendering disabled\" in place when off")))
 	rows = append(rows, "")
 
 	return strings.Join(rows, "\n")

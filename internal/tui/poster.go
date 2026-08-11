@@ -100,8 +100,40 @@ func (m *modelImpl) triggerPreviewDetails() tea.Cmd {
 	}
 }
 
+// setImagesEnabled flips the image-rendering setting and persists it.
+// Turning images back on needs an explicit re-fetch for whatever's
+// currently on screen: fetchPosterCmd short-circuits while disabled, so
+// nothing else would prompt a poster to actually load until the user moves
+// the selection.
+func (m *modelImpl) setImagesEnabled(enabled bool) tea.Cmd {
+	if m.imagesEnabled == enabled {
+		return nil
+	}
+	m.imagesEnabled = enabled
+	m.saveSettings()
+	if enabled {
+		m.setStatus(statusInfo, "Image rendering: Enabled")
+	} else {
+		m.setStatus(statusInfo, "Image rendering: Disabled")
+	}
+	if !enabled {
+		return nil
+	}
+
+	var cmds []tea.Cmd
+	if cmd := m.triggerSearchPoster(m.selectedSeriesIndex()); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if m.resolved != nil {
+		if cmd := m.triggerPreviewPoster(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
 func (m *modelImpl) fetchPosterCmd(slot posterSlot, opID int, tmdbID int, mediaType, title string, maxCols, maxRows int, imageID uint32) tea.Cmd {
-	if m.posterClient == nil || m.imgProtocol == termimg.ProtocolNone {
+	if !m.imagesEnabled || m.posterClient == nil || m.imgProtocol == termimg.ProtocolNone {
 		return nil
 	}
 	if tmdbID == 0 && strings.TrimSpace(title) == "" {

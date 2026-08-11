@@ -302,6 +302,7 @@ type modelImpl struct {
 
 	posterClient             *poster.Client
 	imgProtocol              termimg.Protocol
+	imagesEnabled            bool
 	posterCache              *util.BoundedCache[string]
 	searchPoster             string
 	searchPosterOpID         int

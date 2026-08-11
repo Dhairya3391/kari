@@ -1444,6 +1444,7 @@ func (m *modelImpl) saveSettings() {
 		QualityMode:      m.qualityMode,
 		LanguageFilter:   m.languageFilter,
 		SubtitleLanguage: m.subtitleLanguage,
+		DisableImages:    !m.imagesEnabled,
 	})
 }
 
@@ -1942,7 +1943,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.settingsIndex == 2 {
 				m.settingsIndex++
 				m.languageIndex = 0
-			} else if m.settingsIndex < 4 {
+			} else if m.settingsIndex < 5 {
 				m.settingsIndex++
 			}
 		case "left":
@@ -1968,6 +1969,8 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.setStatus(statusInfo, "Subtitle language: "+lang.Name(m.subtitleLanguage))
 					m.saveSettings()
 				}
+			case 5:
+				return m, tea.Batch(m.setImagesEnabled(false), m.triggerSubtitleSync())
 			}
 			return m, m.triggerSubtitleSync()
 		case "right":
@@ -1994,6 +1997,8 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.setStatus(statusInfo, "Subtitle language: "+lang.Name(m.subtitleLanguage))
 					m.saveSettings()
 				}
+			case 5:
+				return m, tea.Batch(m.setImagesEnabled(true), m.triggerSubtitleSync())
 			}
 			return m, m.triggerSubtitleSync()
 		case " ":

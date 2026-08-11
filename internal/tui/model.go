@@ -146,6 +146,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		batchChan:        make(chan tea.Msg, 50),
 		posterClient:     posterClient,
 		imgProtocol:      termimg.Detect(),
+		imagesEnabled:    true,
 		// Rendered poster strings, not the images themselves — for the Kitty
 		// protocol these are base64-encoded PNGs and can be well over 1MB
 		// each, so this stays smaller than the image caches upstream in
@@ -159,20 +160,24 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			model.qualityMode = s.QualityMode
 		}
 		if len(s.LanguageFilter) > 0 {
-			hasEnabled := false
-			for _, enabled := range s.LanguageFilter {
-				if enabled {
-					hasEnabled = true
-					break
-				}
-			}
-			if hasEnabled {
-				model.languageFilter = s.LanguageFilter
+			// Saved filters only ever record overrides (a language the user
+			// explicitly disabled) — anything absent from the map is still
+			// implicitly enabled, per languageEnabled. So checking the map's
+			// values directly for a literal `true` rejects the common case
+			// of a user disabling just one or two languages, since every
+			// entry in that map is `false`. Apply it and ask
+			// hasEnabledLanguage, which understands that "absent" means
+			// "enabled", instead.
+			prev := model.languageFilter
+			model.languageFilter = s.LanguageFilter
+			if !model.hasEnabledLanguage() {
+				model.languageFilter = prev
 			}
 		}
 		if code := lang.Normalize(s.SubtitleLanguage); code != "" {
 			model.subtitleLanguage = code
 		}
+		model.imagesEnabled = !s.DisableImages
 	}
 	for i, code := range lang.SubtitleOptions {
 		if code == model.subtitleLanguage {
