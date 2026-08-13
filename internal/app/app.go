@@ -107,7 +107,7 @@ func Run() error {
 	anilistClient := scrobble.NewAniListClient(cfg.AniListClientID, cfg.AniListClientSecret)
 	posterClient := poster.NewClient(keyPool)
 
-	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient)
+	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, Version)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	if err != nil {

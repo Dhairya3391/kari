@@ -1,7 +1,6 @@
 package app
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,20 +13,8 @@ import (
 
 	"kari/internal/httpclient"
 	"kari/internal/logging"
+	"kari/internal/selfupdate"
 )
-
-const (
-	repoOwner = "Dhairya3391"
-	repoName  = "kari"
-)
-
-type GitHubRelease struct {
-	TagName string `json:"tag_name"`
-	Assets  []struct {
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-	} `json:"assets"`
-}
 
 func Update() error {
 	return update(false)
@@ -37,7 +24,7 @@ func update(quiet bool) error {
 	if !quiet {
 		fmt.Printf("Checking for updates...\n")
 	}
-	latest, err := getLatestRelease()
+	latest, err := selfupdate.GetLatestRelease()
 	if err != nil {
 		if !quiet {
 			return fmt.Errorf("failed to fetch latest release: %w", err)
@@ -45,7 +32,7 @@ func update(quiet bool) error {
 		return nil
 	}
 
-	latestVersion := strings.TrimPrefix(latest.TagName, "v")
+	latestVersion := latest.Version()
 	currentVersion := strings.TrimSuffix(Version, "-dirty")
 	if latestVersion == currentVersion {
 		if !quiet {
@@ -93,30 +80,6 @@ func update(quiet bool) error {
 		logging.Infof("Background update: successfully downloaded %s. Will be active on next restart.", latest.TagName)
 	}
 	return nil
-}
-
-func getLatestRelease() (*GitHubRelease, error) {
-	// Use the shared client: on Termux/Android it swaps in a public DNS
-	// resolver (Cloudflare/Google) because the system resolver can be broken
-	// (e.g. "lookup api.github.com on [::1]:53: connection refused").
-	client := httpclient.New()
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github api returned status %d", resp.StatusCode)
-	}
-
-	var release GitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return nil, err
-	}
-
-	return &release, nil
 }
 
 func applyUpdate(url string) error {

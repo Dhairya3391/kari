@@ -193,6 +193,7 @@ type modelImpl struct {
 	registry        *provider.Registry
 	players         *player.Registry
 	appCtx          context.Context
+	appVersion      string
 
 	width  int
 	height int

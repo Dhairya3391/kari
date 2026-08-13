@@ -23,7 +23,7 @@ import (
 	"kari/internal/util"
 )
 
-func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client) tea.Model {
+func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, appVersion string) tea.Model {
 	// Loaded up front (rather than where settings used to be applied,
 	// further down) so the accent color is in effect before any of the
 	// list delegates or the download bar below are built — those cache
@@ -139,6 +139,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		traktClient:     traktClient,
 		anilistClient:   anilistClient,
 		appCtx:          ctx,
+		appVersion:      appVersion,
 		activeView:      viewSearch,
 		queryInput:      ti,
 		authInput:       ai,
@@ -238,6 +239,7 @@ func (m *modelImpl) Init() tea.Cmd {
 	if m.statusType == statusWarn && m.statusText != "" {
 		cmds = append(cmds, m.clearStatusAfter(statusClearDuration(statusWarn)))
 	}
+	cmds = append(cmds, m.checkForUpdateCmd())
 	return tea.Batch(cmds...)
 }
 
@@ -250,6 +252,8 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case updateCheckMsg:
+		return m.onUpdateCheck(msg)
 	case historyLoadedMsg:
 		m.loading = false
 		m.loadingText = ""
