@@ -82,6 +82,10 @@ func buildIINAArgs(source model.PlaybackSource, media model.ResolvedMedia, socke
 		"--cache=yes",
 		"--cache-pause-initial=no",
 		"--stream-buffer-size=16M",
+		"--demuxer-seekable-cache=yes",
+		"--demuxer-max-bytes=200M",
+		"--demuxer-readahead-secs=10",
+		"--hls-bitrate=max",
 		"--input-ipc-server="+socketPath,
 	)
 
@@ -100,23 +104,26 @@ func buildIINAArgs(source model.PlaybackSource, media model.ResolvedMedia, socke
 		args = append(args, "--referrer="+source.Referer)
 	}
 
+	// UA and Referer are sent via the dedicated --user-agent/--referrer mpv
+	// options, not repeated in --http-header-fields (a comma-split list that a
+	// UA containing commas would corrupt into a 400 from strict CDNs). Only
+	// add what mpv has no native option for: Origin and the Cookie.
 	var headers []string
-	if userAgent != "" {
-		headers = append(headers, "User-Agent: "+userAgent)
-	}
 	if strings.TrimSpace(source.Referer) != "" {
-		headers = append(headers, "Referer: "+source.Referer)
-		ref := strings.TrimSuffix(source.Referer, "/")
-		headers = append(headers, "Origin: "+ref)
+		if !source.SuppressOrigin {
+			ref := strings.TrimSuffix(source.Referer, "/")
+			headers = append(headers, "Origin: "+ref)
+		}
 	}
 	if strings.TrimSpace(source.CookieHeader) != "" {
 		headers = append(headers, "Cookie: "+source.CookieHeader)
 	}
 	if len(headers) > 0 {
-		args = append(args, "--http-header-fields="+strings.Join(headers, "\r\n"))
+		args = append(args, "--http-header-fields="+strings.Join(headers, ","))
 	}
 
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendSubtitleArgs(args, media.SubtitlePaths())
+	args = append(args, source.ExtraArgs...)
 	return args
 }

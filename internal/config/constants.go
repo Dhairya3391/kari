@@ -6,13 +6,12 @@ const (
 	VidKingAPIBase   = "https://noob.broggl.farm"
 	VidKingReferer   = "https://www.vidking.net/"
 	MovieboxAPIBase  = "https://noob3.broggl.farm"
-	WCOBaseURL       = "https://www.wco.tv"
-	WCOEmbedOrigin   = "https://embed.wcostream.com"
+	PirateXOrigin    = "https://piratexplay.cc"
 	TMDBAPIBase      = "https://api.themoviedb.org/3"
 	TMDBBaseURL      = "https://www.themoviedb.org"
 	TMDBImageBase    = "https://image.tmdb.org/t/p/"
 	DesktopUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
-	WCOUserAgent     = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Mobile Safari/537.36"
+	AndroidUAConst   = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Mobile Safari/537.36"
 	AppName          = "Kari"
 	OpenSubtitlesAPI = "https://api.opensubtitles.com/api/v1"
 	OpenSubtitlesUA  = "kari v1.0"
@@ -21,9 +20,6 @@ const (
 	SearchAPIBase    = "https://noobsearch.broggl.farm"
 	KariClientHeader = "X-Kari-Client"
 	KariClientToken  = "kari-app-v1"
-	BaseURL          = WCOBaseURL
-	EmbedOrigin      = WCOEmbedOrigin
-	AndroidUAConst   = WCOUserAgent
 	TraktAPIBase     = "https://api.trakt.tv"
 	TraktAuthBase    = "https://trakt.tv"
 	AniListAPIBase   = "https://graphql.anilist.co"

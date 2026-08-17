@@ -101,13 +101,14 @@ func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.Reso
 	}
 	for _, p := range resolved.Playback {
 		req.Sources = append(req.Sources, provider.MediaSource{
-			URL:          p.URL,
-			Quality:      p.Label,
-			Resolver:     p.Resolver,
-			Referer:      p.Referer,
-			Type:         p.Type,
-			UserAgent:    p.UserAgent,
-			CookieHeader: p.CookieHeader,
+			URL:            p.URL,
+			Quality:        p.Label,
+			Resolver:       p.Resolver,
+			Referer:        p.Referer,
+			Type:           p.Type,
+			UserAgent:      p.UserAgent,
+			CookieHeader:   p.CookieHeader,
+			SuppressOrigin: p.SuppressOrigin,
 		})
 	}
 

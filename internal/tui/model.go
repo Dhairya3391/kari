@@ -325,6 +325,7 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.playOpID == msg.opID && m.loading {
 			m.loading = false
 			m.loadingText = ""
+			m.setStatus(statusInfo, "Playback in progress...")
 		}
 		return m, spinnerCmd
 	case resetConfirmQuitMsg:

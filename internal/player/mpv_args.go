@@ -23,7 +23,7 @@ func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, socket
 		"--cache-pause-initial=no",
 		"--demuxer-seekable-cache=yes",
 		"--demuxer-max-bytes=200M",
-		"--demuxer-readahead-secs=2",
+		"--demuxer-readahead-secs=10",
 		"--stream-buffer-size=16M",
 		"--hls-bitrate=max",
 	}
@@ -43,25 +43,38 @@ func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, socket
 		args = append(args, "--referrer="+source.Referer)
 	}
 
+	// UA and Referer are sent via the dedicated --user-agent/--referrer mpv
+	// options (mpv applies them to ffmpeg streams too), so they are NOT
+	// repeated here: --http-header-fields is a comma-split list and real UAs
+	// contain commas ("(KHTML, like Gecko)"), which would corrupt the header
+	// block and make strict CDNs answer 400. Only add what mpv has no native
+	// option for: Origin and the provider's Cookie.
 	var headers []string
-	if userAgent != "" {
-		headers = append(headers, "User-Agent: "+userAgent)
-	}
 	if strings.TrimSpace(source.Referer) != "" {
-		headers = append(headers, "Referer: "+source.Referer)
-		ref := strings.TrimSuffix(source.Referer, "/")
-		headers = append(headers, "Origin: "+ref)
+		// Some CDNs reject an Origin header outright (or only accept a bare
+		// scheme://host), so it's opt-in via SuppressOrigin (e.g. PirateX,
+		// whose CDN validates Referer only). When sent it stays derived from
+		// the referer, matching what a browser would send.
+		if !source.SuppressOrigin {
+			ref := strings.TrimSuffix(source.Referer, "/")
+			headers = append(headers, "Origin: "+ref)
+		}
 	}
 	if strings.TrimSpace(source.CookieHeader) != "" {
 		headers = append(headers, "Cookie: "+source.CookieHeader)
 	}
 	if len(headers) > 0 {
-		args = append(args, "--http-header-fields="+strings.Join(headers, "\r\n"))
+		// mpv's list-typed options (http-header-fields) split on commas on the
+		// command line. Joining with "\r\n" makes mpv receive a single value
+		// containing literal CR/LF bytes, which corrupts the header block and
+		// can make strict CDNs answer with 500 — plain comma-join is correct.
+		args = append(args, "--http-header-fields="+strings.Join(headers, ","))
 	}
 
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendSubtitleArgs(args, media.SubtitlePaths())
 	args = append(args, aniskipArgs...)
+	args = append(args, source.ExtraArgs...)
 	args = append(args, "--input-ipc-server="+socketPath)
 
 	return append(args, source.URL)

@@ -274,18 +274,17 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 		"--progress-delta", "0.5",
 	}
 
-	// Pass headers from the source.
 	if ua := strings.TrimSpace(source.UserAgent); ua != "" {
 		args = append(args, "--user-agent", ua)
 	}
 	if ref := strings.TrimSpace(source.Referer); ref != "" {
 		args = append(args, "--referer", ref)
-		if origin := originFromReferer(ref); origin != "" {
-			args = append(args, "--add-headers", "Origin: "+origin)
-		}
 	}
-	if cookie := strings.TrimSpace(source.CookieHeader); cookie != "" {
-		args = append(args, "--add-headers", "Cookie: "+cookie)
+	for _, header := range sourceHeaders(source) {
+		if strings.HasPrefix(header, "User-Agent: ") {
+			continue
+		}
+		args = append(args, "--add-headers", header)
 	}
 
 	args = append(args, source.URL)
@@ -472,4 +471,23 @@ func downloadStrategy(source provider.MediaSource) string {
 	}
 
 	return "native"
+}
+
+func sourceHeaders(source provider.MediaSource) []string {
+	headers := []string{}
+	if ua := strings.TrimSpace(source.UserAgent); ua != "" {
+		headers = append(headers, "User-Agent: "+ua)
+	}
+	if ref := strings.TrimSpace(source.Referer); ref != "" {
+		headers = append(headers, "Referer: "+ref)
+		if !source.SuppressOrigin {
+			if origin := originFromReferer(ref); origin != "" {
+				headers = append(headers, "Origin: "+origin)
+			}
+		}
+	}
+	if cookie := strings.TrimSpace(source.CookieHeader); cookie != "" {
+		headers = append(headers, "Cookie: "+cookie)
+	}
+	return headers
 }

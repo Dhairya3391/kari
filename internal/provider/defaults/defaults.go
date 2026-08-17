@@ -4,8 +4,8 @@ import (
 	"kari/internal/provider"
 	"kari/internal/provider/miruro"
 	"kari/internal/provider/moviebox"
+	"kari/internal/provider/piratex"
 	"kari/internal/provider/vidking"
-	"kari/internal/provider/wco"
 	"kari/internal/tmdb"
 )
 
@@ -43,9 +43,9 @@ var DefaultProviders = []provider.Descriptor{
 		Priority: 1,
 	},
 	{
-		ID: "wco",
+		ID: "piratex",
 		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
-			return wco.NewClient("")
+			return piratex.NewClient()
 		},
 		Modes: []provider.Mode{
 			{Name: provider.ModeCartoon, Priority: 1},

@@ -23,7 +23,7 @@ type Config struct {
 }
 
 func AndroidUA() string {
-	return WCOUserAgent
+	return AndroidUAConst
 }
 
 // Load reads configuration from environment variables.

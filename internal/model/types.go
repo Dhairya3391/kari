@@ -21,14 +21,16 @@ type EpisodeResult struct {
 }
 
 type PlaybackSource struct {
-	Label        string
-	URL          string
-	Referer      string
-	Type         string
-	CookieHeader string
-	UserAgent    string
-	Resolver     string
-	Language     string
+	Label          string
+	URL            string
+	Referer        string
+	Type           string
+	CookieHeader   string
+	UserAgent      string
+	Resolver       string
+	Language       string
+	ExtraArgs      []string
+	SuppressOrigin bool
 }
 
 type SubtitleTrack struct {

@@ -92,7 +92,10 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 	confBuilder.WriteString("cache=yes\n")
 	confBuilder.WriteString("cache-pause-initial=no\n")
 	confBuilder.WriteString("stream-buffer-size=16M\n")
-	confBuilder.WriteString("demuxer-readahead-secs=2\n")
+	confBuilder.WriteString("demuxer-seekable-cache=yes\n")
+	confBuilder.WriteString("demuxer-max-bytes=200M\n")
+	confBuilder.WriteString("demuxer-readahead-secs=10\n")
+	confBuilder.WriteString("hls-bitrate=max\n")
 
 	if source.Referer != "" {
 		confBuilder.WriteString(fmt.Sprintf("referrer=%s\n", source.Referer))
@@ -103,14 +106,17 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 	}
 	confBuilder.WriteString(fmt.Sprintf("user-agent=%s\n", userAgent))
 
+	// UA and Referer arrive via the user-agent=/referrer= conf lines; do NOT
+	// repeat them in http-header-fields — that is a comma-split mpv list and
+	// a UA containing commas ("(KHTML, like Gecko)") would split into corrupt
+	// header entries that strict CDNs answer with 400. Only Origin and Cookie
+	// have no native mpv option and belong here.
 	var headers []string
-	if userAgent != "" {
-		headers = append(headers, "User-Agent: "+userAgent)
-	}
 	if strings.TrimSpace(source.Referer) != "" {
-		headers = append(headers, "Referer: "+source.Referer)
-		ref := strings.TrimSuffix(source.Referer, "/")
-		headers = append(headers, "Origin: "+ref)
+		if !source.SuppressOrigin {
+			ref := strings.TrimSuffix(source.Referer, "/")
+			headers = append(headers, "Origin: "+ref)
+		}
 	}
 	if strings.TrimSpace(source.CookieHeader) != "" {
 		headers = append(headers, "Cookie: "+source.CookieHeader)
@@ -125,6 +131,11 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 			confBuilder.WriteString(h)
 			confBuilder.WriteString("\n")
 		}
+	}
+
+	for _, extra := range source.ExtraArgs {
+		confBuilder.WriteString(strings.TrimPrefix(extra, "--"))
+		confBuilder.WriteString("\n")
 	}
 
 	if media.StartTime > 5 {

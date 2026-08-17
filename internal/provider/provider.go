@@ -57,6 +57,11 @@ type MediaSource struct {
 	UserAgent    string
 	CookieHeader string
 	Language     string
+	ExtraArgs    []string
+	// SuppressOrigin stops the player layer from deriving an Origin header
+	// from Referer. Some CDNs reject any Origin (or reject a full-path one);
+	// providers that validate Referer only should set this.
+	SuppressOrigin bool
 }
 
 type Provider interface {

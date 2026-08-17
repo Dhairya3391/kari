@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"kari/internal/logging"
@@ -118,20 +117,7 @@ func (d *Aria2Downloader) Download(
 		return fmt.Errorf("aria2: rpc not ready: %w", err)
 	}
 
-	// Build header list from source metadata.
-	var headers []string
-	if ua := strings.TrimSpace(source.UserAgent); ua != "" {
-		headers = append(headers, "User-Agent: "+ua)
-	}
-	if ref := strings.TrimSpace(source.Referer); ref != "" {
-		headers = append(headers, "Referer: "+ref)
-		if origin := originFromReferer(ref); origin != "" {
-			headers = append(headers, "Origin: "+origin)
-		}
-	}
-	if cookie := strings.TrimSpace(source.CookieHeader); cookie != "" {
-		headers = append(headers, "Cookie: "+cookie)
-	}
+	headers := sourceHeaders(source)
 
 	// Build aria2c options.
 	aria2Opts := map[string]any{

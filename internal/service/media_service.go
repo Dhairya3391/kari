@@ -160,7 +160,10 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	if len(providers) == 0 {
 		return model.ResolvedMedia{}, fmt.Errorf("no providers available for mode %q", mode)
 	}
-
+	// Bound the whole resolve so a slow/hung transport host can't leave the
+	// "Preparing playback" screen spinning indefinitely.
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
 	var mu sync.Mutex
 	var allPlaybackSources []model.PlaybackSource
 	var allSubtitleTracks []model.SubtitleTrack
@@ -248,14 +251,16 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 					mu.Lock()
 					for _, src := range playback {
 						allPlaybackSources = appendUniquePlaybackSource(allPlaybackSources, model.PlaybackSource{
-							Label:        src.Quality,
-							URL:          src.URL,
-							Referer:      src.Referer,
-							Type:         src.Type,
-							UserAgent:    src.UserAgent,
-							CookieHeader: src.CookieHeader,
-							Resolver:     p.Name(),
-							Language:     src.Language,
+							Label:          src.Quality,
+							URL:            src.URL,
+							Referer:        src.Referer,
+							Type:           src.Type,
+							UserAgent:      src.UserAgent,
+							CookieHeader:   src.CookieHeader,
+							Resolver:       p.Name(),
+							Language:       src.Language,
+							ExtraArgs:      src.ExtraArgs,
+							SuppressOrigin: src.SuppressOrigin,
 						})
 						// Collect subtitles
 						for _, sub := range src.Subtitles {
@@ -295,14 +300,16 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			mu.Lock()
 			for _, src := range sources {
 				allPlaybackSources = appendUniquePlaybackSource(allPlaybackSources, model.PlaybackSource{
-					Label:        src.Quality,
-					URL:          src.URL,
-					Referer:      src.Referer,
-					Type:         src.Type,
-					UserAgent:    src.UserAgent,
-					CookieHeader: src.CookieHeader,
-					Resolver:     p.Name(),
-					Language:     src.Language,
+					Label:          src.Quality,
+					URL:            src.URL,
+					Referer:        src.Referer,
+					Type:           src.Type,
+					UserAgent:      src.UserAgent,
+					CookieHeader:   src.CookieHeader,
+					Resolver:       p.Name(),
+					Language:       src.Language,
+					ExtraArgs:      src.ExtraArgs,
+					SuppressOrigin: src.SuppressOrigin,
 				})
 				// Collect subtitles
 				for _, sub := range src.Subtitles {

@@ -26,7 +26,7 @@ Type a query, press Space, pick a result.
 
 ## Features
 
-- **Multi-source search** — Searches multiple providers at once (MovieBox, VidKing, Miruro, WCO, and optional Jellyfin). Results grouped by source.
+- **Multi-source search** — Searches multiple providers at once (MovieBox, VidKing, Miruro, PirateX, and optional Jellyfin). Results grouped by source.
 - **5 media modes** — Anime, Movies, TV Shows, Cartoons, Jellyfin. Switch with Tab.
 - **Episode browsing** — Season/episode lists with filler badges and sub/dub toggles.
 - **Parallel source resolution** — Queries every provider at once, shows all available qualities.
@@ -211,7 +211,7 @@ The binary ships with fallback keys for Trakt, AniList, and TMDB. They work fine
 | Miruro | Anime | API | 1 |
 | MovieBox | Movies, TV | API (via TMDB) | 2 |
 | VidKing | Movies, TV | API (via TMDB) | 2 |
-| WCO | Cartoons, Anime | HTML scraping | 2 |
+| PirateX | Cartoons | Scraper (merged HLS) | 1 |
 | Jellyfin | Movies, TV | Jellyfin API | 1 |
 
 Lower priority = queried first. All providers are queried in parallel regardless — priority only affects result ordering when multiple providers return the same content.

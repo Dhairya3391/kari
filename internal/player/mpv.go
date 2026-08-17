@@ -117,6 +117,7 @@ func playSingleSource(source model.PlaybackSource, media model.ResolvedMedia, an
 	pipeMpvArgs = appendTitleArgs(pipeMpvArgs, media.DisplayTitle())
 	pipeMpvArgs = appendSubtitleArgs(pipeMpvArgs, media.SubtitlePaths())
 	pipeMpvArgs = append(pipeMpvArgs, aniskipArgs...)
+	pipeMpvArgs = append(pipeMpvArgs, source.ExtraArgs...)
 	pipeMpvArgs = append(pipeMpvArgs, "-")
 
 	logging.Debugf("playSingleSource: trying curl-to-mpv pipe for URL=%q", source.URL)

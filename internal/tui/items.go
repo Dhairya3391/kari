@@ -28,11 +28,8 @@ func seriesToItems(items []model.SearchResult) []list.Item {
 	out := make([]list.Item, 0, len(items))
 	for idx, it := range items {
 		desc := strings.TrimSpace(it.Year)
-		title := it.Title
-		if it.Provider != "wco" {
-			badge := resultTypeLabel(it)
-			title = "[" + badge + "]  " + it.Title
-		}
+		badge := resultTypeLabel(it)
+		title := "[" + badge + "]  " + it.Title
 
 		out = append(out, rowItem{
 			title: title,
