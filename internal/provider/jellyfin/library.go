@@ -48,7 +48,7 @@ func (c *Client) fetchLibrary(ctx context.Context) ([]provider.SearchResult, err
 	u := fmt.Sprintf("%s/Items?includeItemTypes=Movie,Series&Recursive=true&sortBy=SortName&sortOrder=Ascending", c.server)
 	resp, err := c.authGET(ctx, u)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jellyfin fetch library: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -58,7 +58,7 @@ func (c *Client) fetchLibrary(ctx context.Context) ([]provider.SearchResult, err
 
 	var ir itemsResult
 	if err := json.NewDecoder(resp.Body).Decode(&ir); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jellyfin fetch library: decode response: %w", err)
 	}
 
 	results := make([]provider.SearchResult, 0, len(ir.Items))

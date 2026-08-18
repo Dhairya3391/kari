@@ -86,7 +86,7 @@ func (c *Client) searchHints(ctx context.Context, query string) ([]provider.Sear
 	u := fmt.Sprintf("%s/Search/Hints?searchTerm=%s&limit=20", c.server, url.QueryEscape(query))
 	resp, err := c.authGET(ctx, u)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jellyfin search hints: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -96,7 +96,7 @@ func (c *Client) searchHints(ctx context.Context, query string) ([]provider.Sear
 
 	var sr searchHintsResult
 	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jellyfin search hints: decode response: %w", err)
 	}
 
 	results := make([]provider.SearchResult, 0, len(sr.SearchHints))
@@ -153,7 +153,7 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 	u := fmt.Sprintf("%s/Items?parentId=%s&includeItemTypes=Episode&Recursive=true&sortBy=ParentIndexNumber,IndexNumber", c.server, mediaID)
 	resp, err := c.authGET(ctx, u)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jellyfin fetch episodes: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -163,7 +163,7 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 
 	var ir itemsResult
 	if err := json.NewDecoder(resp.Body).Decode(&ir); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("jellyfin fetch episodes: decode response: %w", err)
 	}
 
 	eps := make([]provider.Episode, 0, len(ir.Items))

@@ -163,7 +163,7 @@ func (c *Client) fetchMovieBoxSources(ctx context.Context, tmdbID int, mediaType
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("moviebox fetch sources: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -173,12 +173,12 @@ func (c *Client) fetchMovieBoxSources(ctx context.Context, tmdbID int, mediaType
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("moviebox fetch sources: read body: %w", err)
 	}
 
 	var result movieboxResponse
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("moviebox fetch sources: decode response: %w", err)
 	}
 
 	return &result, nil

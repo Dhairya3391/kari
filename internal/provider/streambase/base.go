@@ -58,15 +58,18 @@ func (b *Base) Search(ctx context.Context, query string, mode provider.ContentTy
 	}
 	if err != nil {
 		logging.Errorf("stream search failed mode=%q query=%q err=%v", mode, query, err)
-		return nil, err
+
+		return nil, fmt.Errorf("streambase search: %w", err)
 	}
 
 	providerResults := make([]provider.SearchResult, 0, len(results))
 	for _, r := range results {
 		mediaType := r.MediaType
-		if mode == provider.ModeMovies {
+		switch mode {
+
+		case provider.ModeMovies:
 			mediaType = "movie"
-		} else if mode == provider.ModeTV {
+		case provider.ModeTV:
 			mediaType = "tv"
 		}
 		providerResults = append(providerResults, provider.SearchResult{
@@ -108,7 +111,7 @@ func (b *Base) FetchEpisodes(ctx context.Context, series provider.SearchResult) 
 
 	details, err := b.fetchTMDBTVDetails(ctx, tmdbID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("streambase fetch episodes: %w", err)
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -148,7 +151,7 @@ func (b *Base) FetchEpisodes(ctx context.Context, series provider.SearchResult) 
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("streambase fetch episodes: %w", err)
 	}
 
 	episodes := make([]provider.Episode, 0, 256)
@@ -238,7 +241,7 @@ func fetchTMDBJSON[T any](b *Base, ctx context.Context, target string) (T, error
 	headers := map[string]string{"Accept": "application/json"}
 	resp, err := b.doRequest(ctx, target, headers)
 	if err != nil {
-		return zero, err
+		return zero, fmt.Errorf("streambase request: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -247,11 +250,11 @@ func fetchTMDBJSON[T any](b *Base, ctx context.Context, target string) (T, error
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return zero, err
+		return zero, fmt.Errorf("streambase read body: %w", err)
 	}
 	var payload T
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return zero, err
+		return zero, fmt.Errorf("streambase decode response: %w", err)
 	}
 	return payload, nil
 }

@@ -169,7 +169,7 @@ func (c *Client) FetchVidKingSources(ctx context.Context, tmdbID int, mediaType 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		logging.Errorf("vidking request failed err=%v", err)
-		return nil, err
+		return nil, fmt.Errorf("vidking fetch sources: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -181,7 +181,7 @@ func (c *Client) FetchVidKingSources(ctx context.Context, tmdbID int, mediaType 
 	var result vidKingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		logging.Errorf("vidking parse failure err=%v", err)
-		return nil, err
+		return nil, fmt.Errorf("vidking fetch sources: decode response: %w", err)
 	}
 	if len(result.Sources) == 0 {
 		logging.Warnf("vidking returned no sources tmdbID=%d", tmdbID)

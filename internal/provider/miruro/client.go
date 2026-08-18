@@ -58,12 +58,12 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro search: build request: %w", err)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro search: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -73,7 +73,7 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 
 	var sr searchResp
 	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro search: decode response: %w", err)
 	}
 	results := make([]provider.SearchResult, 0, len(sr.Results))
 	for _, r := range sr.Results {
@@ -90,6 +90,9 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 		})
 	}
 	logging.Debugf("miruro search done results=%d", len(results))
+	if len(results) == 0 {
+		return nil, provider.ErrNoResults
+	}
 	return results, nil
 }
 
@@ -100,12 +103,12 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro episodes: build request: %w", err)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro episodes: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -115,7 +118,7 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 
 	var er []episodeResp
 	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro episodes: decode response: %w", err)
 	}
 	eps := make([]provider.Episode, 0, len(er))
 	for _, e := range er {
@@ -151,7 +154,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	logging.Debugf("miruro resolve source mediaID=%q episodeID=%q", mediaID, episode.ID)
 	u, err := url.Parse(apiURL + "/link")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro resolve: build url: %w", err)
 	}
 	q := u.Query()
 	q.Set("id", episode.ID)
@@ -159,12 +162,12 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro resolve: build request: %w", err)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro resolve: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -183,12 +186,12 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro resolve: read body: %w", err)
 	}
 
 	var lr linkResp
 	if err := json.Unmarshal(body, &lr); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("miruro resolve: decode response: %w", err)
 	}
 
 	subtitleOptions := make([]provider.SubtitleOption, 0, len(lr.Subtitles))
