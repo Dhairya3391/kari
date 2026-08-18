@@ -41,5 +41,5 @@ type Provider interface {
 - **Miruro**: API-based, high performance Anime provider.
 - **MovieBox**: Movie/TV provider with multi-stream support (via TMDB).
 - **VidKing**: Fast movie/TV scraper with multi-server support (via TMDB).
-- **PirateX**: Direct scraped Cartoon provider for piratexplay.cc — site-native TMDB search plus its two playback transports (as-cdn FirePlayer and the byse encrypted player), both resolving to a merged HLS master (video + all audio languages in one URL).
+- **PirateX**: API-based Cartoon provider for piratexplay.cc — a thin client for the `piratex.dhairya.codes` FastAPI service that does the scraping server-side. `/search` → `/series/{slug}` → `/watch/{episode_id}` (three JSON GETs) yields ready-to-play relayed `.m3u8` URLs; kari builds one source per served language (`audio[].play`, language preselected server-side via `?lang=` — no player-side `--alang`).
 - **Jellyfin**: Optional Movies/TV provider backed by a self-hosted Jellyfin server (enabled via `JELLYFIN_URL` + `JELLYFIN_API_KEY`).

@@ -6,7 +6,7 @@ const (
 	VidKingAPIBase   = "https://noob.broggl.farm"
 	VidKingReferer   = "https://www.vidking.net/"
 	MovieboxAPIBase  = "https://noob3.broggl.farm"
-	PirateXOrigin    = "https://piratexplay.cc"
+	PirateXAPIBase   = "https://piratex.dhairya.codes"
 	TMDBAPIBase      = "https://api.themoviedb.org/3"
 	TMDBBaseURL      = "https://www.themoviedb.org"
 	TMDBImageBase    = "https://image.tmdb.org/t/p/"
