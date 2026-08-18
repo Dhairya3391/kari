@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -260,11 +261,10 @@ func cleanEpisodeTitle(epTitle, seriesTitle string) string {
 		return ""
 	}
 
-	// Remove series title from beginning (case insensitive)
-	lowerEp := strings.ToLower(epTitle)
-	lowerSeries := strings.ToLower(seriesTitle)
-	if seriesTitle != "" && strings.HasPrefix(lowerEp, lowerSeries) {
-		epTitle = epTitle[len(seriesTitle):]
+	if seriesTitle != "" {
+		if n := caseInsensitivePrefixLen(epTitle, seriesTitle); n > 0 {
+			epTitle = epTitle[n:]
+		}
 	}
 	epTitle = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(epTitle), "-"))
 
@@ -276,6 +276,28 @@ func cleanEpisodeTitle(epTitle, seriesTitle string) string {
 	epTitle = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(epTitle), "-"))
 
 	return epTitle
+}
+
+func caseInsensitivePrefixLen(s, prefix string) int {
+	if prefix == "" || s == "" {
+		return 0
+	}
+	var bytes int
+	si, pi := 0, 0
+	for si < len(s) && pi < len(prefix) {
+		sRune, sSize := utf8.DecodeRuneInString(s[si:])
+		pRune, pSize := utf8.DecodeRuneInString(prefix[pi:])
+		if !strings.EqualFold(string(sRune), string(pRune)) {
+			return 0
+		}
+		bytes += sSize
+		si += sSize
+		pi += pSize
+	}
+	if pi < len(prefix) {
+		return 0
+	}
+	return bytes
 }
 
 func (m *modelImpl) languageEnabled(lang string) bool {

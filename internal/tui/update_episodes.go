@@ -85,9 +85,15 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(m.spinner.Tick, m.episodesCmd(opID, *m.selectedSeries))
 			}
 		case keyMsg.String() == "g":
+			if m.episodeList.SettingFilter() {
+				break
+			}
 			m.episodeList.Select(0)
 			return m, nil
 		case keyMsg.String() == "G":
+			if m.episodeList.SettingFilter() {
+				break
+			}
 			if visible := m.episodeList.VisibleItems(); len(visible) > 0 {
 				m.episodeList.Select(len(visible) - 1)
 			}
@@ -156,6 +162,11 @@ func (m *modelImpl) orderedSelectedEpisodes() []model.EpisodeResult {
 }
 
 func (m *modelImpl) batchDownloadCmd(opID int, episodes []model.EpisodeResult, series model.SearchResult, mode provider.ContentType, hasSeries bool) tea.Cmd {
+	qualityMode := m.qualityMode
+	languageFilter := make(map[string]bool, len(m.languageFilter))
+	for lang, enabled := range m.languageFilter {
+		languageFilter[lang] = enabled
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(m.appCtx)
 
@@ -189,8 +200,8 @@ func (m *modelImpl) batchDownloadCmd(opID int, episodes []model.EpisodeResult, s
 				series,
 				episodes,
 				mode,
-				m.qualityMode,
-				m.languageFilter,
+				qualityMode,
+				languageFilter,
 				onProgress,
 			)
 

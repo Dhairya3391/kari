@@ -87,6 +87,8 @@ func getAniskipArgs(client *aniskip.Client, media model.ResolvedMedia) ([]string
 		return nil, ""
 	}
 
+	cleanupStaleScripts()
+
 	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("kari-skip-%d-%d.lua", os.Getpid(), time.Now().UnixNano()))
 	if err := os.WriteFile(scriptPath, []byte(aniskipLuaScript), 0644); err != nil {
 		logging.Debugf("aniskip: failed to write temp lua script: %v", err)
@@ -106,5 +108,22 @@ func getAniskipArgs(client *aniskip.Client, media model.ResolvedMedia) ([]string
 func cleanupAniskipScript(path string) {
 	if path != "" {
 		_ = os.Remove(path)
+	}
+}
+
+func cleanupStaleScripts() {
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "kari-skip-*.lua"))
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-1 * time.Hour)
+	for _, path := range matches {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(path)
+		}
 	}
 }

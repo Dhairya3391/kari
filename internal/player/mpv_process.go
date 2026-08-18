@@ -16,11 +16,12 @@ import (
 )
 
 func ipcPoller(ctx context.Context, client *IPCClient, stats *playbackStats, done <-chan struct{}) {
+	defer client.Close()
+
 	if err := client.Connect(3 * time.Second); err != nil {
 		logging.Debugf("ipcPoller: connect failed: %v", err)
 		return
 	}
-	defer client.Close()
 
 	poll := func() {
 		pos, posErr := client.GetProperty("time-pos")

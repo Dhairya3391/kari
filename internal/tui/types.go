@@ -90,6 +90,8 @@ type resolveDoneMsg struct {
 	err      error
 }
 
+type resolveWorkerDoneMsg struct{}
+
 type subtitleDoneMsg struct {
 	tracks []model.SubtitleTrack
 	opID   int

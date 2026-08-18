@@ -291,6 +291,8 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resolveProgressMsg:
 		mdl, cmd := m.onResolveProgress(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)
+	case resolveWorkerDoneMsg:
+		return m, spinnerCmd
 	case playDoneMsg:
 		mdl, cmd := m.onPlayDone(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)

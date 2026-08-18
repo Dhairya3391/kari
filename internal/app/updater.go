@@ -147,6 +147,7 @@ func applyUpdate(url string) error {
 	oldPath := exePath + ".old"
 	if err := os.Rename(exePath, oldPath); err != nil {
 		logging.Errorf("failed to rename current binary: %v", err)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 
@@ -154,6 +155,7 @@ func applyUpdate(url string) error {
 		if e := os.Rename(oldPath, exePath); e != nil {
 			logging.Errorf("rollback rename failed: %v", e)
 		}
+		_ = os.Remove(tmpPath)
 		return err
 	}
 

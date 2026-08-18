@@ -243,6 +243,9 @@ func (m *modelImpl) saveSettings() {
 }
 
 func (m *modelImpl) cycleMode(reverse bool) tea.Cmd {
+	if len(m.modes) == 0 {
+		return nil
+	}
 	idx := 0
 	for i, v := range m.modes {
 		if v == m.appMode {

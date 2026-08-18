@@ -54,9 +54,15 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 	}
 
 	resultsMap := make(map[string]providerSearchResult, len(providers))
+collectResults:
 	for i := 0; i < len(providers); i++ {
-		res := <-ch
-		resultsMap[res.provider] = res
+		select {
+		case res := <-ch:
+			resultsMap[res.provider] = res
+		case <-ctx.Done():
+			logging.Warnf("search: context expired while waiting for %d provider(s) (mode=%s query=%q)", len(providers)-i, mode, query)
+			break collectResults
+		}
 	}
 
 	var (
@@ -247,41 +253,54 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 					}
 				}()
 
-				for playback := range updates {
-					mu.Lock()
-					for _, src := range playback {
-						allPlaybackSources = appendUniquePlaybackSource(allPlaybackSources, model.PlaybackSource{
-							Label:          src.Quality,
-							URL:            src.URL,
-							Referer:        src.Referer,
-							Type:           src.Type,
-							UserAgent:      src.UserAgent,
-							CookieHeader:   src.CookieHeader,
-							Resolver:       p.Name(),
-							Language:       src.Language,
-							ExtraArgs:      src.ExtraArgs,
-							SuppressOrigin: src.SuppressOrigin,
-						})
-						// Collect subtitles
-						for _, sub := range src.Subtitles {
-							if _, ok := seenSubs[sub.URL]; !ok {
-								seenSubs[sub.URL] = struct{}{}
-								subLang := lang.Normalize(sub.Language)
-								allSubtitleTracks = append(allSubtitleTracks, model.SubtitleTrack{
-									Label:    fmt.Sprintf("%s (%s)", lang.Name(subLang), p.Name()),
-									Language: subLang,
-									URL:      sub.URL,
-									Referer:  src.Referer,
-									Resolver: p.Name(),
-								})
+			streamLoop:
+				for {
+					select {
+					case playback, ok := <-updates:
+						if !ok {
+							break streamLoop
+						}
+						mu.Lock()
+						for _, src := range playback {
+							allPlaybackSources = appendUniquePlaybackSource(allPlaybackSources, model.PlaybackSource{
+								Label:          src.Quality,
+								URL:            src.URL,
+								Referer:        src.Referer,
+								Type:           src.Type,
+								UserAgent:      src.UserAgent,
+								CookieHeader:   src.CookieHeader,
+								Resolver:       p.Name(),
+								Language:       src.Language,
+								ExtraArgs:      src.ExtraArgs,
+								SuppressOrigin: src.SuppressOrigin,
+							})
+							// Collect subtitles
+							for _, sub := range src.Subtitles {
+								if _, ok := seenSubs[sub.URL]; !ok {
+									seenSubs[sub.URL] = struct{}{}
+									subLang := lang.Normalize(sub.Language)
+									allSubtitleTracks = append(allSubtitleTracks, model.SubtitleTrack{
+										Label:    fmt.Sprintf("%s (%s)", lang.Name(subLang), p.Name()),
+										Language: subLang,
+										URL:      sub.URL,
+										Referer:  src.Referer,
+										Resolver: p.Name(),
+									})
+								}
 							}
 						}
-					}
-					sortPlaybackSources(allPlaybackSources)
-					current := buildResolved(allPlaybackSources, allSubtitleTracks)
-					mu.Unlock()
-					if onResult != nil {
-						onResult(current)
+						sortPlaybackSources(allPlaybackSources)
+						current := buildResolved(allPlaybackSources, allSubtitleTracks)
+						mu.Unlock()
+						if onResult != nil {
+							onResult(current)
+						}
+					case <-gCtx.Done():
+						go func() {
+							for range updates {
+							}
+						}()
+						break streamLoop
 					}
 				}
 				return nil

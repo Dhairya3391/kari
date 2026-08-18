@@ -134,21 +134,20 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, series, *m.selectedEpisode))
 }
 func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
+	mode := m.appMode
 	return func() tea.Msg {
-		mode := string(m.appMode)
-		cacheKey := fmt.Sprintf("%s:%s", mode, query)
-		// Jellyfin searches are ranked locally against the provider's own
-		// library cache, so caching here would only serve stale results.
-		cacheable := m.appMode != provider.ModeJellyfin
+		modeKey := string(mode)
+		cacheKey := fmt.Sprintf("%s:%s", modeKey, query)
+		cacheable := mode != provider.ModeJellyfin
 		if cacheable {
 			if entry, ok := m.searchCache.Get(cacheKey); ok {
-				logging.Debugf("search cache hit mode=%s query=%q", mode, query)
+				logging.Debugf("search cache hit mode=%s query=%q", modeKey, query)
 				return searchDoneMsg{results: entry.results, usedQuery: entry.usedQuery, warnings: entry.warnings, opID: opID, err: nil}
 			}
 		}
 
-		logging.Debugf("search start mode=%s query=%q", mode, query)
-		results, usedQuery, warnings, err := m.mediaService.Search(m.appCtx, m.appMode, query)
+		logging.Debugf("search start mode=%s query=%q", modeKey, query)
+		results, usedQuery, warnings, err := m.mediaService.Search(m.appCtx, mode, query)
 		if err == nil && cacheable {
 			m.searchCache.Set(cacheKey, searchCacheEntry{
 				results:   results,
@@ -162,21 +161,25 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 }
 
 func (m *modelImpl) episodesCmd(opID int, series model.SearchResult) tea.Cmd {
+	mode := m.appMode
+	audioMode := m.audioMode
 	return func() tea.Msg {
-		results, err := m.mediaService.FetchEpisodes(m.appCtx, m.appMode, series, m.audioMode)
+		results, err := m.mediaService.FetchEpisodes(m.appCtx, mode, series, audioMode)
 		return episodesDoneMsg{results: results, opID: opID, err: err}
 	}
 }
 
 func (m *modelImpl) historyContinueEpisodesCmd(opID int, group history.Group, series model.SearchResult, mode provider.ContentType) tea.Cmd {
+	audioMode := m.audioMode
 	return func() tea.Msg {
-		results, err := m.mediaService.FetchEpisodes(m.appCtx, mode, series, m.audioMode)
+		results, err := m.mediaService.FetchEpisodes(m.appCtx, mode, series, audioMode)
 		return historyContinueEpisodesMsg{group: group, results: results, opID: opID, err: err}
 	}
 }
 
 func (m *modelImpl) resolveCmd(opID int, series model.SearchResult, episode model.EpisodeResult) tea.Cmd {
 	logging.Debugf("resolveCmd: opID=%d series=%q episode=%q", opID, series.Title, episode.Title)
+	mode := m.appMode
 
 	return tea.Batch(
 		func() tea.Msg {
@@ -184,16 +187,27 @@ func (m *modelImpl) resolveCmd(opID int, series model.SearchResult, episode mode
 			defer cancel()
 
 			onResult := func(resolved model.ResolvedMedia) {
-				m.resolveChan <- resolveProgressMsg{resolved: resolved, opID: opID}
+				select {
+				case m.resolveChan <- resolveProgressMsg{resolved: resolved, opID: opID}:
+				case <-ctx.Done():
+				}
 			}
 
-			resolved, err := m.mediaService.Resolve(ctx, m.appMode, series, episode, onResult)
-			if err != nil {
-				return resolveDoneMsg{resolved: resolved, opID: opID, err: err}
+			resolved, err := m.mediaService.Resolve(ctx, mode, series, episode, onResult)
+
+			// Deliver the completion marker through the same channel the
+			// subscription reads (mirroring download/batch) so the
+			// subscription goroutine that consumes it terminates instead of
+			// blocking forever on <-resolveChan after the last progress
+			// message. Returning the marker directly here would orphan that
+			// goroutine, and stale ones would then steal the first message
+			// of the next resolve.
+			select {
+			case m.resolveChan <- resolveDoneMsg{resolved: resolved, opID: opID, err: err}:
+			case <-ctx.Done():
 			}
 
-			logging.Debugf("resolveCmd: resolved successfully with %d sources", len(resolved.Playback))
-			return resolveDoneMsg{resolved: resolved, opID: opID, err: nil}
+			return resolveWorkerDoneMsg{}
 		},
 		m.resolveSubscription(),
 	)
