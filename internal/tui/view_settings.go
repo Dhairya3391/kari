@@ -103,7 +103,7 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 			enabledCount++
 		}
 	}
-	rows = append(rows, fmt.Sprintf("Languages (MovieBox only) · %d/%d enabled", enabledCount, len(languages)))
+	rows = append(rows, fmt.Sprintf("Languages · %d/%d enabled", enabledCount, len(languages)))
 	if len(languages) == 0 {
 		rows = append(rows, langStyle.Render(mutedStyle.Render("No languages configured")))
 	} else {

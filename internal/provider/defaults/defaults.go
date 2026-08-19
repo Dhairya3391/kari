@@ -5,6 +5,7 @@ import (
 	"kari/internal/provider/miruro"
 	"kari/internal/provider/moviebox"
 	"kari/internal/provider/piratex"
+	"kari/internal/provider/rivestream"
 	"kari/internal/provider/vidking"
 	"kari/internal/tmdb"
 )
@@ -29,6 +30,17 @@ var DefaultProviders = []provider.Descriptor{
 		Modes: []provider.Mode{
 			{Name: provider.ModeMovies, Priority: 2},
 			{Name: provider.ModeTV, Priority: 1},
+		},
+		Priority: 2,
+	},
+	{
+		ID: "rivestream",
+		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
+			return rivestream.NewClient(kp)
+		},
+		Modes: []provider.Mode{
+			{Name: provider.ModeMovies, Priority: 2},
+			{Name: provider.ModeTV, Priority: 2},
 		},
 		Priority: 2,
 	},
