@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/provider"
 )
