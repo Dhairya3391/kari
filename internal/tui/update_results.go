@@ -392,6 +392,7 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 			Playback:      append([]model.PlaybackSource{}, resolved.Playback...),
 			Subtitles:     append([]model.SubtitleTrack{}, resolved.Subtitles...),
 		}
+		m.rawSubtitles = append([]model.SubtitleTrack{}, resolved.Subtitles...)
 		m.selectedPlayback = 0
 		m.ensurePlaybackSelection()
 		m.applyResumeFromHistory(m.resolved)
@@ -411,9 +412,23 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 		}
 	}
 
+	// Accumulate raw subtitles from all provider updates
+	seenSub := make(map[string]struct{})
+	for _, s := range m.rawSubtitles {
+		seenSub[s.URL] = struct{}{}
+	}
+	for _, s := range resolved.Subtitles {
+		if s.URL != "" {
+			if _, ok := seenSub[s.URL]; !ok {
+				m.rawSubtitles = append(m.rawSubtitles, s)
+				seenSub[s.URL] = struct{}{}
+			}
+		}
+	}
+
 	// Only replace subtitles from resolve phase if we don't already have downloaded ones
 	if len(resolved.Subtitles) > 0 && !hasDownloadedSubtitles(m.resolved.Subtitles) {
-		m.resolved.Subtitles = append([]model.SubtitleTrack{}, resolved.Subtitles...)
+		m.resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
 	}
 	m.ensurePlaybackSelection()
 }

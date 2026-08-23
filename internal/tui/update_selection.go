@@ -37,6 +37,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.loading = true
 		m.loadingText = "Preparing playback..."
 		m.resolved = nil
+		m.rawSubtitles = nil
 		m.clearPreviewPoster()
 		opID := m.newOpID()
 		m.resolveOpID = opID
@@ -50,6 +51,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.loading = true
 		m.loadingText = "Preparing playback..."
 		m.resolved = nil
+		m.rawSubtitles = nil
 		m.clearPreviewPoster()
 		opID := m.newOpID()
 		m.resolveOpID = opID
@@ -60,8 +62,9 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 	logging.Debugf("selectSeries: loading episodes for %q", m.selectedSeries.Title)
 	m.loading = true
 	m.loadingText = "Loading episodes..."
-	m.resolved = nil
-	m.clearPreviewPoster()
+		m.resolved = nil
+		m.rawSubtitles = nil
+		m.clearPreviewPoster()
 	m.setStatus(statusInfo, "")
 	opID := m.newOpID()
 	m.episodesOpID = opID
@@ -121,6 +124,7 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 		m.prevSourceQuality = 0
 	}
 	m.resolved = nil
+	m.rawSubtitles = nil
 	m.clearPreviewPoster()
 	m.autoPlayAfterResolve = autoPlay
 	series := model.SearchResult{}
@@ -237,7 +241,11 @@ func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
 	m.subtitleLangUsed = m.subtitleLanguage
 	opID := m.newOpID()
 	m.subtitleOpID = opID
-	return m.subtitleFetchCmd(opID, *m.resolved)
+	mediaForFetch := *m.resolved
+	if len(m.rawSubtitles) > 0 {
+		mediaForFetch.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
+	}
+	return m.subtitleFetchCmd(opID, mediaForFetch)
 }
 
 func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {

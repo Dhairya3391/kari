@@ -254,6 +254,7 @@ type modelImpl struct {
 	subtitleOpID          int
 	subtitleResolverUsed  string
 	subtitleLangUsed      string
+	rawSubtitles          []model.SubtitleTrack
 	playOpID              int
 	downloadOpID          int
 	downloadProgress      float64

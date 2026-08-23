@@ -163,31 +163,33 @@ func selectMatchingProviderCandidates(tracks []model.SubtitleTrack, preferredLan
 	if preferredResolver == "" {
 		return nil
 	}
+	preferredLang = lang.Normalize(preferredLang)
 	var exact, english []model.SubtitleTrack
 	for _, t := range tracks {
 		if !strings.EqualFold(t.Resolver, preferredResolver) {
 			continue
 		}
-		if t.Language == preferredLang {
+		tLang := lang.Normalize(t.Language)
+		if tLang == preferredLang {
 			exact = append(exact, t)
-		} else if preferredLang != "en" && t.Language == "en" {
+		} else if preferredLang != "en" && tLang == "en" {
 			english = append(english, t)
 		}
 	}
 	return append(exact, english...)
 }
 
-// selectOtherProviderCandidates returns subtitles from providers other than preferredResolver,
-// filtered to preferredLang or English.
 func selectOtherProviderCandidates(tracks []model.SubtitleTrack, preferredLang, preferredResolver string) []model.SubtitleTrack {
+	preferredLang = lang.Normalize(preferredLang)
 	var exact, english []model.SubtitleTrack
 	for _, t := range tracks {
 		if preferredResolver != "" && strings.EqualFold(t.Resolver, preferredResolver) {
 			continue
 		}
-		if t.Language == preferredLang {
+		tLang := lang.Normalize(t.Language)
+		if tLang == preferredLang {
 			exact = append(exact, t)
-		} else if preferredLang != "en" && t.Language == "en" {
+		} else if preferredLang != "en" && tLang == "en" {
 			english = append(english, t)
 		}
 	}
