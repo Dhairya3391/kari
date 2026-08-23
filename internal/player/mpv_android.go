@@ -91,10 +91,11 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 	confBuilder.WriteString("network-timeout=8\n")
 	confBuilder.WriteString("cache=yes\n")
 	confBuilder.WriteString("cache-pause-initial=no\n")
-	confBuilder.WriteString("stream-buffer-size=16M\n")
+	confBuilder.WriteString("stream-buffer-size=8M\n")
 	confBuilder.WriteString("demuxer-seekable-cache=yes\n")
-	confBuilder.WriteString("demuxer-max-bytes=200M\n")
-	confBuilder.WriteString("demuxer-readahead-secs=10\n")
+	confBuilder.WriteString("demuxer-max-bytes=100M\n")
+	confBuilder.WriteString("demuxer-max-back-bytes=20M\n")
+	confBuilder.WriteString("demuxer-readahead-secs=60\n")
 	confBuilder.WriteString("hls-bitrate=max\n")
 
 	if source.Referer != "" {

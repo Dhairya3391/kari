@@ -22,9 +22,10 @@ func buildMPVArgs(source model.PlaybackSource, media model.ResolvedMedia, socket
 		"--cache=yes",
 		"--cache-pause-initial=no",
 		"--demuxer-seekable-cache=yes",
-		"--demuxer-max-bytes=200M",
-		"--demuxer-readahead-secs=10",
-		"--stream-buffer-size=16M",
+		"--demuxer-max-bytes=150M",
+		"--demuxer-max-back-bytes=30M",
+		"--demuxer-readahead-secs=60",
+		"--stream-buffer-size=8M",
 		"--hls-bitrate=max",
 	}
 

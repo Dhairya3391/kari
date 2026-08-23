@@ -88,6 +88,7 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 					TMDBID:    m.resolved.TMDBID,
 				}
 				_ = m.historyStore.Upsert(entry)
+				m.applyResumeFromHistory(m.resolved)
 
 				// Refresh episode list markers
 				if len(m.episodeResults) > 0 {
@@ -129,8 +130,10 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.subtitleOpID != 0 {
 			m.pendingManualPlay = true
+			m.pendingPlayFromStart = false
+			m.loading = true
 			m.loadingText = "Downloading subtitles..."
-			return m, nil
+			return m, m.spinner.Tick
 		}
 		m.loading = true
 		m.loadingText = "Opening player..."
@@ -147,18 +150,16 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.subtitleOpID != 0 {
 			m.pendingManualPlay = true
-			m.resolved.StartTime = 0
+			m.pendingPlayFromStart = true
+			m.loading = true
 			m.loadingText = "Downloading subtitles..."
-			return m, nil
-		}
-		if m.resolved != nil {
-			m.resolved.StartTime = 0
+			return m, m.spinner.Tick
 		}
 		m.loading = true
 		m.loadingText = "Starting from beginning..."
 		opID := m.newOpID()
 		m.playOpID = opID
-		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
+		return m, tea.Batch(m.spinner.Tick, m.playCmdWithStartTime(opID, 0), m.playStartedTimeoutCmd(opID))
 	case "n":
 		return m.playNextEpisode()
 	case "A":

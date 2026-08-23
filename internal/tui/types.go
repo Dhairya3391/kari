@@ -238,6 +238,7 @@ type modelImpl struct {
 	autoPlayAfterResolve bool
 	pendingAutoPlay      bool
 	pendingManualPlay    bool
+	pendingPlayFromStart bool
 	autoplay             bool
 
 	appMode provider.ContentType

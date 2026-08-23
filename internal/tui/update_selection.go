@@ -258,6 +258,13 @@ func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia) tea
 }
 
 func (m *modelImpl) playCmd(opID int) tea.Cmd {
+	if m.resolved == nil {
+		return m.playCmdWithStartTime(opID, 0)
+	}
+	return m.playCmdWithStartTime(opID, m.resolved.StartTime)
+}
+
+func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 	sources := m.orderedPlaybackSources()
 	if m.resolved == nil || len(sources) == 0 {
 		return func() tea.Msg {
@@ -265,13 +272,14 @@ func (m *modelImpl) playCmd(opID int) tea.Cmd {
 		}
 	}
 	resolved := *m.resolved
+	resolved.StartTime = startTime
 	playerName := m.selectedPlayerName()
 	provider := ""
 	if src, ok := m.selectedPlaybackSource(); ok {
 		provider = src.Label
 	}
 	return func() tea.Msg {
-		logging.Debugf("playCmd: opID=%d media=%q provider=%q sources_count=%d", opID, resolved.DisplayTitle(), provider, len(sources))
+		logging.Debugf("playCmd: opID=%d media=%q provider=%q sources_count=%d startTime=%.2f", opID, resolved.DisplayTitle(), provider, len(sources), startTime)
 		subPaths := resolved.SubtitlePaths()
 		logging.Debugf("playCmd: launching playback for %q using player=%s subs=%d paths=%v", resolved.DisplayTitle(), playerName, len(subPaths), subPaths)
 		result, err := m.players.PlayWithSources(sources, resolved, playerName)

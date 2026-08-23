@@ -229,9 +229,10 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 		logging.Debugf("onResolveDone: ignoring old opID %d (current %d)", msg.opID, m.resolveOpID)
 		return m, nil
 	}
-	m.loading = false
-	m.loadingText = ""
+	m.resolveOpID = 0
 	if msg.err != nil {
+		m.loading = false
+		m.loadingText = ""
 		m.autoPlayAfterResolve = false
 		m.pendingAutoPlay = false
 		if m.resolved == nil {
@@ -240,7 +241,6 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-
 	m.mergeResolved(msg.resolved)
 
 	// All providers have now reported in, so this is the first point where
@@ -268,9 +268,14 @@ func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 	if m.pendingManualPlay {
 		m.pendingManualPlay = false
 		m.loading = true
-		m.loadingText = "Opening player..."
 		opID := m.newOpID()
 		m.playOpID = opID
+		if m.pendingPlayFromStart {
+			m.pendingPlayFromStart = false
+			m.loadingText = "Starting from beginning..."
+			return m, tea.Batch(m.spinner.Tick, m.playCmdWithStartTime(opID, 0), m.playStartedTimeoutCmd(opID))
+		}
+		m.loadingText = "Opening player..."
 		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
 	}
 	if m.pendingAutoPlay {
@@ -290,12 +295,16 @@ func (m *modelImpl) finalizeResolved() (tea.Model, tea.Cmd) {
 	if m.autoPlayAfterResolve {
 		if m.subtitleOpID != 0 {
 			m.pendingAutoPlay = true
+			m.loading = true
+			m.loadingText = "Downloading subtitles..."
 			m.pushView(viewPreview)
 			m.setStatus(statusInfo, "")
-			return m, nil
+			return m, m.spinner.Tick
 		}
 		if len(m.orderedPlaybackSources()) == 0 {
 			m.autoPlayAfterResolve = false
+			m.loading = false
+			m.loadingText = ""
 			m.pushView(viewPreview)
 			m.setStatus(statusWarn, "No playback source matches the current filters")
 			return m, nil
@@ -307,6 +316,8 @@ func (m *modelImpl) finalizeResolved() (tea.Model, tea.Cmd) {
 		m.playOpID = opID
 		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
 	}
+	m.loading = false
+	m.loadingText = ""
 	m.pushView(viewPreview)
 	m.setStatus(statusInfo, "")
 	return m, nil
@@ -328,6 +339,8 @@ func (m *modelImpl) applyResumeFromHistory(resolved *model.ResolvedMedia) {
 	if ok && !entry.Complete && entry.PositionSecs > 5 {
 		resolved.StartTime = entry.PositionSecs
 		logging.Infof("applyResumeFromHistory: found resume point at %.2fs for %q", entry.PositionSecs, resolved.SeriesTitle)
+	} else {
+		resolved.StartTime = 0
 	}
 }
 
@@ -455,6 +468,8 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 			logging.Errorf("failed to upsert history: %v", err)
 		}
 
+		// Update resolved StartTime to reflect updated resume point or completion
+		m.applyResumeFromHistory(m.resolved)
 		// Refresh episode list markers if it exists
 		if len(m.episodeResults) > 0 {
 			seriesTitle, mediaType := "", ""

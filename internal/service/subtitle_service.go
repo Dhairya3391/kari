@@ -67,36 +67,30 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 	if preferredLang == "" {
 		preferredLang = "en"
 	}
-	originalSubtitles := media.Subtitles
-	for i, t := range originalSubtitles {
-		logging.Debugf("subtitle fetch: incoming[%d] label=%q lang=%q resolver=%q url=%q path=%q", i, t.Label, t.Language, t.Resolver, t.URL, t.Path)
-	}
-	media.Subtitles = selectSubtitleCandidates(media.Subtitles, preferredLang, preferredResolver)
-	logging.Debugf("subtitle fetch: preferredLang=%q preferredResolver=%q matched=%d of %d incoming", preferredLang, preferredResolver, len(media.Subtitles), len(originalSubtitles))
-
-	// Download all provider-supplied subtitles locally to avoid MPV remote URL issues
-	downloadedProvider := s.downloadProviderSubtitles(ctx, &media)
 
 	cacheKey := fmt.Sprintf("%d:%d:%d:%s:%s:%s", media.TMDBID, media.SeasonNumber, media.EpisodeNumber, media.SeriesTitle, preferredLang, preferredResolver)
 	if tracks, ok := s.cache.Get(cacheKey); ok {
 		return tracks, nil
 	}
 
-	// Priority 1: a provider subtitle — selectSubtitleCandidates already put
-	// the active provider's matches first, so the first one that actually
-	// downloaded is the best pick.
-	if downloadedProvider && len(media.Subtitles) > 0 {
-		logging.Debugf("subtitle fetch: %d provider subs available after download, trying pickBestSubtitle", len(media.Subtitles))
-		for i, t := range media.Subtitles {
-			logging.Debugf("subtitle fetch:   sub[%d] label=%q lang=%q resolver=%q path=%q url=%q", i, t.Label, t.Language, t.Resolver, t.Path, t.URL)
+	originalSubtitles := media.Subtitles
+	for i, t := range originalSubtitles {
+		logging.Debugf("subtitle fetch: incoming[%d] label=%q lang=%q resolver=%q url=%q path=%q", i, t.Label, t.Language, t.Resolver, t.URL, t.Path)
+	}
+
+	// Priority 1: Subtitles from the MATCHING provider (preferredResolver)
+	matchingSubs := selectMatchingProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
+	if len(matchingSubs) > 0 {
+		logging.Debugf("subtitle fetch: %d matching provider subs (%s), attempting download", len(matchingSubs), preferredResolver)
+		mCopy := model.ResolvedMedia{Subtitles: matchingSubs}
+		if s.downloadProviderSubtitles(ctx, &mCopy) {
+			if track, ok := s.pickBestSubtitle(mCopy.Subtitles); ok {
+				tracks := []model.SubtitleTrack{track}
+				logging.Debugf("subtitle fetch: selected matching provider sub path=%q lang=%q resolver=%q", track.Path, track.Language, track.Resolver)
+				s.cache.Set(cacheKey, tracks)
+				return tracks, nil
+			}
 		}
-		if track, ok := s.pickBestSubtitle(media.Subtitles); ok {
-			tracks := []model.SubtitleTrack{track}
-			logging.Debugf("subtitle fetch: selected provider sub path=%q lang=%q resolver=%q", track.Path, track.Language, track.Resolver)
-			s.cache.Set(cacheKey, tracks)
-			return tracks, nil
-		}
-		logging.Debugf("subtitle fetch: pickBestSubtitle found nothing")
 	}
 
 	query := strings.TrimSpace(media.SeriesTitle)
@@ -109,6 +103,7 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 		track, found, err := s.openSubtitles.FetchBestSubtitle(ctx, query, preferredLang, media.TMDBID, media.SeasonNumber, media.EpisodeNumber)
 		if err == nil && found {
 			tracks := []model.SubtitleTrack{track}
+			logging.Debugf("subtitle fetch: selected opensubtitles sub path=%q lang=%q", track.Path, track.Language)
 			s.cache.Set(cacheKey, tracks)
 			return tracks, nil
 		}
@@ -121,6 +116,7 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 	{
 		tracks, err := s.fetchYify(ctx, media)
 		if err == nil && len(tracks) > 0 {
+			logging.Debugf("subtitle fetch: selected yify sub path=%q lang=%q", tracks[0].Path, tracks[0].Language)
 			s.cache.Set(cacheKey, tracks)
 			return tracks, nil
 		}
@@ -129,11 +125,15 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 		}
 	}
 
-	if len(originalSubtitles) > 0 {
-		fallback := model.ResolvedMedia{Subtitles: originalSubtitles}
-		if s.downloadProviderSubtitles(ctx, &fallback) {
-			if track, ok := s.pickBestSubtitle(fallback.Subtitles); ok {
+	// Priority 4: Fallback to OTHER providers (only if matching provider, OpenSubtitles, and YIFY all had no subs)
+	otherSubs := selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
+	if len(otherSubs) > 0 {
+		logging.Debugf("subtitle fetch: trying %d fallback subs from other providers", len(otherSubs))
+		mCopy := model.ResolvedMedia{Subtitles: otherSubs}
+		if s.downloadProviderSubtitles(ctx, &mCopy) {
+			if track, ok := s.pickBestSubtitle(mCopy.Subtitles); ok {
 				tracks := []model.SubtitleTrack{track}
+				logging.Debugf("subtitle fetch: selected fallback other provider sub path=%q lang=%q resolver=%q", track.Path, track.Language, track.Resolver)
 				s.cache.Set(cacheKey, tracks)
 				return tracks, nil
 			}
@@ -157,36 +157,41 @@ func (s *SubtitleService) pickBestSubtitle(tracks []model.SubtitleTrack) (model.
 	return model.SubtitleTrack{}, false
 }
 
-// selectSubtitleCandidates narrows and orders a title's full provider
-// subtitle list down to only tracks in preferredLang or English — nothing
-// else is ever considered, so a title whose provider subtitles are all in
-// some unrelated language falls through to OpenSubtitles/YIFY instead of
-// showing that unrelated language. Within that language restriction, the
-// active provider's (preferredResolver's) subtitles are tried before any
-// other provider's, matching where the video itself is playing from.
-func selectSubtitleCandidates(tracks []model.SubtitleTrack, preferredLang, preferredResolver string) []model.SubtitleTrack {
-	var currentExact, currentEnglish, otherExact, otherEnglish []model.SubtitleTrack
-
+// selectMatchingProviderCandidates returns subtitles from the matched provider (preferredResolver)
+// filtered to preferredLang or English.
+func selectMatchingProviderCandidates(tracks []model.SubtitleTrack, preferredLang, preferredResolver string) []model.SubtitleTrack {
+	if preferredResolver == "" {
+		return nil
+	}
+	var exact, english []model.SubtitleTrack
 	for _, t := range tracks {
-		isCurrentProvider := preferredResolver != "" && strings.EqualFold(t.Resolver, preferredResolver)
-		switch {
-		case t.Language == preferredLang && isCurrentProvider:
-			currentExact = append(currentExact, t)
-		case t.Language == preferredLang:
-			otherExact = append(otherExact, t)
-		case preferredLang != "en" && t.Language == "en" && isCurrentProvider:
-			currentEnglish = append(currentEnglish, t)
-		case preferredLang != "en" && t.Language == "en":
-			otherEnglish = append(otherEnglish, t)
+		if !strings.EqualFold(t.Resolver, preferredResolver) {
+			continue
+		}
+		if t.Language == preferredLang {
+			exact = append(exact, t)
+		} else if preferredLang != "en" && t.Language == "en" {
+			english = append(english, t)
 		}
 	}
+	return append(exact, english...)
+}
 
-	candidates := make([]model.SubtitleTrack, 0, len(currentExact)+len(currentEnglish)+len(otherExact)+len(otherEnglish))
-	candidates = append(candidates, currentExact...)
-	candidates = append(candidates, currentEnglish...)
-	candidates = append(candidates, otherExact...)
-	candidates = append(candidates, otherEnglish...)
-	return candidates
+// selectOtherProviderCandidates returns subtitles from providers other than preferredResolver,
+// filtered to preferredLang or English.
+func selectOtherProviderCandidates(tracks []model.SubtitleTrack, preferredLang, preferredResolver string) []model.SubtitleTrack {
+	var exact, english []model.SubtitleTrack
+	for _, t := range tracks {
+		if preferredResolver != "" && strings.EqualFold(t.Resolver, preferredResolver) {
+			continue
+		}
+		if t.Language == preferredLang {
+			exact = append(exact, t)
+		} else if preferredLang != "en" && t.Language == "en" {
+			english = append(english, t)
+		}
+	}
+	return append(exact, english...)
 }
 
 func (s *SubtitleService) downloadProviderSubtitles(ctx context.Context, media *model.ResolvedMedia) bool {

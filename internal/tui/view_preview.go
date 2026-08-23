@@ -157,12 +157,12 @@ func (m *modelImpl) renderPreviewInfo(totalWidth int) string {
 		}
 	}
 	switch {
-	case len(downloadedSubs) > 0:
+	case len(downloadedSubs) > 0 && m.subtitleOpID == 0:
 		rows = append(rows, "", mutedStyle.Render("Subtitles"))
 		for _, sub := range downloadedSubs {
 			rows = append(rows, lipgloss.NewStyle().Foreground(colorSuccess).Render("✓ "+sub.Label))
 		}
-	case m.subtitleOpID != 0:
+	case m.resolveOpID != 0 || m.subtitleOpID != 0:
 		rows = append(rows, "", mutedStyle.Render("Fetching subtitles..."))
 	default:
 		rows = append(rows, "", mutedStyle.Render("No subtitles"))
