@@ -11,17 +11,22 @@ import (
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
+	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/provider/streambase"
 	"kari/internal/tmdb"
 )
 
+// log scopes every line from this package with its identity.
+var rsLog = logging.With("provider", "rivestream")
+
 const (
 	riveStreamAPI = config.RiveStreamAPIBase
 	riveStreamUA  = config.DesktopUserAgent
 )
 
+// Client implements provider.Provider against the RiveStream API.
 type Client struct {
 	base       *streambase.Base
 	httpClient *http.Client
@@ -44,6 +49,8 @@ type riveStreamResponse struct {
 	Subtitles []riveStreamSubtitle   `json:"subtitles"`
 }
 
+// NewClient constructs the RiveStream provider over the shared TMDB search
+// base.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
@@ -55,8 +62,13 @@ func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
 	}, nil
 }
 
+// Alias implements provider.Presenter.
+func (c *Client) Alias() string { return "RiveStream" }
+
+// Name implements Provider.
 func (c *Client) Name() string { return "rivestream" }
 
+// Modes implements Provider.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{
 		{Name: provider.ModeMovies, Priority: 2},
@@ -64,14 +76,29 @@ func (c *Client) Modes() []provider.Mode {
 	}
 }
 
+// audioLanguages is the set of audio-track languages rivestream's internal
+// providers tag streams with (e.g. citadel's "720p | English",
+// hindicast's Hindi audio).
+var audioLanguages = []provider.AudioLanguage{
+	{Code: "English", Display: "English"},
+	{Code: "Hindi", Display: "Hindi"},
+}
+
+// AudioLanguages implements provider.AudioLanguagesSource.
+func (c *Client) AudioLanguages() []provider.AudioLanguage { return audioLanguages }
+
+// Search delegates to the shared TMDB-keyed base.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	return c.base.Search(ctx, query, mode)
 }
 
+// FetchEpisodes delegates to the shared TMDB-keyed base.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	return c.base.FetchEpisodes(ctx, series)
 }
 
+// ResolveSource fetches stream candidates for a TMDB id, deduplicating
+// URLs and extracting per-source audio language from quality labels.
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
 	tmdbID := episode.TMDBID
 	if tmdbID <= 0 {
@@ -81,9 +108,9 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			return nil, fmt.Errorf("invalid media ID: %w", err)
 		}
 	}
-	mediaType := "movie"
+	mediaType := provider.MediaTypeMovie
 	if episode.Season > 0 || episode.Episode > 0 {
-		mediaType = "tv"
+		mediaType = provider.MediaTypeTV
 	}
 	resp, err := c.fetchSources(ctx, tmdbID, mediaType, episode.Season, episode.Episode)
 	if err != nil {
@@ -92,7 +119,6 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	if len(resp.Sources) == 0 {
 		return nil, provider.ErrNoSources
 	}
-
 	sources := make([]provider.MediaSource, 0, len(resp.Sources))
 	seen := make(map[string]struct{}, len(resp.Sources))
 	for _, s := range resp.Sources {
@@ -107,55 +133,44 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		if quality == "" {
 			quality = "Auto"
 		}
-		name := riveProviderName(quality)
-		if name == "" {
-			name = "RIVESTREAM"
-		}
-		sources = append(sources, provider.MediaSource{
+		quality, audioLang := normalizeQualityLanguage(quality)
+		source := provider.MediaSource{
 			URL:       s.URL,
-			Quality:   fmt.Sprintf("[%s] %s", strings.ToUpper(name), quality),
+			Quality:   quality,
 			Type:      s.Format,
-			Language:  languageFromQuality(quality),
 			UserAgent: riveStreamUA,
 			Subtitles: nil,
-		})
+		}
+		if audioLang != "" {
+			source.Language = audioLang
+		}
+		sources = append(sources, source)
 	}
 	return sources, nil
 }
 
-func riveProviderName(quality string) string {
-	q := strings.ToLower(strings.TrimSpace(quality))
-	switch {
-	case strings.Contains(q, "tcloud") || strings.Contains(q, "dcloud") || strings.Contains(q, "ipcloud"):
-		return "primevids" // CDN labels, no resolution
-	case strings.Contains(q, "|"):
-		return "citadel" // "720p | English" — resolution + audio language
-	case q == "hls":
-		return "apex" // bare "HLS"
-	case isBareInteger(q):
-		return "flowcast" // "480", "720" — bare integers (also hindicast, indistinguishable)
-	default:
-		return ""
-	}
-}
-
-func isBareInteger(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
+// languageFromQuality extracts the audio language from rivestream's
+// "720p | English" quality format; empty when the field has no "| language"
+// suffix.
 func languageFromQuality(quality string) string {
-	if i := strings.Index(quality, "|"); i >= 0 {
+	if i := strings.LastIndex(quality, "|"); i >= 0 {
 		return strings.TrimSpace(quality[i+1:])
 	}
 	return ""
+}
+
+// normalizeQualityLanguage rewrites rivestream's "720p | <language>" quality
+// so the suffix is always the English display name, and returns that name as
+// the second value (empty when there is no language suffix). Guards against
+// upstream native-script or coded text leaking into UI labels.
+func normalizeQualityLanguage(quality string) (string, string) {
+	audio := languageFromQuality(quality)
+	if audio == "" {
+		return quality, ""
+	}
+	display := lang.Name(audio)
+	base := strings.TrimSpace(quality[:strings.LastIndex(quality, "|")])
+	return base + " | " + display, display
 }
 
 // qualityLabel renders the rivestream quality field, which is inconsistently
@@ -164,25 +179,26 @@ func languageFromQuality(quality string) string {
 // integer (flowcast/hindicast: 480, 720). Accept both instead of letting the
 // strict string decode fail the whole response.
 func qualityLabel(raw json.RawMessage) string {
-	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		return ""
 	}
-	if raw[0] == '"' {
+	if trimmed[0] == '"' {
 		var s string
-		if err := json.Unmarshal(raw, &s); err != nil {
+		if err := json.Unmarshal(trimmed, &s); err != nil {
 			return ""
 		}
 		return s
 	}
 	var n json.Number
-	if err := json.Unmarshal(raw, &n); err != nil {
+	if err := json.Unmarshal(trimmed, &n); err != nil {
 		return ""
 	}
 	return n.String()
 }
 
 func (c *Client) fetchSources(ctx context.Context, tmdbID int, mediaType string, season, episode int) (*riveStreamResponse, error) {
-	logging.Debugf("rivestream fetch start tmdbID=%d media_type=%q S%dE%d", tmdbID, mediaType, season, episode)
+	rsLog.Debug("fetch start", "tmdbID", tmdbID, "mediaType", mediaType, "season", season, "episode", episode)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, riveStreamAPI, nil)
 	if err != nil {
@@ -204,28 +220,32 @@ func (c *Client) fetchSources(ctx context.Context, tmdbID int, mediaType string,
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		logging.Errorf("rivestream request failed err=%v", err)
+		logging.Debug("request failed", "provider", c.Name(), "err", err)
 		return nil, fmt.Errorf("rivestream fetch sources: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		logging.Warnf("rivestream API returned status %d", resp.StatusCode)
+		logging.Debug("api", "provider", c.Name(), "status", resp.StatusCode)
 		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: req.URL.String()}
 	}
 
 	var result riveStreamResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		logging.Errorf("rivestream parse failure err=%v", err)
+		logging.Debug("decode failed", "provider", c.Name(), "err", err)
 		return nil, fmt.Errorf("rivestream fetch sources: decode response: %w", err)
 	}
 	if len(result.Sources) == 0 {
-		logging.Warnf("rivestream returned no sources tmdbID=%d", tmdbID)
+		logging.Debug("no sources", "provider", c.Name(), "tmdbID", tmdbID)
 		return nil, provider.ErrNoSources
 	}
 
-	logging.Debugf("rivestream fetch success sources=%d subs=%d", len(result.Sources), len(result.Subtitles))
+	logging.Debug("fetch success", "provider", c.Name(), "sources", len(result.Sources), "subs", len(result.Subtitles))
 	return &result, nil
 }
 
-var _ provider.Provider = (*Client)(nil)
+var (
+	_ provider.Provider            = (*Client)(nil)
+	_ provider.Presenter           = (*Client)(nil)
+	_ provider.AudioLanguagesSource = (*Client)(nil)
+)

@@ -1,7 +1,10 @@
 package defaults
 
 import (
+	"kari/internal/config"
+	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/miruro"
 	"kari/internal/provider/moviebox"
 	"kari/internal/provider/piratex"
@@ -10,68 +13,66 @@ import (
 	"kari/internal/tmdb"
 )
 
+// DefaultProviders is the single list of providers Kari knows about. Each
+// entry declares its own enable gate and construction; adding a provider
+// here is the only registration step — the TUI and services pick up its
+// modes, features, languages, and aliases automatically.
 var DefaultProviders = []provider.Descriptor{
 	{
 		ID: "moviebox",
-		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
-			return moviebox.NewClient(kp)
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return moviebox.NewClient(d.KeyPool)
 		},
-		Modes: []provider.Mode{
-			{Name: provider.ModeMovies, Priority: 2},
-			{Name: provider.ModeTV, Priority: 2},
-		},
-		Priority: 2,
 	},
 	{
 		ID: "vidking",
-		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
-			return vidking.NewClient(kp)
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return vidking.NewClient(d.KeyPool)
 		},
-		Modes: []provider.Mode{
-			{Name: provider.ModeMovies, Priority: 2},
-			{Name: provider.ModeTV, Priority: 1},
-		},
-		Priority: 2,
 	},
 	{
 		ID: "rivestream",
-		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
-			return rivestream.NewClient(kp)
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return rivestream.NewClient(d.KeyPool)
 		},
-		Modes: []provider.Mode{
-			{Name: provider.ModeMovies, Priority: 2},
-			{Name: provider.ModeTV, Priority: 2},
-		},
-		Priority: 2,
 	},
 	{
 		ID: "miruro",
-		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
+		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return miruro.NewClient()
 		},
-		Modes: []provider.Mode{
-			{Name: provider.ModeAnime, Priority: 1},
-		},
-		Priority: 1,
 	},
 	{
 		ID: "piratex",
-		Factory: func(kp *tmdb.KeyPool) (provider.Provider, error) {
+		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return piratex.NewClient()
 		},
-		Modes: []provider.Mode{
-			{Name: provider.ModeCartoon, Priority: 1},
+	},
+	{
+		ID: "jellyfin",
+		When: func(cfg *config.Config) bool {
+			return cfg != nil && cfg.JellyfinURL != "" && cfg.JellyfinAPIKey != ""
 		},
-		Priority: 2,
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return jellyfin.NewClient(d.Config.JellyfinURL, d.Config.JellyfinAPIKey)
+		},
 	},
 }
 
-func NewDefaultRegistry(keyPool *tmdb.KeyPool) (*provider.Registry, error) {
+// NewDefaultRegistry constructs every enabled default provider and registers
+// it. A factory failure skips that provider with a logged warning — startup
+// continues with the remaining integrations.
+func NewDefaultRegistry(keyPool *tmdb.KeyPool, cfg *config.Config) (*provider.Registry, error) {
 	registry := &provider.Registry{}
 	for _, d := range DefaultProviders {
-		p, err := d.Factory(keyPool)
+		if d.When != nil && !d.When(cfg) {
+			logging.Debug("provider disabled by configuration", "provider", d.ID)
+			continue
+		}
+		p, err := d.Factory(provider.Deps{Config: cfg, KeyPool: keyPool})
 		if err != nil {
-			return nil, err
+			logging.Error("provider construction failed; skipping registration", "provider", d.ID, "err", err)
+			continue
 		}
 		registry.Register(p)
 	}

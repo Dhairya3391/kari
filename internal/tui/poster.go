@@ -93,7 +93,7 @@ func (m *modelImpl) triggerPreviewDetails() tea.Cmd {
 
 		details, err := m.posterClient.FetchDetails(ctx, tmdbID, mediaType, title)
 		if err != nil {
-			logging.Debugf("preview details fetch failed tmdb_id=%d title=%q err=%v", tmdbID, title, err)
+			logging.Debug("preview details fetch failed", "tmdb_id", tmdbID, "title", title, "err", err)
 			return previewDetailsMsg{opID: opID, err: err}
 		}
 		return previewDetailsMsg{opID: opID, overview: details.Overview, genres: details.Genres, rating: details.Rating}
@@ -148,13 +148,13 @@ func (m *modelImpl) fetchPosterCmd(slot posterSlot, opID int, tmdbID int, mediaT
 
 		img, err := m.posterClient.FetchImage(ctx, tmdbID, mediaType, title)
 		if err != nil {
-			logging.Debugf("poster fetch failed tmdb_id=%d title=%q err=%v", tmdbID, title, err)
+			logging.Debug("poster fetch failed", "tmdb_id", tmdbID, "title", title, "err", err)
 			return posterLoadedMsg{slot: slot, opID: opID, err: err}
 		}
 
 		rendered, err := termimg.RenderFit(img, m.imgProtocol, maxCols, maxRows, imageID)
 		if err != nil {
-			logging.Debugf("poster render failed tmdb_id=%d title=%q err=%v", tmdbID, title, err)
+			logging.Debug("poster render failed", "tmdb_id", tmdbID, "title", title, "err", err)
 			return posterLoadedMsg{slot: slot, opID: opID, err: err}
 		}
 

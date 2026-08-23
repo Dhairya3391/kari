@@ -17,6 +17,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// log scopes every line from this package/component.
+var mediaLog = logging.With("component", "service.media")
+
 // MediaService orchestrates provider operations for the TUI.
 type MediaService struct {
 	registry *provider.Registry
@@ -27,8 +30,11 @@ func NewMediaService(registry *provider.Registry) *MediaService {
 	return &MediaService{registry: registry}
 }
 
-// Search queries providers for a mode and aggregates results.
-func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, query string) ([]model.SearchResult, string, []string, error) {
+// Search fans a query out to every provider supporting the mode under a
+// shared deadline and merges results in provider priority order. Each
+// result's Provider field names the service that produced it, and
+// per-provider failures become warnings rather than errors.
+func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, query string) ([]provider.SearchResult, string, []string, error) {
 	providers := s.registry.ProvidersForMode(mode)
 	if len(providers) == 0 {
 		return nil, query, nil, fmt.Errorf("no providers available for mode %q", mode)
@@ -40,7 +46,6 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 	type providerSearchResult struct {
 		provider string
 		results  []provider.SearchResult
-		used     string
 		err      error
 	}
 
@@ -49,7 +54,7 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 		p := p
 		go func() {
 			results, err := p.Search(ctx, query, mode)
-			ch <- providerSearchResult{provider: p.Name(), results: results, used: query, err: err}
+			ch <- providerSearchResult{provider: p.Name(), results: results, err: err}
 		}()
 	}
 
@@ -60,14 +65,13 @@ collectResults:
 		case res := <-ch:
 			resultsMap[res.provider] = res
 		case <-ctx.Done():
-			logging.Warnf("search: context expired while waiting for %d provider(s) (mode=%s query=%q)", len(providers)-i, mode, query)
+			mediaLog.Warn("search deadline hit while waiting for providers", "pending", len(providers)-i, "mode", mode, "query", query)
 			break collectResults
 		}
 	}
 
 	var (
-		allResults []model.SearchResult
-		usedQuery  = query
+		allResults []provider.SearchResult
 		warnings   []string
 	)
 
@@ -75,93 +79,81 @@ collectResults:
 		res, ok := resultsMap[p.Name()]
 		if !ok || res.err != nil {
 			if ok {
-				warnings = append(warnings, fmt.Sprintf("%s: %v", strings.ToUpper(res.provider), res.err))
+				warnings = append(warnings, fmt.Sprintf("%s: %v", strings.ToUpper(s.registry.DisplayName(res.provider)), res.err))
+			} else {
+				warnings = append(warnings, fmt.Sprintf("%s: timed out", strings.ToUpper(s.registry.DisplayName(p.Name()))))
 			}
 			continue
 		}
 		for _, r := range res.results {
-			allResults = append(allResults, model.SearchResult{
-				Title:     r.Title,
-				URL:       r.ID,
-				Provider:  res.provider,
-				MediaType: r.MediaType,
-				Year:      r.Year,
-				TMDBID:    r.TMDBID,
-			})
-		}
-		if strings.TrimSpace(res.used) != "" {
-			usedQuery = res.used
+			r.Provider = res.provider
+			allResults = append(allResults, r)
 		}
 	}
 
-	if len(allResults) == 0 && len(warnings) > 0 {
-		return nil, usedQuery, warnings, fmt.Errorf("%s search failed: %s", strings.ToUpper(string(mode)), warnings[0])
+	if len(allResults) == 0 {
+		if len(warnings) > 0 {
+			return nil, query, warnings, fmt.Errorf("%s search failed: %s", strings.ToUpper(string(mode)), warnings[0])
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, query, nil, err
+		}
 	}
 
-	return allResults, usedQuery, warnings, nil
+	return allResults, query, warnings, nil
 }
 
-// FetchEpisodes retrieves episode results for a series.
-func (s *MediaService) FetchEpisodes(ctx context.Context, mode provider.ContentType, series model.SearchResult, audioMode string) ([]model.EpisodeResult, error) {
+// FetchEpisodes retrieves episode results for a series from its originating
+// provider. When audioMode is non-empty, episodes tagged with a different
+// audio track ("sub"/"dub") are filtered out.
+func (s *MediaService) FetchEpisodes(ctx context.Context, mode provider.ContentType, series provider.SearchResult, audioMode string) ([]provider.Episode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	providerName := strings.ToLower(strings.TrimSpace(series.Provider))
-	providers := s.registry.ProvidersForMode(mode)
-	var p provider.Provider
-	for _, prov := range providers {
-		if prov.Name() == providerName {
-			p = prov
-			break
-		}
-	}
-	if p == nil {
-		return nil, fmt.Errorf("provider %q not found for mode %q", providerName, mode)
+	p, ok := s.registry.ProviderByNameForMode(strings.TrimSpace(series.Provider), mode)
+	if !ok {
+		mediaLog.Warn("episodes requested from unavailable provider",
+			"provider", series.Provider, "mode", mode)
+		return nil, fmt.Errorf("the source for this title is unavailable in %s mode right now", mode)
 	}
 
-	eps, err := p.FetchEpisodes(ctx, provider.SearchResult{
-		Title:     series.Title,
-		ID:        series.URL,
-		Type:      mode,
-		Year:      series.Year,
-		MediaType: series.MediaType,
-		TMDBID:    series.TMDBID,
-	})
+	eps, err := p.FetchEpisodes(ctx, series)
 	if err != nil {
 		return nil, err
 	}
 
-	results := make([]model.EpisodeResult, 0, len(eps))
+	results := make([]provider.Episode, 0, len(eps))
 	for _, e := range eps {
-		if audioMode != "" && e.Audio != "" {
-			normalizedAudio := strings.ToLower(strings.TrimSpace(e.Audio))
-			normalizedTarget := strings.ToLower(strings.TrimSpace(audioMode))
-
-			// Handle common variations
-			if strings.HasPrefix(normalizedAudio, "sub") {
-				normalizedAudio = "sub"
-			} else if strings.HasPrefix(normalizedAudio, "dub") {
-				normalizedAudio = "dub"
-			}
-
-			if normalizedAudio != normalizedTarget {
-				continue
-			}
+		if !matchesAudioMode(e.Audio, audioMode) {
+			continue
 		}
-		results = append(results, model.EpisodeResult{
-			Title:    e.Title,
-			URL:      e.ID,
-			Number:   e.Episode,
-			Season:   e.Season,
-			Provider: p.Name(),
-			Filler:   e.Filler,
-		})
+		results = append(results, e)
 	}
 	return results, nil
 }
 
-// Resolve resolves playback sources from ALL supporting providers in parallel.
-func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, series model.SearchResult, episode model.EpisodeResult, onResult func(model.ResolvedMedia)) (model.ResolvedMedia, error) {
+// matchesAudioMode reports whether an episode's audio tag satisfies the
+// user's sub/dub selection. Empty tags always match.
+func matchesAudioMode(audio, audioMode string) bool {
+	if audioMode == "" || audio == "" {
+		return true
+	}
+	normalizedAudio := strings.ToLower(strings.TrimSpace(audio))
+	normalizedTarget := strings.ToLower(strings.TrimSpace(audioMode))
+
+	// Handle common variations
+	if strings.HasPrefix(normalizedAudio, provider.AudioSub) {
+		normalizedAudio = provider.AudioSub
+	} else if strings.HasPrefix(normalizedAudio, provider.AudioDub) {
+		normalizedAudio = provider.AudioDub
+	}
+
+	return normalizedAudio == normalizedTarget
+}
+
+// Resolve resolves playback sources from ALL supporting providers in parallel,
+// reporting each aggregated snapshot through onResult as batches arrive.
+func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, series provider.SearchResult, episode provider.Episode, onResult func(model.ResolvedMedia)) (model.ResolvedMedia, error) {
 	providers := s.registry.ProvidersForMode(mode)
 	if len(providers) == 0 {
 		return model.ResolvedMedia{}, fmt.Errorf("no providers available for mode %q", mode)
@@ -170,60 +162,53 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	// "Preparing playback" screen spinning indefinitely.
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	var mu sync.Mutex
-	var allPlaybackSources []model.PlaybackSource
-	var allSubtitleTracks []model.SubtitleTrack
-	var failures []string
-	seenSubs := make(map[string]struct{})
+
+	agg := newSourceAggregator(providers, s.registry.DisplayName)
 
 	// Helper to build ResolvedMedia from current aggregated sources.
 	// Slices are copied so the snapshot handed to callers never aliases the
 	// shared backing arrays that other goroutines keep mutating.
-	buildResolved := func(playback []model.PlaybackSource, subs []model.SubtitleTrack) model.ResolvedMedia {
-		playbackCopy := make([]model.PlaybackSource, len(playback))
-		copy(playbackCopy, playback)
-		subsCopy := make([]model.SubtitleTrack, len(subs))
-		copy(subsCopy, subs)
+	buildResolved := func() model.ResolvedMedia {
+		playbackCopy := make([]provider.MediaSource, len(agg.sources))
+		copy(playbackCopy, agg.sources)
+		subsCopy := make([]model.SubtitleTrack, len(agg.subs))
+		copy(subsCopy, agg.subs)
 		return model.ResolvedMedia{
 			SeriesTitle:   series.Title,
-			SeriesURL:     series.URL,
+			SeriesURL:     series.ID,
 			EpisodeTitle:  episode.Title,
-			EpisodeURL:    episode.URL,
-			MediaURL:      firstPlaybackURL(playback),
+			EpisodeURL:    episode.ID,
+			MediaURL:      firstPlaybackURL(agg.sources),
 			MediaType:     series.MediaType,
 			Year:          series.Year,
 			TMDBID:        series.TMDBID,
 			SeasonNumber:  episode.Season,
-			EpisodeNumber: episode.Number,
+			EpisodeNumber: episode.Episode,
 			Resolver:      "Aggregated",
 			Playback:      playbackCopy,
 			Subtitles:     subsCopy,
 		}
 	}
 
-	// Build priority map so sources can be ordered by provider priority
-	providerPriority := make(map[string]int, len(providers))
-	for i, p := range providers {
-		providerPriority[p.Name()] = i
+	// snapshot sorts the aggregator and builds a detached ResolvedMedia copy.
+	// Callers must hold mu; onResult deliberately runs outside the lock so a
+	// slow callback can't stall the other provider goroutines mid-fan-out.
+	snapshot := func() model.ResolvedMedia {
+		agg.sort()
+		return buildResolved()
 	}
-	sortPlaybackSources := func(sources []model.PlaybackSource) {
-		sort.SliceStable(sources, func(i, j int) bool {
-			leftQuality := SourceQuality(sources[i].Label)
-			rightQuality := SourceQuality(sources[j].Label)
-			if leftQuality != rightQuality {
-				return leftQuality > rightQuality
-			}
-			return providerPriority[sources[i].Resolver] < providerPriority[sources[j].Resolver]
-		})
-	}
+
+	var mu sync.Mutex
+	var failures []string
 
 	g, gCtx := errgroup.WithContext(ctx)
 
 	for _, p := range providers {
 		p := p
 		g.Go(func() error {
-			// 1. Determine the ID to use for this provider.
-			mediaID := series.URL
+			// Determine the ID to use for this provider: results from other
+			// providers can only be resolved cross-provider via TMDB ID.
+			mediaID := series.ID
 			if p.Name() != series.Provider {
 				if series.TMDBID > 0 {
 					mediaID = strconv.Itoa(series.TMDBID)
@@ -234,123 +219,66 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 
 			mediaEpisode := provider.Episode{
 				Title:   episode.Title,
-				ID:      episode.URL,
+				ID:      episode.ID,
 				Season:  episode.Season,
-				Episode: episode.Number,
+				Episode: episode.Episode,
 				TMDBID:  series.TMDBID,
 			}
 
-			// 2. Handle StreamingProviders (incremental updates)
-			if sp, ok := p.(provider.StreamingProvider); ok {
-				updates := make(chan []provider.MediaSource, 4)
-				go func() {
-					defer close(updates)
-					if err := sp.ResolveStream(gCtx, mediaID, mediaEpisode, updates); err != nil {
-						logging.Debugf("streaming provider %q failed: %v", p.Name(), err)
-						mu.Lock()
-						failures = append(failures, fmt.Sprintf("%s: %v", p.Name(), err))
-						mu.Unlock()
-					}
-				}()
-
-			streamLoop:
-				for {
-					select {
-					case playback, ok := <-updates:
-						if !ok {
-							break streamLoop
-						}
-						mu.Lock()
-						for _, src := range playback {
-							allPlaybackSources = appendUniquePlaybackSource(allPlaybackSources, model.PlaybackSource{
-								Label:          src.Quality,
-								URL:            src.URL,
-								Referer:        src.Referer,
-								Type:           src.Type,
-								UserAgent:      src.UserAgent,
-								CookieHeader:   src.CookieHeader,
-								Resolver:       p.Name(),
-								Language:       src.Language,
-								ExtraArgs:      src.ExtraArgs,
-								SuppressOrigin: src.SuppressOrigin,
-							})
-							// Collect subtitles
-							for _, sub := range src.Subtitles {
-								if _, ok := seenSubs[sub.URL]; !ok {
-									seenSubs[sub.URL] = struct{}{}
-									subLang := lang.Normalize(sub.Language)
-									allSubtitleTracks = append(allSubtitleTracks, model.SubtitleTrack{
-										Label:    fmt.Sprintf("%s (%s)", lang.Name(subLang), p.Name()),
-										Language: subLang,
-										URL:      sub.URL,
-										Referer:  src.Referer,
-										Resolver: p.Name(),
-									})
-								}
-							}
-						}
-						sortPlaybackSources(allPlaybackSources)
-						current := buildResolved(allPlaybackSources, allSubtitleTracks)
-						mu.Unlock()
-						if onResult != nil {
-							onResult(current)
-						}
-					case <-gCtx.Done():
-						go func() {
-							for range updates {
-							}
-						}()
-						break streamLoop
-					}
-				}
-				return nil
-			}
-
-			// 3. Handle Standard Providers
-			sources, err := p.ResolveSource(gCtx, mediaID, mediaEpisode)
-			if err != nil {
-				logging.Debugf("provider %q failed to resolve: %v", p.Name(), err)
+			recordFailure := func(err error) {
 				mu.Lock()
 				failures = append(failures, fmt.Sprintf("%s: %v", p.Name(), err))
 				mu.Unlock()
-				return nil
 			}
 
-			mu.Lock()
-			for _, src := range sources {
-				allPlaybackSources = appendUniquePlaybackSource(allPlaybackSources, model.PlaybackSource{
-					Label:          src.Quality,
-					URL:            src.URL,
-					Referer:        src.Referer,
-					Type:           src.Type,
-					UserAgent:      src.UserAgent,
-					CookieHeader:   src.CookieHeader,
-					Resolver:       p.Name(),
-					Language:       src.Language,
-					ExtraArgs:      src.ExtraArgs,
-					SuppressOrigin: src.SuppressOrigin,
-				})
-				// Collect subtitles
-				for _, sub := range src.Subtitles {
-					if _, ok := seenSubs[sub.URL]; !ok {
-						seenSubs[sub.URL] = struct{}{}
-						subLang := lang.Normalize(sub.Language)
-						allSubtitleTracks = append(allSubtitleTracks, model.SubtitleTrack{
-							Label:    fmt.Sprintf("%s (%s)", lang.Name(subLang), p.Name()),
-							Language: subLang,
-							URL:      sub.URL,
-							Referer:  src.Referer,
-							Resolver: p.Name(),
-						})
+			// StreamingProviders deliver incremental batches over a channel;
+			// standard providers return one slice. Both feed the same
+			// aggregation path.
+			var updates <-chan []provider.MediaSource
+			if sp, ok := p.(provider.StreamingProvider); ok {
+				ch := make(chan []provider.MediaSource, 4)
+				updates = ch
+				go func() {
+					defer close(ch)
+					if err := sp.ResolveStream(gCtx, mediaID, mediaEpisode, ch); err != nil {
+						mediaLog.Debug("streaming provider failed", "provider", p.Name(), "err", err)
+						recordFailure(err)
 					}
+				}()
+			} else {
+				sources, err := p.ResolveSource(gCtx, mediaID, mediaEpisode)
+				if err != nil {
+					mediaLog.Debug("provider resolve failed", "provider", p.Name(), "err", err)
+					recordFailure(err)
+					return nil
 				}
+				ch := make(chan []provider.MediaSource, 1)
+				ch <- sources
+				close(ch)
+				updates = ch
 			}
-			sortPlaybackSources(allPlaybackSources)
-			current := buildResolved(allPlaybackSources, allSubtitleTracks)
-			mu.Unlock()
 
-			if onResult != nil {
-				onResult(current)
+		streamLoop:
+			for {
+				select {
+				case batch, ok := <-updates:
+					if !ok {
+						break streamLoop
+					}
+					mu.Lock()
+					agg.add(p.Name(), batch)
+					current := snapshot()
+					mu.Unlock()
+					if onResult != nil {
+						onResult(current)
+					}
+				case <-gCtx.Done():
+					go func() {
+						for range updates {
+						}
+					}()
+					break streamLoop
+				}
 			}
 			return nil
 		})
@@ -360,36 +288,96 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		return model.ResolvedMedia{}, err
 	}
 
-	if len(allPlaybackSources) == 0 {
+	if len(agg.sources) == 0 {
+		if err := ctx.Err(); err != nil {
+			return model.ResolvedMedia{}, err
+		}
 		if len(failures) > 0 {
-			logging.Warnf("resolve: all %d provider(s) failed: %s", len(providers), strings.Join(failures, " | "))
+			mediaLog.Warn("all providers failed to resolve", "providers", len(providers), "failures", strings.Join(failures, " | "))
 		}
 		return model.ResolvedMedia{}, provider.ErrNoSources
 	}
-
-	sortPlaybackSources(allPlaybackSources)
-
-	return buildResolved(allPlaybackSources, allSubtitleTracks), nil
+	return snapshot(), nil
 }
 
-func firstPlaybackURL(playback []model.PlaybackSource) string {
-	if len(playback) == 0 {
-		return ""
-	}
-	return playback[0].URL
+// sourceAggregator merges playback sources and subtitle tracks from all
+// providers, deduplicating entries as they arrive. It is not safe for
+// concurrent use; callers must hold their own lock around add/sort/publish
+// sequencing (see Resolve).
+type sourceAggregator struct {
+	priority    map[string]int // provider name -> priority (lower sorts first)
+	displayName func(string) string
+	sources     []provider.MediaSource
+	subs        []model.SubtitleTrack
+	seenSubs    map[string]struct{}
 }
 
-func appendUniquePlaybackSource(sources []model.PlaybackSource, candidate model.PlaybackSource) []model.PlaybackSource {
-	if strings.TrimSpace(candidate.URL) == "" {
-		return sources
+func newSourceAggregator(providers []provider.Provider, displayName func(string) string) *sourceAggregator {
+	priority := make(map[string]int, len(providers))
+	for i, p := range providers {
+		priority[p.Name()] = i
 	}
+	return &sourceAggregator{
+		priority:    priority,
+		displayName: displayName,
+		seenSubs:    make(map[string]struct{}),
+	}
+}
+
+// add merges one provider batch: playback sources are appended when their
+// transport identity (URL+referer+UA+cookies) is new, subtitle tracks when
+// their URL is new.
+func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource) {
+	for _, src := range batch {
+		src.Resolver = providerName
+		if strings.TrimSpace(src.URL) != "" && !containsSource(a.sources, src) {
+			a.sources = append(a.sources, src)
+		}
+		for _, sub := range src.Subtitles {
+			if _, seen := a.seenSubs[sub.URL]; seen {
+				continue
+			}
+			a.seenSubs[sub.URL] = struct{}{}
+			subLang := lang.Normalize(sub.Language)
+			a.subs = append(a.subs, model.SubtitleTrack{
+				Label:    fmt.Sprintf("%s (%s)", lang.Name(subLang), a.displayName(providerName)),
+				Language: subLang,
+				URL:      sub.URL,
+				Referer:  src.Referer,
+				Resolver: providerName,
+			})
+		}
+	}
+}
+
+// sort orders sources highest quality first, breaking ties by provider
+// priority so earlier-registered providers surface before fallbacks.
+func (a *sourceAggregator) sort() {
+	sort.SliceStable(a.sources, func(i, j int) bool {
+		leftQuality := SourceQuality(a.sources[i].Quality)
+		rightQuality := SourceQuality(a.sources[j].Quality)
+		if leftQuality != rightQuality {
+			return leftQuality > rightQuality
+		}
+		return a.priority[a.sources[i].Resolver] < a.priority[a.sources[j].Resolver]
+	})
+}
+
+func containsSource(sources []provider.MediaSource, candidate provider.MediaSource) bool {
 	for _, source := range sources {
 		if source.URL == candidate.URL &&
 			source.Referer == candidate.Referer &&
 			source.UserAgent == candidate.UserAgent &&
 			source.CookieHeader == candidate.CookieHeader {
-			return sources
+			return true
 		}
 	}
-	return append(sources, candidate)
+	return false
+}
+
+func firstPlaybackURL(playback []provider.MediaSource) string {
+	if len(playback) == 0 {
+		return ""
+	}
+	return playback[0].URL
 }

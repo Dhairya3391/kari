@@ -121,7 +121,7 @@ func runAmStart(args []string) error {
 }
 
 func execAmStart(path string, args []string) error {
-	logging.Debugf("android playback launch binary=%q args=%v", path, args)
+	logging.Debug("android playback launch", "binary", path, "args", args)
 	cmd := exec.Command(path, args...)
 	var out strings.Builder
 	cmd.Stdout = &out
@@ -147,6 +147,9 @@ func execAmStart(path string, args []string) error {
 		}
 		return err
 	case <-time.After(androidStartupTimeout):
-		return nil
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		return fmt.Errorf("launch timed out after %v", androidStartupTimeout)
 	}
 }

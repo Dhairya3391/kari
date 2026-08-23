@@ -16,7 +16,7 @@ func main() {
 	defer logging.Close()
 
 	if err := app.Run(); err != nil {
-		logging.Errorf("app error: %v", err)
+		logging.Error("app exited with error", "err", err)
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

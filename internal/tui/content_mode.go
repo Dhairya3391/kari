@@ -1,24 +1,20 @@
 package tui
 
 import (
-	"strconv"
 	"strings"
 
-	"kari/internal/model"
+	"kari/internal/provider"
 )
 
-func resultTypeLabel(item model.SearchResult) string {
+func resultTypeLabel(item provider.SearchResult) string {
 	switch strings.ToLower(strings.TrimSpace(item.MediaType)) {
-	case "movie":
+	case provider.MediaTypeMovie:
 		return "Movie"
-	case "tv":
+	case provider.MediaTypeTV:
 		return "Series"
-	case "anime":
-		if count, ok := parseAnimeEpisodeCount(item.URL); ok && count <= 1 {
-			return "Anime Movie"
-		}
+	case provider.MediaTypeAnime:
 		return "Anime"
-	case "cartoon":
+	case provider.MediaTypeCartoon:
 		return "Cartoon"
 	default:
 		return "Title"
@@ -34,42 +30,37 @@ func historyKindLabel(mode, mediaType string) string {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	mt := strings.ToLower(strings.TrimSpace(mediaType))
 	switch {
-	case mode == "anime" && mt == "movie":
+	case mode == string(provider.ModeAnime) && mt == provider.MediaTypeMovie:
 		return "Anime Movie"
-	case mode == "anime":
+	case mode == string(provider.ModeAnime):
 		return "Anime"
-	case mt == "movie":
+	case mt == provider.MediaTypeMovie:
 		return "Movie"
-	case mt == "cartoon" || mode == "cartoon":
+	case mt == provider.MediaTypeCartoon || mode == string(provider.ModeCartoon):
 		return "Cartoon"
-	case mt == "tv":
+	case mt == provider.MediaTypeTV:
 		return "TV"
 	default:
 		return "Title"
 	}
 }
 
-func directEpisodeForResult(item model.SearchResult) (model.EpisodeResult, bool) {
-	if strings.EqualFold(item.Provider, "tmdb") && strings.EqualFold(item.MediaType, "movie") {
-		return model.EpisodeResult{
-			Title:     item.Title,
-			Kind:      "movie",
-			Provider:  "tmdb",
-			MediaType: "movie",
-		}, true
-	}
-
-	return model.EpisodeResult{}, false
+// modeFeatures returns the aggregated provider-declared features for the
+// active content mode. The TUI consults this instead of hardcoding
+// per-mode or per-provider behavior.
+func (m *modelImpl) modeFeatures() provider.Features {
+	return m.registry.Features(m.appMode)
 }
 
-func parseAnimeEpisodeCount(url string) (int, bool) {
-	parts := strings.Split(url, "||")
-	if len(parts) != 2 {
-		return 0, false
+// availableLanguages returns the audio languages declared by the providers
+// supporting the active mode. Empty when no active provider tags audio
+// languages. Movies and TV intentionally share one pool — the same providers
+// serve both, so filters must behave identically across them.
+func (m *modelImpl) availableLanguages() []provider.AudioLanguage {
+	modes := []provider.ContentType{m.appMode}
+	switch m.appMode {
+	case provider.ModeMovies, provider.ModeTV:
+		modes = []provider.ContentType{provider.ModeMovies, provider.ModeTV}
 	}
-	count, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-	if err != nil {
-		return 0, false
-	}
-	return count, true
+	return m.registry.AudioLanguages(modes...)
 }

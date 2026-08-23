@@ -43,7 +43,12 @@ func dialIPC(socketPath string, timeout time.Duration) (net.Conn, error) {
 	return nil, fmt.Errorf("timeout connecting to mpv IPC pipe: %s", socketPath)
 }
 
+// DefaultMPVSocketPath returns the mpv named-pipe path used on Windows,
+// honoring the MPV_SOCKET override.
 func DefaultMPVSocketPath() string {
+	if sock := os.Getenv("MPV_SOCKET"); sock != "" {
+		return sock
+	}
 	return fmt.Sprintf(`\\.\pipe\kari-mpv-%d`, os.Getpid())
 }
 

@@ -16,8 +16,6 @@ const (
 	AppName           = "Kari"
 	OpenSubtitlesAPI  = "https://api.opensubtitles.com/api/v1"
 	OpenSubtitlesUA   = "kari v1.0"
-	YifyBase          = "https://yifysubtitles.ch"
-	YifyUserAgent     = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	SearchAPIBase     = "https://noobsearch.broggl.farm"
 	KariClientHeader  = "X-Kari-Client"
 	KariClientToken   = "kari-app-v1"
@@ -32,6 +30,8 @@ const (
 	DefaultAniListClientSecret = "g25ntjZ1mQeHVtHjNZeGpLyVidaA2xkMFQwsmYKu"
 )
 
+// DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var
+// replaces the whole list when set.
 var DefaultTMDBAPIKeys = []string{
 	"fb7bb23f03b6994dafc674c074d01761",
 	"e55425032d3d0f371fc776f302e7c09b",

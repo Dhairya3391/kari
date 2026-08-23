@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+// CacheDir returns (creating if needed) the directory where downloaded
+// subtitle files are materialized for player consumption.
 func CacheDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -23,7 +25,7 @@ func CacheDir() (string, error) {
 }
 
 // PruneCacheDir deletes cached subtitle files older than maxAge. Every
-// download (provider, OpenSubtitles, YIFY) writes a new file here and
+// download (provider, OpenSubtitles) writes a new file here and
 // nothing else ever removes them, so without this the directory grows
 // without bound over a long-lived install. Safe to call while playback is
 // in progress: an in-use subtitle file was just written, so it's always

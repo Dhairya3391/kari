@@ -1,17 +1,38 @@
+// Package logging provides Kari's structured application log.
+//
+// The API is structured-first: messages are static phrases and data rides
+// as typed key/value pairs, so output is greppable, machine-parseable, and
+// free of format-string bugs.
+//
+//	logging.Debug("search done", "mode", mode, "query", q, "results", n)
+//
+// Subsystems scope their lines with With instead of embedding names in the
+// message:
+//
+//	log := logging.With("provider", c.Name())
+//	log.Debug("fetch start", "tmdbID", id)
+//
+// Levels follow docs/CODEBASE.md §8: Debug for execution tracing and
+// expected fan-out failures, Info for lifecycle events, Warn for failures a
+// user might care about without debug enabled, Error for operations that
+// aborted.
+//
+// Output goes to ~/.config/kari/kari.log (rotated at 10 MB, one backup).
+// Environment overrides: KARI_LOG_DEBUG forces debug level, KARI_LOG_STDERR
+// mirrors to stderr, KARI_LOG_FORMAT_JSON emits machine-readable JSON.
 package logging
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
-
 var (
 	logger      atomic.Pointer[slog.Logger]
 	logFile     *os.File
@@ -30,16 +51,16 @@ const (
 // maxLogSizeBytes bounds kari.log so a long-running or frequently-launched
 // install doesn't grow it forever. Once it crosses this size, the previous
 // file is kept as one rotated backup (kari.log.1) and a fresh file starts —
-// simple size-based rotation, no need for anything time-based or multi-
-// generation given this is a single local debug log, not a service log.
+// simple size-based rotation, appropriate for a single local diagnostic log.
 const maxLogSizeBytes = 10 * 1024 * 1024 // 10MB
 
 func init() {
-	// default no-op logger so callers are safe before Init
-	noop := slog.New(slog.NewTextHandler(io.Discard, nil))
-	logger.Store(noop)
+	// No-op logger so callers are safe before Init runs.
+	logger.Store(slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
+// Init opens the rotating log file and installs it as the global sink.
+// Safe to call once per process; later calls are no-ops.
 func Init(debug bool) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -72,8 +93,10 @@ func Init(debug bool) error {
 	}
 
 	opts := &slog.HandlerOptions{
-		Level:     level,
-		AddSource: false,
+		Level: level,
+		// Source locations only matter while debugging; keeping them off in
+		// normal operation keeps lines short and diff-friendly.
+		AddSource: level == slog.LevelDebug,
 	}
 
 	var writer io.Writer = f
@@ -81,7 +104,12 @@ func Init(debug bool) error {
 		writer = io.MultiWriter(f, os.Stderr)
 	}
 
-	l := slog.New(slog.NewTextHandler(writer, opts))
+	var l *slog.Logger
+	if envBool("KARI_LOG_FORMAT_JSON") {
+		l = slog.New(slog.NewJSONHandler(writer, opts))
+	} else {
+		l = slog.New(slog.NewTextHandler(writer, opts))
+	}
 	logger.Store(l)
 	slog.SetDefault(l)
 	logFile = f
@@ -93,8 +121,85 @@ func Init(debug bool) error {
 	return nil
 }
 
-// logStartup writes the banner as raw bytes to avoid slog prefixes mangling it.
+// Logger returns the active base logger. Prefer the package-level
+// Debug/Info/Warn/Error helpers or a With-scoped handle over holding this.
+func Logger() *slog.Logger { return logger.Load() }
+
+// dynamicHandler delegates log evaluation to the active root logger at call time,
+// ensuring package-level loggers created via logging.With during package init
+// route to the configured logger sink once Init runs.
+type dynamicHandler struct {
+	attrs  []slog.Attr
+	groups []string
+}
+
+func (h *dynamicHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	cur := logger.Load()
+	if cur == nil {
+		return false
+	}
+	return cur.Handler().Enabled(ctx, level)
+}
+
+func (h *dynamicHandler) Handle(ctx context.Context, r slog.Record) error {
+	cur := logger.Load()
+	if cur == nil {
+		return nil
+	}
+	target := cur.Handler()
+	for _, g := range h.groups {
+		target = target.WithGroup(g)
+	}
+	if len(h.attrs) > 0 {
+		target = target.WithAttrs(h.attrs)
+	}
+	return target.Handle(ctx, r)
+}
+
+func (h *dynamicHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newAttrs := make([]slog.Attr, 0, len(h.attrs)+len(attrs))
+	newAttrs = append(newAttrs, h.attrs...)
+	newAttrs = append(newAttrs, attrs...)
+	return &dynamicHandler{
+		attrs:  newAttrs,
+		groups: append([]string(nil), h.groups...),
+	}
+}
+
+func (h *dynamicHandler) WithGroup(name string) slog.Handler {
+	newGroups := make([]string, 0, len(h.groups)+1)
+	newGroups = append(newGroups, h.groups...)
+	newGroups = append(newGroups, name)
+	return &dynamicHandler{
+		attrs:  append([]slog.Attr(nil), h.attrs...),
+		groups: newGroups,
+	}
+}
+
+// With returns a logger bound with permanent key/value pairs — the
+// idiomatic way to scope every line of a subsystem:
+//
+//	var log = logging.With("component", "service.media")
+func With(args ...any) *slog.Logger {
+	return slog.New(&dynamicHandler{}).With(args...)
+}
+// Debug logs at debug level; args are alternating key/value pairs.
+func Debug(msg string, args ...any) { logger.Load().Debug(msg, args...) }
+
+// Info logs at info level.
+func Info(msg string, args ...any) { logger.Load().Info(msg, args...) }
+
+// Warn logs at warn level.
+func Warn(msg string, args ...any) { logger.Load().Warn(msg, args...) }
+
+// Error logs at error level.
+func Error(msg string, args ...any) { logger.Load().Error(msg, args...) }
+
+// logStartup writes the session banner as raw bytes so slog never mangles it.
 func logStartup(w io.Writer) {
+	if envBool("KARI_LOG_FORMAT_JSON") {
+		return
+	}
 	now := time.Now().Format("2006-01-02 15:04:05")
 	lines := []string{
 		"",
@@ -115,113 +220,4 @@ func logStartup(w io.Writer) {
 	for _, l := range lines {
 		fmt.Fprintln(w, l)
 	}
-}
-
-func Close() error {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if logFile != nil {
-		logShutdown(logFile)
-		err := logFile.Close()
-		logFile = nil
-		return err
-	}
-	return nil
-}
-
-func logShutdown(w io.Writer) {
-	now := time.Now().Format("2006-01-02 15:04:05")
-	lines := []string{
-		"",
-		sepLine,
-		"",
-		headerStart,
-		"║                                                              ║",
-		"║                    👋 Kari Stopped                         ║",
-		"║                                                              ║",
-		headerEnd,
-		"stopped at " + now,
-		"",
-	}
-	for _, l := range lines {
-		fmt.Fprintln(w, l)
-	}
-}
-
-func Path() string {
-	return logPath
-}
-
-func Debug(msg string, args ...any) {
-	logger.Load().Debug(msg, args...)
-}
-
-func Info(msg string, args ...any) {
-	logger.Load().Info(msg, args...)
-}
-
-func Warn(msg string, args ...any) {
-	logger.Load().Warn(msg, args...)
-}
-
-func Error(msg string, args ...any) {
-	logger.Load().Error(msg, args...)
-}
-
-// f-variants kept for convenience but prefer structured calls above.
-func Debugf(format string, args ...any) { Debug(fmt.Sprintf(format, args...)) }
-func Infof(format string, args ...any)  { Info(fmt.Sprintf(format, args...)) }
-func Warnf(format string, args ...any)  { Warn(fmt.Sprintf(format, args...)) }
-func Errorf(format string, args ...any) { Error(fmt.Sprintf(format, args...)) }
-
-// rotateIfOversized moves an existing oversized log file to path+".1"
-// (replacing any prior backup) before Init opens path fresh. Best-effort:
-// if stat or rename fails (e.g. permissions), it silently leaves the
-// existing file in place rather than blocking startup or losing logs.
-func rotateIfOversized(path string) {
-	info, err := os.Stat(path)
-	if err != nil || info.Size() < maxLogSizeBytes {
-		return
-	}
-	_ = os.Rename(path, path+".1")
-}
-
-func resolveLogPath() (string, error) {
-	if path := firstEnv("KARI_LOG_FILE"); path != "" {
-		if filepath.IsAbs(path) {
-			return path, nil
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(cwd, path), nil
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "kari", "kari.log"), nil
-}
-
-func envBool(keys ...string) bool {
-	for _, key := range keys {
-		v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
-		switch v {
-		case "1", "true", "yes", "y", "on":
-			return true
-		}
-	}
-	return false
-}
-
-func firstEnv(keys ...string) string {
-	for _, key := range keys {
-		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-			return v
-		}
-	}
-	return ""
 }

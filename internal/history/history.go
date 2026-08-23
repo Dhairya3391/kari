@@ -24,6 +24,7 @@ type EntryKey struct {
 	Episode   int
 }
 
+// String renders the canonical persistence key for this entry.
 func (k EntryKey) String() string {
 	return fmt.Sprintf("%s:%s:%s:s%02de%02d",
 		normalizeKeyPart(k.Mode),
@@ -34,6 +35,8 @@ func (k EntryKey) String() string {
 	)
 }
 
+// Entry records one watch event: what was played, where playback stopped,
+// and how far it got. Entries are provider-agnostic by design.
 type Entry struct {
 	Key             EntryKey  `json:"key"`
 	Title           string    `json:"title"`
@@ -58,12 +61,14 @@ type Entry struct {
 	TMDBID    int    `json:"tmdb_id,omitempty"`
 }
 
+// GroupKey collapses entries into one series/movie for the history list.
 type GroupKey struct {
 	Mode      string
 	MediaType string
 	Title     string
 }
 
+// String renders the canonical grouping key.
 func (k GroupKey) String() string {
 	return fmt.Sprintf("%s:%s:%s",
 		normalizeKeyPart(k.Mode),
@@ -72,6 +77,8 @@ func (k GroupKey) String() string {
 	)
 }
 
+// Group is the history-list projection of every entry sharing a GroupKey:
+// where to resume, how far has been completed, and the raw entries.
 type Group struct {
 	Key              GroupKey
 	Title            string
@@ -86,6 +93,7 @@ type Group struct {
 	HasComplete      bool
 }
 
+// BuildGroups aggregates flat entries into display groups, newest-first.
 func BuildGroups(entries []Entry) []Group {
 	groupsByKey := make(map[string]*Group)
 	order := make([]string, 0, len(entries))
@@ -156,6 +164,8 @@ func BuildGroups(entries []Entry) []Group {
 	return groups
 }
 
+// BuildGroupLookup maps group key strings to their keys, for O(1) lookups
+// when the TUI resolves a selected row back to a series.
 func BuildGroupLookup(entries []Entry) map[string]GroupKey {
 	groups := BuildGroups(entries)
 	lookup := make(map[string]GroupKey, len(groups))
@@ -165,6 +175,8 @@ func BuildGroupLookup(entries []Entry) map[string]GroupKey {
 	return lookup
 }
 
+// Store persists watch-history entries to disk as JSON with atomic
+// rewrites, and serves reads from memory.
 type Store struct {
 	path   string
 	mu     sync.Mutex
@@ -172,11 +184,14 @@ type Store struct {
 	saveWG sync.WaitGroup
 }
 
+// storageFormat wraps the on-disk document shape (versioned for future
+// migrations).
 type storageFormat struct {
 	Version int     `json:"version"`
 	Entries []Entry `json:"entries"`
 }
 
+// NewStore loads (or initializes) the history file at path.
 func NewStore(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, err
@@ -203,6 +218,7 @@ func NewStore(path string) (*Store, error) {
 	return s, nil
 }
 
+// deduplicate keeps only the latest entry per EntryKey, preserving order.
 func deduplicate(entries []Entry) []Entry {
 	seen := make(map[string]bool)
 	var unique []Entry
@@ -216,6 +232,7 @@ func deduplicate(entries []Entry) []Entry {
 	return unique
 }
 
+// Upsert inserts or replaces the entry with e's key and persists.
 func (s *Store) Upsert(e Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -256,6 +273,7 @@ func (s *Store) Upsert(e Entry) error {
 	return s.save()
 }
 
+// Get returns the stored entry for key.
 func (s *Store) Get(key EntryKey) (Entry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -269,6 +287,7 @@ func (s *Store) Get(key EntryKey) (Entry, bool) {
 	return Entry{}, false
 }
 
+// Delete removes a single entry and persists.
 func (s *Store) Delete(key EntryKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -283,6 +302,7 @@ func (s *Store) Delete(key EntryKey) error {
 	return nil
 }
 
+// DeleteGroup removes every entry in the group and persists.
 func (s *Store) DeleteGroup(key GroupKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -301,6 +321,7 @@ func (s *Store) DeleteGroup(key GroupKey) error {
 	return s.save()
 }
 
+// All returns a snapshot of all stored entries.
 func (s *Store) All() []Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -310,6 +331,7 @@ func (s *Store) All() []Entry {
 	return res
 }
 
+// Clear wipes all history and persists.
 func (s *Store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -338,12 +360,12 @@ func (s *Store) save() error {
 
 		data, err := json.MarshalIndent(format, "", "  ")
 		if err != nil {
-			logging.Errorf("history: failed to marshal for save: %v", err)
+			logging.Error("history marshal failed", "err", err)
 			return
 		}
 
 		if err := util.AtomicWriteFile(path, data, 0644); err != nil {
-			logging.Errorf("history: failed to write %s: %v", path, err)
+			logging.Error("history write failed", "path", path, "err", err)
 		}
 	})
 
@@ -371,6 +393,7 @@ func normalizeKeyPart(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+// FirstNonEmpty returns the first value that isn't empty after trimming.
 func FirstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {

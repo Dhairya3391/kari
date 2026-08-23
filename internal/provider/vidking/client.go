@@ -16,6 +16,9 @@ import (
 	"kari/internal/tmdb"
 )
 
+// log scopes every line from this package with its identity.
+var vkLog = logging.With("provider", "vidking")
+
 const (
 	vidKingAPI     = config.VidKingAPIBase
 	vidKingReferer = config.VidKingReferer
@@ -30,6 +33,7 @@ const (
 	preferredVidKingCDN = "mbph"
 )
 
+// Client implements provider.Provider against the VidKing API.
 type Client struct {
 	base       *streambase.Base
 	httpClient *http.Client
@@ -40,6 +44,7 @@ type vidKingSourceItem struct {
 	Quality string `json:"quality"`
 }
 
+// VidKingSubtitle is one subtitle entry in a VidKing resolve response.
 type VidKingSubtitle struct {
 	URL      string `json:"url"`
 	Language string `json:"lang"`
@@ -51,6 +56,8 @@ type vidKingResponse struct {
 	Subtitles []VidKingSubtitle   `json:"subtitles"`
 }
 
+// NewClient constructs the VidKing provider over the shared TMDB search
+// base.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
@@ -62,20 +69,29 @@ func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
 	}, nil
 }
 
+// Alias implements provider.Presenter.
+func (c *Client) Alias() string { return "VidKing" }
+
+// Name implements Provider.
 func (c *Client) Name() string { return "vidking" }
 
+// Modes implements Provider.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{{Name: provider.ModeMovies, Priority: 2}, {Name: provider.ModeTV, Priority: 1}}
 }
 
+// Search delegates to the shared TMDB-keyed base.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	return c.base.Search(ctx, query, mode)
 }
 
+// FetchEpisodes delegates to the shared TMDB-keyed base.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	return c.base.FetchEpisodes(ctx, series)
 }
 
+// ResolveSource picks the highest-quality VidKing variant per episode and
+// attaches its subtitles.
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
 	tmdbID := episode.TMDBID
 	if tmdbID <= 0 {
@@ -85,9 +101,9 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			return nil, fmt.Errorf("invalid media ID: %w", err)
 		}
 	}
-	mediaType := "movie"
+	mediaType := provider.MediaTypeMovie
 	if episode.Season > 0 || episode.Episode > 0 {
-		mediaType = "tv"
+		mediaType = provider.MediaTypeTV
 	}
 	resp, err := c.FetchVidKingSources(ctx, tmdbID, mediaType, episode.Season, episode.Episode)
 	if err != nil {
@@ -127,7 +143,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		entry := chosen[q]
 		ms := provider.MediaSource{
 			URL:       entry.item.URL,
-			Quality:   fmt.Sprintf("[VIDKING] %s", q),
+			Quality:   q,
 			Referer:   vidKingReferer,
 			UserAgent: vidKingUA,
 		}
@@ -139,11 +155,13 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	return sources, nil
 }
 
+// FetchVidKingSources performs the raw API call and decodes the response;
+// exported because piratex-style flows may reuse it.
 func (c *Client) FetchVidKingSources(ctx context.Context, tmdbID int, mediaType string, season, episode int) (*vidKingResponse, error) {
-	logging.Debugf("vidking fetch start tmdbID=%d media_type=%q S%dE%d", tmdbID, mediaType, season, episode)
-	mt := "movie"
-	if mediaType == "tv" {
-		mt = "tv"
+	vkLog.Debug("fetch start", "tmdbID", tmdbID, "mediaType", mediaType, "season", season, "episode", episode)
+	mt := provider.MediaTypeMovie
+	if mediaType == provider.MediaTypeTV {
+		mt = provider.MediaTypeTV
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, vidKingAPI, nil)
@@ -168,28 +186,31 @@ func (c *Client) FetchVidKingSources(ctx context.Context, tmdbID int, mediaType 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		logging.Errorf("vidking request failed err=%v", err)
+		logging.Debug("request failed", "provider", c.Name(), "err", err)
 		return nil, fmt.Errorf("vidking fetch sources: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		logging.Warnf("vidking API returned status %d", resp.StatusCode)
+		logging.Debug("api", "provider", c.Name(), "status", resp.StatusCode)
 		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: req.URL.String()}
 	}
 
 	var result vidKingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		logging.Errorf("vidking parse failure err=%v", err)
+		logging.Debug("decode failed", "provider", c.Name(), "err", err)
 		return nil, fmt.Errorf("vidking fetch sources: decode response: %w", err)
 	}
 	if len(result.Sources) == 0 {
-		logging.Warnf("vidking returned no sources tmdbID=%d", tmdbID)
+		logging.Debug("no sources", "provider", c.Name(), "tmdbID", tmdbID)
 		return nil, provider.ErrNoSources
 	}
 
-	logging.Debugf("vidking fetch success sources=%d subs=%d", len(result.Sources), len(result.Subtitles))
+	logging.Debug("fetch success", "provider", c.Name(), "sources", len(result.Sources), "subs", len(result.Subtitles))
 	return &result, nil
 }
 
-var _ provider.Provider = (*Client)(nil)
+var (
+	_ provider.Provider  = (*Client)(nil)
+	_ provider.Presenter = (*Client)(nil)
+)

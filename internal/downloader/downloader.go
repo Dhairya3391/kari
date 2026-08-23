@@ -21,6 +21,10 @@ import (
 	"kari/internal/provider"
 )
 
+// log scopes every line from this package.
+var ytdlpLog = logging.With("component", "downloader.ytdlp")
+
+// DownloadProgress is a snapshot reported during an active download.
 type DownloadProgress struct {
 	Percent    float64 // 0.0 to 1.0
 	TotalSize  string  // e.g. "1.35GiB"
@@ -29,6 +33,8 @@ type DownloadProgress struct {
 	ETA        string  // e.g. "00:36"
 }
 
+// DownloadRequest describes one download job: ordered fallback sources,
+// display title, destination, and the progress sink.
 type DownloadRequest struct {
 	Sources   []provider.MediaSource
 	Title     string
@@ -36,6 +42,8 @@ type DownloadRequest struct {
 	Progress  func(p DownloadProgress)
 }
 
+// Downloader is the engine contract for fetching media to disk.
+// CleanupPartial removes incomplete artifacts after a failed/cancelled run.
 type Downloader interface {
 	Download(ctx context.Context, req DownloadRequest) error
 	CleanupPartial(outputDir, title string)
@@ -108,14 +116,18 @@ func ensureOutputDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)
 }
 
-// ── YTDLPDownloader ──────────────────────────────────────────────────────────
-
+// YTDLPDownloader fetches media by shelling out to yt-dlp, parsing its
+// progress output into DownloadProgress callbacks. It tries the request's
+// sources in order until one succeeds.
 type YTDLPDownloader struct{}
 
 var _ Downloader = (*YTDLPDownloader)(nil)
 
+// NewYTDLPDownloader constructs the yt-dlp engine.
 func NewYTDLPDownloader() *YTDLPDownloader { return &YTDLPDownloader{} }
 
+// Download fetches req.Sources in order until one succeeds, streaming
+// parsed progress to req.Progress.
 func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) error {
 	if len(req.Sources) == 0 {
 		return fmt.Errorf("ytdlp: no sources provided")
@@ -124,7 +136,7 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 	baseTitle, _ := splitTitleExt(req.Title)
 	existingSize := d.findOutputSize(req.OutputDir, baseTitle)
 	if existingSize != "" {
-		logging.Infof("ytdlp: file already exists, skipping")
+		ytdlpLog.Info("output exists; skipping download")
 		if req.Progress != nil {
 			req.Progress(DownloadProgress{Percent: 1.0, TotalSize: existingSize})
 		}
@@ -157,21 +169,16 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 		}
 		seenSources[key] = struct{}{}
 
-		logging.Infof(
-			"ytdlp: trying source %d/%d provider=%q quality=%q strategy=%s url=%q",
-			i+1,
-			len(req.Sources),
-			source.Resolver,
-			source.Quality,
-			downloadStrategy(source),
-			source.URL,
-		)
+		ytdlpLog.Info("trying source",
+			"index", i+1, "total", len(req.Sources),
+			"resolver", source.Resolver, "quality", source.Quality,
+			"strategy", downloadStrategy(source), "url", source.URL)
 		if err := d.downloadSource(ctx, req, source); err == nil {
 			if req.Progress != nil {
 				finalSize := d.findOutputSize(req.OutputDir, baseTitle)
 				req.Progress(DownloadProgress{Percent: 1.0, TotalSize: finalSize})
 			}
-			logging.Infof("ytdlp: download complete title=%q source=%d", req.Title, i+1)
+			ytdlpLog.Info("download complete", "title", req.Title, "source", i+1)
 			return nil
 		} else if ctx.Err() != nil {
 			d.CleanupPartial(req.OutputDir, req.Title)
@@ -181,7 +188,7 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 			// Preserve .aria2 control files so the next source can resume.
 			d.CleanupPartial(req.OutputDir, req.Title)
 			errs = append(errs, fmt.Errorf("source %d (%s): %w", i+1, source.Quality, err))
-			logging.Warnf("ytdlp: source %d/%d failed: %v", i+1, len(req.Sources), err)
+			ytdlpLog.Warn("source failed; trying next", "index", i+1, "total", len(req.Sources), "err", err)
 		}
 	}
 
@@ -234,7 +241,7 @@ func (d *YTDLPDownloader) downloadSource(ctx context.Context, req DownloadReques
 	// Some providers label redirecting or signed URLs as MP4 even though they
 	// need yt-dlp's native request handling. Retry that same source natively
 	// before moving to the next provider URL.
-	logging.Debugf("ytdlp: aria2c failed for provider=%q; retrying source natively", source.Resolver)
+	ytdlpLog.Debug("aria2c strategy failed; retrying natively", "resolver", source.Resolver)
 	d.CleanupPartial(req.OutputDir, req.Title)
 	return d.downloadWithStrategy(ctx, req, source, "native")
 }
@@ -288,7 +295,7 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	}
 
 	args = append(args, source.URL)
-	logging.Debugf("ytdlp: start title=%q source=%q args=%v", req.Title, source.Quality, args)
+	ytdlpLog.Debug("download start", "title", req.Title, "quality", source.Quality, "args", args)
 
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 	// Force unbuffered Python stdout so progress lines arrive immediately.
@@ -355,7 +362,7 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 						}
 					}
 				} else if matches := progressRe.FindStringSubmatch(line); len(matches) > 1 {
-					logging.Debugf("ytdlp: extended progress regex did not match line, using simple fallback: %s", line)
+					ytdlpLog.Debug("extended progress line unmatched; simple fallback", "line", line)
 					if val, err := strconv.ParseFloat(matches[1], 64); err == nil {
 						p := val / 100.0
 						current := int64(p * 10000)
@@ -386,6 +393,7 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	return nil
 }
 
+// CleanupPartial removes partial artifacts of an interrupted download.
 func (d *YTDLPDownloader) CleanupPartial(outputDir, title string) {
 	baseTitle, _ := splitTitleExt(title)
 	files, err := os.ReadDir(outputDir)
@@ -402,7 +410,7 @@ func (d *YTDLPDownloader) CleanupPartial(outputDir, title string) {
 				strings.HasSuffix(name, ".ytdl") ||
 				strings.Contains(name, ".part-Frag") {
 				if err := os.Remove(filepath.Join(outputDir, name)); err != nil {
-					logging.Debugf("ytdlp: cleanup failed remove %s: %v", name, err)
+					ytdlpLog.Debug("cleanup remove failed", "file", name, "err", err)
 				}
 			}
 		}
@@ -426,7 +434,7 @@ func (d *YTDLPDownloader) cleanupAriaControlFiles(outputDir, title string) {
 		name := f.Name()
 		if strings.HasPrefix(name, baseTitle) && strings.HasSuffix(name, ".aria2") {
 			if err := os.Remove(filepath.Join(outputDir, name)); err != nil {
-				logging.Debugf("ytdlp: cleanup aria2 failed remove %s: %v", name, err)
+				ytdlpLog.Debug("cleanup aria2 control file remove failed", "file", name, "err", err)
 			}
 		}
 	}
@@ -448,7 +456,7 @@ func originFromReferer(referer string) string {
 
 func isHLSSource(source provider.MediaSource) bool {
 	sourceType := strings.ToLower(strings.TrimSpace(source.Type))
-	if sourceType == "hls" || sourceType == "m3u8" {
+	if sourceType == provider.SourceTypeHLS || sourceType == provider.SourceTypeM3U8 {
 		return true
 	}
 

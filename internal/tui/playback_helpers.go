@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"kari/internal/model"
+	"kari/internal/provider"
 	"kari/internal/service"
 )
 
@@ -16,15 +16,15 @@ func (m *modelImpl) playbackSelectionIndex() int {
 	return -1
 }
 
-func (m *modelImpl) selectedPlaybackSource() (model.PlaybackSource, bool) {
+func (m *modelImpl) selectedPlaybackSource() (provider.MediaSource, bool) {
 	idx := m.playbackSelectionIndex()
 	if idx < 0 {
-		return model.PlaybackSource{}, false
+		return provider.MediaSource{}, false
 	}
 	return m.resolved.Playback[idx], true
 }
 
-func (m *modelImpl) orderedPlaybackSources() []model.PlaybackSource {
+func (m *modelImpl) orderedPlaybackSources() []provider.MediaSource {
 	if m.resolved == nil {
 		return nil
 	}
@@ -43,7 +43,7 @@ func (m *modelImpl) orderedPlaybackSources() []model.PlaybackSource {
 		}
 	}
 
-	out := make([]model.PlaybackSource, 0, len(indices))
+	out := make([]provider.MediaSource, 0, len(indices))
 	for offset := range indices {
 		idx := indices[(position+offset)%len(indices)]
 		out = append(out, m.resolved.Playback[idx])
@@ -69,7 +69,7 @@ func (m *modelImpl) ensurePlaybackSelection() {
 			if m.prevSourceLanguage != "" && !strings.EqualFold(src.Language, m.prevSourceLanguage) {
 				continue
 			}
-			if m.prevSourceQuality > 0 && service.SourceQuality(src.Label) != m.prevSourceQuality {
+			if m.prevSourceQuality > 0 && service.SourceQuality(src.Quality) != m.prevSourceQuality {
 				continue
 			}
 			m.selectedPlayback = idx
@@ -87,7 +87,7 @@ func (m *modelImpl) ensurePlaybackSelection() {
 		// Try quality-only match
 		if m.prevSourceQuality > 0 {
 			for _, idx := range indices {
-				if service.SourceQuality(m.resolved.Playback[idx].Label) == m.prevSourceQuality {
+				if service.SourceQuality(m.resolved.Playback[idx].Quality) == m.prevSourceQuality {
 					m.selectedPlayback = idx
 					return
 				}

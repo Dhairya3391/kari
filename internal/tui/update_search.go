@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/history"
+	"kari/internal/model"
 )
 
 func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -163,7 +164,7 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "n":
 		return m.playNextEpisode()
 	case "A":
-		if m.resolved != nil && (m.resolved.MediaType == "anime" || m.resolved.MediaType == "tv" || m.resolved.MediaType == "cartoon") {
+		if model.IsEpisodeBased(m.resolved.MediaType) {
 			m.autoplay = !m.autoplay
 		}
 		return m, nil

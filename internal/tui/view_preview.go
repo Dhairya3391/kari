@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/model"
+	"kari/internal/provider"
 )
 
 func (m *modelImpl) renderPreviewScreen(dims layoutDims) string {
@@ -34,8 +35,8 @@ func (m *modelImpl) renderPreviewScreen(dims layoutDims) string {
 			}
 			rows = append(rows, lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(shorten(title, width-6)))
 
-			if m.selectedEpisode.Season > 0 || m.selectedEpisode.Number > 0 {
-				rows = append(rows, mutedStyle.Render(fmt.Sprintf("Season %d  ·  Episode %d", m.selectedEpisode.Season, m.selectedEpisode.Number)))
+			if m.selectedEpisode.Season > 0 || m.selectedEpisode.Episode > 0 {
+				rows = append(rows, mutedStyle.Render(fmt.Sprintf("Season %d  ·  Episode %d", m.selectedEpisode.Season, m.selectedEpisode.Episode)))
 			}
 
 			cleanedTitle := cleanEpisodeTitle(m.selectedEpisode.Title, title)
@@ -44,7 +45,8 @@ func (m *modelImpl) renderPreviewScreen(dims layoutDims) string {
 			}
 
 			if m.selectedSeries != nil && m.selectedSeries.Provider != "" {
-				rows = append(rows, "", mutedStyle.Render("via ")+lipgloss.NewStyle().Foreground(colorInfo).Render(m.selectedSeries.Provider))
+				// Codename only — internal provider names never reach the UI.
+				rows = append(rows, "", mutedStyle.Render("via ")+lipgloss.NewStyle().Foreground(colorInfo).Render(m.registry.DisplayName(m.selectedSeries.Provider)))
 			}
 
 			return lipgloss.Place(dims.contentW, m.height/2, lipgloss.Center, lipgloss.Center, cardStyle.Width(width).Render(strings.Join(rows, "\n")))
@@ -134,7 +136,7 @@ func (m *modelImpl) renderPreviewInfo(totalWidth int) string {
 		rows = append(rows, infoStyle.Render(fmt.Sprintf("󰐊 Resume at %s", resumeTime)))
 	}
 
-	if r.MediaType != "movie" {
+	if r.MediaType != provider.MediaTypeMovie {
 		if r.SeasonNumber > 0 || r.EpisodeNumber > 0 {
 			rows = append(rows, mutedStyle.Render(fmt.Sprintf("Season %d  ·  Episode %d", r.SeasonNumber, r.EpisodeNumber)))
 		}

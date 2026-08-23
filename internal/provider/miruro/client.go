@@ -22,28 +22,49 @@ const (
 	apiURL = config.MiruroAPIBase
 )
 
+// Client implements provider.Provider against the Miruro API.
 type Client struct {
 	http *http.Client
 }
 
+// Alias implements provider.Presenter.
+func (c *Client) Alias() string { return "Miruro" }
+// Name implements Provider.
 func (c *Client) Name() string {
 	return "miruro"
 }
 
+// Modes implements Provider.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{
 		{Name: provider.ModeAnime, Priority: 1},
 	}
 }
 
+// RequiresEpisodeListForMovies implements provider.MovieEpisodeFlow. Miruro
+// resolves by per-episode IDs that only the episode listing provides, so
+// even anime movies must go through FetchEpisodes first.
+func (c *Client) RequiresEpisodeListForMovies() bool { return true }
+
+// Features implements provider.FeatureSource.
+func (c *Client) Features(mode provider.ContentType) provider.Features {
+	if mode != provider.ModeAnime {
+		return provider.Features{}
+	}
+	return provider.Features{AudioSelection: true}
+}
+
+// NewClient constructs the Miruro provider with the shared HTTP client.
 func NewClient() (*Client, error) {
 	return &Client{
 		http: httpclient.New(),
 	}, nil
 }
 
+// Search queries Miruro's AniList-backed index. Anime movies are reported
+// as MediaType "movie" but still resolve through the episode flow.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
-	logging.Debugf("miruro search start query=%q", query)
+	logging.Debug("search start", "provider", c.Name(), "query", query)
 	if query == "" {
 		return nil, fmt.Errorf("empty query")
 	}
@@ -77,9 +98,9 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 	}
 	results := make([]provider.SearchResult, 0, len(sr.Results))
 	for _, r := range sr.Results {
-		mediaType := "anime"
+		mediaType := provider.MediaTypeAnime
 		if strings.EqualFold(r.Format, "MOVIE") {
-			mediaType = "movie"
+			mediaType = provider.MediaTypeMovie
 		}
 		results = append(results, provider.SearchResult{
 			Title:     r.Name,
@@ -89,16 +110,18 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 			MediaType: mediaType,
 		})
 	}
-	logging.Debugf("miruro search done results=%d", len(results))
+	logging.Debug("search done", "provider", c.Name(), "results", len(results))
 	if len(results) == 0 {
 		return nil, provider.ErrNoResults
 	}
 	return results, nil
 }
 
+// FetchEpisodes lists episodes for an AniList media ID; fractional or
+// zero-numbered entries are skipped.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	mediaID := series.ID
-	logging.Debugf("miruro fetch episodes mediaID=%q", mediaID)
+	logging.Debug("fetch episodes", "provider", c.Name(), "mediaID", mediaID)
 	u := fmt.Sprintf("%s/episodes/%s", apiURL, mediaID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -146,12 +169,14 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 		return eps[i].Episode < eps[j].Episode
 	})
 
-	logging.Debugf("miruro fetch episodes done count=%d", len(eps))
+	logging.Debug("fetch episodes done", "provider", c.Name(), "count", len(eps))
 	return eps, nil
 }
 
+// ResolveSource resolves one episode ID to ranked stream sources,
+// extracting referer/UA from headers and mpv args and attaching subtitles.
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
-	logging.Debugf("miruro resolve source mediaID=%q episodeID=%q", mediaID, episode.ID)
+	logging.Debug("resolve source", "provider", c.Name(), "mediaID", mediaID, "episodeID", episode.ID)
 	u, err := url.Parse(apiURL + "/link")
 	if err != nil {
 		return nil, fmt.Errorf("miruro resolve: build url: %w", err)
@@ -239,7 +264,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 				sc += 40
 			} else if strings.Contains(q, "360") {
 				sc += 20
-			} else if t == "hls" || strings.Contains(q, "auto") {
+			} else if t == provider.SourceTypeHLS || strings.Contains(q, "auto") {
 				sc += 80
 			} else if t == "mp4" {
 				sc += 50
@@ -314,7 +339,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 
 		quality := s.Quality
 		if quality == "" || strings.EqualFold(quality, "auto") {
-			if strings.EqualFold(s.Type, "hls") || strings.EqualFold(quality, "auto") {
+			if strings.EqualFold(s.Type, provider.SourceTypeHLS) || strings.EqualFold(quality, "auto") {
 				quality = "Auto"
 			} else if strings.EqualFold(s.Type, "embed") {
 				quality = "Embed"
@@ -332,7 +357,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 
 		sources = append(sources, provider.MediaSource{
 			URL:       s.URL,
-			Quality:   fmt.Sprintf("[MIRURO] %s", quality),
+			Quality:   quality,
 			Referer:   referer,
 			Type:      s.Type,
 			UserAgent: userAgent,
@@ -340,7 +365,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			Subtitles: subtitleOptions,
 		})
 	}
-	logging.Debugf("miruro resolve source done count=%d", len(sources))
+	logging.Debug("resolve source done", "provider", c.Name(), "count", len(sources))
 	return sources, nil
 }
 
@@ -367,6 +392,9 @@ func miruroStreamKey(s linkStream) string {
 func cleanMiruroText(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
-
-
-var _ provider.Provider = (*Client)(nil)
+var (
+	_ provider.Provider         = (*Client)(nil)
+	_ provider.Presenter        = (*Client)(nil)
+	_ provider.FeatureSource    = (*Client)(nil)
+	_ provider.MovieEpisodeFlow = (*Client)(nil)
+)

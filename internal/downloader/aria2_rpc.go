@@ -20,6 +20,9 @@ import (
 	"kari/internal/provider"
 )
 
+// log scopes every line from this package.
+var ariaLog = logging.With("component", "downloader.aria2")
+
 // aria2HTTPClient is deliberately a plain bounded-timeout client rather than
 // the shared retryable one in internal/httpclient — retrying a POST to a
 // non-idempotent JSON-RPC method (e.g. aria2.addUri) could submit the same
@@ -28,7 +31,6 @@ import (
 var aria2HTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 // ── JSON-RPC types ────────────────────────────────────────────────────────────
-
 type aria2RPCRequest struct {
 	JSONRPC string `json:"jsonrpc"`
 	ID      string `json:"id"`
@@ -94,7 +96,7 @@ func (d *Aria2Downloader) Download(
 		"--file-allocation=none",
 		"--console-log-level=warn",
 	}
-	logging.Debugf("aria2: starting daemon on port %d", port)
+	ariaLog.Debug("daemon starting", "port", port)
 
 	cmd := exec.CommandContext(ctx, "aria2c", aria2Args...)
 	var stderrBuf bytes.Buffer
@@ -139,7 +141,7 @@ func (d *Aria2Downloader) Download(
 		return fmt.Errorf("aria2: addUri: %w", err)
 	}
 
-	logging.Debugf("aria2: gid=%s url=%q", gid, source.URL)
+	ariaLog.Debug("download queued", "gid", gid, "url", source.URL)
 
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -151,7 +153,7 @@ func (d *Aria2Downloader) Download(
 			// Read stderr for logging before killing.
 			daemonStderr := stderrBuf.String()
 			if daemonStderr != "" {
-				logging.Debugf("aria2: daemon stderr on cancel: %s", daemonStderr)
+				ariaLog.Debug("daemon stderr on cancel", "stderr", daemonStderr)
 			}
 			return ctx.Err()
 
@@ -196,7 +198,6 @@ func (d *Aria2Downloader) Download(
 }
 
 // ── JSON-RPC client helpers ──────────────────────────────────────────────────
-
 func aria2RPC(port int, secret string, req *aria2RPCRequest) (json.RawMessage, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -307,7 +308,6 @@ func aria2GetVersion(port int, secret string) error {
 }
 
 // ── Daemon lifecycle ─────────────────────────────────────────────────────────
-
 func findFreePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -342,7 +342,6 @@ func waitForAria2RPC(port int, secret string, timeout time.Duration) error {
 }
 
 // ── Progress computation ─────────────────────────────────────────────────────
-
 func computeAria2Progress(status *aria2TellStatusResult) DownloadProgress {
 	total, _ := strconv.ParseInt(status.TotalLength, 10, 64)
 	completed, _ := strconv.ParseInt(status.CompletedLength, 10, 64)
@@ -402,13 +401,13 @@ func renameOutputFile(status *aria2TellStatusResult, outputDir, baseTitle string
 	// Check if the desired path already exists — aria2c's auto-file-renaming
 	// is disabled so this shouldn't happen, but guard anyway.
 	if _, err := os.Stat(desiredPath); err == nil {
-		logging.Debugf("aria2: target %s already exists, keeping %s", desiredPath, actualPath)
+		ariaLog.Debug("target already exists; keeping file", "desired", desiredPath, "actual", actualPath)
 		return
 	}
 
 	if err := os.Rename(actualPath, desiredPath); err != nil {
-		logging.Warnf("aria2: rename %s -> %s: %v", actualPath, desiredPath, err)
+		ariaLog.Warn("rename failed", "from", actualPath, "to", desiredPath, "err", err)
 	} else {
-		logging.Debugf("aria2: renamed %s -> %s", actualPath, desiredPath)
+		ariaLog.Debug("renamed", "from", actualPath, "to", desiredPath)
 	}
 }

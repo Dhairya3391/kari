@@ -5,7 +5,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"kari/internal/logging"
 	"kari/internal/selfupdate"
 )
 
@@ -31,7 +30,7 @@ func (m *modelImpl) checkForUpdateCmd() tea.Cmd {
 
 func (m *modelImpl) onUpdateCheck(msg updateCheckMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		logging.Warnf("update check failed: %v", msg.err)
+		tuiLog.Warn("version check failed", "err", msg.err)
 		return m, nil
 	}
 	if !selfupdate.IsNewer(m.appVersion, msg.latestVersion) {

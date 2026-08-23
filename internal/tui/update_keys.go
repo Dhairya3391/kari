@@ -8,8 +8,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"kari/internal/logging"
-	"kari/internal/provider"
 	"kari/internal/settings"
 )
 
@@ -183,7 +181,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		m.goBackOne()
 		if m.loading {
-			logging.Debugf("handleGlobalKeys: ESC cancelled in-flight resolve (opID=%d)", m.resolveOpID)
+			tuiLog.Debug("ESC cancelled in-flight resolve", "opID", m.resolveOpID)
 			m.loading = false
 			m.loadingText = ""
 			m.resolveOpID = m.newOpID()
@@ -274,10 +272,11 @@ func (m *modelImpl) cycleMode(reverse bool) tea.Cmd {
 	return nil
 }
 
-// updateQueryPlaceholder adjusts the search prompt hint for the active mode.
+// updateQueryPlaceholder adjusts the search prompt hint for the active mode,
+// preferring the placeholder declared by the mode's providers.
 func (m *modelImpl) updateQueryPlaceholder() {
-	if m.appMode == provider.ModeJellyfin {
-		m.queryInput.Placeholder = "Search… (Enter on empty = browse library)"
+	if ph := m.modeFeatures().SearchPlaceholder; ph != "" {
+		m.queryInput.Placeholder = ph
 		return
 	}
 	m.queryInput.Placeholder = "Search… (Esc for controls)"

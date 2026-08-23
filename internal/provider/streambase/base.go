@@ -18,7 +18,6 @@ import (
 	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/logging"
-	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/search"
 	"kari/internal/tmdb"
@@ -30,11 +29,15 @@ var (
 	reSeasonNum  = regexp.MustCompile(`(?i)\bseason\s+(\d{1,3})\b`)
 )
 
+// Base is the shared TMDB-backed implementation used by providers that
+// identify media by TMDB id: meilisearch title lookup plus TMDB episode
+// listings. Concrete clients only implement ResolveSource.
 type Base struct {
 	httpClient *http.Client
 	keyPool    *tmdb.KeyPool
 }
 
+// New validates that a key pool is available and constructs the base.
 func New(keyPool *tmdb.KeyPool) (*Base, error) {
 	if keyPool == nil {
 		return nil, fmt.Errorf("tmdb key pool is required")
@@ -42,49 +45,38 @@ func New(keyPool *tmdb.KeyPool) (*Base, error) {
 	return &Base{httpClient: httpclient.New(), keyPool: keyPool}, nil
 }
 
+// Search resolves titles to TMDB ids through the meilisearch index,
+// normalizing media types to the selected mode.
 func (b *Base) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
-	logging.Debugf("stream search start mode=%q query=%q", mode, query)
-	var results []model.SearchResult
-	var err error
-
-	searchClient := search.NewClient()
-	switch mode {
-	case provider.ModeMovies:
-		results, err = searchClient.SearchMovies(ctx, query)
-	case provider.ModeTV:
-		results, err = searchClient.SearchTV(ctx, query)
-	default:
-		results, err = searchClient.Search(ctx, query)
-	}
+	logging.Debug("stream search start", "mode", mode, "query", query)
+	results, err := search.NewClient().SearchWithMode(ctx, query, mode)
 	if err != nil {
-		logging.Errorf("stream search failed mode=%q query=%q err=%v", mode, query, err)
+		logging.Debug("stream search failed", "mode", mode, "query", query, "err", err)
 
 		return nil, fmt.Errorf("streambase search: %w", err)
 	}
 
+	// Normalize the media type to the selected mode — meilisearch results
+	// may carry a different vocabulary than the mode the user picked.
 	providerResults := make([]provider.SearchResult, 0, len(results))
 	for _, r := range results {
 		mediaType := r.MediaType
 		switch mode {
-
 		case provider.ModeMovies:
-			mediaType = "movie"
+			mediaType = provider.MediaTypeMovie
 		case provider.ModeTV:
-			mediaType = "tv"
+			mediaType = provider.MediaTypeTV
 		}
-		providerResults = append(providerResults, provider.SearchResult{
-			Title:     r.Title,
-			ID:        strconv.Itoa(r.TMDBID),
-			Type:      mode,
-			Year:      r.Year,
-			MediaType: mediaType,
-			TMDBID:    r.TMDBID,
-		})
+		r.Type = mode
+		r.MediaType = mediaType
+		providerResults = append(providerResults, r)
 	}
-	logging.Debugf("stream search done mode=%q query=%q results=%d", mode, query, len(providerResults))
+	logging.Debug("stream search done", "mode", mode, "query", query, "results", len(providerResults))
 	return providerResults, nil
 }
 
+// FetchEpisodes returns a synthetic single episode for movies or the full
+// season/episode listing from TMDB for series.
 func (b *Base) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	tmdbID := series.TMDBID
 	if tmdbID <= 0 {
@@ -95,7 +87,7 @@ func (b *Base) FetchEpisodes(ctx context.Context, series provider.SearchResult) 
 		}
 	}
 
-	if series.MediaType == "movie" {
+	if series.MediaType == provider.MediaTypeMovie {
 		return []provider.Episode{{
 			Title:   series.Title,
 			ID:      series.ID,
@@ -206,7 +198,7 @@ func (b *Base) fetchTMDBTVDetails(ctx context.Context, tmdbID int) (tmdbTVDetail
 		if !isAuthError(err) {
 			return details, err
 		}
-		logging.Warnf("tmdb tv request unauthorized tmdb_id=%d err=%v", tmdbID, err)
+		logging.Debug("tmdb tv unauthorized, rotating key", "tmdbID", tmdbID, "err", err)
 		b.keyPool.MarkFailed(apiKey)
 		lastAuthErr = err
 	}
@@ -230,7 +222,7 @@ func (b *Base) fetchTMDBSeasonDetails(ctx context.Context, tmdbID, season int) (
 		if !isAuthError(err) {
 			return details, err
 		}
-		logging.Warnf("tmdb season request unauthorized tmdb_id=%d season=%d err=%v", tmdbID, season, err)
+		logging.Debug("tmdb season unauthorized, rotating key", "tmdbID", tmdbID, "season", season, "err", err)
 		b.keyPool.MarkFailed(apiKey)
 		lastAuthErr = err
 	}

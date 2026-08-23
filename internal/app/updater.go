@@ -16,6 +16,12 @@ import (
 	"kari/internal/selfupdate"
 )
 
+// updateLog scopes self-update logging.
+var updateLog = logging.With("component", "updater")
+
+// Update self-updates the binary in place: fetch the latest GitHub release
+// for this platform, download the asset with progress, swap atomically, and
+// back up the old binary. Intended for `kari --update`.
 func Update() error {
 	return update(false)
 }
@@ -44,7 +50,7 @@ func update(quiet bool) error {
 	if !quiet {
 		fmt.Printf("Updating Kari from %s to %s...\n", Version, latestVersion)
 	} else {
-		logging.Infof("Background update: found new version %s (current: %s)", latestVersion, Version)
+		updateLog.Info("new version found", "latest", latestVersion, "current", Version)
 	}
 
 	assetName := fmt.Sprintf("kari-%s-%s", runtime.GOOS, runtime.GOARCH)
@@ -77,7 +83,7 @@ func update(quiet bool) error {
 	if !quiet {
 		fmt.Printf("Successfully updated to %s! Please restart Kari.\n", latest.TagName)
 	} else {
-		logging.Infof("Background update: successfully downloaded %s. Will be active on next restart.", latest.TagName)
+		updateLog.Info("update downloaded; active on next restart", "version", latest.TagName)
 	}
 	return nil
 }
@@ -141,19 +147,19 @@ func applyUpdate(url string) error {
 		return err
 	}
 	if err := f.Close(); err != nil {
-		logging.Warnf("failed to close temp file: %v", err)
+		updateLog.Warn("temp file close failed", "err", err)
 	}
 
 	oldPath := exePath + ".old"
 	if err := os.Rename(exePath, oldPath); err != nil {
-		logging.Errorf("failed to rename current binary: %v", err)
+		updateLog.Error("current binary rename failed", "err", err)
 		_ = os.Remove(tmpPath)
 		return err
 	}
 
 	if err := os.Rename(tmpPath, exePath); err != nil {
 		if e := os.Rename(oldPath, exePath); e != nil {
-			logging.Errorf("rollback rename failed: %v", e)
+			updateLog.Error("rollback rename failed", "err", e)
 		}
 		_ = os.Remove(tmpPath)
 		return err
@@ -161,7 +167,7 @@ func applyUpdate(url string) error {
 
 	err = os.Remove(oldPath)
 	if err != nil {
-		logging.Warnf("could not remove old binary: %v (it will be removed on next run or manually)", err)
+		updateLog.Warn("old binary removal deferred to next run", "err", err)
 	}
 
 	return nil

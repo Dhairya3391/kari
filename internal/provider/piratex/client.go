@@ -13,6 +13,7 @@ import (
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
+	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/util"
@@ -25,12 +26,14 @@ const apiBase = config.PirateXAPIBase
 // /watch/{id}.m3u8 endpoint, so kari only needs slugs + episode ids and the
 // returned URLs are ready to play with no headers). Search, the episode list,
 // and stream resolution are three plain JSON GETs.
+// Client implements provider.Provider against the Piratex API.
 type Client struct {
 	http        *http.Client
 	searchCache *util.BoundedCache[[]provider.SearchResult]
 	seriesCache *util.BoundedCache[*seriesResp]
 }
 
+// NewClient constructs the Piratex provider with the shared HTTP client.
 func NewClient() (*Client, error) {
 	return &Client{
 		http:        httpclient.New(),
@@ -39,10 +42,15 @@ func NewClient() (*Client, error) {
 	}, nil
 }
 
+// Alias implements provider.Presenter.
+func (c *Client) Alias() string { return "PirateX" }
+
+// Name implements Provider.
 func (c *Client) Name() string {
 	return "piratex"
 }
 
+// Modes implements Provider.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{
 		{Name: provider.ModeCartoon, Priority: 1},
@@ -70,8 +78,9 @@ func (c *Client) get(ctx context.Context, target string) ([]byte, int, error) {
 
 // ── Search ───────────────────────────────────────────────────────────────────
 
+// Search scrapes Piratex's catalogue for cartoon titles matching query.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
-	logging.Debugf("piratex search start query=%q", query)
+	logging.Debug("search start", "provider", c.Name(), "query", query)
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, provider.ErrNoResults
@@ -79,7 +88,7 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 
 	cacheKey := strings.ToLower(query)
 	if cached, ok := c.searchCache.Get(cacheKey); ok {
-		logging.Debugf("piratex search cached query=%q", query)
+		logging.Debug("search cached", "provider", c.Name(), "query", query)
 		return cached, nil
 	}
 
@@ -121,7 +130,7 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 			ID:        slug,
 			Type:      provider.ModeCartoon,
 			Year:      yearString(item.Year),
-			MediaType: "cartoon",
+			MediaType: provider.MediaTypeCartoon,
 		})
 	}
 
@@ -130,18 +139,19 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 	}
 
 	c.searchCache.Set(cacheKey, results)
-	logging.Debugf("piratex search done results=%d", len(results))
+	logging.Debug("search done", "provider", c.Name(), "results", len(results))
 	return results, nil
 }
 
 // ── Episodes ─────────────────────────────────────────────────────────────────
 
+// FetchEpisodes lists episodes for a scraped series slug.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	slug := strings.TrimSpace(series.ID)
 	if slug == "" {
 		return nil, fmt.Errorf("piratex episodes: empty slug")
 	}
-	logging.Debugf("piratex fetch episodes slug=%q", slug)
+	logging.Debug("fetch episodes", "provider", c.Name(), "slug", slug)
 
 	data, err := c.fetchSeries(ctx, slug)
 	if err != nil {
@@ -177,7 +187,7 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 		return eps[i].Episode < eps[j].Episode
 	})
 
-	logging.Debugf("piratex fetch episodes done count=%d", len(eps))
+	logging.Debug("fetch episodes done", "provider", c.Name(), "count", len(eps))
 	return eps, nil
 }
 
@@ -208,6 +218,8 @@ func (c *Client) fetchSeries(ctx context.Context, slug string) (*seriesResp, err
 
 // ── Resolve ──────────────────────────────────────────────────────────────────
 
+// ResolveSource picks the master HLS playlist for an episode and groups
+// streams by audio language when the master exposes language variants.
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
 	epID := strings.TrimSpace(episode.ID)
 	if epID == "" {
@@ -219,7 +231,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	if epID == "" {
 		return nil, fmt.Errorf("piratex resolve: empty episode id")
 	}
-	logging.Debugf("piratex resolve source id=%q", epID)
+	logging.Debug("resolve source", "provider", c.Name(), "id", epID)
 
 	target := fmt.Sprintf("%s/watch/%s", apiBase, url.PathEscape(epID))
 	body, status, err := c.get(ctx, target)
@@ -264,7 +276,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	var sources []provider.MediaSource
 	seen := make(map[string]bool)
 	if len(wr.Audio) > 0 {
-		streamType := "hls"
+		streamType := provider.SourceTypeHLS
 		if t := strings.TrimSpace(streams[0].Type); t != "" {
 			streamType = t
 		}
@@ -284,21 +296,28 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 				continue
 			}
 
-			name := strings.TrimSpace(track.Name)
-			if name == "" {
-				name = strings.ToUpper(strings.TrimSpace(track.Language))
+			// Prefer the normalized language name so native-script group
+			// names from the master playlist (e.g. NAME="हिन्दी") render in
+			// English. Raw track.Name stays a last-resort fallback for
+			// non-language group labels ("Main", "5.1").
+			label := strings.TrimSpace(track.Name)
+			if code := lang.Normalize(track.Language); code != "" {
+				label = strings.ToUpper(lang.Name(code))
 			}
-			label := "PIRATEX " + name
 			if _, dup := seen[label]; dup {
 				continue
 			}
 			seen[label] = true
 
+			langName := ""
+			if strings.TrimSpace(track.Language) != "" {
+				langName = lang.Name(track.Language)
+			}
 			sources = append(sources, provider.MediaSource{
 				URL:            playURL,
 				Type:           streamType,
 				Quality:        label,
-				Language:       strings.TrimSpace(track.Language),
+				Language:       langName,
 				Subtitles:      subtitleOptions,
 				SuppressOrigin: true,
 			})
@@ -311,7 +330,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			if streamURL == "" || !stream.Master {
 				continue
 			}
-			label := "PIRATEX " + transportLabel(stream.Server)
+			label := transportLabel(stream.Server)
 			if _, dup := seen[label]; dup {
 				continue
 			}
@@ -330,7 +349,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		return nil, provider.ErrNoSources
 	}
 
-	logging.Debugf("piratex resolve done sources=%d", len(sources))
+	logging.Debug("resolve done", "provider", c.Name(), "sources", len(sources))
 	return sources, nil
 }
 
@@ -362,3 +381,8 @@ func yearString(v any) string {
 	}
 	return ""
 }
+
+var (
+	_ provider.Provider  = (*Client)(nil)
+	_ provider.Presenter = (*Client)(nil)
+)

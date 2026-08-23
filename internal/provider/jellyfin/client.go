@@ -16,6 +16,10 @@ import (
 	"kari/internal/provider"
 )
 
+// log scopes every line from this package with its identity.
+var jellyLog = logging.With("provider", "jellyfin")
+
+// Client implements provider.Provider against the Jellyfin API.
 type Client struct {
 	http   *http.Client
 	server string
@@ -26,6 +30,7 @@ type Client struct {
 	libraryAt time.Time
 }
 
+// NewClient validates credentials and constructs the Jellyfin provider.
 func NewClient(server, apiKey string) (*Client, error) {
 	if server == "" || apiKey == "" {
 		return nil, fmt.Errorf("jellyfin server URL and API key are required")
@@ -38,13 +43,32 @@ func NewClient(server, apiKey string) (*Client, error) {
 	}, nil
 }
 
+// Alias implements provider.Presenter.
+func (c *Client) Alias() string { return "Jellyfin" }
+
+// Name implements Provider.
 func (c *Client) Name() string {
 	return "jellyfin"
 }
 
+// Modes implements Provider.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{
 		{Name: provider.ModeJellyfin, Priority: 1},
+	}
+}
+
+// Features implements provider.FeatureSource. Jellyfin searches match
+// against the server library: an empty query browses it, results change
+// server-side so they must not be cached.
+func (c *Client) Features(mode provider.ContentType) provider.Features {
+	if mode != provider.ModeJellyfin {
+		return provider.Features{}
+	}
+	return provider.Features{
+		AllowEmptyQuery:   true,
+		NoCachedSearches:  true,
+		SearchPlaceholder: "Search… (Enter on empty = browse library)",
 	}
 }
 
@@ -57,19 +81,22 @@ func (c *Client) authGET(ctx context.Context, url string) (*http.Response, error
 	return c.http.Do(req)
 }
 
+// Search ranks the cached server library against query; an empty query
+// browses everything. Falls back to server-side hints when the library
+// listing fails.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
-	logging.Debugf("jellyfin search start query=%q", query)
+	logging.Debug("search start", "provider", c.Name(), "query", query)
 
 	// Match against the cached library so short and partial queries work;
 	// an empty query browses the whole library.
 	library, err := c.getLibrary(ctx)
 	if err != nil {
-		logging.Debugf("jellyfin library fetch failed, falling back to server search: %v", err)
+		jellyLog.Debug("library fetch failed; falling back to server search", "err", err)
 		return c.searchHints(ctx, query)
 	}
 
 	results := rankLibrary(library, query)
-	logging.Debugf("jellyfin search done results=%d", len(results))
+	logging.Debug("search done", "provider", c.Name(), "results", len(results))
 	if len(results) == 0 {
 		return nil, provider.ErrNoResults
 	}
@@ -104,9 +131,9 @@ func (c *Client) searchHints(ctx context.Context, query string) ([]provider.Sear
 		mediaType := ""
 		switch h.Type {
 		case "Movie":
-			mediaType = "movie"
+			mediaType = provider.MediaTypeMovie
 		case "Series":
-			mediaType = "tv"
+			mediaType = provider.MediaTypeTV
 		default:
 			continue
 		}
@@ -139,16 +166,17 @@ func (c *Client) searchHints(ctx context.Context, query string) ([]provider.Sear
 		})
 	}
 
-	logging.Debugf("jellyfin search done results=%d", len(results))
+	logging.Debug("search done", "provider", c.Name(), "results", len(results))
 	if len(results) == 0 {
 		return nil, provider.ErrNoResults
 	}
 	return results, nil
 }
 
+// FetchEpisodes lists episodes of one Jellyfin series item.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	mediaID := series.ID
-	logging.Debugf("jellyfin fetch episodes mediaID=%q", mediaID)
+	logging.Debug("fetch episodes", "provider", c.Name(), "mediaID", mediaID)
 
 	u := fmt.Sprintf("%s/Items?parentId=%s&includeItemTypes=Episode&Recursive=true&sortBy=ParentIndexNumber,IndexNumber", c.server, mediaID)
 	resp, err := c.authGET(ctx, u)
@@ -187,12 +215,14 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 		return eps[i].Episode < eps[j].Episode
 	})
 
-	logging.Debugf("jellyfin fetch episodes done count=%d", len(eps))
+	logging.Debug("fetch episodes done", "provider", c.Name(), "count", len(eps))
 	return eps, nil
 }
 
+// ResolveSource builds a direct stream URL for the episode item (or the
+// series item itself for movies).
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
-	logging.Debugf("jellyfin resolve source mediaID=%q episodeID=%q", mediaID, episode.ID)
+	logging.Debug("resolve source", "provider", c.Name(), "mediaID", mediaID, "episodeID", episode.ID)
 
 	itemID := episode.ID
 	if itemID == "" {
@@ -206,12 +236,16 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			URL:     streamURL,
 			Quality: "Jellyfin",
 			Referer: c.server + "/",
-			Type:    "mp4",
+			Type:    provider.SourceTypeMP4,
 		},
 	}
 
-	logging.Debugf("jellyfin resolve source done count=%d", len(sources))
+	logging.Debug("resolve source done", "provider", c.Name(), "count", len(sources))
 	return sources, nil
 }
 
-var _ provider.Provider = (*Client)(nil)
+var (
+	_ provider.Provider      = (*Client)(nil)
+	_ provider.Presenter     = (*Client)(nil)
+	_ provider.FeatureSource = (*Client)(nil)
+)

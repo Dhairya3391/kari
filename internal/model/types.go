@@ -1,38 +1,10 @@
 package model
 
-type SearchResult struct {
-	Title     string
-	URL       string
-	Provider  string
-	MediaType string
-	Year      string
-	TMDBID    int
-}
+import "kari/internal/provider"
 
-type EpisodeResult struct {
-	Title     string
-	URL       string
-	Number    int
-	Season    int
-	Kind      string
-	Provider  string
-	MediaType string
-	Filler    bool
-}
-
-type PlaybackSource struct {
-	Label          string
-	URL            string
-	Referer        string
-	Type           string
-	CookieHeader   string
-	UserAgent      string
-	Resolver       string
-	Language       string
-	ExtraArgs      []string
-	SuppressOrigin bool
-}
-
+// SubtitleTrack is one subtitle offering attached to resolved media. Tracks
+// arrive from providers or subtitle services as URL references; Path is
+// filled in once a track has been downloaded to disk.
 type SubtitleTrack struct {
 	Label    string
 	Language string
@@ -43,13 +15,14 @@ type SubtitleTrack struct {
 	Resolver string
 }
 
+// ResolvedMedia aggregates every playback source and subtitle track
+// resolved for one selection, plus the metadata services need to scrobble,
+// organize downloads, and display it.
 type ResolvedMedia struct {
 	SeriesTitle   string
 	SeriesURL     string
 	EpisodeTitle  string
 	EpisodeURL    string
-	IframeURL     string
-	GetvidlinkURL string
 	MediaURL      string
 	MediaType     string
 	Year          string
@@ -57,7 +30,10 @@ type ResolvedMedia struct {
 	SeasonNumber  int
 	EpisodeNumber int
 	Resolver      string
-	Playback      []PlaybackSource
-	Subtitles     []SubtitleTrack
-	StartTime     float64
+	// Playback holds the merged, quality-sorted sources across providers.
+	// Entries are provider.MediaSource values with Resolver stamped by the
+	// MediaService aggregation.
+	Playback  []provider.MediaSource
+	Subtitles []SubtitleTrack
+	StartTime float64
 }

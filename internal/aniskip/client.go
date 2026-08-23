@@ -7,6 +7,8 @@ import (
 	"net/http"
 )
 
+// SkipTimes holds intro/outro boundaries in seconds, used to feed
+// mpv's skip hints and aniskip keybindings.
 type SkipTimes struct {
 	OpStart float64
 	OpEnd   float64
@@ -14,10 +16,12 @@ type SkipTimes struct {
 	EdEnd   float64
 }
 
+// Client queries the aniskip API for episode skip times.
 type Client struct {
 	http *http.Client
 }
 
+// NewClient constructs a client around the shared HTTP client.
 func NewClient(httpClient *http.Client) *Client {
 	return &Client{http: httpClient}
 }
@@ -33,6 +37,9 @@ type skipResponse struct {
 	} `json:"results"`
 }
 
+// GetSkipTimes returns OP/ED boundaries for a MyAnimeList episode. A
+// missing entry is not an error: the returned SkipTimes is zero-valued
+// when the API reports none found.
 func (c *Client) GetSkipTimes(ctx context.Context, malID int, episode int) (*SkipTimes, error) {
 	url := fmt.Sprintf("https://api.aniskip.com/v1/skip-times/%d/%d?types=op&types=ed", malID, episode)
 

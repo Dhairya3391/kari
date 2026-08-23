@@ -8,8 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/history"
-	"kari/internal/logging"
-	"kari/internal/model"
+	"kari/internal/provider"
 )
 
 func (m *modelImpl) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -103,7 +102,7 @@ func (m *modelImpl) playHistoryGroup(keyStr string) (tea.Model, tea.Cmd) {
 	opID := m.newOpID()
 	m.historyContinueOpID = opID
 	grp := *group
-	logging.Infof("playHistoryGroup: searching current providers for %q (mode=%s)", entry.Title, m.appMode)
+	tuiLog.Info("history resume: searching providers", "title", entry.Title, "mode", m.appMode)
 	return m, tea.Batch(m.spinner.Tick, m.historyResolveSeriesCmd(opID, entry, &grp))
 }
 
@@ -130,7 +129,7 @@ func (m *modelImpl) historyResolveSeriesCmd(opID int, entry history.Entry, group
 // corresponds to a history entry: an exact TMDBID match first (most
 // reliable, provider-independent), falling back to an exact title match,
 // and finally just the top result.
-func bestHistorySeriesMatch(results []model.SearchResult, entry history.Entry) model.SearchResult {
+func bestHistorySeriesMatch(results []provider.SearchResult, entry history.Entry) provider.SearchResult {
 	if entry.TMDBID > 0 {
 		for _, r := range results {
 			if r.TMDBID == entry.TMDBID {
@@ -154,7 +153,7 @@ func (m *modelImpl) onHistoryResolveSeries(msg historyResolveSeriesMsg) (tea.Mod
 	if msg.err != nil {
 		m.loading = false
 		m.loadingText = ""
-		logging.Warnf("history resume: %v", msg.err)
+		tuiLog.Warn("history resume failed", "err", msg.err)
 		m.setStatus(statusWarn, fmt.Sprintf("%q not found on any current provider", msg.entry.Title))
 		return m, nil
 	}
@@ -174,7 +173,7 @@ func (m *modelImpl) onHistoryResolveSeries(msg historyResolveSeriesMsg) (tea.Mod
 		m.loadingText = "Finding next episode..."
 		opID := m.newOpID()
 		m.historyContinueOpID = opID
-		logging.Infof("onHistoryResolveSeries: loading episodes for %q after S%dE%d", msg.group.Title, msg.group.FarthestComplete.Season, msg.group.FarthestComplete.Episode)
+		tuiLog.Info("history resume: fetching next episodes", "title", msg.group.Title, "season", msg.group.FarthestComplete.Season, "episode", msg.group.FarthestComplete.Episode)
 		return m, m.historyContinueEpisodesCmd(opID, *msg.group, series, m.appMode)
 	}
 
@@ -183,25 +182,25 @@ func (m *modelImpl) onHistoryResolveSeries(msg historyResolveSeriesMsg) (tea.Mod
 	m.loadingText = "Loading episodes..."
 	opID := m.newOpID()
 	m.episodesOpID = opID
-	logging.Infof("onHistoryResolveSeries: re-resolving %q S%dE%d from history for preview", target.Title, target.Season, target.Episode)
+	tuiLog.Info("history resume: re-resolving for preview", "title", target.Title, "season", target.Season, "episode", target.Episode)
 	return m, m.episodesCmd(opID, series)
 }
 
 // episodeIndexForEntry finds the live episode matching a history entry's
 // season/episode. Movies have no season/episode numbering, so any single
 // live "episode" result is treated as the match.
-func episodeIndexForEntry(episodes []model.EpisodeResult, entry history.Entry) (int, bool) {
+func episodeIndexForEntry(episodes []provider.Episode, entry history.Entry) (int, bool) {
 	if entry.Season == 0 && entry.Episode == 0 && len(episodes) > 0 {
 		return 0, true
 	}
 	for i, ep := range episodes {
-		if ep.Season == entry.Season && ep.Number == entry.Episode {
+		if ep.Season == entry.Season && ep.Episode == entry.Episode {
 			return i, true
 		}
 	}
 	if entry.Episode > 0 {
 		for i, ep := range episodes {
-			if ep.Number == entry.Episode {
+			if ep.Episode == entry.Episode {
 				return i, true
 			}
 		}

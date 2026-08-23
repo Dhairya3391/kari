@@ -10,7 +10,6 @@ import (
 
 	"kari/internal/history"
 	"kari/internal/lang"
-	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/util"
 )
@@ -59,80 +58,118 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "up", "k":
-			if m.settingsIndex > 0 {
+			// Vertical navigation wraps so the list never dead-ends, and
+			// skips the Languages slot when the mode has none.
+			for {
 				m.settingsIndex--
+				if m.settingsIndex < 0 {
+					m.settingsIndex = settingsLastIndex
+				}
+				if m.settingsIndex != 3 || len(m.availableLanguages()) > 0 {
+					break
+				}
+			}
+			if m.settingsIndex == 3 {
+				m.languageIndex = 0 // entering Languages resets its cursor
 			}
 		case "down", "j":
-			if m.settingsIndex == 2 {
+			for {
 				m.settingsIndex++
-				m.languageIndex = 0
-			} else if m.settingsIndex < 6 {
-				m.settingsIndex++
+				if m.settingsIndex > settingsLastIndex {
+					m.settingsIndex = 0
+				}
+				if m.settingsIndex != 3 || len(m.availableLanguages()) > 0 {
+					break
+				}
+			}
+			if m.settingsIndex == 3 {
+				m.languageIndex = 0 // entering Languages resets its cursor
 			}
 		case "left":
 			switch m.settingsIndex {
 			case 2:
-				if m.qualityMode > 0 {
-					m.qualityMode--
-					m.selectedPlayback = 0
-					if filtered := m.filteredPlayback(); len(filtered) > 0 {
-						m.selectedPlayback = filtered[0]
-					}
-					m.saveSettings()
+				// Value rows wrap instead of hard-stopping at the ends.
+				m.qualityMode--
+				if m.qualityMode < 0 {
+					m.qualityMode = qualityLowest
 				}
+				m.selectedPlayback = 0
+				if filtered := m.filteredPlayback(); len(filtered) > 0 {
+					m.selectedPlayback = filtered[0]
+				}
+				m.saveSettings()
 			case 3:
-				if m.languageIndex > 0 {
-					m.languageIndex--
+				languages := m.availableLanguages()
+				if len(languages) == 0 {
+					break
+				}
+				m.languageIndex--
+				if m.languageIndex < 0 {
+					m.languageIndex = len(languages) - 1
 				}
 			case 4:
-				if m.subtitleLanguageIndex > 0 {
-					m.subtitleLanguageIndex--
-					m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
-					m.saveSettings()
+				m.subtitleLanguageIndex--
+				if m.subtitleLanguageIndex < 0 {
+					m.subtitleLanguageIndex = len(lang.SubtitleOptions) - 1
 				}
+				m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
+				m.saveSettings()
 			case 5:
 				return m, tea.Batch(m.setImagesEnabled(false), m.triggerSubtitleSync())
 			case 6:
-				if m.accentIndex > 0 {
-					m.setAccent(m.accentIndex - 1)
+				m.accentIndex--
+				if m.accentIndex < 0 {
+					m.accentIndex = len(accentPresets)
 				}
+				m.setAccent(m.accentIndex)
 			}
 			return m, m.triggerSubtitleSync()
 		case "right":
 			switch m.settingsIndex {
 			case 2:
-				if m.qualityMode < qualityLowest {
-					m.qualityMode++
-					m.selectedPlayback = 0
-					if filtered := m.filteredPlayback(); len(filtered) > 0 {
-						m.selectedPlayback = filtered[0]
-					}
-					m.saveSettings()
+				m.qualityMode++
+				if m.qualityMode > qualityLowest {
+					m.qualityMode = 0
 				}
+				m.selectedPlayback = 0
+				if filtered := m.filteredPlayback(); len(filtered) > 0 {
+					m.selectedPlayback = filtered[0]
+				}
+				m.saveSettings()
 			case 3:
 				languages := m.availableLanguages()
-				if m.languageIndex < len(languages)-1 {
-					m.languageIndex++
+				if len(languages) == 0 {
+					break
+				}
+				m.languageIndex++
+				if m.languageIndex >= len(languages) {
+					m.languageIndex = 0
 				}
 			case 4:
-				if m.subtitleLanguageIndex < len(lang.SubtitleOptions)-1 {
-					m.subtitleLanguageIndex++
-					m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
-					m.saveSettings()
+				m.subtitleLanguageIndex++
+				if m.subtitleLanguageIndex >= len(lang.SubtitleOptions) {
+					m.subtitleLanguageIndex = 0
 				}
+				m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
+				m.saveSettings()
 			case 5:
 				return m, tea.Batch(m.setImagesEnabled(true), m.triggerSubtitleSync())
 			case 6:
-				if m.accentIndex < len(accentPresets) {
-					m.setAccent(m.accentIndex + 1)
+				m.accentIndex++
+				if m.accentIndex > len(accentPresets) {
+					m.accentIndex = 0
 				}
+				m.setAccent(m.accentIndex)
 			}
 			return m, m.triggerSubtitleSync()
 		case " ":
 			if m.settingsIndex == 3 && m.languageFilter != nil {
 				languages := m.availableLanguages()
 				if len(languages) > 0 {
-					selected := languages[m.languageIndex]
+					if m.languageIndex >= len(languages) {
+						m.languageIndex = 0
+					}
+					selected := languages[m.languageIndex].Code
 					m.languageFilter[selected] = !m.languageEnabled(selected)
 					if !m.hasEnabledLanguage() {
 						m.languageFilter[selected] = true
@@ -170,6 +207,9 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case authDoneMsg:
 		m.loading = false
+		m.traktAuthCode = ""
+		m.traktAuthURL = ""
+		m.traktAuthDeviceCode = ""
 		var cmd tea.Cmd
 		if msg.err != nil {
 			cmd = m.setStatusTimed(statusError, fmt.Sprintf("Auth failed: %v", msg.err))
@@ -210,8 +250,6 @@ func (m *modelImpl) startTraktAuth() (tea.Model, tea.Cmd) {
 func (m *modelImpl) pollTraktAuth(deviceCode string, interval, expiresIn int) tea.Cmd {
 	return func() tea.Msg {
 		err := m.traktClient.PollDeviceAuth(m.appCtx, deviceCode, interval, expiresIn)
-		m.traktAuthCode = ""
-		m.traktAuthURL = ""
 		return authDoneMsg{err: err}
 	}
 }
@@ -228,7 +266,7 @@ func (m *modelImpl) startAniListAuth() (tea.Model, tea.Cmd) {
 }
 
 func (m *modelImpl) triggerScrobble(entry history.Entry) {
-	if m.resolved == nil {
+	if m.resolved == nil || m.historyStore == nil {
 		return
 	}
 
@@ -237,12 +275,13 @@ func (m *modelImpl) triggerScrobble(entry history.Entry) {
 	appMode := m.appMode
 	trakt := m.traktClient
 	anilist := m.anilistClient
+	historyStore := m.historyStore
 	appCtx := m.appCtx
 	if appCtx == nil {
 		appCtx = context.Background()
 	}
 
-	logging.Debugf("triggerScrobble: entry=%+v appMode=%s", entry, appMode)
+	tuiLog.Debug("scrobble triggered", "entry", entry, "appMode", appMode)
 
 	go func() {
 		// Use a local copy of entry to ensure idempotency update doesn't affect other goroutines
@@ -262,40 +301,40 @@ func (m *modelImpl) triggerScrobble(entry history.Entry) {
 			diff = -diff
 		}
 		if diff < 0.01 && e.LastScrobbledPercent != 0 && progress < 0.99 {
-			logging.Debugf("triggerScrobble: skipping redundant update (diff=%.4f)", diff)
+			tuiLog.Debug("scrobble skipped; redundant progress delta", "diff", diff)
 			return
 		}
 
-		logging.Debugf("triggerScrobble: media_type=%q tmdb_id=%d season=%d ep=%d progress=%.2f", resolved.MediaType, resolved.TMDBID, resolved.SeasonNumber, resolved.EpisodeNumber, progress)
+		tuiLog.Debug("scrobble payload", "mediaType", resolved.MediaType, "tmdbID", resolved.TMDBID, "season", resolved.SeasonNumber, "episodeNumber", resolved.EpisodeNumber, "progress", progress)
 
 		success := false
 		if appMode == provider.ModeAnime {
 			if anilist != nil && anilist.IsAuthenticated() {
-				logging.Debugf("triggerScrobble: scrobbling %q to anilist (progress=%.2f)", e.Title, progress)
+				tuiLog.Debug("scrobbling to anilist", "episode", e.Title, "progress", progress)
 				if err := anilist.UpdateProgress(ctx, resolved); err != nil {
-					logging.Errorf("anilist scrobble failed: %v", err)
+					tuiLog.Error("anilist scrobble failed", "err", err)
 				} else {
-					logging.Infof("anilist scrobble successful for %q", e.Title)
+					tuiLog.Info("anilist scrobble succeeded", "episode", e.Title)
 					success = true
 				}
 			}
 		} else {
 			if trakt != nil && trakt.IsAuthenticated() {
 				if progress*100 < 1.0 {
-					logging.Debugf("triggerScrobble: skipping trakt scrobble below 1%% progress (%.2f%%)", progress*100)
+					tuiLog.Debug("trakt scrobble skipped below 1% threshold", "progressPct", progress*100)
 				} else {
-					logging.Debugf("triggerScrobble: scrobbling %q to trakt (progress=%.2f)", e.Title, progress)
+					tuiLog.Debug("scrobbling to trakt", "episode", e.Title, "progress", progress)
 					_ = trakt.RefreshIfNeeded(ctx)
 					var err error
-					if resolved.MediaType == "movie" {
+					if resolved.MediaType == provider.MediaTypeMovie {
 						err = trakt.ScrobbleMovie(ctx, resolved, progress)
 					} else {
 						err = trakt.ScrobbleEpisode(ctx, resolved, progress)
 					}
 					if err != nil {
-						logging.Errorf("trakt scrobble failed: %v", err)
+						tuiLog.Error("trakt scrobble failed", "err", err)
 					} else {
-						logging.Infof("trakt scrobble successful for %q", e.Title)
+						tuiLog.Info("trakt scrobble succeeded", "episode", e.Title)
 						success = true
 					}
 				}
@@ -306,11 +345,11 @@ func (m *modelImpl) triggerScrobble(entry history.Entry) {
 			// Update the record with the last scrobbled percentage to prevent duplicates
 			e.LastScrobbledPercent = progress
 			// We need to re-fetch the latest entry from the store to avoid overwriting other updates
-			if latest, ok := m.historyStore.Get(e.Key); ok {
+			if latest, ok := historyStore.Get(e.Key); ok {
 				latest.LastScrobbledPercent = progress
-				_ = m.historyStore.Upsert(latest)
+				_ = historyStore.Upsert(latest)
 			} else {
-				_ = m.historyStore.Upsert(e)
+				_ = historyStore.Upsert(e)
 			}
 		}
 	}()

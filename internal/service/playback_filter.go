@@ -5,10 +5,12 @@ import (
 	"strconv"
 	"strings"
 
-	"kari/internal/model"
+	"kari/internal/provider"
 )
 
-func FilterPlaybackIndices(playback []model.PlaybackSource, qualityMode int, languages map[string]bool) []int {
+// FilterPlaybackIndices returns indices of sources passing the language
+// filter and current quality preference (1=highest, 2=mid, 3=lowest).
+func FilterPlaybackIndices(playback []provider.MediaSource, qualityMode int, languages map[string]bool) []int {
 	candidates := make([]int, 0, len(playback))
 	for i, source := range playback {
 		if source.Language != "" {
@@ -36,16 +38,18 @@ func FilterPlaybackIndices(playback []model.PlaybackSource, qualityMode int, lan
 	}
 }
 
-func FilterPlaybackSources(playback []model.PlaybackSource, qualityMode int, languages map[string]bool) []model.PlaybackSource {
+// FilterPlaybackSources is the slice-returning variant of
+// FilterPlaybackIndices.
+func FilterPlaybackSources(playback []provider.MediaSource, qualityMode int, languages map[string]bool) []provider.MediaSource {
 	indices := FilterPlaybackIndices(playback, qualityMode, languages)
-	sources := make([]model.PlaybackSource, 0, len(indices))
+	sources := make([]provider.MediaSource, 0, len(indices))
 	for _, idx := range indices {
 		sources = append(sources, playback[idx])
 	}
 	return sources
 }
 
-func filterByQuality(playback []model.PlaybackSource, candidates []int, keep func(q, maxQ, minQ, secondQ int) bool) []int {
+func filterByQuality(playback []provider.MediaSource, candidates []int, keep func(q, maxQ, minQ, secondQ int) bool) []int {
 	type group struct{ indices []int }
 	groups := make(map[string]*group)
 	order := make([]string, 0, len(candidates))
@@ -63,7 +67,7 @@ func filterByQuality(playback []model.PlaybackSource, candidates []int, keep fun
 		indices := groups[resolver].indices
 		maxQ, minQ, secondQ := 0, 99999, 0
 		for _, idx := range indices {
-			quality := SourceQuality(playback[idx].Label)
+			quality := SourceQuality(playback[idx].Quality)
 			maxQ = max(maxQ, quality)
 			if quality > 0 && quality < minQ {
 				minQ = quality
@@ -73,14 +77,14 @@ func filterByQuality(playback []model.PlaybackSource, candidates []int, keep fun
 			minQ = maxQ
 		}
 		for _, idx := range indices {
-			quality := SourceQuality(playback[idx].Label)
+			quality := SourceQuality(playback[idx].Quality)
 			if quality < maxQ && quality > secondQ {
 				secondQ = quality
 			}
 		}
 		kept := false
 		for _, idx := range indices {
-			if keep(SourceQuality(playback[idx].Label), maxQ, minQ, secondQ) {
+			if keep(SourceQuality(playback[idx].Quality), maxQ, minQ, secondQ) {
 				result = append(result, idx)
 				kept = true
 			}
@@ -91,7 +95,7 @@ func filterByQuality(playback []model.PlaybackSource, candidates []int, keep fun
 		// that resolver's highest-quality source.
 		if !kept {
 			for _, idx := range indices {
-				if SourceQuality(playback[idx].Label) == maxQ {
+				if SourceQuality(playback[idx].Quality) == maxQ {
 					result = append(result, idx)
 					break
 				}
@@ -106,6 +110,8 @@ var (
 	reQualityNum = regexp.MustCompile(`\b(\d{3,4})\b`)
 )
 
+// SourceQuality extracts a numeric resolution (2160/1080/…) from a quality
+// label like "1080p Hindi" or bare "480"; 0 when unparseable.
 func SourceQuality(label string) int {
 	normalized := strings.ToLower(label)
 	if strings.Contains(normalized, "4k") || strings.Contains(normalized, "uhd") {

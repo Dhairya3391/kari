@@ -6,6 +6,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/lipgloss"
+
+	"kari/internal/provider"
 )
 
 var (
@@ -107,15 +109,15 @@ func normalizeHexColor(s string) (string, bool) {
 
 func renderBadge(mode string) string {
 	switch mode {
-	case "anime":
+	case provider.MediaTypeAnime:
 		return modeBadgeAnime.Render(mode)
-	case "cartoon":
+	case provider.MediaTypeCartoon:
 		return modeBadgeCartoon.Render(mode)
-	case "movies":
+	case provider.MediaTypeMovie, string(provider.ModeMovies):
 		return modeBadgeMovies.Render(mode)
-	case "tv":
+	case provider.MediaTypeTV:
 		return modeBadgeTV.Render(mode)
-	case "jellyfin":
+	case string(provider.ModeJellyfin):
 		return modeBadgeJellyfin.Render(mode)
 	default:
 		return modeBadgeDefault.Render(mode)

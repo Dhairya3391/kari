@@ -9,7 +9,11 @@ import (
 	"kari/internal/aniskip"
 	"kari/internal/logging"
 	"kari/internal/model"
+	"kari/internal/provider"
 )
+
+// log scopes every line from this package/component.
+var playerLog = logging.With("component", "player")
 
 type cachedPlayer struct {
 	Player
@@ -22,21 +26,23 @@ func (c *cachedPlayer) Available() bool {
 	return c.available
 }
 
-// Registry stores players and handles selection/dispatch.
+// Registry holds available players and picks between them by preference.
 type Registry struct {
 	players       []Player
 	preferred     string
 	aniskipClient *aniskip.Client
 }
 
-// Register adds a player to the registry.
+// Register adds a player implementation.
 func (r *Registry) Register(p Player) {
 	r.players = append(r.players, &cachedPlayer{Player: p})
 }
 
-// PlayWithSources plays media using the preferred player when possible.
-func (r *Registry) PlayWithSources(sources []model.PlaybackSource, media model.ResolvedMedia, preferred string) (PlaybackResult, error) {
-	logging.Debugf("PlayWithSources: media=%q preferred_player=%q sources_count=%d", media.DisplayTitle(), preferred, len(sources))
+// PlayWithSources tries sources in order against the preferred player,
+// falling back to others when unavailable. A NeedsCompletionConfirmError
+// from any source counts as launched-successfully.
+func (r *Registry) PlayWithSources(sources []provider.MediaSource, media model.ResolvedMedia, preferred string) (PlaybackResult, error) {
+	playerLog.Debug("playback starting", "media", media.DisplayTitle(), "preferredPlayer", preferred, "sources", len(sources))
 
 	if preferred == "" {
 		preferred = r.DefaultPlayer()
@@ -45,7 +51,7 @@ func (r *Registry) PlayWithSources(sources []model.PlaybackSource, media model.R
 
 	var lastErr error
 	for _, p := range order {
-		logging.Debugf("PlayWithSources: trying player=%s available=%t", p.Name(), p.Available())
+		playerLog.Debug("trying player", "player", p.Name(), "available", p.Available())
 		// If this is the explicitly preferred player, we try it even if it says it's unavailable,
 		// to bypass broken Android package detection.
 		if !p.Available() && p.Name() != playerName(preferred) {
@@ -55,13 +61,13 @@ func (r *Registry) PlayWithSources(sources []model.PlaybackSource, media model.R
 		if err != nil {
 			var needsConfirm *NeedsCompletionConfirmError
 			if errors.As(err, &needsConfirm) {
-				logging.Infof("PlayWithSources: player %s succeeded", p.Name())
+				playerLog.Info("playback launched", "player", p.Name())
 				return result, nil
 			}
-			logging.Warnf("PlayWithSources: player %s failed: %v", p.Name(), err)
+			playerLog.Warn("player failed; falling back", "player", p.Name(), "err", err)
 			lastErr = err
 		} else {
-			logging.Infof("PlayWithSources: player %s succeeded", p.Name())
+			playerLog.Info("playback launched", "player", p.Name())
 			return result, nil
 		}
 	}
@@ -71,7 +77,7 @@ func (r *Registry) PlayWithSources(sources []model.PlaybackSource, media model.R
 	return PlaybackResult{}, fmt.Errorf("no supported player found")
 }
 
-// AvailablePlayers returns the names of available players.
+// AvailablePlayers lists names of registered players usable on this system.
 func (r *Registry) AvailablePlayers() []string {
 	out := make([]string, 0, len(r.players))
 	for _, p := range r.players {
@@ -82,7 +88,8 @@ func (r *Registry) AvailablePlayers() []string {
 	return out
 }
 
-// DefaultPlayer returns the selected default player name.
+// DefaultPlayer returns the configured preference when installed, else the
+// first available player (or empty string).
 func (r *Registry) DefaultPlayer() string {
 	envPlayer := playerName(r.preferred)
 	for _, p := range r.players {
@@ -130,7 +137,8 @@ func (r *Registry) preferredPlayers(preferred string) []Player {
 	return r.players
 }
 
-// NewRegistry constructs a registry with platform-supported players.
+// NewRegistry constructs and populates the platform's player set with the
+// user's preference applied.
 func NewRegistry(preferred string, aniskipClient *aniskip.Client) *Registry {
 	r := &Registry{
 		preferred:     preferred,

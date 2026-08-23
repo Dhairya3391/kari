@@ -18,11 +18,17 @@ import (
 	"kari/internal/util"
 )
 
+// log scopes every line from this package.
+var aniLog = logging.With("component", "scrobble.anilist")
+
+// AniListToken is the persisted OAuth token for the AniList auth-code flow.
 type AniListToken struct {
 	AccessToken string    `json:"access_token"`
 	ExpiresAt   time.Time `json:"expires_at"`
 }
 
+// AniListClient updates anime watch progress via the AniList GraphQL API.
+// Tokens are persisted under ~/.config/kari.
 type AniListClient struct {
 	clientID     string
 	clientSecret string
@@ -31,6 +37,7 @@ type AniListClient struct {
 	httpClient   *http.Client
 }
 
+// NewAniListClient constructs a client, loading any persisted token from disk.
 func NewAniListClient(clientID, clientSecret string) *AniListClient {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -73,6 +80,9 @@ func (c *AniListClient) saveToken() error {
 	return util.AtomicWriteFile(c.tokenPath, data, 0600)
 }
 
+// Revoke is accepted for parity with TraktClient but is a no-op: AniList's
+// OAuth spec has no programmatic revoke endpoint, so tokens are simply
+// discarded locally.
 func (c *AniListClient) Revoke() error {
 	c.token = nil
 	if err := os.Remove(c.tokenPath); err != nil && !os.IsNotExist(err) {
@@ -81,15 +91,18 @@ func (c *AniListClient) Revoke() error {
 	return nil
 }
 
+// IsAuthenticated reports whether an unexpired token is stored.
 func (c *AniListClient) IsAuthenticated() bool {
 	return c.token != nil && (c.token.ExpiresAt.IsZero() || c.token.ExpiresAt.After(time.Now()))
 }
 
+// AuthURL returns the browser URL the user visits to obtain an auth code.
 func (c *AniListClient) AuthURL() string {
 	return fmt.Sprintf("%s/api/v2/oauth/authorize?client_id=%s&response_type=token",
 		config.AniListAuthBase, c.clientID)
 }
 
+// ExchangeCode swaps the user-pasted auth code for a token and persists it.
 func (c *AniListClient) ExchangeCode(ctx context.Context, token string) error {
 	token = strings.TrimSpace(token)
 
@@ -112,12 +125,14 @@ func (c *AniListClient) ExchangeCode(ctx context.Context, token string) error {
 	return c.saveToken()
 }
 
+// UpdateProgress advances the matching AniList list entry to the resolved
+// media's episode number, searching by series title.
 func (c *AniListClient) UpdateProgress(ctx context.Context, media model.ResolvedMedia) error {
 	if !c.IsAuthenticated() {
 		return fmt.Errorf("anilist client not authenticated")
 	}
 
-	logging.Debugf("anilist: updating progress for %q (ep %d)", media.SeriesTitle, media.EpisodeNumber)
+	aniLog.Debug("updating progress", "series", media.SeriesTitle, "episode", media.EpisodeNumber)
 
 	// Always search by title because TMDB IDs are not AniList IDs
 	mediaID, err := c.searchMediaID(ctx, media.SeriesTitle)
@@ -125,7 +140,7 @@ func (c *AniListClient) UpdateProgress(ctx context.Context, media model.Resolved
 		return fmt.Errorf("failed to find anilist media id: %w", err)
 	}
 
-	logging.Debugf("anilist: found media id %d for %q", mediaID, media.SeriesTitle)
+	aniLog.Debug("media resolved", "mediaID", mediaID, "series", media.SeriesTitle)
 
 	query := `
 	mutation ($mediaId: Int, $progress: Int) {

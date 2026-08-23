@@ -14,6 +14,9 @@ import (
 	"kari/internal/provider"
 )
 
+// log scopes every line from this package with its identity.
+var libLog = logging.With("provider", "jellyfin")
+
 const (
 	libraryTTL       = 5 * time.Minute
 	maxSearchResults = 50
@@ -32,7 +35,7 @@ func (c *Client) getLibrary(ctx context.Context) ([]provider.SearchResult, error
 	results, err := c.fetchLibrary(ctx)
 	if err != nil {
 		if c.library != nil {
-			logging.Debugf("jellyfin library refresh failed, serving stale cache: %v", err)
+			libLog.Debug("library refresh failed; serving stale cache", "err", err)
 			return c.library, nil
 		}
 		return nil, err
@@ -40,7 +43,7 @@ func (c *Client) getLibrary(ctx context.Context) ([]provider.SearchResult, error
 
 	c.library = results
 	c.libraryAt = time.Now()
-	logging.Debugf("jellyfin library cached items=%d", len(results))
+	logging.Debug("jellyfin library cached", "items", len(results))
 	return results, nil
 }
 
@@ -66,9 +69,9 @@ func (c *Client) fetchLibrary(ctx context.Context) ([]provider.SearchResult, err
 		mediaType := ""
 		switch it.Type {
 		case "Movie":
-			mediaType = "movie"
+			mediaType = provider.MediaTypeMovie
 		case "Series":
-			mediaType = "tv"
+			mediaType = provider.MediaTypeTV
 		default:
 			continue
 		}

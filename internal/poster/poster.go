@@ -27,6 +27,9 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// log scopes every line from this package with its identity.
+var posterLog = logging.With("component", "poster")
+
 const tmdbPosterSize = "w500"
 
 // maxCachedImages/maxCachedDetails cap how many distinct titles' artwork and
@@ -132,7 +135,7 @@ func (c *Client) FetchImage(ctx context.Context, tmdbID int, mediaType, title st
 			return nil, err
 		}
 		if werr := writeDiskCache(key, data); werr != nil {
-			logging.Debugf("poster: failed to write disk cache for %q: %v", key, werr)
+			posterLog.Debug("poster disk cache write failed", "key", key, "err", werr)
 		}
 	}
 

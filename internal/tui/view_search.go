@@ -6,7 +6,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"kari/internal/provider"
 	"kari/internal/termimg"
 )
 
@@ -143,7 +142,7 @@ func (m *modelImpl) renderEpisodesScreen(dims layoutDims) string {
 	}
 
 	episodeCount := mutedStyle.Render(fmt.Sprintf("%d episodes", len(m.episodeResults)))
-	if m.appMode == provider.ModeAnime && m.audioMode != "" {
+	if m.modeFeatures().AudioSelection && m.audioMode != "" {
 		episodeCount += "  " + badgeBase.Background(colorInfo).Render(strings.ToUpper(m.audioMode))
 	}
 

@@ -9,14 +9,19 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
+	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/provider/streambase"
 	"kari/internal/tmdb"
 )
+
+// log scopes every line from this package with its identity.
+var mbLog = logging.With("provider", "moviebox")
 
 const (
 	movieboxAPI     = config.MovieboxAPIBase
@@ -24,6 +29,7 @@ const (
 	movieboxMediaUA = "curl/8.7.1"
 )
 
+// Client implements provider.Provider against the MovieBox API.
 type Client struct {
 	base       *streambase.Base
 	httpClient *http.Client
@@ -54,6 +60,8 @@ type movieboxResponse struct {
 	Meta      movieboxMeta                    `json:"meta"`
 }
 
+// NewClient constructs the MovieBox provider over the shared TMDB search
+// base.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
@@ -65,8 +73,13 @@ func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
 	}, nil
 }
 
+// Alias implements provider.Presenter.
+func (c *Client) Alias() string { return "MovieBox" }
+
+// Name implements Provider.
 func (c *Client) Name() string { return "moviebox" }
 
+// Modes implements Provider.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{
 		{Name: provider.ModeMovies, Priority: 2},
@@ -74,14 +87,51 @@ func (c *Client) Modes() []provider.Mode {
 	}
 }
 
+// audioLanguages is the full set of audio-track languages the MovieBox API
+// can return on MediaSources. Derived from testing across 17 movies and 12
+// TV series.
+var audioLanguages = []provider.AudioLanguage{
+	{Code: "Original", Display: "Original"},
+	{Code: "English", Display: "English"},
+	{Code: "English sub", Display: "English sub"},
+	{Code: "Bengali", Display: "Bengali"},
+	{Code: "esla", Display: "Spanish (LatAm)"},
+	{Code: "Hindi", Display: "Hindi"},
+	{Code: "Kannada", Display: "Kannada"},
+	{Code: "Malayalam", Display: "Malayalam"},
+	{Code: "ptbr", Display: "Portuguese (BR)"},
+	{Code: "Tamil", Display: "Tamil"},
+	{Code: "Telugu", Display: "Telugu"},
+}
+
+// AudioLanguages implements provider.AudioLanguagesSource.
+func (c *Client) AudioLanguages() []provider.AudioLanguage { return audioLanguages }
+
+// movieboxDisplay resolves a MovieBox language code to its English display
+// name: the provider's own table first (codes like "esla"/"ptbr" are
+// MovieBox-private), then the shared language mapper as a fallback so an
+// unexpected new code still renders readably instead of leaking raw.
+func movieboxDisplay(code string) string {
+	for _, l := range audioLanguages {
+		if strings.EqualFold(l.Code, code) {
+			return l.Display
+		}
+	}
+	return lang.Name(code)
+}
+
+// Search delegates to the shared TMDB-keyed base.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	return c.base.Search(ctx, query, mode)
 }
 
+// FetchEpisodes delegates to the shared TMDB-keyed base.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	return c.base.FetchEpisodes(ctx, series)
 }
 
+// ResolveSource maps one TMDB id/season/episode to MovieBox sources,
+// emitting one source per (language, quality) pair with attached subtitles.
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
 	tmdbID := episode.TMDBID
 	if tmdbID <= 0 {
@@ -92,9 +142,9 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		}
 	}
 
-	mediaType := "movie"
+	mediaType := provider.MediaTypeMovie
 	if episode.Season > 0 || episode.Episode > 0 {
-		mediaType = "tv"
+		mediaType = provider.MediaTypeTV
 	}
 
 	result, err := c.fetchMovieBoxSources(ctx, tmdbID, mediaType, episode.Season, episode.Episode)
@@ -102,7 +152,6 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		return nil, err
 	}
 
-	var sources []provider.MediaSource
 	sortedLangs := make([]string, 0, len(result.Sources))
 	for lang := range result.Sources {
 		sortedLangs = append(sortedLangs, lang)
@@ -114,21 +163,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		subs = append(subs, provider.SubtitleOption{URL: sub.URL, Language: sub.Lang})
 	}
 
-	for _, lang := range sortedLangs {
-		items := result.Sources[lang]
-		for _, item := range items {
-			label := fmt.Sprintf("[MOVIEBOX] %s %s", item.Quality, lang)
-			ms := provider.MediaSource{
-				URL:       item.URL,
-				Quality:   label,
-				Referer:   "",
-				UserAgent: movieboxMediaUA,
-				Language:  lang,
-				Subtitles: subs,
-			}
-			sources = append(sources, ms)
-		}
-	}
+	sources := buildSources(result.Sources, sortedLangs, subs)
 
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources
@@ -137,8 +172,30 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	return sources, nil
 }
 
+// buildSources emits one MediaSource per (language, quality) pair. Language
+// carries the raw API code — the stable AudioLanguage.Code that settings
+// persist and match against; the display name stays UI-only in Quality.
+func buildSources(sourcesByLang map[string][]movieboxSourceItem, langs []string, subs []provider.SubtitleOption) []provider.MediaSource {
+	sources := make([]provider.MediaSource, 0)
+	for _, code := range langs {
+		items := sourcesByLang[code]
+		display := movieboxDisplay(code)
+		for _, item := range items {
+			ms := provider.MediaSource{
+				URL:       item.URL,
+				Quality:   fmt.Sprintf("%s %s", item.Quality, display),
+				UserAgent: movieboxMediaUA,
+				Language:  code,
+				Subtitles: subs,
+			}
+			sources = append(sources, ms)
+		}
+	}
+	return sources
+}
+
 func (c *Client) fetchMovieBoxSources(ctx context.Context, tmdbID int, mediaType string, season, episode int) (*movieboxResponse, error) {
-	logging.Debugf("moviebox fetch start tmdbID=%d type=%q S%dE%d", tmdbID, mediaType, season, episode)
+	mbLog.Debug("fetch start", "tmdbID", tmdbID, "mediaType", mediaType, "season", season, "episode", episode)
 
 	u, err := url.Parse(movieboxAPI)
 	if err != nil {
@@ -184,4 +241,8 @@ func (c *Client) fetchMovieBoxSources(ctx context.Context, tmdbID int, mediaType
 	return &result, nil
 }
 
-var _ provider.Provider = (*Client)(nil)
+var (
+	_ provider.Provider            = (*Client)(nil)
+	_ provider.Presenter           = (*Client)(nil)
+	_ provider.AudioLanguagesSource = (*Client)(nil)
+)

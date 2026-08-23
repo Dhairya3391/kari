@@ -13,12 +13,18 @@ import (
 	"kari/internal/provider"
 )
 
+// log scopes every line from this package/component.
+var batchLog = logging.With("component", "service.download.batch")
+
+// DownloadService resolves media through MediaService and hands the chosen
+// sources to the downloader engine with organized output paths.
 type DownloadService struct {
 	downloadDir  string
 	dl           downloader.Downloader
 	mediaService *MediaService
 }
 
+// NewDownloadService wires the service to a download directory and engine.
 func NewDownloadService(downloadDir string, dl downloader.Downloader, mediaService *MediaService) *DownloadService {
 	return &DownloadService{
 		downloadDir:  downloadDir,
@@ -47,10 +53,12 @@ func sanitizePathName(name string) string {
 	return cleaned
 }
 
+// OrganizedPath computes the destination directory and file title for a
+// resolved media item, inserting Season folders for episodic content.
 func (s *DownloadService) OrganizedPath(resolved model.ResolvedMedia) (outputDir, title string) {
 	seriesDir := sanitizePathName(resolved.SeriesTitle)
 	outputDir = filepath.Join(s.downloadDir, seriesDir)
-	if resolved.SeasonNumber > 0 && resolved.MediaType != "movie" {
+	if resolved.SeasonNumber > 0 && resolved.MediaType != provider.MediaTypeMovie {
 		outputDir = filepath.Join(outputDir, fmt.Sprintf("Season %02d", resolved.SeasonNumber))
 	}
 
@@ -60,7 +68,7 @@ func (s *DownloadService) OrganizedPath(resolved model.ResolvedMedia) (outputDir
 	}
 
 	switch {
-	case resolved.SeasonNumber > 0 && resolved.EpisodeNumber > 0 && resolved.MediaType != "movie":
+	case resolved.SeasonNumber > 0 && resolved.EpisodeNumber > 0 && resolved.MediaType != provider.MediaTypeMovie:
 		tag := fmt.Sprintf("S%02dE%02d", resolved.SeasonNumber, resolved.EpisodeNumber)
 		title = tag
 		if epTitle != "" {
@@ -83,6 +91,8 @@ func (s *DownloadService) OrganizedPath(resolved model.ResolvedMedia) (outputDir
 	return
 }
 
+// Download resolves and fetches one item, reporting progress through the
+// given callback.
 func (s *DownloadService) Download(ctx context.Context, resolved model.ResolvedMedia, progress func(downloader.DownloadProgress)) error {
 	outputDir, title := s.OrganizedPath(resolved)
 	return s.downloadMedia(ctx, resolved, outputDir, title, progress)
@@ -96,26 +106,16 @@ func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.Reso
 	req := downloader.DownloadRequest{
 		Title:     title,
 		OutputDir: outputDir,
-		Sources:   make([]provider.MediaSource, 0, len(resolved.Playback)),
+		Sources:   resolved.Playback,
 		Progress:  progress,
 	}
-	for _, p := range resolved.Playback {
-		req.Sources = append(req.Sources, provider.MediaSource{
-			URL:            p.URL,
-			Quality:        p.Label,
-			Resolver:       p.Resolver,
-			Referer:        p.Referer,
-			Type:           p.Type,
-			UserAgent:      p.UserAgent,
-			CookieHeader:   p.CookieHeader,
-			SuppressOrigin: p.SuppressOrigin,
-		})
-	}
 
-	logging.Debugf("download service: start title=%q outputDir=%q", title, outputDir)
+	logging.Debug("download service: start", "title", title, "outputDir", outputDir)
 	return s.dl.Download(ctx, req)
 }
 
+// CleanupPartial removes partial artifacts of an interrupted download and
+// prunes now-empty directories under the download root.
 func (s *DownloadService) CleanupPartial(outputDir, title string) {
 	s.dl.CleanupPartial(outputDir, title)
 	removeEmptyDirs(outputDir, s.downloadDir)
@@ -140,15 +140,19 @@ func removeEmptyDirs(dir, rootDir string) {
 	}
 }
 
+// BatchDownloadResult is the per-episode outcome of a batch download.
 type BatchDownloadResult struct {
-	Episode model.EpisodeResult
+	Episode provider.Episode
 	Err     error
 }
 
+// BatchDownload downloads episodes sequentially (respecting ctx), applying
+// quality/language filters before each download and reporting progress via
+// onProgress. One failed episode never aborts the rest.
 func (s *DownloadService) BatchDownload(
 	ctx context.Context,
-	series model.SearchResult,
-	episodes []model.EpisodeResult,
+	series provider.SearchResult,
+	episodes []provider.Episode,
 	mode provider.ContentType,
 	qualityMode int,
 	languages map[string]bool,
@@ -165,7 +169,7 @@ func (s *DownloadService) BatchDownload(
 
 		current := i + 1
 		epTitle := episodeResultTitle(ep)
-		logging.Debugf("batch download: starting episode %d/%d: %s", current, len(episodes), epTitle)
+		batchLog.Debug("batch episode starting", "current", current, "total", len(episodes), "episode", epTitle)
 		onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 0})
 
 		resolved, err := s.mediaService.Resolve(ctx, mode, series, ep, nil)
@@ -199,12 +203,12 @@ func (s *DownloadService) BatchDownload(
 	return results
 }
 
-func episodeResultTitle(ep model.EpisodeResult) string {
-	if ep.Season > 0 && ep.Number > 0 {
-		return fmt.Sprintf("S%02dE%02d", ep.Season, ep.Number)
+func episodeResultTitle(ep provider.Episode) string {
+	if ep.Season > 0 && ep.Episode > 0 {
+		return fmt.Sprintf("S%02dE%02d", ep.Season, ep.Episode)
 	}
-	if ep.Number > 0 {
-		return fmt.Sprintf("E%02d", ep.Number)
+	if ep.Episode > 0 {
+		return fmt.Sprintf("E%02d", ep.Episode)
 	}
 	if ep.Title != "" {
 		return ep.Title

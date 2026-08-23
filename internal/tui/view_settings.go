@@ -9,7 +9,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/lang"
+	"kari/internal/provider"
 )
+
+// settingsLastIndex bounds the vertically navigable setting slots
+// (0=Trakt 1=AniList 2=Quality 3=Languages 4=SubtitleLang 5=Images 6=Appearance).
+const settingsLastIndex = 6
 
 func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 	rows := []string{
@@ -31,7 +36,7 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 		traktStyle = traktStyle.BorderLeft(true).BorderStyle(lipgloss.ThickBorder()).BorderForeground(colorPrimary)
 	}
 
-	rows = append(rows, "Trakt.tv")
+	rows = append(rows, sectionTitleStyle.Render("Trakt.tv"))
 	rows = append(rows, traktStyle.Render(fmt.Sprintf("Status: %s\n[C] Connect    [R] Revoke", traktStatus)))
 	if m.traktAuthCode != "" {
 		rows = append(rows, traktStyle.Render(fmt.Sprintf("\nGo to: %s\nEnter code: %s", m.traktAuthURL, m.traktAuthCode)))
@@ -49,7 +54,7 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 		anilistStyle = anilistStyle.BorderLeft(true).BorderStyle(lipgloss.ThickBorder()).BorderForeground(colorPrimary)
 	}
 
-	rows = append(rows, "AniList")
+	rows = append(rows, sectionTitleStyle.Render("AniList"))
 	rows = append(rows, anilistStyle.Render(fmt.Sprintf("Status: %s\n[C] Connect    [R] Revoke", anilistStatus)))
 
 	if m.anilistAuthURL != "" {
@@ -81,7 +86,7 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 
 	modeColor := lipgloss.NewStyle().Foreground(colorPrimary).Render
 
-	rows = append(rows, "Quality")
+	rows = append(rows, sectionTitleStyle.Render("Quality"))
 	qualityLine := fmt.Sprintf(
 		"%s All    %s Highest    %s Data Saver    %s Lowest",
 		modeColor(allMarker), modeColor(highestMarker), modeColor(dataSaverMarker), modeColor(lowestMarker),
@@ -98,26 +103,26 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 	}
 
 	enabledCount := 0
-	for _, code := range languages {
-		if m.languageEnabled(code) {
+	for _, l := range languages {
+		if m.languageEnabled(l.Code) {
 			enabledCount++
 		}
 	}
-	rows = append(rows, fmt.Sprintf("Languages · %d/%d enabled", enabledCount, len(languages)))
+	rows = append(rows, sectionTitleStyle.Render(fmt.Sprintf("Languages · %d/%d enabled", enabledCount, len(languages))))
 	if len(languages) == 0 {
-		rows = append(rows, langStyle.Render(mutedStyle.Render("No languages configured")))
+		rows = append(rows, langStyle.Render(mutedStyle.Render("No audio-language filters for this mode")))
 	} else {
 		entries := make([]string, len(languages))
-		for i, code := range languages {
+		for i, l := range languages {
 			marker := "○"
-			if m.languageEnabled(code) {
+			if m.languageEnabled(l.Code) {
 				marker = "●"
 			}
-			text := marker + " " + movieboxLanguageLabel(code)
+			text := marker + " " + l.Display
 			switch {
 			case m.settingsIndex == 3 && i == m.languageIndex:
 				text = lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(text)
-			case m.languageEnabled(code):
+			case m.languageEnabled(l.Code):
 				text = textStyle.Render(text)
 			default:
 				text = mutedStyle.Render(text)
@@ -125,8 +130,7 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 			entries[i] = text
 		}
 		// Flowed into a wrapping grid rather than one language per line —
-		// with 11 MovieBox languages, a single column was a lot of vertical
-		// space for what's really just a set of toggles.
+		// with a dozen toggles, a single column wastes vertical space.
 		for _, line := range wrapEntries(entries, dims.contentW-4, "   ") {
 			rows = append(rows, langStyle.Render(line))
 		}
@@ -140,7 +144,7 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 		subLangStyle = subLangStyle.BorderLeft(true).BorderStyle(lipgloss.ThickBorder()).BorderForeground(colorPrimary)
 	}
 
-	rows = append(rows, "Subtitle Language")
+	rows = append(rows, sectionTitleStyle.Render("Subtitle Language"))
 	rows = append(rows, subLangStyle.Render(lipgloss.NewStyle().Foreground(colorPrimary).Render(lang.Name(m.subtitleLanguage))))
 	rows = append(rows, subLangStyle.Render(mutedStyle.Render("[←] [→] to change")))
 	rows = append(rows, subLangStyle.Render(mutedStyle.Render("Preferred when a provider or OpenSubtitles offers more than one language")))
@@ -160,7 +164,7 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 	}
 	imagesLine := fmt.Sprintf("%s Enabled    %s Disabled", modeColor(enabledMarker), modeColor(disabledMarker))
 
-	rows = append(rows, "Image Rendering")
+	rows = append(rows, sectionTitleStyle.Render("Image Rendering"))
 	rows = append(rows, imagesStyle.Render(imagesLine))
 	rows = append(rows, imagesStyle.Render(mutedStyle.Render("[←] [→] to change")))
 	rows = append(rows, imagesStyle.Render(mutedStyle.Render("Posters are shown as \"Image rendering disabled\" in place when off")))
@@ -197,8 +201,10 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 	}
 	accentParts[len(accentPresets)] = modeColor(customMarker) + " " + customLabel
 
-	rows = append(rows, "Appearance")
-	rows = append(rows, accentStyle.Render(shorten(strings.Join(accentParts, "    "), dims.contentW-4)))
+	rows = append(rows, sectionTitleStyle.Render("Appearance"))
+	for _, line := range wrapEntries(accentParts, dims.contentW-4, "    ") {
+		rows = append(rows, accentStyle.Render(line))
+	}
 	if m.editingAccentHex {
 		rows = append(rows, accentStyle.Render(mutedStyle.Render("Enter a 6-digit hex color and press Enter (Esc to cancel):")))
 		rows = append(rows, accentStyle.Render(m.hexInput.View()))
@@ -212,48 +218,19 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 	return strings.Join(rows, "\n")
 }
 
+// hasEnabledLanguage guards the loaded filter against a degenerate
+// "everything disabled" state. It deliberately checks the full movies/TV
+// language pool — not the active mode's slice — because at startup the
+// active mode may be one with no audio languages at all (anime), where
+// checking locally would wrongly conclude every language was disabled and
+// wipe the user's saved filter.
 func (m *modelImpl) hasEnabledLanguage() bool {
-	for _, lang := range m.availableLanguages() {
-		if m.languageEnabled(lang) {
+	for _, l := range m.registry.AudioLanguages(provider.ModeMovies, provider.ModeTV) {
+		if m.languageEnabled(l.Code) {
 			return true
 		}
 	}
 	return false
-}
-
-// movieboxLanguages is the hardcoded list of all languages the MovieBox API can return.
-// Derived from testing across 17 movies and 12 TV series.
-var movieboxLanguages = []string{
-	"Original",
-	"English",
-	"English sub",
-	"Bengali",
-	"esla",
-	"Hindi",
-	"Kannada",
-	"Malayalam",
-	"ptbr",
-	"Tamil",
-	"Telugu",
-}
-
-// movieboxLanguageNames gives a couple of the cryptic MovieBox codes a
-// readable label; anything not listed here is already readable as-is
-// (e.g. "Hindi", "Tamil").
-var movieboxLanguageNames = map[string]string{
-	"esla": "Spanish (LatAm)",
-	"ptbr": "Portuguese (BR)",
-}
-
-func movieboxLanguageLabel(code string) string {
-	if name, ok := movieboxLanguageNames[code]; ok {
-		return name
-	}
-	return code
-}
-
-func (m *modelImpl) availableLanguages() []string {
-	return movieboxLanguages
 }
 
 func cleanEpisodeTitle(epTitle, seriesTitle string) string {

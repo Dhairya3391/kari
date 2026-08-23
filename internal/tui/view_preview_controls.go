@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"kari/internal/model"
 	"kari/internal/service"
 )
 
@@ -57,26 +58,65 @@ func (m *modelImpl) renderPreviewControlsRow(width int) string {
 // Players and Actions next to it.
 const sourceSplitThreshold = 8
 
+func cleanQualityDisplay(q string) string {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return "Unknown"
+	}
+	if q == "720" || q == "1080" || q == "480" || q == "360" || q == "2160" {
+		q += "p"
+	}
+	return strings.ReplaceAll(q, " | ", " · ")
+}
+
 func (m *modelImpl) renderSourceColumn(filtered []int, width int) string {
 	r := m.resolved
-	items := make([]string, 0, len(filtered))
+	type sourceRow struct {
+		actualIdx int
+		quality   string
+		provider  string
+	}
+
+	rowsData := make([]sourceRow, 0, len(filtered))
+	maxQualityW := 0
 	for _, actualIdx := range filtered {
 		src := r.Playback[actualIdx]
-		label := src.Label
-		if strings.TrimSpace(label) == "" {
-			label = "Unknown"
+		q := cleanQualityDisplay(src.Quality)
+		p := m.registry.DisplayName(src.Resolver)
+		if w := lipgloss.Width(q); w > maxQualityW {
+			maxQualityW = w
 		}
-		if actualIdx == m.selectedPlayback {
-			items = append(items, lipgloss.NewStyle().
-				Foreground(colorPrimary).
-				BorderLeft(true).
-				BorderStyle(lipgloss.ThickBorder()).
-				BorderForeground(colorPrimary).
-				PaddingLeft(1).
-				Render("● "+label))
+		rowsData = append(rowsData, sourceRow{
+			actualIdx: actualIdx,
+			quality:   q,
+			provider:  p,
+		})
+	}
+
+	items := make([]string, 0, len(rowsData))
+	for _, row := range rowsData {
+		gap := maxQualityW - lipgloss.Width(row.quality)
+		if gap < 0 {
+			gap = 0
+		}
+		paddedQuality := row.quality + strings.Repeat(" ", gap)
+
+		var line string
+		if row.provider != "" {
+			if row.actualIdx == m.selectedPlayback {
+				line = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("● " + paddedQuality) +
+					mutedStyle.Render("  · " + row.provider)
+			} else {
+				line = mutedStyle.Render("○ " + paddedQuality + "  · " + row.provider)
+			}
 		} else {
-			items = append(items, mutedStyle.Render("  ○ "+label))
+			if row.actualIdx == m.selectedPlayback {
+				line = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("● " + paddedQuality)
+			} else {
+				line = mutedStyle.Render("○ " + paddedQuality)
+			}
 		}
+		items = append(items, line)
 	}
 
 	rows := []string{sectionTitleStyle.Render("Source"), "", layoutSourceItems(items, width), "", mutedStyle.Render("tab / shift+tab to switch")}
@@ -117,7 +157,7 @@ func (m *modelImpl) renderPlayersColumn() string {
 	}
 	rows = append(rows, "", mutedStyle.Render("[ctrl+p] to switch player"))
 
-	if r.MediaType == "anime" || r.MediaType == "tv" || r.MediaType == "cartoon" {
+	if model.IsEpisodeBased(r.MediaType) {
 		status := mutedStyle.Render("OFF")
 		if m.autoplay {
 			status = lipgloss.NewStyle().Foreground(colorSuccess).Render("ON")
@@ -167,13 +207,18 @@ func (m *modelImpl) renderHelpOverlay() string {
 	)
 
 	sections = append(sections, "", sectionTitleStyle.Render("Episodes"), "")
-	sections = append(sections,
-		"  "+keyStyle.Render("space")+"    "+mutedStyle.Render("toggle select"),
-		"  "+keyStyle.Render("ctrl+a")+"   "+mutedStyle.Render("select all"),
-		"  "+keyStyle.Render("ctrl+d")+"   "+mutedStyle.Render("deselect all"),
-		"  "+keyStyle.Render("D")+"        "+mutedStyle.Render("batch download"),
-		"  "+keyStyle.Render("a")+"        "+mutedStyle.Render("sub/dub"),
-	)
+	epKeys := []string{
+		"  " + keyStyle.Render("space") + "    " + mutedStyle.Render("toggle select"),
+		"  " + keyStyle.Render("ctrl+a") + "   " + mutedStyle.Render("select all"),
+		"  " + keyStyle.Render("ctrl+d") + "   " + mutedStyle.Render("deselect all"),
+		"  " + keyStyle.Render("D") + "        " + mutedStyle.Render("batch download"),
+	}
+	// The sub/dub key only exists when the mode's providers declare
+	// audio-track selection.
+	if m.modeFeatures().AudioSelection {
+		epKeys = append(epKeys, "  "+keyStyle.Render("a")+"        "+mutedStyle.Render("sub/dub"))
+	}
+	sections = append(sections, epKeys...)
 
 	sections = append(sections, "", sectionTitleStyle.Render("Playback"), "")
 	sections = append(sections,

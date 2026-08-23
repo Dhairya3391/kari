@@ -15,7 +15,11 @@ import (
 	"kari/internal/logging"
 )
 
-func (c *Client) processSubtitleData(data []byte) ([]byte, string) {
+// log scopes every line from this package.
+var subLog = logging.With("component", "subtitles")
+
+// ProcessSubtitleData unzips, converts encoding, and normalizes subtitle bytes into UTF-8 SRT/text.
+func ProcessSubtitleData(data []byte) ([]byte, string) {
 	if len(data) < 2 {
 		return data, detectFormatByContent(data)
 	}
@@ -23,21 +27,21 @@ func (c *Client) processSubtitleData(data []byte) ([]byte, string) {
 	if isGZIP(data) {
 		decompressed, err := decompressGZIP(data)
 		if err != nil {
-			logging.Debugf("gzip decompression failed: %v", err)
+			subLog.Debug("gzip decompression failed", "err", err)
 			return data, "gzip-failed"
 		}
 		data = decompressed
-		logging.Debugf("gzip decompressed, size: %d", len(data))
+		subLog.Debug("gzip decompressed", "size", len(data))
 	}
 
 	if isZIP(data) {
 		extracted, err := extractFromZIP(data)
 		if err != nil {
-			logging.Debugf("zip extraction failed: %v", err)
+			subLog.Debug("zip extraction failed", "err", err)
 			return data, "zip-failed"
 		}
 		data = extracted
-		logging.Debugf("zip extracted, size: %d", len(data))
+		subLog.Debug("zip extracted", "size", len(data))
 	}
 
 	data = stripBOM(data)
@@ -47,10 +51,10 @@ func (c *Client) processSubtitleData(data []byte) ([]byte, string) {
 	if isVTT(data) {
 		converted, err := vttToSRT(data)
 		if err != nil {
-			logging.Debugf("vtt to srt conversion failed: %v", err)
+			subLog.Debug("vtt-to-srt conversion failed", "err", err)
 			return data, "vtt-convert-failed"
 		}
-		logging.Debugf("converted vtt to srt")
+		subLog.Debug("converted vtt to srt")
 		return converted, "srt-from-vtt"
 	}
 
@@ -83,8 +87,6 @@ func isSRT(data []byte) bool {
 }
 
 var srtTimestampPattern = regexp.MustCompile(`^\d+[\r\n]+\d{2}:\d{2}:\d{2},\d{3}`)
-var srtIndexPattern = regexp.MustCompile(`^\d+$`)
-
 func decompressGZIP(data []byte) ([]byte, error) {
 	reader, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -148,45 +150,90 @@ func convertToUTF8(data []byte) []byte {
 	return []byte(cleaned)
 }
 
+var vttTagRegex = regexp.MustCompile(`<[^>]+>`)
+
+func formatSRTTimestamp(ts string) string {
+	ts = strings.TrimSpace(ts)
+	ts = strings.ReplaceAll(ts, ".", ",")
+	if strings.Count(ts, ":") == 1 {
+		ts = "00:" + ts
+	}
+	return ts
+}
+
 func vttToSRT(data []byte) ([]byte, error) {
 	text := string(data)
-	text = strings.ReplaceAll(text, "WEBVTT", "")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 
-	var lines []string
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if strings.Contains(line, " --> ") {
-			line = strings.ReplaceAll(line, ".", ",")
-		}
-		lines = append(lines, line)
-	}
+	var (
+		blocks   []string
+		inHeader = true
+		curIndex = 1
+	)
 
-	if len(lines) > 0 {
-		lines = normalizeSRTIndices(lines)
-	}
-
-	return []byte(strings.Join(lines, "\n")), nil
-}
-
-func normalizeSRTIndices(lines []string) []string {
-	var result []string
-	counter := 1
+	lines := strings.Split(text, "\n")
 	for i := 0; i < len(lines); i++ {
-		line := lines[i]
-		if srtIndexPattern.MatchString(line) {
-			result = append(result, fmt.Sprintf("%d", counter))
-			counter++
-		} else {
-			result = append(result, line)
+		line := strings.TrimSpace(lines[i])
+		if inHeader {
+			if strings.HasPrefix(line, "WEBVTT") || strings.HasPrefix(line, "NOTE") || strings.HasPrefix(line, "STYLE") || strings.HasPrefix(line, "REGION") {
+				continue
+			}
+			if line == "" {
+				inHeader = false
+				continue
+			}
+			if strings.Contains(line, "-->") {
+				inHeader = false
+			} else {
+				continue
+			}
+		}
+
+		if strings.Contains(line, "-->") {
+			parts := strings.Split(line, "-->")
+			if len(parts) != 2 {
+				continue
+			}
+			start := strings.TrimSpace(parts[0])
+			endPart := strings.TrimSpace(parts[1])
+			endFields := strings.Fields(endPart)
+			if len(endFields) == 0 {
+				continue
+			}
+			end := endFields[0]
+
+			timeLine := formatSRTTimestamp(start) + " --> " + formatSRTTimestamp(end)
+
+			var textLines []string
+			for i+1 < len(lines) {
+				nextLine := strings.TrimSpace(lines[i+1])
+				if nextLine == "" {
+					i++
+					break
+				}
+				if strings.Contains(nextLine, "-->") {
+					break
+				}
+				cleaned := vttTagRegex.ReplaceAllString(nextLine, "")
+				cleaned = strings.TrimSpace(cleaned)
+				if cleaned != "" {
+					textLines = append(textLines, cleaned)
+				}
+				i++
+			}
+
+			if len(textLines) > 0 {
+				block := fmt.Sprintf("%d\n%s\n%s", curIndex, timeLine, strings.Join(textLines, "\n"))
+				blocks = append(blocks, block)
+				curIndex++
+			}
 		}
 	}
-	return result
+
+	return []byte(strings.Join(blocks, "\n\n") + "\n"), nil
 }
+
 
 func detectFormatByContent(data []byte) string {
 	if isVTT(data) {

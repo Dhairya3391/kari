@@ -10,26 +10,32 @@ import (
 
 	"kari/internal/logging"
 	"kari/internal/model"
+	"kari/internal/provider"
 )
 
+// MPVPlayer (android build) launches mpv through an Android intent; the
+// mpv.conf include bridge carries stream headers that intents cannot.
 type MPVPlayer struct{}
 
 var _ Player = (*MPVPlayer)(nil)
 
+// Name implements Player.
 func (p *MPVPlayer) Name() string {
 	return "mpv"
 }
 
+// Available implements Player.
 func (p *MPVPlayer) Available() bool {
 	return isPackageAvailable(mpvAndroidPackage)
 }
 
-func (p *MPVPlayer) Play(sources []model.PlaybackSource, media model.ResolvedMedia) (PlaybackResult, error) {
+// Play implements Player.
+func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
 	return playWithMPVAndroid(sources, media)
 }
 
-func playWithMPVAndroid(sources []model.PlaybackSource, media model.ResolvedMedia) (PlaybackResult, error) {
-	return attemptSources("mpv", sources, func(source model.PlaybackSource) (PlaybackResult, error) {
+func playWithMPVAndroid(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
+	return attemptSources("mpv", sources, func(source provider.MediaSource) (PlaybackResult, error) {
 		if err := playSingleSourceWithMPVAndroid(source, media); err != nil {
 			return PlaybackResult{}, err
 		}
@@ -37,7 +43,7 @@ func playWithMPVAndroid(sources []model.PlaybackSource, media model.ResolvedMedi
 	})
 }
 
-func playSingleSourceWithMPVAndroid(source model.PlaybackSource, media model.ResolvedMedia) error {
+func playSingleSourceWithMPVAndroid(source provider.MediaSource, media model.ResolvedMedia) error {
 	writeMpvConf(source, media)
 
 	// mpv-android's intent accepts options only via extras for title, start
@@ -61,7 +67,7 @@ func playSingleSourceWithMPVAndroid(source model.PlaybackSource, media model.Res
 	return nil
 }
 
-func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
+func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) {
 	// mpv-android loads libmpv's config only from its own internal files dir
 	// (/data/user/0/is.xyz.mpv/files/), which the app sets via
 	// `config-dir=<filesDir>` (see BaseMPVView.initialize upstream). That
@@ -152,14 +158,18 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 	subtitleFiles := media.SubtitlePaths()
 	if len(subtitleFiles) > 0 && subtitleFiles[0] != "" {
 		if err := os.MkdirAll(mpvAndroidDir, 0o755); err != nil {
-			logging.Debugf("writeMpvConf: failed to create %s: %v", mpvAndroidDir, err)
+			mpvLog.Debug("config dir create failed", "dir", mpvAndroidDir, "err", err)
 		}
-		target := mpvAndroidDir + "/sub.vtt"
+		ext := filepath.Ext(subtitleFiles[0])
+		if ext == "" {
+			ext = ".vtt"
+		}
+		target := filepath.Join(mpvAndroidDir, "sub"+ext)
 		if err := copyFile(subtitleFiles[0], target); err == nil {
 			subPath = target
-			logging.Debugf("writeMpvConf: copied subtitle to %s", target)
+			mpvLog.Debug("subtitle copied for config bridge", "target", target)
 		} else {
-			logging.Debugf("writeMpvConf: failed to copy subtitle to %s: %v", target, err)
+			mpvLog.Debug("subtitle copy failed", "target", target, "err", err)
 		}
 	}
 	if subPath != "" {
@@ -182,13 +192,13 @@ func writeMpvConf(source model.PlaybackSource, media model.ResolvedMedia) {
 			continue
 		}
 		if err := os.WriteFile(confPath, []byte(confData), 0o644); err != nil {
-			logging.Debugf("writeMpvConf: failed to write %s: %v", confPath, err)
+			mpvLog.Debug("config write failed", "path", confPath, "err", err)
 			continue
 		}
 		wroteCount++
-		logging.Debugf("writeMpvConf: wrote %s", confPath)
+		mpvLog.Debug("config written", "path", confPath)
 	}
 	if wroteCount == 0 {
-		logging.Debugf("writeMpvConf: could not write mpv.conf to any path (headers/title won't be set)")
+		mpvLog.Debug("could not write mpv.conf to any path; headers and title will not be set")
 	}
 }

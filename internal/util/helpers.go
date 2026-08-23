@@ -22,10 +22,14 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// NormalizeSpace collapses runs of whitespace into single spaces and trims
+// the ends, normalizing titles pulled from APIs with inconsistent spacing.
 func NormalizeSpace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
+// OpenBrowser opens url in the platform's default browser. The command is
+// started detached; failure to open is reported but never retried.
 func OpenBrowser(url string) error {
 	switch runtime.GOOS {
 	case "darwin":

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"kari/internal/history"
-	"kari/internal/model"
 	"kari/internal/provider"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -24,7 +23,7 @@ func (i rowItem) Title() string       { return i.title }
 func (i rowItem) Description() string { return i.desc }
 func (i rowItem) FilterValue() string { return i.title + " " + i.desc }
 
-func seriesToItems(items []model.SearchResult) []list.Item {
+func seriesToItems(items []provider.SearchResult) []list.Item {
 	out := make([]list.Item, 0, len(items))
 	for idx, it := range items {
 		desc := strings.TrimSpace(it.Year)
@@ -34,7 +33,7 @@ func seriesToItems(items []model.SearchResult) []list.Item {
 		out = append(out, rowItem{
 			title: title,
 			desc:  desc,
-			key:   it.URL,
+			key:   it.ID,
 			index: idx,
 		})
 	}
@@ -69,7 +68,7 @@ func progressMarker(entry history.Entry) string {
 	}
 }
 
-func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, seriesTitle string, mode provider.ContentType, mediaType string, selected map[int]struct{}) []list.Item {
+func episodesToItems(items []provider.Episode, historyStore *history.Store, seriesTitle string, mode provider.ContentType, mediaType string, selected map[int]struct{}) []list.Item {
 	out := make([]list.Item, 0, len(items))
 	for idx, it := range items {
 		marker := "[    ] "
@@ -81,7 +80,7 @@ func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, s
 				Mode:      string(mode),
 				MediaType: mediaType,
 				Season:    it.Season,
-				Episode:   it.Number,
+				Episode:   it.Episode,
 			})
 			if ok {
 				marker = progressMarker(entry)
@@ -89,10 +88,10 @@ func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, s
 		}
 
 		tag := "     "
-		if it.Season > 0 && it.Number > 0 {
-			tag = fmt.Sprintf("S%d E%02d", it.Season, it.Number)
-		} else if it.Number > 0 {
-			tag = fmt.Sprintf("E%02d", it.Number)
+		if it.Season > 0 && it.Episode > 0 {
+			tag = fmt.Sprintf("S%d E%02d", it.Season, it.Episode)
+		} else if it.Episode > 0 {
+			tag = fmt.Sprintf("E%02d", it.Episode)
 		} else if it.Season > 0 {
 			tag = fmt.Sprintf("S%d", it.Season)
 		}
@@ -111,14 +110,14 @@ func episodesToItems(items []model.EpisodeResult, historyStore *history.Store, s
 			return it.Title
 		}())
 		desc := ""
-		if it.Kind == "movie" {
+		if mediaType == provider.MediaTypeMovie {
 			desc = "Movie"
 		}
 
 		out = append(out, rowItem{
 			title: title,
 			desc:  desc,
-			key:   it.URL,
+			key:   it.ID,
 			index: idx,
 		})
 	}
@@ -170,7 +169,7 @@ func historyGroupsToItems(groups []history.Group) []list.Item {
 
 func historyGroupActionLabel(group history.Group) string {
 	mediaType := strings.ToLower(strings.TrimSpace(group.MediaType))
-	if mediaType == "movie" {
+	if mediaType == provider.MediaTypeMovie {
 		if group.HasIncomplete {
 			return "Resume"
 		}

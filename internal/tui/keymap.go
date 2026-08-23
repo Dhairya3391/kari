@@ -2,7 +2,8 @@ package tui
 
 import (
 	"github.com/charmbracelet/bubbles/key"
-	"kari/internal/provider"
+
+	"kari/internal/model"
 )
 
 type keyMap struct {
@@ -145,7 +146,7 @@ func (m *modelImpl) shortHelpBindings() []key.Binding {
 		bindings = []key.Binding{m.keys.Search, m.keys.Type, m.keys.Select, m.keys.History, m.keys.Help, m.keys.Quit}
 	case viewEpisodes:
 		bindings = []key.Binding{m.keys.Move, m.keys.ToggleSelect, m.keys.BatchDownload, m.keys.Select, m.keys.Help, m.keys.Quit}
-		if m.selectedSeries != nil && m.appMode == provider.ModeAnime {
+		if m.selectedSeries != nil && m.modeFeatures().AudioSelection {
 			bindings = append(bindings[:3], append([]key.Binding{m.keys.Audio}, bindings[3:]...)...)
 		}
 	case viewHistory:
@@ -160,7 +161,7 @@ func (m *modelImpl) shortHelpBindings() []key.Binding {
 		if m.canPlayNextEpisode() {
 			bindings = append(bindings, m.keys.PlayNext)
 		}
-		if m.resolved != nil && (m.resolved.MediaType == "anime" || m.resolved.MediaType == "tv" || m.resolved.MediaType == "cartoon") {
+		if m.resolved != nil && model.IsEpisodeBased(m.resolved.MediaType) {
 			bindings = append(bindings, m.keys.Autoplay)
 		}
 		bindings = append(bindings, m.keys.Download, m.keys.Help, m.keys.Quit)

@@ -9,7 +9,6 @@ import (
 	"net/url"
 
 	"kari/internal/config"
-	"kari/internal/logging"
 )
 
 type tmdbDetails struct {
@@ -73,7 +72,7 @@ func (c *Client) fetchTMDBMediaDetailsUncached(ctx context.Context, tmdbID int, 
 		if status != http.StatusUnauthorized && status != http.StatusTooManyRequests {
 			return tmdbDetails{}, err
 		}
-		logging.Warnf("poster: tmdb request unauthorized tmdb_id=%d err=%v", tmdbID, err)
+		posterLog.Warn("tmdb request unauthorized; rotating key", "tmdbID", tmdbID, "err", err)
 		c.keyPool.MarkFailed(apiKey)
 		lastAuthErr = err
 	}

@@ -13,6 +13,7 @@ import (
 
 	"kari/internal/history"
 	"kari/internal/lang"
+	"kari/internal/logging"
 	"kari/internal/player"
 	"kari/internal/poster"
 	"kari/internal/provider"
@@ -23,6 +24,12 @@ import (
 	"kari/internal/util"
 )
 
+// tuiLog scopes every log line emitted by the TUI layer.
+var tuiLog = logging.With("component", "tui")
+
+// NewModel wires every dependency into the TUI root model. This signature
+// is intentionally explicit: all components arrive pre-constructed from
+// app.Run, so nothing inside tui constructs I/O collaborators.
 func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, appVersion string) tea.Model {
 	// Loaded up front (rather than where settings used to be applied,
 	// further down) so the accent color is in effect before any of the
@@ -160,7 +167,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		searchCache:      util.NewBoundedCache[searchCacheEntry](60),
 		downloadChan:     make(chan tea.Msg, 10),
 		resolveChan:      make(chan tea.Msg, 10),
-		audioMode:        "sub",
+		audioMode:        provider.AudioSub,
 		qualityMode:      qualityAll,
 		languageFilter:   make(map[string]bool),
 		subtitleLanguage: "en",
@@ -306,7 +313,6 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancelDownload = msg.cancel
 		m.downloadOutputDir = msg.outputDir
 		m.downloadTitle = msg.title
-		m.downloadProvider = msg.provider
 		m.drainDownloadChan()
 		return m, tea.Batch(spinnerCmd, func() tea.Msg {
 			return downloadProgressMsg{opID: msg.opID, progress: 0}

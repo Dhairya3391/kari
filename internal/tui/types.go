@@ -47,13 +47,13 @@ const (
 )
 
 type searchCacheEntry struct {
-	results   []model.SearchResult
+	results   []provider.SearchResult
 	usedQuery string
 	warnings  []string
 }
 
 type searchDoneMsg struct {
-	results   []model.SearchResult
+	results   []provider.SearchResult
 	usedQuery string
 	warnings  []string
 	opID      int
@@ -61,14 +61,14 @@ type searchDoneMsg struct {
 }
 
 type episodesDoneMsg struct {
-	results []model.EpisodeResult
+	results []provider.Episode
 	opID    int
 	err     error
 }
 
 type historyContinueEpisodesMsg struct {
 	group   history.Group
-	results []model.EpisodeResult
+	results []provider.Episode
 	opID    int
 	err     error
 }
@@ -79,7 +79,7 @@ type historyContinueEpisodesMsg struct {
 type historyResolveSeriesMsg struct {
 	entry  history.Entry
 	group  *history.Group
-	series model.SearchResult
+	series provider.SearchResult
 	opID   int
 	err    error
 }
@@ -150,7 +150,6 @@ type downloadStartedMsg struct {
 	cancel    context.CancelFunc
 	outputDir string
 	title     string
-	provider  string
 }
 
 type batchStartedMsg struct {
@@ -211,11 +210,11 @@ type modelImpl struct {
 
 	keys keyMap
 
-	allSeriesResults []model.SearchResult
-	seriesResults    []model.SearchResult
-	episodeResults   []model.EpisodeResult
-	selectedSeries   *model.SearchResult
-	selectedEpisode  *model.EpisodeResult
+	allSeriesResults []provider.SearchResult
+	seriesResults    []provider.SearchResult
+	episodeResults   []provider.Episode
+	selectedSeries   *provider.SearchResult
+	selectedEpisode  *provider.Episode
 	resolved         *model.ResolvedMedia
 
 	searchQuery  string
@@ -266,7 +265,6 @@ type modelImpl struct {
 	resolveChan           chan tea.Msg
 	cancelDownload        context.CancelFunc
 	downloadTitle         string
-	downloadProvider      string
 	downloadOutputDir     string
 	confirmQuit           bool
 	confirmStop           bool
@@ -291,13 +289,13 @@ type modelImpl struct {
 	editingAccentHex      bool
 	hexInput              textinput.Model
 
-	selectedEpisodes map[int]struct{}
-	batchInProgress  bool
-	batchCurrent            int
-	batchTotal              int
-	batchEpisodeProgress    float64
-	batchCancel      context.CancelFunc
-	batchChan        chan tea.Msg
+	selectedEpisodes     map[int]struct{}
+	batchInProgress      bool
+	batchCurrent         int
+	batchTotal           int
+	batchEpisodeProgress float64
+	batchCancel          context.CancelFunc
+	batchChan            chan tea.Msg
 
 	posterClient             *poster.Client
 	imgProtocol              termimg.Protocol

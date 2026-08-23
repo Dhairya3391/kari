@@ -7,6 +7,10 @@ import (
 	"sync"
 )
 
+// KeyPool rotates through TMDB API keys round-robin, skipping keys marked
+// failed after auth errors. It is safe for concurrent use; a nil *KeyPool
+// behaves like an empty pool, so components that work without TMDB don't
+// need nil-guards at call sites.
 type KeyPool struct {
 	mu     sync.Mutex
 	keys   []string
@@ -14,6 +18,7 @@ type KeyPool struct {
 	next   int
 }
 
+// NewKeyPool constructs a pool from the given keys, ignoring blanks.
 func NewKeyPool(keys []string) *KeyPool {
 	cleaned := make([]string, 0, len(keys))
 	for _, key := range keys {
@@ -24,10 +29,14 @@ func NewKeyPool(keys []string) *KeyPool {
 	return &KeyPool{keys: cleaned, failed: make(map[string]struct{})}
 }
 
+// NextKey returns the next working key, rotating through the pool and
+// skipping failed ones. Callers should MarkFailed on auth errors and retry.
 func (p *KeyPool) NextKey() (string, error) {
 	return p.nextKey()
 }
 
+// MarkFailed records that a key was rejected, excluding it from rotation.
+// Safe to call with empty keys or on a nil pool.
 func (p *KeyPool) MarkFailed(key string) {
 	key = strings.TrimSpace(key)
 	if key == "" || p == nil {
@@ -41,6 +50,7 @@ func (p *KeyPool) MarkFailed(key string) {
 	p.mu.Unlock()
 }
 
+// nextKey is the lock-holding implementation of NextKey.
 func (p *KeyPool) nextKey() (string, error) {
 	if p == nil {
 		return "", errors.New("tmdb key pool is nil")

@@ -17,12 +17,18 @@ import (
 	"kari/internal/util"
 )
 
+// log scopes every line from this package.
+var traktLog = logging.With("component", "scrobble.trakt")
+
+// TraktToken is the persisted OAuth token for the Trakt device-auth flow.
 type TraktToken struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
+// TraktClient scrobbles episode/movie progress to trakt.tv. Tokens are
+// persisted under ~/.config/kari and refreshed automatically.
 type TraktClient struct {
 	clientID     string
 	clientSecret string
@@ -31,6 +37,7 @@ type TraktClient struct {
 	httpClient   *http.Client
 }
 
+// NewTraktClient constructs a client, loading any persisted token from disk.
 func NewTraktClient(clientID, clientSecret string) *TraktClient {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -73,6 +80,8 @@ func (c *TraktClient) saveToken() error {
 	return util.AtomicWriteFile(c.tokenPath, data, 0600)
 }
 
+// Revoke revokes the stored token server-side (best effort) and deletes it
+// from disk.
 func (c *TraktClient) Revoke() error {
 	c.token = nil
 	if err := os.Remove(c.tokenPath); err != nil && !os.IsNotExist(err) {
@@ -81,10 +90,13 @@ func (c *TraktClient) Revoke() error {
 	return nil
 }
 
+// IsAuthenticated reports whether a usable token is stored.
 func (c *TraktClient) IsAuthenticated() bool {
 	return c.token != nil && c.token.ExpiresAt.After(time.Now())
 }
 
+// StartDeviceAuth begins the device-code flow, returning the code the user
+// enters at verificationURL plus polling parameters.
 func (c *TraktClient) StartDeviceAuth(ctx context.Context) (userCode, verificationURL, deviceCode string, interval, expiresIn int, err error) {
 	body := map[string]string{"client_id": c.clientID}
 	data, _ := json.Marshal(body)
@@ -116,6 +128,8 @@ func (c *TraktClient) StartDeviceAuth(ctx context.Context) (userCode, verificati
 	return res.UserCode, res.VerificationURL, res.DeviceCode, res.Interval, res.ExpiresIn, nil
 }
 
+// PollDeviceAuth polls until the user completes authorization or the code
+// expires, persisting the exchanged token on success.
 func (c *TraktClient) PollDeviceAuth(ctx context.Context, deviceCode string, interval, expiresIn int) error {
 	if interval <= 0 {
 		interval = 5
@@ -187,6 +201,8 @@ func (c *TraktClient) PollDeviceAuth(ctx context.Context, deviceCode string, int
 	}
 }
 
+// RefreshIfNeeded exchanges a soon-to-expire refresh token for a new access
+// token; it is a no-op when the current token is still fresh.
 func (c *TraktClient) RefreshIfNeeded(ctx context.Context) error {
 	if c.token == nil || c.token.RefreshToken == "" {
 		return nil
@@ -233,6 +249,7 @@ func (c *TraktClient) RefreshIfNeeded(ctx context.Context) error {
 	return c.saveToken()
 }
 
+// ScrobbleEpisode reports watch progress for an episode; progress is 0..1.
 func (c *TraktClient) ScrobbleEpisode(ctx context.Context, media model.ResolvedMedia, progress float64) error {
 	if !c.IsAuthenticated() {
 		return nil
@@ -246,7 +263,7 @@ func (c *TraktClient) ScrobbleEpisode(ctx context.Context, media model.ResolvedM
 		progressPct = 100
 	}
 
-	logging.Debugf("trakt: scrobbling episode %q S%02dE%02d at %.1f%%", media.SeriesTitle, media.SeasonNumber, media.EpisodeNumber, progressPct)
+	traktLog.Debug("scrobbling episode", "series", media.SeriesTitle, "season", media.SeasonNumber, "episode", media.EpisodeNumber, "progressPct", progressPct)
 
 	payload := map[string]interface{}{
 		"episode": map[string]interface{}{
@@ -266,6 +283,7 @@ func (c *TraktClient) ScrobbleEpisode(ctx context.Context, media model.ResolvedM
 	return c.doScrobble(ctx, payload)
 }
 
+// ScrobbleMovie reports watch progress for a movie; progress is 0..1.
 func (c *TraktClient) ScrobbleMovie(ctx context.Context, media model.ResolvedMedia, progress float64) error {
 	if !c.IsAuthenticated() {
 		return nil
@@ -279,7 +297,7 @@ func (c *TraktClient) ScrobbleMovie(ctx context.Context, media model.ResolvedMed
 		progressPct = 100
 	}
 
-	logging.Debugf("trakt: scrobbling movie %q at %.1f%%", media.SeriesTitle, progressPct)
+	traktLog.Debug("scrobbling movie", "title", media.SeriesTitle, "progressPct", progressPct)
 
 	payload := map[string]interface{}{
 		"movie": map[string]interface{}{
@@ -305,7 +323,7 @@ func (c *TraktClient) doScrobble(ctx context.Context, payload interface{}) error
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		logging.Errorf("trakt scrobble request failed: %v", err)
+		traktLog.Error("scrobble request failed", "err", err)
 		return err
 	}
 	defer resp.Body.Close()
@@ -313,9 +331,9 @@ func (c *TraktClient) doScrobble(ctx context.Context, payload interface{}) error
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errBody bytes.Buffer
 		_, _ = errBody.ReadFrom(resp.Body)
-		logging.Errorf("trakt scrobble failed: status=%d body=%q", resp.StatusCode, errBody.String())
+		traktLog.Error("scrobble failed", "status", resp.StatusCode, "body", errBody.String())
 		return fmt.Errorf("trakt scrobble error: %d", resp.StatusCode)
 	}
-	logging.Infof("trakt: scrobble successful")
+	traktLog.Info("scrobble succeeded")
 	return nil
 }

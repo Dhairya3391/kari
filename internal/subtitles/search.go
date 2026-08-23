@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"kari/internal/lang"
-	"kari/internal/logging"
 	"kari/internal/model"
 )
 
@@ -41,11 +40,13 @@ type subtitleFile struct {
 	FileName string `json:"file_name"`
 }
 
+// Search queries OpenSubtitles for subtitle entries matching the title or
+// TMDB ID and preferred language.
 func (c *Client) Search(ctx context.Context, query, language string, tmdbID, season, episode int) ([]searchEntry, error) {
 	if language == "" {
 		language = "en"
 	}
-	logging.Debugf("opensubtitles search start query=%q language=%q tmdbID=%d S%dE%d", query, language, tmdbID, season, episode)
+	osLog.Debug("search start", "query", query, "language", language, "tmdbID", tmdbID, "season", season, "episode", episode)
 	if err := c.ensureToken(ctx); err != nil {
 		return nil, err
 	}
@@ -96,7 +97,7 @@ func (c *Client) Search(ctx context.Context, query, language string, tmdbID, sea
 
 	var filtered []searchEntry
 	for _, r := range results {
-		if strings.EqualFold(r.Attributes.Language, "en") {
+		if strings.EqualFold(r.Attributes.Language, language) {
 			filtered = append(filtered, r)
 		}
 	}
@@ -107,7 +108,7 @@ func (c *Client) Search(ctx context.Context, query, language string, tmdbID, sea
 	sort.Slice(filtered, func(i, j int) bool {
 		return filtered[i].Attributes.DownloadCount > filtered[j].Attributes.DownloadCount
 	})
-	logging.Debugf("opensubtitles search done results=%d", len(filtered))
+	osLog.Debug("search done", "results", len(filtered))
 	return filtered, nil
 }
 
@@ -120,8 +121,10 @@ type downloadResponse struct {
 	FileName string `json:"file_name"`
 }
 
+// Download materializes a subtitle file into the cache dir and returns its
+// local path.
 func (c *Client) Download(ctx context.Context, fileID int) (string, error) {
-	logging.Debugf("opensubtitles download start fileID=%d", fileID)
+	osLog.Debug("download start", "fileID", fileID)
 	if err := c.ensureToken(ctx); err != nil {
 		return "", err
 	}
@@ -156,14 +159,14 @@ func (c *Client) Download(ctx context.Context, fileID int) (string, error) {
 		return "", fmt.Errorf("opensubtitles download: empty link")
 	}
 
-	logging.Debugf("opensubtitles resolving file link %q", dr.Link)
+	osLog.Debug("resolving file link", "link", dr.Link)
 
 	rawData, err := c.downloadFile(ctx, dr.Link)
 	if err != nil {
 		return "", fmt.Errorf("opensubtitles file download: %w", err)
 	}
 
-	processedData, detectedFormat := c.processSubtitleData(rawData)
+	processedData, detectedFormat := ProcessSubtitleData(rawData)
 
 	subDir, err := CacheDir()
 	if err != nil {
@@ -176,21 +179,23 @@ func (c *Client) Download(ctx context.Context, fileID int) (string, error) {
 		return "", fmt.Errorf("opensubtitles file write: %w", err)
 	}
 
-	logging.Infof("opensubtitles: downloaded subtitle to %s (format: %s)", localPath, detectedFormat)
+	osLog.Info("subtitle downloaded", "path", localPath, "format", detectedFormat)
 	return localPath, nil
 }
 
+// FetchBestSubtitle combines Search + scoring + Download and returns the
+// highest-scoring subtitle track materialized on disk.
 func (c *Client) FetchBestSubtitle(ctx context.Context, query, language string, tmdbID, season, episode int) (model.SubtitleTrack, bool, error) {
 	if language == "" {
 		language = "en"
 	}
-	logging.Debugf("opensubtitles FetchBestSubtitle start query=%q language=%q tmdbID=%d S%dE%d", query, language, tmdbID, season, episode)
+	osLog.Debug("best-subtitle search start", "query", query, "language", language, "tmdbID", tmdbID, "season", season, "episode", episode)
 	results, err := c.Search(ctx, query, language, tmdbID, season, episode)
 	if err != nil {
 		return model.SubtitleTrack{}, false, err
 	}
 	if len(results) == 0 {
-		logging.Debugf("opensubtitles FetchBestSubtitle no results found")
+		osLog.Debug("best-subtitle search found no results")
 		return model.SubtitleTrack{}, false, nil
 	}
 
@@ -248,11 +253,11 @@ func (c *Client) FetchBestSubtitle(ctx context.Context, query, language string, 
 	}
 
 	if best == nil || len(best.Attributes.Files) == 0 || bestScore < threshold {
-		logging.Debugf("opensubtitles FetchBestSubtitle no suitable file found or score too low: bestScore=%d threshold=%d", bestScore, threshold)
+		osLog.Debug("no suitable subtitle above score threshold", "bestScore", bestScore, "threshold", threshold)
 		return model.SubtitleTrack{}, false, nil
 	}
 
-	logging.Debugf("opensubtitles FetchBestSubtitle selected release=%q score=%d", best.Attributes.Release, bestScore)
+	osLog.Debug("best subtitle selected", "release", best.Attributes.Release, "score", bestScore)
 	fileID := best.Attributes.Files[0].FileID
 	localPath, err := c.Download(ctx, fileID)
 	if err != nil {

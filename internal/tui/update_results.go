@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,13 +15,23 @@ import (
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/player"
+	"kari/internal/provider"
 )
+
+// reURL matches http(s) URLs so cleanErrorForUI can scrub them.
+var reURL = regexp.MustCompile(`https?://\S+`)
 
 func cleanErrorForUI(err error) string {
 	if err == nil {
 		return "Unknown error"
 	}
 	msg := err.Error()
+
+	// Scrub transport detail: URLs embed upstream hostnames (i.e. provider
+	// identities) and add noise without helping the user.
+	for _, m := range reURL.FindAllString(msg, -1) {
+		msg = strings.ReplaceAll(msg, m, "…")
+	}
 
 	if strings.Contains(msg, "no sources found") {
 		return "No sources found"
@@ -42,9 +53,9 @@ func cleanErrorForUI(err error) string {
 		return "No sources: " + strings.Join(cleanParts, ", ")
 	}
 
-	short := strings.Split(msg, ":")[0]
-	if len(short) > 50 {
-		short = short[:50] + "..."
+	short := strings.TrimSpace(msg)
+	if len(short) > 60 {
+		short = short[:60] + "..."
 	}
 	return title(short)
 }
@@ -67,19 +78,19 @@ func (m *modelImpl) onSearchDone(msg searchDoneMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
 	m.loadingText = ""
 	if msg.err != nil {
-		logging.Errorf("onSearchDone failed opID=%d err=%v", msg.opID, msg.err)
-		m.setStatus(statusError, fmt.Sprintf("Search failed: %v", msg.err))
+		logging.Error("onSearchDone failed", "opID", msg.opID, "err", msg.err)
+		m.setStatus(statusError, "Search failed: "+cleanErrorForUI(msg.err))
 		m.queryInput.Focus()
 		return m, nil
 	}
 
-	logging.Infof("onSearchDone success opID=%d results_count=%d used_query=%q", msg.opID, len(msg.results), msg.usedQuery)
+	logging.Info("onSearchDone success", "opID", msg.opID, "results_count", len(msg.results), "used_query", msg.usedQuery)
 	m.allSeriesResults = msg.results
 	m.usedQuery = msg.usedQuery
 	m.seriesResults = msg.results
 	m.seriesList.SetItems(seriesToItems(m.seriesResults))
 	if len(m.seriesResults) == 0 {
-		m.setStatus(statusWarn, "No series results found")
+		m.setStatus(statusWarn, "No results for "+msg.usedQuery+" — try another mode (tab to switch)")
 		m.queryInput.Focus()
 		return m, nil
 	}
@@ -100,8 +111,8 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
 	m.loadingText = ""
 	if msg.err != nil {
-		logging.Errorf("onEpisodesDone failed opID=%d err=%v", msg.opID, msg.err)
-		m.setStatus(statusError, fmt.Sprintf("Episodes load failed: %v", msg.err))
+		logging.Error("onEpisodesDone failed", "opID", msg.opID, "err", msg.err)
+		m.setStatus(statusError, "Episodes load failed: "+cleanErrorForUI(msg.err))
 		return m, nil
 	}
 
@@ -112,7 +123,7 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 		mediaType = m.selectedSeries.MediaType
 	}
 
-	logging.Infof("onEpisodesDone success opID=%d episodes_count=%d", msg.opID, len(msg.results))
+	logging.Info("onEpisodesDone success", "opID", msg.opID, "episodes_count", len(msg.results))
 	m.episodeResults = msg.results
 	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle, m.appMode, mediaType, m.selectedEpisodes))
 
@@ -125,9 +136,9 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Auto-resolve for movies to skip the episode list screen
-	if m.selectedSeries != nil && m.selectedSeries.MediaType == "movie" && len(msg.results) > 0 {
+	if m.selectedSeries != nil && m.selectedSeries.MediaType == provider.MediaTypeMovie && len(msg.results) > 0 {
 		idx := 0
-		logging.Debugf("onEpisodesDone: auto-selecting movie episode for %q", m.selectedSeries.Title)
+		tuiLog.Debug("movie result; auto-selecting episode flow", "title", m.selectedSeries.Title)
 		return m.selectEpisode(idx)
 	}
 
@@ -142,7 +153,7 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 				Mode:      string(m.appMode),
 				MediaType: mediaType,
 				Season:    it.Season,
-				Episode:   it.Number,
+				Episode:   it.Episode,
 			})
 			if !ok || !entry.Complete {
 				targetIdx = i
@@ -159,11 +170,11 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 	// Try to find current episode index if it's not set
 	if m.selectedEpisode != nil {
 		for i, it := range m.episodeResults {
-			if it.URL != "" && m.selectedEpisode.URL != "" && it.URL == m.selectedEpisode.URL {
+			if it.ID != "" && m.selectedEpisode.ID != "" && it.ID == m.selectedEpisode.ID {
 				m.episodeIndex = i
 				break
 			}
-			if it.Number > 0 && it.Number == m.selectedEpisode.Number && it.Season == m.selectedEpisode.Season {
+			if it.Episode > 0 && it.Episode == m.selectedEpisode.Episode && it.Season == m.selectedEpisode.Season {
 				m.episodeIndex = i
 				break
 			}
@@ -194,7 +205,7 @@ func (m *modelImpl) onHistoryContinueEpisodes(msg historyContinueEpisodesMsg) (t
 	m.loading = false
 	m.loadingText = ""
 	if msg.err != nil {
-		logging.Errorf("history continue episode load failed title=%q err=%v", msg.group.Title, msg.err)
+		logging.Error("history continue episode load failed", "title", msg.group.Title, "err", msg.err)
 		m.setStatus(statusWarn, "Could not load episodes for "+msg.group.Title)
 		if m.selectedEpisode == nil {
 			m.pushView(viewEpisodes)
@@ -226,7 +237,7 @@ func (m *modelImpl) onHistoryContinueEpisodes(msg historyContinueEpisodesMsg) (t
 
 func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.resolveOpID {
-		logging.Debugf("onResolveDone: ignoring old opID %d (current %d)", msg.opID, m.resolveOpID)
+		tuiLog.Debug("stale resolve ignored", "got", msg.opID, "want", m.resolveOpID)
 		return m, nil
 	}
 	m.resolveOpID = 0
@@ -236,7 +247,7 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 		m.autoPlayAfterResolve = false
 		m.pendingAutoPlay = false
 		if m.resolved == nil {
-			logging.Errorf("resolve failed provider=%s series=%q episode=%q err=%v", selectedSeriesProvider(m.selectedSeries), selectedSeriesTitle(m.selectedSeries), selectedEpisodeTitle(m.selectedEpisode), msg.err)
+			logging.Error("resolve failed", "provider", selectedSeriesProvider(m.selectedSeries), "series", selectedSeriesTitle(m.selectedSeries), "episode", selectedEpisodeTitle(m.selectedEpisode), "err", msg.err)
 			m.setStatus(statusError, cleanErrorForUI(msg.err))
 		}
 		return m, nil
@@ -338,7 +349,7 @@ func (m *modelImpl) applyResumeFromHistory(resolved *model.ResolvedMedia) {
 
 	if ok && !entry.Complete && entry.PositionSecs > 5 {
 		resolved.StartTime = entry.PositionSecs
-		logging.Infof("applyResumeFromHistory: found resume point at %.2fs for %q", entry.PositionSecs, resolved.SeriesTitle)
+		tuiLog.Info("resume point found", "positionSecs", entry.PositionSecs, "title", resolved.SeriesTitle)
 	} else {
 		resolved.StartTime = 0
 	}
@@ -353,18 +364,20 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 	m.mergeResolved(msg.resolved)
 	m.pushView(viewPreview)
 
-	// Subtitles are deliberately NOT fetched here even on the first result:
-	// this only reflects whichever provider happened to respond first, and
-	// fetching now risks missing another provider's (e.g. VidKing's) own
-	// subtitle that just hasn't reported back yet — which used to make an
-	// available provider subtitle look absent and fall back to OpenSubtitles
-	// for no reason. onResolveDone triggers it instead, once every
-	// provider's data (and so every provider's subtitles) is in.
-	if wasNil {
-		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails())
+	subCmd := m.triggerSubtitleSync()
+
+	var finalizeCmd tea.Cmd
+	if m.autoPlayAfterResolve && len(m.orderedPlaybackSources()) > 0 {
+		var mdl tea.Model
+		mdl, finalizeCmd = m.finalizeResolved()
+		m = mdl.(*modelImpl)
 	}
 
-	return m, m.resolveSubscription()
+	if wasNil {
+		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails(), subCmd, finalizeCmd)
+	}
+
+	return m, tea.Batch(m.resolveSubscription(), subCmd, finalizeCmd)
 }
 
 func hasDownloadedSubtitles(tracks []model.SubtitleTrack) bool {
@@ -389,7 +402,7 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 			SeasonNumber:  resolved.SeasonNumber,
 			EpisodeNumber: resolved.EpisodeNumber,
 			Resolver:      resolved.Resolver,
-			Playback:      append([]model.PlaybackSource{}, resolved.Playback...),
+			Playback:      append([]provider.MediaSource{}, resolved.Playback...),
 			Subtitles:     append([]model.SubtitleTrack{}, resolved.Subtitles...),
 		}
 		m.rawSubtitles = append([]model.SubtitleTrack{}, resolved.Subtitles...)
@@ -439,7 +452,7 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 	m.autoPlayAfterResolve = false
 
 	if msg.opID != m.playOpID {
-		logging.Warnf("onPlayDone: opID mismatch (got %d, want %d)", msg.opID, m.playOpID)
+		tuiLog.Warn("play result opID mismatch", "got", msg.opID, "want", m.playOpID)
 		return m, nil
 	}
 	m.playOpID = 0
@@ -448,8 +461,8 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 	isConfirmErr := errors.As(msg.err, &needsConfirm)
 
 	if msg.err != nil && !isConfirmErr {
-		logging.Errorf("playback failed opID=%d provider=%q err=%v", msg.opID, msg.provider, msg.err)
-		m.setStatus(statusError, fmt.Sprintf("Playback failed: %v", msg.err))
+		logging.Error("playback failed", "opID", msg.opID, "provider", msg.provider, "err", msg.err)
+		m.setStatus(statusError, "Playback failed: "+cleanErrorForUI(msg.err))
 		m.autoplay = false
 		return m, nil
 	}
@@ -480,7 +493,7 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 			TMDBID:    m.resolved.TMDBID,
 		}
 		if err := m.historyStore.Upsert(entry); err != nil {
-			logging.Errorf("failed to upsert history: %v", err)
+			tuiLog.Error("history upsert failed", "err", err)
 		}
 
 		// Update resolved StartTime to reflect updated resume point or completion
@@ -505,17 +518,17 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 
 	if isConfirmErr {
 		m.confirmCompletion = true
-		logging.Infof("playback finished on Android, needs confirmation")
+		logging.Info("playback finished on Android, needs confirmation")
 	} else {
-		logging.Infof("playback finished opID=%d provider=%q result=%+v", msg.opID, msg.provider, msg.result)
+		logging.Info("playback finished", "opID", msg.opID, "provider", msg.provider, "result", msg.result)
 		m.setStatus(statusSuccess, "Playback finished")
 	}
 
 	m.activeView = viewPreview
 
-	if m.autoplay && m.resolved != nil && (m.resolved.MediaType == "anime" || m.resolved.MediaType == "tv" || m.resolved.MediaType == "cartoon") {
+	if m.autoplay && m.resolved != nil && model.IsEpisodeBased(m.resolved.MediaType) {
 		if idx, ok := m.nextEpisodeIndex(); ok {
-			logging.Infof("autoplay: starting next episode index=%d", idx)
+			logging.Info("autoplay: starting next episode", "index", idx)
 			return m.startEpisodeResolution(idx, true)
 		}
 		m.autoplay = false
@@ -575,7 +588,7 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 	m.cancelDownload = nil
 	m.downloadOpID = 0
 	if msg.err != nil {
-		logging.Errorf("download failed opID=%d err=%v", msg.opID, msg.err)
+		logging.Error("download failed", "opID", msg.opID, "err", msg.err)
 		errMsg := fmt.Sprintf("Download failed: %v", msg.err)
 		if errors.Is(msg.err, exec.ErrNotFound) || strings.Contains(msg.err.Error(), "executable file not found") {
 			errMsg = "Download failed: yt-dlp is not installed"

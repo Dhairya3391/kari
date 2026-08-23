@@ -8,7 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/downloader"
-	"kari/internal/model"
 	"kari/internal/provider"
 )
 
@@ -73,13 +72,18 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(keyMsg, m.keys.Select):
 			return m.selectEpisode(m.selectedEpisodeIndex())
 		case key.Matches(keyMsg, m.keys.Audio):
+			if m.loading || m.batchInProgress {
+				return m, nil
+			}
 			if m.selectedSeries != nil {
-				if m.audioMode == "sub" {
-					m.audioMode = "dub"
+				if m.audioMode == provider.AudioSub {
+					m.audioMode = provider.AudioDub
 				} else {
-					m.audioMode = "sub"
+					m.audioMode = provider.AudioSub
 				}
 				m.selectedEpisodes = make(map[int]struct{})
+				m.loading = true
+				m.loadingText = "Loading episodes (" + m.audioMode + ")..."
 				opID := m.newOpID()
 				m.episodesOpID = opID
 				return m, tea.Batch(m.spinner.Tick, m.episodesCmd(opID, *m.selectedSeries))
@@ -138,7 +142,7 @@ func (m *modelImpl) startBatchDownload() (tea.Model, tea.Cmd) {
 	opID := m.newOpID()
 	m.downloadOpID = opID
 
-	var series model.SearchResult
+	var series provider.SearchResult
 	var mode provider.ContentType
 	var hasSeries bool
 	if m.selectedSeries != nil {
@@ -151,8 +155,8 @@ func (m *modelImpl) startBatchDownload() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.spinner.Tick, cmd)
 }
 
-func (m *modelImpl) orderedSelectedEpisodes() []model.EpisodeResult {
-	out := make([]model.EpisodeResult, 0, len(m.selectedEpisodes))
+func (m *modelImpl) orderedSelectedEpisodes() []provider.Episode {
+	out := make([]provider.Episode, 0, len(m.selectedEpisodes))
 	for i := range m.episodeResults {
 		if _, ok := m.selectedEpisodes[i]; ok {
 			out = append(out, m.episodeResults[i])
@@ -161,7 +165,7 @@ func (m *modelImpl) orderedSelectedEpisodes() []model.EpisodeResult {
 	return out
 }
 
-func (m *modelImpl) batchDownloadCmd(opID int, episodes []model.EpisodeResult, series model.SearchResult, mode provider.ContentType, hasSeries bool) tea.Cmd {
+func (m *modelImpl) batchDownloadCmd(opID int, episodes []provider.Episode, series provider.SearchResult, mode provider.ContentType, hasSeries bool) tea.Cmd {
 	qualityMode := m.qualityMode
 	languageFilter := make(map[string]bool, len(m.languageFilter))
 	for lang, enabled := range m.languageFilter {

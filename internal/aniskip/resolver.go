@@ -26,6 +26,9 @@ type graphqlResponse struct {
 	} `json:"errors"`
 }
 
+// GetMALID resolves an anime series title to its MyAnimeList ID via the
+// AniList GraphQL search endpoint, so aniskip lookups can run on titles
+// providers already know.
 func (c *Client) GetMALID(ctx context.Context, title string) (int, error) {
 	query := `
 	query ($search: String) {

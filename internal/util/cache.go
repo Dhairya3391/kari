@@ -36,6 +36,7 @@ func NewBoundedCache[V any](max int) *BoundedCache[V] {
 	}
 }
 
+// Get returns the cached value for key, marking it most-recently-used.
 func (c *BoundedCache[V]) Get(key string) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -47,6 +48,8 @@ func (c *BoundedCache[V]) Get(key string) (V, bool) {
 	return zero, false
 }
 
+// Set inserts or updates key, marking it most-recently-used and evicting
+// the least-recently-used entry when the cache exceeds its bound.
 func (c *BoundedCache[V]) Set(key string, value V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

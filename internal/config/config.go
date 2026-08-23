@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// Config is the resolved application configuration: environment overrides
+// layered over defaults from constants.go. Constructed once in app.Run and
+// passed down to every component that needs it.
 type Config struct {
 	TMDBAPIKeys         []string
 	OpenSubtitlesKey    string
@@ -22,11 +25,16 @@ type Config struct {
 	JellyfinAPIKey      string
 }
 
+// AndroidUA returns the shared Android browser User-Agent constant. It
+// exists as a function so callers never import the raw const directly and
+// platform-specific wrappers stay in one place.
 func AndroidUA() string {
 	return AndroidUAConst
 }
 
-// Load reads configuration from environment variables.
+// Load reads configuration from environment variables, applying hardcoded
+// defaults where variables are unset, and validates that partial
+// credential sets (e.g. OpenSubtitles) are either complete or absent.
 func Load() (*Config, error) {
 	cfg := &Config{
 		TMDBAPIKeys:         append([]string(nil), DefaultTMDBAPIKeys...),
@@ -75,6 +83,8 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// firstEnv returns the first non-empty value among the given environment
+// variable names, supporting legacy aliases alongside current names.
 func firstEnv(keys ...string) string {
 	for _, key := range keys {
 		if v := strings.TrimSpace(os.Getenv(key)); v != "" {

@@ -12,6 +12,9 @@ import (
 	"kari/internal/model"
 )
 
+// log scopes every line from this package/component.
+var skipLog = logging.With("component", "player.aniskip")
+
 const aniskipLuaScript = `
 local opts = {
     op_start = -1,
@@ -61,7 +64,7 @@ end)
 // getAniskipArgs fetches skip times and creates a temporary lua script, returning the MPV arguments needed.
 func getAniskipArgs(client *aniskip.Client, media model.ResolvedMedia) ([]string, string) {
 	if client == nil {
-		logging.Debugf("aniskip: client is nil, skipping")
+		skipLog.Debug("client nil; skip args disabled")
 		return nil, ""
 	}
 	if media.EpisodeNumber <= 0 || media.SeriesTitle == "" {
@@ -73,17 +76,17 @@ func getAniskipArgs(client *aniskip.Client, media model.ResolvedMedia) ([]string
 
 	malID, err := client.GetMALID(ctx, media.SeriesTitle)
 	if err != nil {
-		logging.Debugf("aniskip: failed to get MAL ID: %v", err)
+		skipLog.Debug("MAL id lookup failed", "err", err)
 		return nil, ""
 	}
 
 	times, err := client.GetSkipTimes(ctx, malID, media.EpisodeNumber)
 	if err != nil {
-		logging.Debugf("aniskip: failed to get skip times: %v", err)
+		skipLog.Debug("skip-times lookup failed", "err", err)
 		return nil, ""
 	}
 	if times == nil {
-		logging.Debugf("aniskip: no skip times found for mal_id %d ep %d", malID, media.EpisodeNumber)
+		skipLog.Debug("no skip times available", "malID", malID, "episode", media.EpisodeNumber)
 		return nil, ""
 	}
 
@@ -91,7 +94,7 @@ func getAniskipArgs(client *aniskip.Client, media model.ResolvedMedia) ([]string
 
 	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("kari-skip-%d-%d.lua", os.Getpid(), time.Now().UnixNano()))
 	if err := os.WriteFile(scriptPath, []byte(aniskipLuaScript), 0644); err != nil {
-		logging.Debugf("aniskip: failed to write temp lua script: %v", err)
+		skipLog.Debug("temp lua script write failed", "err", err)
 		return nil, ""
 	}
 

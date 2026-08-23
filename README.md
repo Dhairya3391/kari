@@ -26,7 +26,7 @@ Type a query, press Space, pick a result.
 
 ## Features
 
-- **Multi-source search** — Searches multiple providers at once (MovieBox, VidKing, Miruro, PirateX, and optional Jellyfin). Results grouped by source.
+- **Multi-source search** — Searches multiple providers at once (MovieBox, RiveStream, VidKing, Miruro, PirateX, and optional Jellyfin). Results grouped by source.
 - **5 media modes** — Anime, Movies, TV Shows, Cartoons, Jellyfin. Switch with Tab.
 - **Episode browsing** — Season/episode lists with filler badges and sub/dub toggles.
 - **Parallel source resolution** — Queries every provider at once, shows all available qualities.
@@ -39,7 +39,7 @@ Type a query, press Space, pick a result.
 - **Posters & metadata** — TMDB/AniList poster art in search results and the preview screen, plus overview, genres, and rating. Renders as real pixel images on Kitty/WezTerm/Ghostty, and falls back to Unicode half-block art everywhere else — no config needed, capability is auto-detected.
 - **Customizable accent color** — Pick from curated presets or type your own hex code in Settings; applies immediately across the whole UI.
 - **Download progress bar** — Live byte-percentage (single downloads) or episode-count (batch downloads) progress bar during downloads.
-- **Subtitles** — Tries the playback provider's own subtitles first (matching your preferred language, then English), falls back to other providers, then OpenSubtitles, then Yify — never a random unrelated language. Re-syncs automatically if you switch source or change the subtitle language setting.
+- **Subtitles** — Tries the playback provider's own subtitles first (matching your preferred language, then English), falls back to other providers, then OpenSubtitles — never a random unrelated language. Re-syncs automatically if you switch source or change the subtitle language setting.
 - **Self-update** — `./kari -u` fetches the latest release from GitHub.
 - **Cross-platform** — Linux, macOS, Windows, Android (Termux).
 
@@ -121,7 +121,7 @@ All config is through environment variables. No config files to wrangle.
 | Variable | Description |
 | --- | --- |
 | `TMDB_API_KEY` | Your own TMDB key. If unset, a pool of built-in keys is rotated through. |
-| `OPENSUBTITLES_API_KEY` | OpenSubtitles API key. If unset, falls back to Yify. |
+| `OPENSUBTITLES_API_KEY` | OpenSubtitles API key. Optional; without it only provider-supplied subtitles are used. |
 | `OPENSUBTITLES_USERNAME` | Required if you set the API key. |
 | `OPENSUBTITLES_PASSWORD` | Same. |
 | `JELLYFIN_URL` | Your Jellyfin server URL (example: `"https://jfn.fqdn.com/"`). When set, a JELLYFIN mode appears. |
@@ -202,21 +202,22 @@ The binary ships with fallback keys for Trakt, AniList, and TMDB. They work fine
 2. **Episodes** — Season/episode list with filler badges. Sub/dub toggle is there for anime.
 3. **Preview** — Poster, description, genres, rating, resolved sources, selected subtitle, and any saved position. Hit Enter to play.
 4. **History** — Grouped by series. Resume or delete.
-5. **Settings** — Authenticate with Trakt or AniList via device auth (no manual token fiddling), set quality mode, toggle MovieBox languages, pick a preferred subtitle language, toggle image rendering, and pick an accent color (curated presets or your own hex code).
+5. **Settings** — Authenticate with Trakt or AniList via device auth (no manual token fiddling), set quality mode, toggle audio language filters, pick a preferred subtitle language, toggle image rendering, and pick an accent color (curated presets or your own hex code).
 
 ### Media Providers
 
 | Provider | Mode | Method | Priority |
 | --- | --- | --- | --- |
 | Miruro | Anime | API | 1 |
-| MovieBox | Movies, TV | API (via TMDB) | 2 |
-| VidKing | Movies, TV | API (via TMDB) | 2 |
 | PirateX | Cartoons | Scraper (merged HLS) | 1 |
+| MovieBox | Movies, TV | API (via TMDB) | 2 |
+| RiveStream | Movies, TV | API (via TMDB) | 2 |
+| VidKing | Movies, TV | API (via TMDB) | 1 (TV), 2 (Movies) |
 | Jellyfin | Movies, TV | Jellyfin API | 1 |
 
 Lower priority = queried first. All providers are queried in parallel regardless — priority only affects result ordering when multiple providers return the same content.
 
-Want to add another provider? See [docs/PROVIDERS.md](docs/PROVIDERS.md) and [PROVIDER_GUIDE.md](PROVIDER_GUIDE.md).
+Want to add another provider? See [docs/CODEBASE.md](docs/CODEBASE.md).
 
 ## Android Setup (Termux)
 
@@ -230,7 +231,7 @@ Kari supports MPV and MX Player on Android via Termux intents and automatic conf
    ```
 
    | Package | Why |
-   |---------|-----|
+   | --------- | ----- |
    | `golang` | Build kari |
    | `curl` | Direct/pipe fallback playback |
    | `termux-api` | Provides the `termux-am`/`termux-am-starter` fallback for launching MPV/MX Player via Android intents ([source](https://github.com/termux/termux-api)) |
@@ -269,9 +270,9 @@ Kari supports MPV and MX Player on Android via Termux intents and automatic conf
 
 > **Note:** Kari writes the playback config to `.mpv.conf` (and a mirrored `mpv.conf`) under `/storage/emulated/0/Android/media/is.xyz.mpv/` on every play launch. It does **not** write to Termux's `~/.config/mpv/` — mpv-android's libmpv never reads that path, so headers only apply once your own app config above contains the `include=` line.
 
-7. Run `./kari`
+1. Run `./kari`
 
-Kari launches MPV via Android `am start` intents (falling back to `termux-am`/`termux-am-starter` automatically if `am` is blocked on your device). Since Android intents can't carry stream headers, Kari injects them through the config bridge from step 6 (the `include=` line). See [docs/PLAYERS.md](docs/PLAYERS.md) for architectural details.
+Kari launches MPV via Android `am start` intents (falling back to `termux-am`/`termux-am-starter` automatically if `am` is blocked on your device). Since Android intents can't carry stream headers, Kari injects them through the config bridge from step 6 (the `include=` line). See [docs/CODEBASE.md](docs/CODEBASE.md) for architectural details.
 
 > **Note:** On some Android versions, DNS resolution may fail for downloads. Kari includes a built-in fallback to Cloudflare (1.1.1.1) and Google (8.8.8.8) DNS for Android builds.
 
@@ -292,14 +293,14 @@ internal/
     ├── scrobble/      — Trakt.tv + AniList sync
     ├── history/       — Local JSON watch storage
     ├── downloader/    — yt-dlp wrapper with aria2c acceleration
-    ├── subtitles/     — OpenSubtitles + Yify clients
+    ├── subtitles/     — OpenSubtitles client
     ├── aniskip/       — Fetches intro/outro timestamps
     ├── tmdb/          — Key pool with rotation
     ├── httpclient/    — Shared retryable HTTP client
     └── logging/       — Structured slog wrapper
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for more detail.
+See [docs/CODEBASE.md](docs/CODEBASE.md) for more detail.
 
 ## Development
 
@@ -332,7 +333,7 @@ Or build for whatever machine you're on:
 Version is derived from git tags and baked in via `-ldflags`:
 
 | Scenario | Example |
-|---|---|
+| --- | --- |
 | Tagged release (`v1.0.0`) | `1.0.0` |
 | 5 commits after tag | `1.0.5` (patch increments) |
 | No tags yet | `1.0.42` (commit count) |
@@ -358,7 +359,7 @@ go test ./...
 
 ### Code conventions
 
-See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) and [`AGENTS.md`](AGENTS.md) (AI assistant rules for this repo) for the full list. Key rules:
+See [docs/CODEBASE.md](docs/CODEBASE.md) and [`AGENTS.md`](AGENTS.md) (AI assistant rules for this repo) for the full list. Key rules:
 
 - No global state — pass dependencies explicitly
 - Wire everything in `internal/app/app.go`
@@ -368,7 +369,7 @@ See [docs/CONVENTIONS.md](docs/CONVENTIONS.md) and [`AGENTS.md`](AGENTS.md) (AI 
 
 ## Contributing
 
-Pull requests are welcome. The best place to start is adding a new media provider — see [PROVIDER_GUIDE.md](PROVIDER_GUIDE.md) for the full walkthrough.
+Pull requests are welcome. The best place to start is adding a new media provider — see [docs/CODEBASE.md](docs/CODEBASE.md) for the full walkthrough.
 
 A few ground rules:
 

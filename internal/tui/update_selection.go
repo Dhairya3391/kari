@@ -17,7 +17,7 @@ import (
 )
 
 func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
-	logging.Debugf("selectSeries: index=%d results_len=%d", idx, len(m.seriesResults))
+	tuiLog.Debug("series selected", "index", idx, "resultsLen", len(m.seriesResults))
 	if idx < 0 || idx >= len(m.seriesResults) {
 		m.setStatus(statusError, "Series selection out of range")
 		return m, nil
@@ -28,11 +28,13 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 	m.selectedEpisodes = make(map[int]struct{})
 	m.episodeIndex = 0
 
-	if m.selectedSeries.MediaType == "movie" && m.selectedSeries.Provider != "miruro" {
-		logging.Debugf("selectSeries: movie detected, resolving playback directly for %q", m.selectedSeries.Title)
-		m.selectedEpisode = &model.EpisodeResult{
+	// Movie-titled results skip the episode listing and resolve directly,
+	// unless the selected provider declares (via provider.MovieEpisodeFlow)
+	// that it needs a fetched episode ID even for movies.
+	if m.selectedSeries.MediaType == provider.MediaTypeMovie && !m.registry.RequiresEpisodeListForMovies(m.selectedSeries.Provider) {
+		tuiLog.Debug("movie result; resolving directly", "title", m.selectedSeries.Title)
+		m.selectedEpisode = &provider.Episode{
 			Title: m.selectedSeries.Title,
-			Kind:  "movie",
 		}
 		m.loading = true
 		m.loadingText = "Preparing playback..."
@@ -45,26 +47,12 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode))
 	}
 
-	if direct, ok := directEpisodeForResult(*m.selectedSeries); ok {
-		logging.Debugf("selectSeries: found direct episode for %q", m.selectedSeries.Title)
-		m.selectedEpisode = &direct
-		m.loading = true
-		m.loadingText = "Preparing playback..."
-		m.resolved = nil
-		m.rawSubtitles = nil
-		m.clearPreviewPoster()
-		opID := m.newOpID()
-		m.resolveOpID = opID
-		m.pushView(viewPreview)
-		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, direct))
-	}
-
-	logging.Debugf("selectSeries: loading episodes for %q", m.selectedSeries.Title)
+	tuiLog.Debug("loading episodes", "title", m.selectedSeries.Title)
 	m.loading = true
 	m.loadingText = "Loading episodes..."
-		m.resolved = nil
-		m.rawSubtitles = nil
-		m.clearPreviewPoster()
+	m.resolved = nil
+	m.rawSubtitles = nil
+	m.clearPreviewPoster()
 	m.setStatus(statusInfo, "")
 	opID := m.newOpID()
 	m.episodesOpID = opID
@@ -102,7 +90,7 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	if m.loading {
 		return m, nil
 	}
-	logging.Debugf("selectEpisode: index=%d results_len=%d", idx, len(m.episodeResults))
+	tuiLog.Debug("episode selected", "index", idx, "resultsLen", len(m.episodeResults))
 	if idx < 0 || idx >= len(m.episodeResults) {
 		m.setStatus(statusError, "Episode selection out of range")
 		return m, nil
@@ -118,7 +106,7 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	}
 	if src, ok := m.selectedPlaybackSource(); ok {
 		m.prevSourceLanguage = src.Language
-		m.prevSourceQuality = service.SourceQuality(src.Label)
+		m.prevSourceQuality = service.SourceQuality(src.Quality)
 	} else {
 		m.prevSourceLanguage = ""
 		m.prevSourceQuality = 0
@@ -127,30 +115,29 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	m.rawSubtitles = nil
 	m.clearPreviewPoster()
 	m.autoPlayAfterResolve = autoPlay
-	series := model.SearchResult{}
+	series := provider.SearchResult{}
 	if m.selectedSeries != nil {
 		series = *m.selectedSeries
 	}
 	opID := m.newOpID()
 	m.resolveOpID = opID
 	m.pushView(viewPreview)
-	logging.Debugf("selectEpisode: resolving playback for series=%q episode=%q autoPlay=%t", series.Title, m.selectedEpisode.Title, autoPlay)
+	tuiLog.Debug("resolving playback", "series", series.Title, "episode", m.selectedEpisode.Title, "autoPlay", autoPlay)
 	return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, series, *m.selectedEpisode))
 }
 func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 	mode := m.appMode
+	cacheable := !m.modeFeatures().NoCachedSearches
 	return func() tea.Msg {
-		modeKey := string(mode)
-		cacheKey := fmt.Sprintf("%s:%s", modeKey, query)
-		cacheable := mode != provider.ModeJellyfin
+		cacheKey := fmt.Sprintf("%s:%s", mode, query)
 		if cacheable {
 			if entry, ok := m.searchCache.Get(cacheKey); ok {
-				logging.Debugf("search cache hit mode=%s query=%q", modeKey, query)
+				logging.Debug("search cache hit", "mode", mode, "query", query)
 				return searchDoneMsg{results: entry.results, usedQuery: entry.usedQuery, warnings: entry.warnings, opID: opID, err: nil}
 			}
 		}
 
-		logging.Debugf("search start mode=%s query=%q", modeKey, query)
+		logging.Debug("search start", "mode", mode, "query", query)
 		results, usedQuery, warnings, err := m.mediaService.Search(m.appCtx, mode, query)
 		if err == nil && cacheable {
 			m.searchCache.Set(cacheKey, searchCacheEntry{
@@ -164,7 +151,7 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 	}
 }
 
-func (m *modelImpl) episodesCmd(opID int, series model.SearchResult) tea.Cmd {
+func (m *modelImpl) episodesCmd(opID int, series provider.SearchResult) tea.Cmd {
 	mode := m.appMode
 	audioMode := m.audioMode
 	return func() tea.Msg {
@@ -173,7 +160,7 @@ func (m *modelImpl) episodesCmd(opID int, series model.SearchResult) tea.Cmd {
 	}
 }
 
-func (m *modelImpl) historyContinueEpisodesCmd(opID int, group history.Group, series model.SearchResult, mode provider.ContentType) tea.Cmd {
+func (m *modelImpl) historyContinueEpisodesCmd(opID int, group history.Group, series provider.SearchResult, mode provider.ContentType) tea.Cmd {
 	audioMode := m.audioMode
 	return func() tea.Msg {
 		results, err := m.mediaService.FetchEpisodes(m.appCtx, mode, series, audioMode)
@@ -181,8 +168,8 @@ func (m *modelImpl) historyContinueEpisodesCmd(opID int, group history.Group, se
 	}
 }
 
-func (m *modelImpl) resolveCmd(opID int, series model.SearchResult, episode model.EpisodeResult) tea.Cmd {
-	logging.Debugf("resolveCmd: opID=%d series=%q episode=%q", opID, series.Title, episode.Title)
+func (m *modelImpl) resolveCmd(opID int, series provider.SearchResult, episode provider.Episode) tea.Cmd {
+	tuiLog.Debug("resolve starting", "opID", opID, "series", series.Title, "episode", episode.Title)
 	mode := m.appMode
 
 	return tea.Batch(
@@ -259,7 +246,7 @@ func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia) tea
 		defer cancel()
 		tracks, err := m.subtitleService.Fetch(ctx, resolved, preferredLang, preferredResolver)
 		if err != nil {
-			logging.Debugf("subtitle fetch failed: %v", err)
+			tuiLog.Debug("subtitle fetch failed", "err", err)
 		}
 		return subtitleDoneMsg{tracks: tracks, opID: opID, err: err}
 	}
@@ -282,16 +269,19 @@ func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 	resolved := *m.resolved
 	resolved.StartTime = startTime
 	playerName := m.selectedPlayerName()
-	provider := ""
+	providerName := ""
 	if src, ok := m.selectedPlaybackSource(); ok {
-		provider = src.Label
+		providerName = src.Resolver
+		if providerName == "" {
+			providerName = src.Quality
+		}
 	}
 	return func() tea.Msg {
-		logging.Debugf("playCmd: opID=%d media=%q provider=%q sources_count=%d startTime=%.2f", opID, resolved.DisplayTitle(), provider, len(sources), startTime)
+		tuiLog.Debug("play starting", "opID", opID, "media", resolved.DisplayTitle(), "provider", providerName, "sourcesCount", len(sources), "startTime", startTime)
 		subPaths := resolved.SubtitlePaths()
-		logging.Debugf("playCmd: launching playback for %q using player=%s subs=%d paths=%v", resolved.DisplayTitle(), playerName, len(subPaths), subPaths)
+		tuiLog.Debug("launching playback", "media", resolved.DisplayTitle(), "player", playerName, "subtitles", len(subPaths), "paths", subPaths)
 		result, err := m.players.PlayWithSources(sources, resolved, playerName)
-		return playDoneMsg{opID: opID, provider: provider, result: result, err: err}
+		return playDoneMsg{opID: opID, provider: providerName, result: result, err: err}
 	}
 }
 
@@ -332,36 +322,30 @@ func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd 
 			}
 		}()
 
-		resolver := resolved.Resolver
-		if len(resolved.Playback) > 0 && resolved.Playback[0].Resolver != "" {
-			resolver = resolved.Playback[0].Resolver
-		}
-
 		return downloadStartedMsg{
 			opID:      opID,
 			cancel:    cancel,
 			outputDir: outputDir,
 			title:     title,
-			provider:  resolver,
 		}
 	}
 }
 
-func selectedSeriesTitle(series *model.SearchResult) string {
+func selectedSeriesTitle(series *provider.SearchResult) string {
 	if series == nil {
 		return ""
 	}
 	return series.Title
 }
 
-func selectedSeriesProvider(series *model.SearchResult) string {
+func selectedSeriesProvider(series *provider.SearchResult) string {
 	if series == nil {
 		return ""
 	}
 	return series.Provider
 }
 
-func selectedEpisodeTitle(episode *model.EpisodeResult) string {
+func selectedEpisodeTitle(episode *provider.Episode) string {
 	if episode == nil {
 		return ""
 	}
@@ -379,29 +363,33 @@ func shouldFetchNextEpisode(group history.Group) bool {
 	if group.HasIncomplete || !group.HasComplete {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(group.MediaType), "movie") {
+	if strings.EqualFold(strings.TrimSpace(group.MediaType), provider.MediaTypeMovie) {
 		return false
 	}
 	return group.FarthestComplete.Episode > 0
 }
 
+// modeForHistoryEntry maps a history entry to its content mode. Entries
+// recorded before modes existed store only a MediaType, so legacy values
+// (including the plural "movies" form) are matched here against the
+// persisted vocabulary.
 func modeForHistoryEntry(entry history.Entry) provider.ContentType {
 	if entry.Mode != "" {
 		return provider.ContentType(entry.Mode)
 	}
 	switch strings.ToLower(strings.TrimSpace(entry.MediaType)) {
-	case "movie", "movies":
+	case provider.MediaTypeMovie, string(provider.ModeMovies):
 		return provider.ModeMovies
-	case "anime":
+	case string(provider.ModeAnime):
 		return provider.ModeAnime
-	case "cartoon":
+	case string(provider.ModeCartoon):
 		return provider.ModeCartoon
 	default:
 		return provider.ModeTV
 	}
 }
 
-func nextEpisodeAfterEntry(episodes []model.EpisodeResult, entry history.Entry) (int, bool) {
+func nextEpisodeAfterEntry(episodes []provider.Episode, entry history.Entry) (int, bool) {
 	for idx, episode := range episodes {
 		if episodeAfterHistoryEntry(episode, entry) {
 			return idx, true
@@ -410,7 +398,7 @@ func nextEpisodeAfterEntry(episodes []model.EpisodeResult, entry history.Entry) 
 	return 0, false
 }
 
-func episodeAfterHistoryEntry(episode model.EpisodeResult, entry history.Entry) bool {
+func episodeAfterHistoryEntry(episode provider.Episode, entry history.Entry) bool {
 	if entry.Season > 0 {
 		if episode.Season > entry.Season {
 			return true
@@ -419,7 +407,7 @@ func episodeAfterHistoryEntry(episode model.EpisodeResult, entry history.Entry) 
 			return false
 		}
 	}
-	if entry.Episode > 0 && episode.Number > entry.Episode {
+	if entry.Episode > 0 && episode.Episode > entry.Episode {
 		if entry.Season <= 0 || episode.Season == entry.Season || episode.Season <= 0 {
 			return true
 		}
@@ -432,7 +420,7 @@ func (m *modelImpl) startSearchFromInput() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	q := strings.TrimSpace(m.queryInput.Value())
-	if q == "" && m.appMode != provider.ModeJellyfin {
+	if q == "" && !m.modeFeatures().AllowEmptyQuery {
 		m.setStatus(statusWarn, "Enter a query")
 		return m, nil
 	}

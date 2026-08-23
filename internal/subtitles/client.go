@@ -18,11 +18,16 @@ import (
 	"kari/internal/util"
 )
 
+// log scopes every line from this package.
+var osLog = logging.With("component", "subtitles.opensubtitles")
+
 const (
 	apiBase   = config.OpenSubtitlesAPI
 	userAgent = config.OpenSubtitlesUA
 )
 
+// Client talks to the OpenSubtitles REST API (login, search, download
+// links).
 type Client struct {
 	apiKey   string
 	username string
@@ -34,6 +39,7 @@ type Client struct {
 	http        *http.Client
 }
 
+// NewClient constructs an OpenSubtitles client from API credentials.
 func NewClient(apiKey, username, password string) *Client {
 	return &Client{
 		apiKey:   apiKey,
@@ -43,6 +49,7 @@ func NewClient(apiKey, username, password string) *Client {
 	}
 }
 
+// Configured reports whether credentials were provided.
 func (c *Client) Configured() bool {
 	return c.apiKey != "" && c.username != "" && c.password != ""
 }
@@ -78,15 +85,15 @@ func (c *Client) ensureToken(ctx context.Context) error {
 				if time.Now().Before(tc.Expiry) {
 					c.token = tc.Token
 					c.tokenExpiry = tc.Expiry
-					logging.Debugf("opensubtitles: loaded cached token from disk (expires %v)", tc.Expiry)
+					osLog.Debug("token cache loaded from disk", "expiresAt", tc.Expiry)
 					return nil
 				}
-				logging.Debugf("opensubtitles: cached token expired at %v", tc.Expiry)
+				osLog.Debug("token cache expired", "expiredAt", tc.Expiry)
 			} else {
-				logging.Debugf("opensubtitles: failed to unmarshal cached token: %v", err)
+				osLog.Debug("token cache unmarshal failed", "err", err)
 			}
 		} else if !os.IsNotExist(err) {
-			logging.Debugf("opensubtitles: failed to read cached token file: %v", err)
+			osLog.Debug("token cache read failed", "err", err)
 		}
 	}
 
@@ -125,7 +132,7 @@ func (c *Client) downloadFile(ctx context.Context, fileURL string) ([]byte, erro
 }
 
 func (c *Client) login(ctx context.Context) error {
-	logging.Debugf("opensubtitles login start username=%q", c.username)
+	osLog.Debug("login start", "username", c.username)
 	body, err := json.Marshal(loginRequest{Username: c.username, Password: c.password})
 	if err != nil {
 		return fmt.Errorf("opensubtitles login marshal: %w", err)
@@ -164,13 +171,13 @@ func (c *Client) login(ctx context.Context) error {
 		tc := tokenCache{Token: c.token, Expiry: c.tokenExpiry}
 		if data, err := json.Marshal(tc); err == nil {
 			if err := util.AtomicWriteFile(cachePath, data, 0o600); err != nil {
-				logging.Warnf("opensubtitles: failed to write token cache: %v", err)
+				osLog.Warn("token cache write failed", "err", err)
 				return fmt.Errorf("opensubtitles write token cache: %w", err)
 			}
 		}
 	}
 
-	logging.Infof("opensubtitles: logged in as %s", c.username)
+	osLog.Info("login successful", "user", c.username)
 	return nil
 }
 

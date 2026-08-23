@@ -193,16 +193,50 @@ var aliases = map[string]string{
 	"hausa":           "ha",
 	"hau":             "ha",
 }
+
 // SubtitleOptions is the curated, ordered list of languages selectable as
 // the default subtitle language in settings.
 var SubtitleOptions = []string{
 	"en", "es", "fr", "de", "pt", "it", "ar", "hi", "ja", "ko", "zh", "ru", "tr", "id",
 }
 
+// nativeAliases maps the native-script spellings of our curated languages
+// as they appear in upstream data (HLS LANGUAGE attributes, provider APIs)
+// to canonical codes, so a track tagged हिन्दी or தமிழ் still displays as
+// "Hindi"/"Tamil" instead of raw native script leaking into the UI.
+var nativeAliases = map[string]string{
+	"हिन्दी":           "hi",
+	"हिंदी":            "hi",
+	"বাংলা":            "bn",
+	"தமிழ்":            "ta",
+	"తెలుగు":           "te",
+	"മലയാളം":           "ml",
+	"ಕನ್ನಡ":            "kn",
+	"मराठी":            "mr",
+	"ગુજરાતી":          "gu",
+	"ਪੰਜਾਬੀ":           "pa",
+	"پنجابی":           "pa",
+	"اردو":             "ur",
+	"العربية":          "ar",
+	"عربي":             "ar",
+	"فارسی":            "fa",
+	"עברית":            "he",
+	"ελληνικά":         "el",
+	"русский":          "ru",
+	"українська":       "uk",
+	"日本語":              "ja",
+	"한국어":              "ko",
+	"中文":               "zh",
+	"ไทย":              "th",
+	"tiếng việt":       "vi",
+	"bahasa indonesia": "id",
+}
+
 // Normalize folds a language tag from any provider into one of the
 // canonical codes above, so tags representing the same language compare
-// equal regardless of which form a provider used. Unrecognized tags are
-// returned lowercased and trimmed, unchanged otherwise.
+// equal regardless of which form a given provider used — English names,
+// 2/3-letter codes, typos, regional variants, and native-script spellings.
+// Unrecognized tags are returned lowercased and trimmed, unchanged otherwise.
 func Normalize(raw string) string {
 	code := strings.ToLower(strings.TrimSpace(raw))
 	if code == "" {
@@ -211,12 +245,17 @@ func Normalize(raw string) string {
 	if canon, ok := aliases[code]; ok {
 		return canon
 	}
+	if canon, ok := nativeAliases[code]; ok {
+		return canon
+	}
 	return code
 }
 
-// Name returns a human-readable name for a language tag in any form
+// Name returns the English display name for a language tag in any form
 // Normalize understands, falling back to the (normalized) tag itself,
-// uppercased, if it's not in the curated list above.
+// uppercased, if it's not in the curated lists. All user-facing rendering
+// goes through here so raw provider tags or native scripts never leak into
+// the UI.
 func Name(raw string) string {
 	code := Normalize(raw)
 	if name, ok := names[code]; ok {

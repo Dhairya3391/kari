@@ -110,6 +110,8 @@ func (t *kariClientRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 	return t.next.RoundTrip(req)
 }
 
+// uaRoundTripper injects a default User-Agent when a request doesn't carry
+// one, letting individual requests still override it.
 type uaRoundTripper struct {
 	next http.RoundTripper
 	ua   string
@@ -122,13 +124,16 @@ func (t *uaRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.next.RoundTrip(req)
 }
 
+// leveledLogger adapts retryablehttp's retry chatter to the app logger:
+// only genuine retry-give-up errors surface (as warnings); per-attempt
+// Info/Debug noise is suppressed.
 type leveledLogger struct{}
 
 func (l *leveledLogger) Error(msg string, keysAndValues ...interface{}) {
-	logging.Warnf("[http] %s", msg)
+	logging.Warn("http retry gave up", "detail", msg)
 }
 func (l *leveledLogger) Warn(msg string, keysAndValues ...interface{}) {
-	logging.Warnf("[http] %s", msg)
+	logging.Warn("http retry gave up", "detail", msg)
 }
 func (l *leveledLogger) Info(msg string, keysAndValues ...interface{})  {} // suppress retryablehttp chatter
 func (l *leveledLogger) Debug(msg string, keysAndValues ...interface{}) {} // suppress retryablehttp chatter

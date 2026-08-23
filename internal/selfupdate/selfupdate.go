@@ -18,6 +18,7 @@ const (
 	repoName  = "kari"
 )
 
+// Release describes one GitHub release asset relevant to self-update.
 type Release struct {
 	TagName string `json:"tag_name"`
 	Assets  []struct {
@@ -31,6 +32,7 @@ func (r *Release) Version() string {
 	return strings.TrimPrefix(r.TagName, "v")
 }
 
+// GetLatestRelease fetches metadata for the newest published release.
 func GetLatestRelease() (*Release, error) {
 	// Use the shared client: on Termux/Android it swaps in a public DNS
 	// resolver (Cloudflare/Google) because the system resolver can be broken

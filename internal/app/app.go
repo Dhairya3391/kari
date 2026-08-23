@@ -19,7 +19,6 @@ import (
 	"kari/internal/player"
 	"kari/internal/poster"
 	"kari/internal/provider/defaults"
-	"kari/internal/provider/jellyfin"
 	"kari/internal/scrobble"
 	"kari/internal/service"
 	"kari/internal/tmdb"
@@ -50,6 +49,9 @@ func getArgs() (args []string, version bool, update bool) {
 	return args, version, update
 }
 
+// Run boots the whole application: parse args, load config, wire every
+// component in internal/provider/defaults and app, then hand control to the
+// bubbletea program. It is the only place concrete components meet.
 func Run() error {
 	args, showVersion, showUpdate := getArgs()
 	if showVersion {
@@ -60,9 +62,9 @@ func Run() error {
 		return Update()
 	}
 	query := strings.TrimSpace(strings.Join(args, " "))
-	logging.Infof("starting app query=%q", query)
+	logging.Info("starting app", "query", query)
 	if p := logging.Path(); p != "" {
-		logging.Infof("debug log path: %s", p)
+		logging.Info("log file ready", "path", p)
 	}
 
 	cfg, err := config.Load()
@@ -77,25 +79,15 @@ func Run() error {
 	histPath := filepath.Join(home, ".config", "kari", "history.json")
 	historyStore, historyErr := history.NewStore(histPath)
 	if historyErr != nil {
-		logging.Errorf("failed to initialize history store: %v", historyErr)
+		logging.Error("history store init failed; continuing without history", "err", historyErr)
 	}
 
 	keyPool := tmdb.NewKeyPool(cfg.TMDBAPIKeys)
 	aniskipClient := aniskip.NewClient(httpclient.NewWithTimeout(10 * time.Second))
 
-	registry, err := defaults.NewDefaultRegistry(keyPool)
+	registry, err := defaults.NewDefaultRegistry(keyPool, cfg)
 	if err != nil {
 		return err
-	}
-
-	if cfg.JellyfinURL != "" && cfg.JellyfinAPIKey != "" {
-		jf, err := jellyfin.NewClient(cfg.JellyfinURL, cfg.JellyfinAPIKey)
-		if err != nil {
-			logging.Errorf("failed to create jellyfin provider: %v", err)
-		} else {
-			registry.Register(jf)
-			logging.Infof("jellyfin provider registered (server=%s)", cfg.JellyfinURL)
-		}
 	}
 
 	players := player.NewRegistry(cfg.PreferredPlayer, aniskipClient)
@@ -111,7 +103,7 @@ func Run() error {
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	if err != nil {
-		logging.Errorf("program exited with error: %v", err)
+		logging.Error("program exited with error", "err", err)
 	}
 	if historyStore != nil {
 		historyStore.Close()

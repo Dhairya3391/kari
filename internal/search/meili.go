@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
-	"kari/internal/model"
 	"kari/internal/provider"
 )
 
+// Result is one raw hit from the meilisearch TMDB index.
 type Result struct {
 	TMDBID        int    `json:"tmdb_id"`
 	Title         string `json:"title"`
@@ -22,6 +23,7 @@ type Result struct {
 	Language      string `json:"original_language"`
 }
 
+// Response wraps a meilisearch reply including any corrected query.
 type Response struct {
 	Query          string   `json:"query"`
 	CorrectedQuery string   `json:"corrected_query,omitempty"`
@@ -29,29 +31,35 @@ type Response struct {
 	Results        []Result `json:"results"`
 }
 
+// Client queries the shared TMDB search index used by TMDB-keyed providers.
 type Client struct {
 	httpClient *http.Client
 }
 
+// NewClient constructs the search client with the desktop UA.
 func NewClient() *Client {
 	return &Client{
 		httpClient: httpclient.NewWithUserAgent(config.DesktopUserAgent),
 	}
 }
 
-func (c *Client) Search(ctx context.Context, query string) ([]model.SearchResult, error) {
-	return c.SearchWithEndpoint(ctx, query, "/search")
+// SearchWithMode queries the TMDB search index for the given content mode.
+// ModeMovies and ModeTV hit their dedicated endpoints; every other mode
+// uses the generic multi-search endpoint.
+func (c *Client) SearchWithMode(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
+	endpoint := "/search"
+	switch mode {
+	case provider.ModeMovies:
+		endpoint = "/movies"
+	case provider.ModeTV:
+		endpoint = "/tv"
+	}
+	return c.SearchWithEndpoint(ctx, query, endpoint)
 }
 
-func (c *Client) SearchMovies(ctx context.Context, query string) ([]model.SearchResult, error) {
-	return c.SearchWithEndpoint(ctx, query, "/movies")
-}
-
-func (c *Client) SearchTV(ctx context.Context, query string) ([]model.SearchResult, error) {
-	return c.SearchWithEndpoint(ctx, query, "/tv")
-}
-
-func (c *Client) SearchWithEndpoint(ctx context.Context, query string, endpoint string) ([]model.SearchResult, error) {
+// SearchWithEndpoint performs the raw query against one endpoint and maps
+// hits to provider results keyed by TMDB id.
+func (c *Client) SearchWithEndpoint(ctx context.Context, query string, endpoint string) ([]provider.SearchResult, error) {
 	if query == "" {
 		return nil, fmt.Errorf("empty query")
 	}
@@ -84,16 +92,15 @@ func (c *Client) SearchWithEndpoint(ctx context.Context, query string, endpoint 
 		return nil, provider.ErrNoResults
 	}
 
-	out := make([]model.SearchResult, 0, len(result.Results))
+	out := make([]provider.SearchResult, 0, len(result.Results))
 	for _, r := range result.Results {
 		yearStr := ""
 		if r.Year != nil {
 			yearStr = fmt.Sprintf("%v", r.Year)
 		}
-		out = append(out, model.SearchResult{
+		out = append(out, provider.SearchResult{
 			Title:     r.Title,
-			URL:       fmt.Sprintf("%s/%s/%d", config.TMDBBaseURL, r.MediaType, r.TMDBID),
-			Provider:  "tmdb",
+			ID:        strconv.Itoa(r.TMDBID),
 			MediaType: r.MediaType,
 			Year:      yearStr,
 			TMDBID:    r.TMDBID,
