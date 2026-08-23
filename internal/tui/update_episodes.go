@@ -238,6 +238,7 @@ func (m *modelImpl) onBatchProgress(msg batchProgressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.batchCurrent = msg.current
 	m.batchTotal = msg.total
+	m.batchEpisodeProgress = msg.episodeProgress
 	if msg.totalSize != "" && msg.speed != "" && msg.downloaded != "" {
 		text := fmt.Sprintf("Downloading %d/%d: %s — %.1f%% — %s / %s at %s",
 			msg.current, msg.total, msg.episodeTitle, msg.episodeProgress*100,

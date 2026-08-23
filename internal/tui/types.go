@@ -291,8 +291,9 @@ type modelImpl struct {
 
 	selectedEpisodes map[int]struct{}
 	batchInProgress  bool
-	batchCurrent     int
-	batchTotal       int
+	batchCurrent            int
+	batchTotal              int
+	batchEpisodeProgress    float64
 	batchCancel      context.CancelFunc
 	batchChan        chan tea.Msg
 

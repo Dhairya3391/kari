@@ -13,6 +13,7 @@ type episodeResp struct {
 	ID          string  `json:"id"`
 	Number      float64 `json:"number"`
 	Category    string  `json:"category"`
+	RawCategory string  `json:"rawCategory"`
 	Title       string  `json:"title"`
 	Image       string  `json:"image"`
 	AirDate     string  `json:"airDate"`
@@ -26,15 +27,23 @@ type linkResp struct {
 	Streams   []linkStream   `json:"streams"`
 	Subtitles []linkSubtitle `json:"subtitles"`
 }
-
 type linkStream struct {
-	URL      string `json:"url"`
-	Type     string `json:"type"`
-	Quality  string `json:"quality"`
-	Referer  string `json:"referer"`
-	Server   string `json:"server"`
-	Priority int    `json:"priority"`
-	Default  bool   `json:"default"`
+	URL         string            `json:"url"`
+	Type        string            `json:"type"`
+	Quality     string            `json:"quality"`
+	Referer     string            `json:"referer"`
+	Server      string            `json:"server"`
+	Provider    string            `json:"provider"`
+	Priority    int               `json:"priority"`
+	Verified    bool              `json:"verified"`
+	Default     bool              `json:"default"`
+	Headers     map[string]string `json:"headers"`
+	HTTPHeaders map[string]string `json:"httpHeaders"`
+	MPV         *linkMPV          `json:"mpv"`
+}
+type linkMPV struct {
+	URL  string   `json:"url"`
+	Args []string `json:"args"`
 }
 
 type linkSubtitle struct {

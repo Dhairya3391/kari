@@ -43,14 +43,15 @@ func (m *modelImpl) View() string {
 
 // searchPosterVisible/previewPosterVisible report whether this frame will
 // actually show that slot's poster — every state that hides it (switching
-// screens, the help overlay, a confirm dialog covering the screen) needs to
-// be listed here so the Kitty cleanup above knows to clear it.
+// screens, the help overlay, a confirm dialog covering the screen, still
+// loading / unresolved media, or disabled images) needs to be listed here
+// so the Kitty cleanup above knows to clear it.
 func (m *modelImpl) searchPosterVisible() bool {
-	return m.activeView == viewSearch && !m.showHelp
+	return m.activeView == viewSearch && !m.showHelp && m.imagesEnabled && m.searchPoster != ""
 }
 
 func (m *modelImpl) previewPosterVisible() bool {
-	return m.activeView == viewPreview && !m.showHelp && !m.confirmCompletion
+	return m.activeView == viewPreview && !m.showHelp && !m.confirmCompletion && m.resolved != nil && m.imagesEnabled && m.previewPoster != ""
 }
 
 func (m *modelImpl) renderMainView() string {
@@ -153,7 +154,8 @@ func (m *modelImpl) downloadRatio() (float64, bool) {
 		return 0, false
 	}
 	if m.batchTotal > 0 {
-		return float64(m.batchCurrent) / float64(m.batchTotal), true
+		ratio := (float64(m.batchCurrent) + m.batchEpisodeProgress) / float64(m.batchTotal)
+		return ratio, true
 	}
 	if m.downloadProgress >= 0 {
 		return m.downloadProgress / 100, true

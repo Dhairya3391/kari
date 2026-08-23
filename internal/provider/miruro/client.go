@@ -195,44 +195,68 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	}
 
 	subtitleOptions := make([]provider.SubtitleOption, 0, len(lr.Subtitles))
+	seenSubs := make(map[string]struct{}, len(lr.Subtitles))
 	for _, sub := range lr.Subtitles {
-		if sub.File != "" {
-			subtitleOptions = append(subtitleOptions, provider.SubtitleOption{URL: sub.File, Language: sub.Language})
+		file := strings.TrimSpace(sub.File)
+		if file == "" {
+			continue
 		}
+		if _, ok := seenSubs[file]; ok {
+			continue
+		}
+		seenSubs[file] = struct{}{}
+		lang := strings.TrimSpace(sub.Language)
+		if lang == "" {
+			lang = strings.TrimSpace(sub.Label)
+		}
+		if lang == "" {
+			lang = "en"
+		}
+		subtitleOptions = append(subtitleOptions, provider.SubtitleOption{
+			URL:      file,
+			Language: lang,
+		})
 	}
 
 	streams := append([]linkStream(nil), lr.Streams...)
 	sort.SliceStable(streams, func(i, j int) bool {
-		score := func(idx int) int {
-			s := streams[idx]
-			server := strings.ToLower(cleanMiruroText(s.Server))
-			if server == "yt-mp4" {
-				return 100
-			}
-			if strings.Contains(strings.ToLower(cleanMiruroText(s.Quality)), "1080") {
-				return 90
-			}
-			if strings.EqualFold(cleanMiruroText(s.Type), "mp4") {
-				return 80
-			}
-			if server == "fm-hls" {
-				return 70
-			}
-			if s.Default {
-				return 1
-			}
-			return 0
+		if streams[i].Priority != streams[j].Priority {
+			return streams[i].Priority < streams[j].Priority
 		}
-		si := score(i)
-		sj := score(j)
+		if streams[i].Verified != streams[j].Verified {
+			return streams[i].Verified
+		}
+		score := func(s linkStream) int {
+			sc := 0
+			q := strings.ToLower(cleanMiruroText(s.Quality))
+			t := strings.ToLower(cleanMiruroText(s.Type))
+
+			if strings.Contains(q, "1080") {
+				sc += 100
+			} else if strings.Contains(q, "720") {
+				sc += 70
+			} else if strings.Contains(q, "480") {
+				sc += 40
+			} else if strings.Contains(q, "360") {
+				sc += 20
+			} else if t == "hls" || strings.Contains(q, "auto") {
+				sc += 80
+			} else if t == "mp4" {
+				sc += 50
+			}
+
+			if s.Default {
+				sc += 5
+			}
+			return sc
+		}
+		si := score(streams[i])
+		sj := score(streams[j])
 		if si != sj {
 			return si > sj
 		}
 		if streams[i].Default != streams[j].Default {
 			return streams[i].Default
-		}
-		if streams[i].Priority != streams[j].Priority {
-			return streams[i].Priority < streams[j].Priority
 		}
 		return miruroStreamKey(streams[i]) < miruroStreamKey(streams[j])
 	})
@@ -249,14 +273,61 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 
 		referer := s.Referer
 		if referer == "" {
+			if s.Headers != nil && s.Headers["Referer"] != "" {
+				referer = s.Headers["Referer"]
+			} else if s.HTTPHeaders != nil && s.HTTPHeaders["Referer"] != "" {
+				referer = s.HTTPHeaders["Referer"]
+			}
+		}
+
+		userAgent := ""
+		if s.Headers != nil && s.Headers["User-Agent"] != "" {
+			userAgent = s.Headers["User-Agent"]
+		} else if s.HTTPHeaders != nil && s.HTTPHeaders["User-Agent"] != "" {
+			userAgent = s.HTTPHeaders["User-Agent"]
+		}
+
+		var extraArgs []string
+		if s.MPV != nil {
+			for _, arg := range s.MPV.Args {
+				arg = strings.TrimSpace(arg)
+				if strings.HasPrefix(arg, "--referrer=") {
+					if referer == "" {
+						referer = strings.TrimPrefix(arg, "--referrer=")
+					}
+				} else if strings.HasPrefix(arg, "--user-agent=") {
+					if userAgent == "" {
+						userAgent = strings.TrimPrefix(arg, "--user-agent=")
+					}
+				} else if arg != "" {
+					extraArgs = append(extraArgs, arg)
+				}
+			}
+		}
+
+		if referer == "" {
 			referer = config.MiruroOrigin
 		}
-		quality := s.Quality
-		if quality == "" {
-			quality = "Auto"
+		if userAgent == "" {
+			userAgent = config.DesktopUserAgent
 		}
-		if s.Server != "" {
-			quality = fmt.Sprintf("%s (%s)", quality, s.Server)
+
+		quality := s.Quality
+		if quality == "" || strings.EqualFold(quality, "auto") {
+			if strings.EqualFold(s.Type, "hls") || strings.EqualFold(quality, "auto") {
+				quality = "Auto"
+			} else if strings.EqualFold(s.Type, "embed") {
+				quality = "Embed"
+			} else {
+				quality = "Direct"
+			}
+		}
+		serverOrProvider := s.Server
+		if serverOrProvider == "" {
+			serverOrProvider = s.Provider
+		}
+		if serverOrProvider != "" {
+			quality = fmt.Sprintf("%s (%s)", quality, serverOrProvider)
 		}
 
 		sources = append(sources, provider.MediaSource{
@@ -264,7 +335,8 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			Quality:   fmt.Sprintf("[MIRURO] %s", quality),
 			Referer:   referer,
 			Type:      s.Type,
-			UserAgent: config.DesktopUserAgent, // Use desktop UA for better compatibility
+			UserAgent: userAgent,
+			ExtraArgs: extraArgs,
 			Subtitles: subtitleOptions,
 		})
 	}
@@ -278,6 +350,7 @@ func normalizeMiruroStream(s linkStream) linkStream {
 	s.Quality = cleanMiruroText(s.Quality)
 	s.Referer = cleanMiruroText(s.Referer)
 	s.Server = cleanMiruroText(s.Server)
+	s.Provider = cleanMiruroText(s.Provider)
 	return s
 }
 
@@ -285,14 +358,15 @@ func miruroStreamKey(s linkStream) string {
 	return strings.Join([]string{
 		cleanMiruroText(s.URL),
 		strings.ToLower(cleanMiruroText(s.Server)),
+		strings.ToLower(cleanMiruroText(s.Provider)),
 		strings.ToLower(cleanMiruroText(s.Type)),
 		strings.ToLower(cleanMiruroText(s.Quality)),
 		cleanMiruroText(s.Referer),
 	}, "|")
 }
-
 func cleanMiruroText(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
+
 
 var _ provider.Provider = (*Client)(nil)
