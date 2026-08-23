@@ -117,31 +117,35 @@ func (r *Registry) Features(mode ContentType) Features {
 }
 
 // AudioLanguages returns the union of audio languages declared by providers
-// supporting ANY of the given modes, in provider priority order,
-// deduplicated case-insensitively by Code (settings filters match languages
-// without case sensitivity). Providers that don't implement
-// AudioLanguagesSource contribute nothing, so modes without audio-language
-// support yield an empty slice.
+// supporting ANY of the given modes (or all providers in the registry when no
+// mode is given), in provider priority order, deduplicated case-insensitively
+// by Code. Providers that don't implement AudioLanguagesSource contribute nothing.
 func (r *Registry) AudioLanguages(modes ...ContentType) []AudioLanguage {
 	var out []AudioLanguage
 	seen := make(map[string]struct{})
-	for _, mode := range modes {
-		for _, p := range r.ProvidersForMode(mode) {
-			als, ok := p.(AudioLanguagesSource)
-			if !ok {
+	var providers []Provider
+	if len(modes) == 0 {
+		providers = r.providers
+	} else {
+		for _, mode := range modes {
+			providers = append(providers, r.ProvidersForMode(mode)...)
+		}
+	}
+	for _, p := range providers {
+		als, ok := p.(AudioLanguagesSource)
+		if !ok {
+			continue
+		}
+		for _, l := range als.AudioLanguages() {
+			key := strings.ToLower(strings.TrimSpace(l.Code))
+			if key == "" {
 				continue
 			}
-			for _, l := range als.AudioLanguages() {
-				key := strings.ToLower(strings.TrimSpace(l.Code))
-				if key == "" {
-					continue
-				}
-				if _, dup := seen[key]; dup {
-					continue
-				}
-				seen[key] = struct{}{}
-				out = append(out, l)
+			if _, dup := seen[key]; dup {
+				continue
 			}
+			seen[key] = struct{}{}
+			out = append(out, l)
 		}
 	}
 	return out

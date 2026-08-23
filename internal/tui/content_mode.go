@@ -52,15 +52,10 @@ func (m *modelImpl) modeFeatures() provider.Features {
 	return m.registry.Features(m.appMode)
 }
 
-// availableLanguages returns the audio languages declared by the providers
-// supporting the active mode. Empty when no active provider tags audio
-// languages. Movies and TV intentionally share one pool — the same providers
-// serve both, so filters must behave identically across them.
+// availableLanguages returns the audio languages declared across all providers.
+// Audio language filters in settings are shown globally across all modes so
+// users can configure language preferences for movies, TV, and cartoons
+// without having to switch modes first.
 func (m *modelImpl) availableLanguages() []provider.AudioLanguage {
-	modes := []provider.ContentType{m.appMode}
-	switch m.appMode {
-	case provider.ModeMovies, provider.ModeTV:
-		modes = []provider.ContentType{provider.ModeMovies, provider.ModeTV}
-	}
-	return m.registry.AudioLanguages(modes...)
+	return m.registry.AudioLanguages()
 }

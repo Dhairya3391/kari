@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### 🛠️ TUI & UX Improvements
 
 - **Smoothed Batch Download Progress**: Blended per-episode byte progress (`batchEpisodeProgress`) with overall episode count for accurate, flicker-free progress bars during batch downloads.
+- **Global Audio Language Settings**: Audio language filters in settings are now accessible regardless of the active content mode, enabling seamless configuration for Movies, TV, and Cartoons without requiring mode-switching.
 - **Dynamic Language Resolution**: Expanded `internal/lang` with 14 selectable subtitle languages and ISO-639 normalization across all provider responses.
 - **Resilient IPC & Resume Handling**: Hardened MPV JSON IPC socket polling to gracefully survive stream buffering, reconnect on transient I/O hiccups, and persist exact resume positions on exit.
 
