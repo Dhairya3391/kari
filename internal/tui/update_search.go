@@ -66,6 +66,17 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch keyMsg.String() {
 		case "y", "Y":
 			if m.historyStore != nil && m.resolved != nil {
+				audioMode := m.audioMode
+				if m.selectedEpisode != nil && m.selectedEpisode.Audio != "" {
+					audioMode = m.selectedEpisode.Audio
+				}
+				lang := ""
+				if src, ok := m.selectedPlaybackSource(); ok && src.Language != "" {
+					lang = src.Language
+				} else if m.prevSourceLanguage != "" {
+					lang = m.prevSourceLanguage
+				}
+
 				entry := history.Entry{
 					Key: history.EntryKey{
 						Title:     m.resolved.SeriesTitle,
@@ -87,6 +98,8 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 					Mode:      string(m.appMode),
 					MediaType: m.resolved.MediaType,
 					TMDBID:    m.resolved.TMDBID,
+					AudioMode: audioMode,
+					Language:  lang,
 				}
 				_ = m.historyStore.Upsert(entry)
 				m.applyResumeFromHistory(m.resolved)

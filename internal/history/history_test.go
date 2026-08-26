@@ -62,3 +62,58 @@ func TestStore_CloseWaitsForPendingSave(t *testing.T) {
 		t.Fatalf("expected entry to have been persisted before Close() returned")
 	}
 }
+
+// TestStore_AudioModeAndLanguagePersistence verifies that AudioMode ("sub"/"dub")
+// and playback source Language ("Hindi", "English", etc.) are saved and restored
+// across store reopens.
+func TestStore_AudioModeAndLanguagePersistence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.json")
+	s, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	key := EntryKey{Title: "frieren", Mode: "anime", MediaType: "tv", Season: 1, Episode: 5}
+	entry := Entry{
+		Key:          key,
+		Title:        "frieren",
+		Season:       1,
+		Episode:      5,
+		PositionSecs: 500,
+		DurationSecs: 1400,
+		AudioMode:    "dub",
+		Language:     "English",
+	}
+	if err := s.Upsert(entry); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	s.Close()
+
+	reopened, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore (reopen): %v", err)
+	}
+
+	got, ok := reopened.Get(key)
+	if !ok {
+		t.Fatalf("expected entry to exist after reopen")
+	}
+	if got.AudioMode != "dub" {
+		t.Errorf("AudioMode = %q, want %q", got.AudioMode, "dub")
+	}
+	if got.Language != "English" {
+		t.Errorf("Language = %q, want %q", got.Language, "English")
+	}
+
+	groups := BuildGroups(reopened.All())
+	if len(groups) != 1 {
+		t.Fatalf("got %d groups, want 1", len(groups))
+	}
+	if groups[0].ContinueEntry.AudioMode != "dub" {
+		t.Errorf("Group ContinueEntry.AudioMode = %q, want %q", groups[0].ContinueEntry.AudioMode, "dub")
+	}
+	if groups[0].ContinueEntry.Language != "English" {
+		t.Errorf("Group ContinueEntry.Language = %q, want %q", groups[0].ContinueEntry.Language, "English")
+	}
+}

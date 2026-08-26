@@ -59,6 +59,8 @@ type Entry struct {
 	Mode      string `json:"mode,omitempty"`
 	MediaType string `json:"media_type,omitempty"`
 	TMDBID    int    `json:"tmdb_id,omitempty"`
+	AudioMode string `json:"audio_mode,omitempty"`
+	Language  string `json:"language,omitempty"`
 }
 
 // GroupKey collapses entries into one series/movie for the history list.

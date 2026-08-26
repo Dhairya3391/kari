@@ -469,6 +469,17 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 
 	// Update history
 	if m.historyStore != nil && m.resolved != nil {
+		audioMode := m.audioMode
+		if m.selectedEpisode != nil && m.selectedEpisode.Audio != "" {
+			audioMode = m.selectedEpisode.Audio
+		}
+		lang := ""
+		if src, ok := m.selectedPlaybackSource(); ok && src.Language != "" {
+			lang = src.Language
+		} else if m.prevSourceLanguage != "" {
+			lang = m.prevSourceLanguage
+		}
+
 		entry := history.Entry{
 			Key: history.EntryKey{
 				Title:     m.resolved.SeriesTitle,
@@ -491,6 +502,8 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 			Mode:      string(m.appMode),
 			MediaType: m.resolved.MediaType,
 			TMDBID:    m.resolved.TMDBID,
+			AudioMode: audioMode,
+			Language:  lang,
 		}
 		if err := m.historyStore.Upsert(entry); err != nil {
 			tuiLog.Error("history upsert failed", "err", err)

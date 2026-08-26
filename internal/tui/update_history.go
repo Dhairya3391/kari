@@ -92,6 +92,14 @@ func (m *modelImpl) playHistoryGroup(keyStr string) (tea.Model, tea.Cmd) {
 
 	entry := group.ContinueEntry
 	m.appMode = modeForHistoryEntry(entry)
+	if entry.AudioMode != "" {
+		m.audioMode = entry.AudioMode
+	} else if m.modeFeatures().AudioSelection {
+		m.audioMode = provider.AudioSub
+	}
+	if entry.Language != "" {
+		m.prevSourceLanguage = entry.Language
+	}
 	m.selectedSeries = nil
 	m.selectedEpisode = nil
 	m.resolved = nil

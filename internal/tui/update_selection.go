@@ -107,9 +107,6 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	if src, ok := m.selectedPlaybackSource(); ok {
 		m.prevSourceLanguage = src.Language
 		m.prevSourceQuality = service.SourceQuality(src.Quality)
-	} else {
-		m.prevSourceLanguage = ""
-		m.prevSourceQuality = 0
 	}
 	m.resolved = nil
 	m.rawSubtitles = nil
