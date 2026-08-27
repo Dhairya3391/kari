@@ -179,6 +179,10 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "A":
 		if model.IsEpisodeBased(m.resolved.MediaType) {
 			m.autoplay = !m.autoplay
+			if m.autoplay {
+				return m, m.setStatusTimed(statusSuccess, "Autoplay enabled")
+			}
+			return m, m.setStatusTimed(statusInfo, "Autoplay disabled")
 		}
 		return m, nil
 	case "tab", "shift+tab":

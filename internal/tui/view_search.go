@@ -16,14 +16,14 @@ import (
 // truncation, and gets hard-wrapped instead by the Width() applied when
 // this column is boxed in later, breaking the list's row alignment.
 func searchLeftWidth(contentW int) int {
-	if contentW <= 90 {
+	if contentW <= narrowTerminalThreshold {
 		return contentW
 	}
 	return contentW * 65 / 100
 }
 
 func (m *modelImpl) renderSearchScreen(dims layoutDims) string {
-	if dims.contentW <= 90 {
+	if dims.contentW <= narrowTerminalThreshold {
 		return m.renderSearchLeft(dims.contentW)
 	}
 
@@ -155,7 +155,7 @@ func (m *modelImpl) renderEpisodesScreen(dims layoutDims) string {
 	if len(m.episodeResults) == 0 {
 		rows = append(rows, mutedStyle.Render("No episodes available."))
 	} else {
-		rows = append(rows, mutedStyle.Render("space toggle · ctrl+a all · ctrl+d none  ·  / to filter  ·  g/G first/last"), "")
+		rows = append(rows, mutedStyle.Render("space toggle · ctrl+a all · ctrl+d none  ·  / to filter  ·  g/G top/bottom"), "")
 		rows = append(rows, m.episodeList.View())
 	}
 

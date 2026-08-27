@@ -88,13 +88,13 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.episodesOpID = opID
 				return m, tea.Batch(m.spinner.Tick, m.episodesCmd(opID, *m.selectedSeries))
 			}
-		case keyMsg.String() == "g":
+		case key.Matches(keyMsg, m.keys.Top):
 			if m.episodeList.SettingFilter() {
 				break
 			}
 			m.episodeList.Select(0)
 			return m, nil
-		case keyMsg.String() == "G":
+		case key.Matches(keyMsg, m.keys.Bottom):
 			if m.episodeList.SettingFilter() {
 				break
 			}

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -32,7 +33,7 @@ func (m *modelImpl) renderPreviewControlsRow(width int) string {
 	sourceW := width * 44 / 100
 	playersW := width * 26 / 100
 	actionsW := width - sourceW - playersW - 4
-	if width < 90 {
+	if width < narrowTerminalThreshold {
 		sourceW, playersW, actionsW = width, width, width
 	}
 
@@ -40,7 +41,7 @@ func (m *modelImpl) renderPreviewControlsRow(width int) string {
 	players := m.renderPlayersColumn()
 	actions := m.renderActionsColumn()
 
-	if width < 90 {
+	if width < narrowTerminalThreshold {
 		return lipgloss.JoinVertical(lipgloss.Left, source, "", players, "", actions)
 	}
 
@@ -119,7 +120,18 @@ func (m *modelImpl) renderSourceColumn(filtered []int, width int) string {
 		items = append(items, line)
 	}
 
-	rows := []string{sectionTitleStyle.Render("Source"), "", layoutSourceItems(items, width), "", mutedStyle.Render("tab / shift+tab to switch")}
+	sourceTitle := "Source"
+	if len(filtered) > 1 {
+		pos := 1
+		for i, actualIdx := range filtered {
+			if actualIdx == m.selectedPlayback {
+				pos = i + 1
+				break
+			}
+		}
+		sourceTitle = fmt.Sprintf("Source (%d/%d)", pos, len(filtered))
+	}
+	rows := []string{sectionTitleStyle.Render(sourceTitle), "", layoutSourceItems(items, width), "", mutedStyle.Render("tab / shift+tab to switch")}
 	return strings.Join(rows, "\n")
 }
 
@@ -171,14 +183,14 @@ func (m *modelImpl) renderPlayersColumn() string {
 func (m *modelImpl) renderActionsColumn() string {
 	r := m.resolved
 	rows := []string{sectionTitleStyle.Render("Actions"), ""}
-	rows = append(rows, lipgloss.NewStyle().Foreground(colorPrimary).Render("[enter]")+"  "+textStyle.Render("Play"))
+	rows = append(rows, keyStyle.Render("enter")+"  "+textStyle.Render("Play"))
 	if r.StartTime > 5 {
-		rows = append(rows, lipgloss.NewStyle().Foreground(colorWarn).Render("[r]")+"      "+textStyle.Render("Restart"))
+		rows = append(rows, keyStyle.Render("r")+"      "+textStyle.Render("Restart"))
 	}
 	if m.canPlayNextEpisode() {
-		rows = append(rows, lipgloss.NewStyle().Foreground(colorPrimary).Render("[n]")+"      "+textStyle.Render("Play next"))
+		rows = append(rows, keyStyle.Render("n")+"      "+textStyle.Render("Play next"))
 	}
-	rows = append(rows, lipgloss.NewStyle().Foreground(colorMuted).Render("[d]")+"      "+mutedStyle.Render("Download"))
+	rows = append(rows, keyStyle.Render("d")+"      "+textStyle.Render("Download"))
 	return strings.Join(rows, "\n")
 }
 
@@ -240,7 +252,7 @@ func (m *modelImpl) renderHelpOverlay() string {
 	)
 
 	content := strings.Join(sections, "\n")
-	boxW := 48
+	boxW := min(48, max(28, m.width-4))
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorPrimary).

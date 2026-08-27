@@ -108,18 +108,19 @@ func normalizeHexColor(s string) (string, bool) {
 }
 
 func renderBadge(mode string) string {
+	label := strings.ToUpper(mode)
 	switch mode {
 	case provider.MediaTypeAnime:
-		return modeBadgeAnime.Render(mode)
+		return modeBadgeAnime.Render(label)
 	case provider.MediaTypeCartoon:
-		return modeBadgeCartoon.Render(mode)
+		return modeBadgeCartoon.Render(label)
 	case provider.MediaTypeMovie, string(provider.ModeMovies):
-		return modeBadgeMovies.Render(mode)
+		return modeBadgeMovies.Render(label)
 	case provider.MediaTypeTV:
-		return modeBadgeTV.Render(mode)
+		return modeBadgeTV.Render(label)
 	case string(provider.ModeJellyfin):
-		return modeBadgeJellyfin.Render(mode)
+		return modeBadgeJellyfin.Render(label)
 	default:
-		return modeBadgeDefault.Render(mode)
+		return modeBadgeDefault.Render(label)
 	}
 }

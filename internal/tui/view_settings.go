@@ -37,7 +37,7 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 	}
 
 	rows = append(rows, sectionTitleStyle.Render("Trakt.tv"))
-	rows = append(rows, traktStyle.Render(fmt.Sprintf("Status: %s\n[C] Connect    [R] Revoke", traktStatus)))
+	rows = append(rows, traktStyle.Render(fmt.Sprintf("Status: %s\n%s", traktStatus, mutedStyle.Render("[c] connect    [r] revoke"))))
 	if m.traktAuthCode != "" {
 		rows = append(rows, traktStyle.Render(fmt.Sprintf("\nGo to: %s\nEnter code: %s", m.traktAuthURL, m.traktAuthCode)))
 	}
@@ -55,7 +55,7 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 	}
 
 	rows = append(rows, sectionTitleStyle.Render("AniList"))
-	rows = append(rows, anilistStyle.Render(fmt.Sprintf("Status: %s\n[C] Connect    [R] Revoke", anilistStatus)))
+	rows = append(rows, anilistStyle.Render(fmt.Sprintf("Status: %s\n%s", anilistStatus, mutedStyle.Render("[c] connect    [r] revoke"))))
 
 	if m.anilistAuthURL != "" {
 		rows = append(rows, anilistStyle.Render("\nA browser window should have opened."))
@@ -88,7 +88,7 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 
 	rows = append(rows, sectionTitleStyle.Render("Quality"))
 	qualityLine := fmt.Sprintf(
-		"%s All    %s Highest    %s Data Saver    %s Lowest",
+		"%s All    %s Highest    %s Saver    %s Lowest",
 		modeColor(allMarker), modeColor(highestMarker), modeColor(dataSaverMarker), modeColor(lowestMarker),
 	)
 	rows = append(rows, qualityStyle.Render(shorten(qualityLine, dims.contentW-4)))
@@ -108,10 +108,11 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 			enabledCount++
 		}
 	}
-	rows = append(rows, sectionTitleStyle.Render(fmt.Sprintf("Languages · %d/%d enabled", enabledCount, len(languages))))
 	if len(languages) == 0 {
-		rows = append(rows, langStyle.Render(mutedStyle.Render("No audio-language filters for this mode")))
+		rows = append(rows, sectionTitleStyle.Render("Languages"))
+		rows = append(rows, langStyle.Render(mutedStyle.Render("No audio-language filters for this mode (Sub/Dub configured in episodes)")))
 	} else {
+		rows = append(rows, sectionTitleStyle.Render(fmt.Sprintf("Languages · %d/%d enabled", enabledCount, len(languages))))
 		entries := make([]string, len(languages))
 		for i, l := range languages {
 			marker := "○"

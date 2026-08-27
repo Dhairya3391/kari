@@ -9,7 +9,8 @@ import (
 )
 
 const (
-	maxContentWidth = 118
+	maxContentWidth         = 118
+	narrowTerminalThreshold = 90
 )
 
 type layoutDims struct {
@@ -25,25 +26,22 @@ func (m *modelImpl) computeLayoutDims() layoutDims {
 	if contentW > maxContentWidth {
 		contentW = maxContentWidth
 	}
-
 	return layoutDims{contentW: contentW, bodyW: contentW}
 }
 
 func (m *modelImpl) resizeLists() {
 	dims := m.computeLayoutDims()
-	w := dims.bodyW - 4
-	if w < 24 {
-		w = 24
-	}
-	h := max(10, m.height-13)
+	w := max(20, dims.bodyW-4)
+	h := max(4, m.height-12)
 
-	seriesW := searchLeftWidth(dims.bodyW) - 4
-	if seriesW < 24 {
-		seriesW = 24
-	}
+	seriesW := max(20, searchLeftWidth(dims.bodyW)-4)
 	m.seriesList.SetSize(seriesW, h)
 	m.episodeList.SetSize(w, h)
 	m.historyList.SetSize(w, h)
+
+	inputW := max(15, dims.contentW-12)
+	m.queryInput.Width = inputW
+	m.authInput.Width = inputW
 }
 
 func (m *modelImpl) setStatus(level statusLevel, text string) {

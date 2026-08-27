@@ -89,10 +89,16 @@ func (m *modelImpl) renderMainView() string {
 	spacer := strings.Repeat("\n", gap)
 	finalContent := content + spacer + "\n" + footer
 
-	if m.width > dims.contentW+4 {
-		finalContent = lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Top, finalContent)
+	if m.width > dims.contentW {
+		leftPad := strings.Repeat(" ", (m.width-dims.contentW)/2)
+		lines := strings.Split(finalContent, "\n")
+		for i, line := range lines {
+			if line != "" {
+				lines[i] = leftPad + line
+			}
+		}
+		finalContent = strings.Join(lines, "\n")
 	}
-
 	return finalContent
 }
 
@@ -101,9 +107,10 @@ func (m *modelImpl) renderRule(width int) string {
 }
 
 func (m *modelImpl) renderHeader(dims layoutDims) string {
+	maxTitleW := max(12, dims.contentW-22)
 	breadcrumb := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("Kari") +
 		mutedStyle.Render(" › ") +
-		mutedStyle.Render(m.activeViewLabel())
+		mutedStyle.Render(m.activeViewLabel(maxTitleW))
 
 	return sideBySide(breadcrumb, "", dims.contentW)
 }
@@ -189,13 +196,25 @@ func (m *modelImpl) renderStatusLine(width int) string {
 	return lipgloss.Place(width, 1, lipgloss.Center, lipgloss.Center, style.Render(text))
 }
 
-func (m *modelImpl) activeViewLabel() string {
+func (m *modelImpl) activeViewLabel(maxTitleW int) string {
 	switch m.activeView {
 	case viewSearch:
 		return "Search"
 	case viewEpisodes:
+		if m.selectedSeries != nil && m.selectedSeries.Title != "" {
+			return shorten(m.selectedSeries.Title, maxTitleW) + " › Episodes"
+		}
 		return "Episodes"
 	case viewPreview:
+		title := ""
+		if m.selectedSeries != nil && m.selectedSeries.Title != "" {
+			title = m.selectedSeries.Title
+		} else if m.resolved != nil && m.resolved.SeriesTitle != "" {
+			title = m.resolved.SeriesTitle
+		}
+		if title != "" {
+			return shorten(title, maxTitleW) + " › Preview"
+		}
 		return "Preview"
 	case viewHistory:
 		return "History"
@@ -248,13 +267,15 @@ func (m *modelImpl) renderHistoryScreen(dims layoutDims) string {
 }
 
 func (m *modelImpl) renderConfirmDialog(title string, dims layoutDims) string {
+	dialogW := min(40, max(24, dims.contentW-4))
+	dialogHeight := min(10, max(5, m.height-4))
 	dialog := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorPrimary).
 		Padding(1, 2).
-		Width(40).
+		Width(dialogW).
 		Align(lipgloss.Center).
-		Render(fmt.Sprintf("%s\n\n[Y] Yes    [N] No", title))
+		Render(fmt.Sprintf("%s\n\n[y] Yes    [n] No", title))
 
-	return lipgloss.Place(dims.contentW, 10, lipgloss.Center, lipgloss.Center, dialog)
+	return lipgloss.Place(dims.contentW, dialogHeight, lipgloss.Center, lipgloss.Center, dialog)
 }

@@ -137,10 +137,13 @@ func (m *modelImpl) renderPreviewInfo(totalWidth int) string {
 	}
 
 	if r.MediaType != provider.MediaTypeMovie {
-		if r.SeasonNumber > 0 || r.EpisodeNumber > 0 {
-			rows = append(rows, mutedStyle.Render(fmt.Sprintf("Season %d  ·  Episode %d", r.SeasonNumber, r.EpisodeNumber)))
+		if r.SeasonNumber > 0 && r.EpisodeNumber > 0 {
+			rows = append(rows, mutedStyle.Render(fmt.Sprintf("S%02d E%02d", r.SeasonNumber, r.EpisodeNumber)))
+		} else if r.EpisodeNumber > 0 {
+			rows = append(rows, mutedStyle.Render(fmt.Sprintf("E%02d", r.EpisodeNumber)))
+		} else if r.SeasonNumber > 0 {
+			rows = append(rows, mutedStyle.Render(fmt.Sprintf("S%02d", r.SeasonNumber)))
 		}
-
 		cleanedTitle := cleanEpisodeTitle(r.EpisodeTitle, primaryTitle)
 		if cleanedTitle != "" {
 			rows = append(rows, mutedStyle.Render(shorten(cleanedTitle, width)))
