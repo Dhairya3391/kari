@@ -5,90 +5,165 @@
 ![Go Version](https://img.shields.io/github/go-mod/go-version/Dhairya3391/kari?style=flat-square&label=go)
 ![Last Commit](https://img.shields.io/github/last-commit/Dhairya3391/kari?style=flat-square)
 
-I wanted MPV for playback, Trakt for tracking, AniList for anime, subtitles when I needed them, and exactly zero browser tabs.
-
-So I built Kari.
+Stream anime, movies, TV shows, and cartoons directly from your terminal. External media player playback (MPV, IINA, VLC), automatic watch history, Trakt/AniList scrobbling, smart subtitle selection, and zero browser tabs.
 
 Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
 ![kari demo](https://github.com/user-attachments/assets/be296568-f5c1-4675-86e4-626434f2829c)
 
+---
+
 ## Quick Start
 
+### 1. Ensure you have a media player (MPV recommended)
+
+- **macOS:** `brew install mpv`
+- **Ubuntu / Debian:** `sudo apt install mpv`
+- **Arch Linux:** `sudo pacman -S mpv`
+- **Windows:** `winget install mpv.net` (or standard `mpv`)
+
+### 2. Install Kari
+
+**macOS / Linux / Termux (one-line install):**
+
 ```bash
-git clone https://github.com/Dhairya3391/kari.git
-cd kari
-go build -o kari ./cmd/kari
-./kari
+curl -fsSL https://raw.githubusercontent.com/Dhairya3391/kari/main/install.sh | bash
 ```
 
-Type a query, press Space, pick a result.
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/Dhairya3391/kari/main/install.ps1 | iex
+```
+
+*Prefer manual download?* Grab pre-compiled binaries from the [Releases page](https://github.com/Dhairya3391/kari/releases).
+
+### 3. Launch
+
+```bash
+kari
+```
+
+Start typing what you want to watch, hit `Space` to search, and press `Enter` to play.
+
+---
+
+## The 30-Second Guide
+
+1. **Search**: Type a title and hit **`Space`**. Search queries multiple providers simultaneously.
+2. **Switch Category**: Press **`Tab`** to cycle between **Anime**, **Movies**, **TV Shows**, **Cartoons**, and **Jellyfin**.
+3. **Pick & Play**: Choose a result with arrows or `j`/`k`, select an episode, and press **`Enter`**. Your media player launches with full playback controls.
+4. **Resume**: Kari saves your progress automatically. Open watch history anytime with **`h`** and hit **`Enter`** to pick up where you left off.
+
+You can also launch directly into a search from your command line:
+
+```bash
+kari "frieren"
+```
+
+---
+
+## Keybindings
+
+### Navigation & Search
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` or `j` / `k` | Move up / down |
+| `Enter` | Select series, select episode, or play |
+| `Esc` / `Backspace` | Go back to previous screen |
+| `Space` | Execute search for current text query |
+| `Tab` / `Shift+Tab` | Cycle media mode (Anime → Movies → TV → Cartoon → Jellyfin) |
+| `/` | Filter list items |
+| `Ctrl+H` | Return to home / search view |
+
+### Playback & Audio
+
+| Key | Action |
+| --- | --- |
+| `n` | Play next episode |
+| `A` | Toggle auto-play next episode |
+| `a` | Toggle Sub / Dub (Anime mode) |
+| `r` | Restart episode from beginning (discards saved resume position) |
+| `Ctrl+P` | Switch active playback player |
+
+### Downloads & App
+
+| Key | Action |
+| --- | --- |
+| `d` | Download selected episode |
+| `x` | Stop or cancel active download |
+| `h` / `H` | Open watch history |
+| `s` / `S` | Open Settings (Trakt, AniList, subtitles, theme, language filters) |
+| `Ctrl+D` | Toggle debug log panel |
+| `q` / `Ctrl+C` | Quit Kari |
+
+---
 
 ## Features
 
-- **Multi-source search** — Searches multiple providers at once (MovieBox, RiveStream, VidKing, Miruro, PirateX, and optional Jellyfin). Results grouped by source.
-- **5 media modes** — Anime, Movies, TV Shows, Cartoons, Jellyfin. Switch with Tab.
-- **Episode browsing** — Season/episode lists with filler badges and sub/dub toggles.
-- **Parallel source resolution** — Queries every provider at once, shows all available qualities.
-- **External player support** — MPV (any OS), IINA (macOS), VLC (Windows), MX Player (Android).
-- **IPC position tracking** — MPV reports back via Unix socket. Close mid-episode, resume where you left off.
-- **Auto-skip intro/outro** — Pulls timestamps from AniSkip, generates an MPV Lua script on the fly.
-- **Scrobbling** — Syncs watch status to Trakt.tv (movies/TV) via device auth (no tokens to copy) and AniList (anime) via OAuth.
-- **Watch history** — Local JSON store, grouped by series, remembers your position.
-- **Downloading** — yt-dlp powered downloads with aria2c multi-connection acceleration for HLS, DASH, and direct HTTP sources.
-- **Posters & metadata** — TMDB/AniList poster art in search results and the preview screen, plus overview, genres, and rating. Renders as real pixel images on Kitty/WezTerm/Ghostty, and falls back to Unicode half-block art everywhere else — no config needed, capability is auto-detected.
-- **Customizable accent color** — Pick from curated presets or type your own hex code in Settings; applies immediately across the whole UI.
-- **Download progress bar** — Live byte-percentage (single downloads) or episode-count (batch downloads) progress bar during downloads.
-- **Subtitles** — Tries the playback provider's own subtitles first (matching your preferred language, then English), falls back to other providers, then OpenSubtitles — never a random unrelated language. Re-syncs automatically if you switch source or change the subtitle language setting.
-- **Self-update** — `./kari -u` fetches the latest release from GitHub.
-- **Cross-platform** — Linux, macOS, Windows, Android (Termux).
+- **Multi-Source Parallel Search** — Queries multiple streaming sources concurrently (Miruro, MovieBox, RiveStream, VidKing, PirateX, and optional Jellyfin).
+- **5 Media Categories** — Dedicated modes for Anime, Movies, TV Series, Cartoons, and private Jellyfin servers. Switch effortlessly with `Tab`.
+- **Accurate Resume & History** — MPV reports timestamps back via local IPC socket. Quit anytime and Kari remembers your exact position, selected audio mode (Sub/Dub), and preferred stream language.
+- **Auto-Skip Intro / Outro** — Fetches AniSkip timestamps automatically for anime and injects an on-the-fly MPV Lua script.
+- **Scrobbling Sync** — Native device-flow authorization for Trakt.tv (Movies & TV) and AniList (Anime). No tokens or API keys to copy manually.
+- **Smart Subtitle Fallback** — Prioritizes provider-embedded subtitles matching your preferred language, gracefully falling back to other providers and OpenSubtitles.
+- **Terminal Poster Art** — Renders real pixel graphics on modern terminals (Kitty, WezTerm, Ghostty) with automatic fallback to high-density Unicode half-blocks on standard terminals.
+- **Fast Accelerated Downloads** — Download episodes via `yt-dlp` with automatic `aria2c` 16-connection acceleration for fast speeds.
+- **UI Customization** — Built-in theme presets and custom HEX accent color support in Settings.
+- **One-Command Self Update** — Run `kari -u` to pull and install the newest release from GitHub.
 
-## Installation
+---
 
-### Prerequisites
+## Media Providers
 
-- **Go 1.26+** — [Install Go](https://go.dev/doc/install)
+| Provider | Mode | Method | Priority |
+| --- | --- | --- | --- |
+| **Miruro** | Anime | API | 1 |
+| **PirateX** | Cartoons | Scraper (HLS stream) | 1 |
+| **VidKing** | Movies, TV | API (TMDB-indexed) | 1 (TV), 2 (Movies) |
+| **MovieBox** | Movies, TV | API (TMDB-indexed) | 2 |
+| **RiveStream** | Movies, TV | API (TMDB-indexed) | 2 |
+| **Jellyfin** | Movies, TV | Jellyfin Server API | 1 |
 
-At least one media player in `$PATH`:
+*Lower priority number = primary provider. All providers are queried simultaneously in parallel.*
 
-| Player | Platforms | Notes |
+---
+
+## Supported Media Players
+
+| Player | Platforms | Features |
 | --- | --- | --- |
-| [MPV](https://mpv.io/) | Linux, macOS, Windows, Android | Full support |
-| [IINA](https://iina.io/) | macOS | MPV-based; position tracking works |
-| [VLC](https://www.videolan.org/) | Windows | No position tracking |
-| [MX Player](https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.ad) | Android | Launched via `am start`; no position tracking |
+| **[MPV](https://mpv.io/)** | Linux, macOS, Windows, Android | **Recommended.** Full support with IPC position tracking, AniSkip, and custom headers |
+| **[IINA](https://iina.io/)** | macOS | MPV-based UI; position tracking supported |
+| **[VLC](https://www.videolan.org/)** | Windows, Linux, macOS | Playback supported; no IPC position tracking |
+| **[MX Player](https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.ad)** | Android | Launched via Android intents |
 
-Optional tools:
+---
 
-| Tool | Used for | In `$PATH` |
-| --- | --- | --- |
-| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | All downloads (HLS, DASH, MP4, etc.) | **Required for downloads** |
-| [aria2c](https://aria2.github.io/) | Multi-connection parallel downloads — **strongly recommended** for fast speeds (16 connections per file) | Recommended |
-| [curl](https://curl.se/) | MPV pipe playback fallback | Yes |
-| [upx](https://upx.github.io/) | Compressing build artifacts (build script only) | No |
+## Optional Download Acceleration
 
-> **Tip:** Install [aria2c](https://aria2.github.io/) for significantly faster downloads. yt-dlp uses it as an external downloader with 16 parallel connections per file. Without it, downloads use yt-dlp's single-connection HTTP client which is much slower.
->
-> ```bash
-> # macOS
-> brew install aria2
-> # Ubuntu/Debian
-> sudo apt install aria2
-> # Arch
-> sudo pacman -S aria2
-> ```
-
-### Build from source
+Downloads work out of the box with `yt-dlp`. For significantly faster multi-connection downloads, install `aria2c`:
 
 ```bash
-git clone https://github.com/Dhairya3391/kari.git
-cd kari
-go build -o kari ./cmd/kari
+# macOS
+brew install yt-dlp aria2
+
+# Ubuntu / Debian
+sudo apt install yt-dlp aria2
+
+# Arch Linux
+sudo pacman -S yt-dlp aria2
+
+# Windows
+winget install yt-dlp aria2
 ```
 
-The binary lands in the current directory as `./kari`.
+---
 
-### Pre-built binaries
+## Installation Methods
+
+### Method 1: Automated Script (Recommended)
 
 **macOS / Linux / Termux:**
 
@@ -102,320 +177,156 @@ curl -fsSL https://raw.githubusercontent.com/Dhairya3391/kari/main/install.sh | 
 irm https://raw.githubusercontent.com/Dhairya3391/kari/main/install.ps1 | iex
 ```
 
-Both scripts detect your OS/architecture, download the matching binary from the [latest release](https://github.com/Dhairya3391/kari/releases/latest), and put `kari` on your `PATH` — no admin/sudo required. Set `KARI_INSTALL_DIR` before running to install somewhere other than the default.
+### Method 2: Manual Binary Download
 
-Or grab a binary manually from the [releases page](https://github.com/Dhairya3391/kari/releases).
+Download pre-compiled binaries for your architecture from the [GitHub Releases](https://github.com/Dhairya3391/kari/releases/latest) page, extract, and place `kari` into your system `$PATH`.
 
-## Configuration
+### Method 3: Build from Source
 
-All config is through environment variables. No config files to wrangle.
+Requires Go 1.26+:
 
-### Essential
+```bash
+git clone https://github.com/Dhairya3391/kari.git
+cd kari
+go build -o kari ./cmd/kari
+./kari
+```
+
+---
+
+## Configuration & Environment Variables
+
+Kari works with zero configuration. You can optionally customize its behavior with environment variables:
+
+### Core Settings
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `KARI_PLAYER` | Preferred player (`mpv`, `iina`, `vlc`) | Auto-detected |
+| `KARI_PLAYER` | Force a specific media player (`mpv`, `iina`, `vlc`) | Auto-detected |
+| `KARI_DOWNLOAD_DIR` | Directory where downloaded episodes are saved | `./downloads` |
+| `KARI_LOG_FILE` | File destination for logs | `~/.config/kari/kari.log` |
+| `KARI_LOG_DEBUG` | Enable verbose debug logging (`true` or `1`) | `false` |
+| `KARI_LOG_STDERR` | Write logs to standard error (`true` or `1`) | `false` |
 
-### API Keys (optional — built-in fallbacks are there if you don't set these)
+### Integrations & Custom API Keys
+
+*Note: Built-in keys are provided automatically for TMDB, Trakt, and AniList. Set these only if you want to use your own personal accounts or hit rate limits.*
 
 | Variable | Description |
 | --- | --- |
-| `TMDB_API_KEY` | Your own TMDB key. If unset, a pool of built-in keys is rotated through. |
-| `OPENSUBTITLES_API_KEY` | OpenSubtitles API key. Optional; without it only provider-supplied subtitles are used. |
-| `OPENSUBTITLES_USERNAME` | Required if you set the API key. |
-| `OPENSUBTITLES_PASSWORD` | Same. |
-| `JELLYFIN_URL` | Your Jellyfin server URL (example: `"https://jfn.fqdn.com/"`). When set, a JELLYFIN mode appears. |
-| `JELLYFIN_API_KEY` | Jellyfin API key. Required if `JELLYFIN_URL` is set. Generate one in Dashboard → API Keys. |
-| `TRAKT_CLIENT_ID` / `TRAKT_ID` | Trakt.tv OAuth client ID |
-| `TRAKT_CLIENT_SECRET` / `TRAKT_SECRET` | Trakt.tv OAuth client secret |
-| `ANILIST_CLIENT_ID` / `ANILIST_ID` | AniList OAuth client ID |
-| `ANILIST_CLIENT_SECRET` / `ANILIST_SECRET` | AniList OAuth client secret |
+| `TMDB_API_KEY` | Custom TMDB API Key. (Default: rotating key pool) |
+| `JELLYFIN_URL` | Your Jellyfin server URL (e.g. `https://jellyfin.example.com`). Activates Jellyfin mode. |
+| `JELLYFIN_API_KEY` | Jellyfin API Key (generate from Jellyfin Dashboard → API Keys). |
+| `OPENSUBTITLES_API_KEY` | OpenSubtitles REST API key for fallback subtitles. |
+| `OPENSUBTITLES_USERNAME` | OpenSubtitles username (required if API key is set). |
+| `OPENSUBTITLES_PASSWORD` | OpenSubtitles password (required if API key is set). |
+| `TRAKT_CLIENT_ID` / `TRAKT_ID` | Custom Trakt.tv OAuth Client ID. |
+| `TRAKT_CLIENT_SECRET` / `TRAKT_SECRET` | Custom Trakt.tv OAuth Client Secret. |
+| `ANILIST_CLIENT_ID` / `ANILIST_ID` | Custom AniList OAuth Client ID. |
+| `ANILIST_CLIENT_SECRET` / `ANILIST_SECRET` | Custom AniList OAuth Client Secret. |
 
-The binary ships with fallback keys for Trakt, AniList, and TMDB. They work fine for casual use. If you hit rate limits, set your own.
-
-### Other
-
-| Variable | Description | Default |
-| --- | --- | --- |
-| `KARI_DOWNLOAD_DIR` | Where downloaded episodes land | `./downloads` |
-| `KARI_LOG_FILE` | Log file path | `~/.config/kari/kari.log` |
-| `KARI_LOG_DEBUG` | Enable debug logging (`1`, `true`) | `false` |
-| `KARI_LOG_STDERR` | Also write logs to stderr (`1`, `true`) | `false` |
-
-## Usage
-
-```bash
-./kari                    # Opens the TUI. Start typing to search.
-./kari "one piece"        # Skips straight to search results.
-./kari -v --version       # Print version.
-./kari -u --update        # Self-update from GitHub releases.
-```
-
-### Controls
-
-#### Navigation
-
-| Key | Action |
-| --- | --- |
-| `↑/↓` or `j/k` | Move through lists |
-| `Enter` | Select series / episode / play |
-| `Esc` | Go back |
-| `/` | Filter list items |
-
-#### Search & Browse
-
-| Key | Action |
-| --- | --- |
-| `Space` | Start search |
-| `Tab` / `Shift+Tab` | Cycle media mode (Anime → Movies → TV → Cartoon → Jellyfin) |
-| `Ctrl+H` | Go to home/search |
-
-#### Playback
-
-| Key | Action |
-| --- | --- |
-| `n` | Play next episode |
-| `A` | Toggle autoplay |
-| `a` | Toggle sub/dub (anime only) |
-| `r` | Restart episode from beginning |
-| `Ctrl+P` | Switch players |
-
-#### Downloads
-
-| Key | Action |
-| --- | --- |
-| `d` | Download selected episode |
-| `x` | Stop active download / cancel |
-
-#### App
-
-| Key | Action |
-| --- | --- |
-| `h` / `H` | Open watch history |
-| `s` / `S` | Settings (Trakt/AniList auth) |
-| `Ctrl+D` | Toggle debug panel |
-| `q` / `Ctrl+C` | Quit |
-
-### Views
-
-1. **Search** — Type a query, hit Space. Results come back grouped by provider.
-2. **Episodes** — Season/episode list with filler badges. Sub/dub toggle is there for anime.
-3. **Preview** — Poster, description, genres, rating, resolved sources, selected subtitle, and any saved position. Hit Enter to play.
-4. **History** — Grouped by series. Resume or delete.
-5. **Settings** — Authenticate with Trakt or AniList via device auth (no manual token fiddling), set quality mode, toggle audio language filters, pick a preferred subtitle language, toggle image rendering, and pick an accent color (curated presets or your own hex code).
-
-### Media Providers
-
-| Provider | Mode | Method | Priority |
-| --- | --- | --- | --- |
-| Miruro | Anime | API | 1 |
-| PirateX | Cartoons | Scraper (merged HLS) | 1 |
-| MovieBox | Movies, TV | API (via TMDB) | 2 |
-| RiveStream | Movies, TV | API (via TMDB) | 2 |
-| VidKing | Movies, TV | API (via TMDB) | 1 (TV), 2 (Movies) |
-| Jellyfin | Movies, TV | Jellyfin API | 1 |
-
-Lower priority = queried first. All providers are queried in parallel regardless — priority only affects result ordering when multiple providers return the same content.
-
-Want to add another provider? See [docs/CODEBASE.md](docs/CODEBASE.md).
+---
 
 ## Android Setup (Termux)
 
-Kari supports MPV and MX Player on Android via Termux intents and automatic configuration injection:
+Kari can run on Android phones and tablets using Termux and MPV Android:
 
-1. Install [Termux](https://termux.dev/) ([source](https://github.com/termux/termux-app)) from F-Droid (do not use Play Store — the Play Store version is obsolete).
-2. Install required packages:
+1. **Install Termux** from [F-Droid](https://f-droid.org/packages/com.termux/) *(do not use the obsolete Google Play Store release)*.
+2. **Install dependencies**:
 
    ```bash
-   pkg install golang curl termux-api yt-dlp aria2
+   pkg install curl termux-api yt-dlp aria2
    ```
 
-   | Package | Why |
-   | --------- | ----- |
-   | `golang` | Build kari |
-   | `curl` | Direct/pipe fallback playback |
-   | `termux-api` | Provides the `termux-am`/`termux-am-starter` fallback for launching MPV/MX Player via Android intents ([source](https://github.com/termux/termux-api)) |
-   | `yt-dlp` | Required for downloads |
-   | `aria2` | Multi-connection parallel downloads for fast speeds |
-
-   Kari launches players by trying `am start` first (works out of the box on most devices), then falling back to `termux-am`/`termux-am-starter` if `am` is blocked. That fallback needs the **[Termux:API app](https://f-droid.org/packages/com.termux.api/)** — a separate APK from the `termux-api` package above, install it from F-Droid too — and it must be **opened once** after install to start its background socket service. If you ever see a playback error mentioning `Could not connect to socket`, that service isn't running: reopen the Termux:API app (or reboot).
-
-3. Grant storage access:
+3. **Grant storage permissions**:
 
    ```bash
    termux-setup-storage
    ```
 
-   Allow storage permission when prompted. This allows Kari to write headers (Referer, Origin, User-Agent, Cookies) and subtitle files directly to the MPV Android media folder.
-
-4. Clone and build:
+4. **Install [MPV Android](https://play.google.com/store/apps/details?id=is.xyz.mpv)** from Google Play Store.
+5. **Install Kari**:
 
    ```bash
-   git clone https://github.com/Dhairya3391/kari.git
-   cd kari
-   go build -o kari ./cmd/kari
+   curl -fsSL https://raw.githubusercontent.com/Dhairya3391/kari/main/install.sh | bash
    ```
 
-5. Install [MPV Android](https://play.google.com/store/apps/details?id=is.xyz.mpv) (or MX Player) from Play Store.
-
-6. (Required, one-time) Link Kari's playback config into MPV Android — no root needed:
-
-   Open the **MPV Android** app → **Settings** → **Advanced** → **Edit mpv.conf**, and add this single line:
+6. **(One-time setup) Link MPV config bridge**:
+   Open the **MPV Android app** → **Settings** → **Advanced** → **Edit mpv.conf**, and add this single line:
 
    ```ini
    include=/storage/emulated/0/Android/media/is.xyz.mpv/.mpv.conf
    ```
 
-   *Why this step matters:* mpv-android only reads configuration from its own app-data directory, which Termux apps cannot write (and it has no Intent-extra for HTTP headers). This one `include=` line is the sole bridge — Kari rewrites `.mpv.conf` in the MPV media folder on every play with fresh playback headers (`Referer`, `Origin`, `User-Agent`, `Cookie`), the title, resume position, and the subtitle track, so they reach MPV on the next launch. Do it once and every episode just works.
+   *This allows Kari to pass necessary stream headers (Referer, Origin, Cookies) and subtitle tracks to MPV.*
+7. **Run**:
 
-> **Note:** Kari writes the playback config to `.mpv.conf` (and a mirrored `mpv.conf`) under `/storage/emulated/0/Android/media/is.xyz.mpv/` on every play launch. It does **not** write to Termux's `~/.config/mpv/` — mpv-android's libmpv never reads that path, so headers only apply once your own app config above contains the `include=` line.
+   ```bash
+   kari
+   ```
 
-1. Run `./kari`
-
-Kari launches MPV via Android `am start` intents (falling back to `termux-am`/`termux-am-starter` automatically if `am` is blocked on your device). Since Android intents can't carry stream headers, Kari injects them through the config bridge from step 6 (the `include=` line). See [docs/CODEBASE.md](docs/CODEBASE.md) for architectural details.
-
-> **Note:** On some Android versions, DNS resolution may fail for downloads. Kari includes a built-in fallback to Cloudflare (1.1.1.1) and Google (8.8.8.8) DNS for Android builds.
-
-## Architecture
-
-Kari is split into three layers. **Providers** fetch data from streaming sites (API calls or HTML scraping). **Players** send media URLs to external apps (MPV, IINA, VLC, MX Player) and track playback position via IPC. Between them sits a **Bubble Tea TUI** that handles search, episode browsing, and download management. Each provider and player is a self-contained package — adding a new one doesn't touch anything outside its own directory.
-
-```text
-cmd/kari/main.go
-    |
-internal/
-    ├── app/           — Wires everything together
-    ├── config/        — Environment config + API constants
-    ├── service/       — Media, download, subtitle orchestration
-    ├── provider/      — One package per streaming site
-    ├── player/        — Platform-specific player backends
-    ├── tui/           — Bubble Tea model-view-update
-    ├── scrobble/      — Trakt.tv + AniList sync
-    ├── history/       — Local JSON watch storage
-    ├── downloader/    — yt-dlp wrapper with aria2c acceleration
-    ├── subtitles/     — OpenSubtitles client
-    ├── aniskip/       — Fetches intro/outro timestamps
-    ├── tmdb/          — Key pool with rotation
-    ├── httpclient/    — Shared retryable HTTP client
-    └── logging/       — Structured slog wrapper
-```
-
-See [docs/CODEBASE.md](docs/CODEBASE.md) for more detail.
-
-## Development
-
-### Project structure
-
-Same layout as above. `cmd/kari/main.go` is the entry point. Everything else lives under `internal/` — one package per concern.
-
-### Cross-compile
-
-```bash
-chmod +x build.sh
-./build.sh all     # linux/{amd64,arm64}, windows/{amd64,arm64},
-                   # darwin/{amd64,arm64}, android/arm64
-```
-
-Or pick one:
-
-```bash
-./build.sh target linux amd64
-```
-
-Or build for whatever machine you're on:
-
-```bash
-./build.sh
-```
-
-### Versioning
-
-Version is derived from git tags and baked in via `-ldflags`:
-
-| Scenario | Example |
-| --- | --- |
-| Tagged release (`v1.0.0`) | `1.0.0` |
-| 5 commits after tag | `1.0.5` (patch increments) |
-| No tags yet | `1.0.42` (commit count) |
-| Uncommitted changes | `1.0.0-dirty` |
-| `go run` / `go build` (no ldflags) | `0.0.0-dev` |
-
-To cut a release:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-The CI builds all platforms, creates a GitHub Release, and auto-generates release notes from commits since the last tag.
-
-### Build and verify
-
-```bash
-go build ./...
-go vet ./...
-go test ./...
-```
-
-### Code conventions
-
-See [docs/CODEBASE.md](docs/CODEBASE.md) and [`AGENTS.md`](AGENTS.md) (AI assistant rules for this repo) for the full list. Key rules:
-
-- No global state — pass dependencies explicitly
-- Wire everything in `internal/app/app.go`
-- Use `internal/httpclient` instead of raw `http.Client`
-- Log through `internal/logging`
-- Wrap errors with `%w`
-
-## Contributing
-
-Pull requests are welcome. The best place to start is adding a new media provider — see [docs/CODEBASE.md](docs/CODEBASE.md) for the full walkthrough.
-
-A few ground rules:
-
-- Run `go build ./... && go vet ./... && go test ./...` before opening a PR
-- Don't add global state. Wire new components in `internal/app/app.go`
-- Wrap errors with `%w`
-- Kari does not host or distribute copyrighted content. Contributions that add DRM circumvention or direct content hosting will not be accepted.
+---
 
 ## Troubleshooting
 
-### macOS — "Kari cannot be opened" or "damaged"
+### macOS: "Kari cannot be opened" or "damaged"
 
-Downloaded binaries get flagged by Gatekeeper. Clear the quarantine attribute:
+macOS Gatekeeper may flag binaries downloaded via browser or curl. Remove the quarantine flag:
 
 ```bash
 xattr -d com.apple.quarantine ./kari
 ```
 
-If you built from source, this doesn't apply.
+### Linux: "Permission denied"
 
-### Linux — "Permission denied"
+Ensure the binary has executable permissions:
 
 ```bash
 chmod +x ./kari
 ```
 
-### Windows — "Windows protected your PC"
+### Windows: "Windows protected your PC" (SmartScreen)
 
-Click **More info** → **Run anyway**. SmartScreen flags unsigned binaries — the binary is clean, it just isn't code-signed.
+Click **More info** → **Run anyway**. Pre-built binaries are clean and built via open-source GitHub Actions, but are not commercially code-signed.
 
-### Android — MPV not launching
+### "No media player detected"
 
-Ensure `termux-api` is installed (`pkg install termux-api`) and that you've run `termux-setup-storage`. MPV Android must be installed from the Play Store, not from Termux packages. On some devices, the `am` binary is blocked by SELinux — kari will automatically fall back to `termux-am` or `termux-am-starter` if available.
+Make sure MPV, IINA, or VLC is installed and available in your system `$PATH`. Test with:
 
-### Android — Downloads fail with DNS errors
+```bash
+which mpv
+```
 
-Kari uses a built-in DNS fallback (Cloudflare/Google) on Android. If downloads still fail, check that your network connection is active. The system DNS resolver in Termux can be unreliable — this is a known Termux limitation.
+### Logs & Diagnostics
 
-### No player detected
+Logs are written to `~/.config/kari/kari.log` (automatically rotates at 10 MB). For detailed real-time logs, start Kari with:
 
-Make sure your player is in `$PATH`. Run `which mpv` (or `which iina`, `which vlc`) to verify.
+```bash
+KARI_LOG_DEBUG=true kari
+```
 
-### Logs
+Or press `Ctrl+D` inside the TUI to toggle the debug panel.
 
-Written to `~/.config/kari/kari.log`. Set `KARI_LOG_DEBUG=true` for verbose output. The log rotates once it passes 10MB — the previous file is kept as `kari.log.1`.
+---
+
+## Development
+
+```bash
+# Run tests
+go test ./...
+
+# Vet and build
+go vet ./...
+go build ./...
+
+# Multi-platform cross compilation
+./build.sh all
+```
+
+See [docs/CODEBASE.md](docs/CODEBASE.md) and [`AGENTS.md`](AGENTS.md) for architectural guidelines, design patterns, and provider implementation steps.
+
+---
 
 ## License
 
-MIT
+[MIT](LICENSE)
