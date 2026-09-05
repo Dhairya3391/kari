@@ -28,6 +28,11 @@ const (
 	DefaultTraktClientSecret   = "3aeb56d02d938833b0395ddd484b9c13849b0523bb32d0b0635cb9b048eed91d"
 	DefaultAniListClientID     = "40882"
 	DefaultAniListClientSecret = "g25ntjZ1mQeHVtHjNZeGpLyVidaA2xkMFQwsmYKu"
+
+	// AnimeSkipAPIBase is the Anime-Skip GraphQL endpoint.
+	AnimeSkipAPIBase = "https://api.anime-skip.com/graphql"
+	// DefaultAnimeSkipClientID is the bundled X-Client-ID for the Anime-Skip API.
+	DefaultAnimeSkipClientID = "q5ZuG3MoJxy3c4dKJvpOjFIh1HFGTsrm"
 )
 
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var

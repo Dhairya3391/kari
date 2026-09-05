@@ -12,21 +12,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"kari/internal/animeskip"
+	"kari/internal/aniskip"
+	"kari/internal/config"
+	"kari/internal/model"
+	"kari/internal/provider"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"time"
-
-	"kari/internal/aniskip"
-	"kari/internal/config"
-	"kari/internal/model"
-	"kari/internal/provider"
 )
 
 const (
 	mpvStartupTimeout   = 1500 * time.Millisecond
-	mpvReadinessTimeout = 8 * time.Second
+	mpvReadinessTimeout = 20 * time.Second
 
 	// mpvQuickExitThreshold bounds how long into the readiness phase mpv can
 	// exit cleanly (code 0) with no IPC evidence that media ever loaded before
@@ -34,14 +34,16 @@ const (
 	// as a silent playback failure (e.g. a dead URL mpv gives up on without a
 	// nonzero exit code). A real user quitting reacts within a second or two of
 	// seeing the window; a stream failing to open typically takes longer,
-	// bounded by --network-timeout=8 in the mpv args below.
+	// bounded by --network-timeout=15 in the mpv args below.
 	mpvQuickExitThreshold = 2 * time.Second
 )
 
 // MPVPlayer plays via a desktop mpv process, using JSON IPC for position
 // tracking so resume/scrobble get real playback stats.
 type MPVPlayer struct {
-	aniskip *aniskip.Client
+	aniskip      *aniskip.Client
+	animeskip    *animeskip.Client
+	skipSettings SkipSettings
 }
 
 var _ Player = (*MPVPlayer)(nil)
@@ -55,6 +57,10 @@ func (p *MPVPlayer) Available() bool {
 	return err == nil
 }
 
+func (p *MPVPlayer) setSkipSettings(s SkipSettings) {
+	p.skipSettings = s
+}
+
 // Play implements Player.
 func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
 	mpvLog.Debug("playback starting", "media", media.DisplayTitle(), "sources", len(sources))
@@ -62,11 +68,11 @@ func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMed
 		return PlaybackResult{}, errors.New("mpv playback failed: no sources available")
 	}
 
-	aniskipArgs, aniskipPath := getAniskipArgs(p.aniskip, media)
-	defer cleanupAniskipScript(aniskipPath)
+	skipArgs, skipPath := getSkipArgs(p.aniskip, p.animeskip, p.skipSettings, media)
+	defer cleanupAniskipScript(skipPath)
 
 	return attemptSources("mpv", sources, func(source provider.MediaSource) (PlaybackResult, error) {
-		return playSingleSource(source, media, aniskipArgs)
+		return playSingleSource(source, media, skipArgs)
 	})
 }
 
@@ -115,7 +121,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		"--demuxer-max-back-bytes=30M",
 		"--demuxer-readahead-secs=60",
 		"--stream-buffer-size=8M",
-		"--network-timeout=8",
+		"--network-timeout=15",
 		"--input-ipc-server=" + socketPath,
 		hwdecOptionArg(),
 	}
@@ -163,7 +169,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 		"--msg-level=all=warn",
 		"--vo=gpu-next",
 		hwdecOptionArg(),
-		"--network-timeout=8",
+		"--network-timeout=15",
 		"--cache=yes",
 		"--cache-pause-initial=no",
 		"--demuxer-seekable-cache=yes",

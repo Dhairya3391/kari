@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"kari/internal/animeskip"
 	"kari/internal/aniskip"
 	"kari/internal/logging"
 	"kari/internal/model"
@@ -28,9 +29,11 @@ func (c *cachedPlayer) Available() bool {
 
 // Registry holds available players and picks between them by preference.
 type Registry struct {
-	players       []Player
-	preferred     string
-	aniskipClient *aniskip.Client
+	players         []Player
+	preferred       string
+	aniskipClient   *aniskip.Client
+	animeskipClient *animeskip.Client
+	skipSettings    SkipSettings
 }
 
 // Register adds a player implementation.
@@ -137,12 +140,32 @@ func (r *Registry) preferredPlayers(preferred string) []Player {
 	return r.players
 }
 
+type skipConfigurable interface {
+	setSkipSettings(s SkipSettings)
+}
+
+// SetSkipSettings updates skip options for all player instances.
+func (r *Registry) SetSkipSettings(s SkipSettings) {
+	r.skipSettings = s
+	for _, p := range r.players {
+		target := p
+		if cp, ok := p.(*cachedPlayer); ok {
+			target = cp.Player
+		}
+		if sc, ok := target.(skipConfigurable); ok {
+			sc.setSkipSettings(s)
+		}
+	}
+}
+
 // NewRegistry constructs and populates the platform's player set with the
 // user's preference applied.
-func NewRegistry(preferred string, aniskipClient *aniskip.Client) *Registry {
+func NewRegistry(preferred string, aniskipClient *aniskip.Client, animeskipClient *animeskip.Client, skipSettings SkipSettings) *Registry {
 	r := &Registry{
-		preferred:     preferred,
-		aniskipClient: aniskipClient,
+		preferred:       preferred,
+		aniskipClient:   aniskipClient,
+		animeskipClient: animeskipClient,
+		skipSettings:    skipSettings,
 	}
 	registerPlayers(r)
 	return r

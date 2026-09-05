@@ -23,6 +23,10 @@ type Config struct {
 	PreferredPlayer     string
 	JellyfinURL         string
 	JellyfinAPIKey      string
+	// AnimeSkipClientID is the X-Client-ID header value for the Anime-Skip
+	// GraphQL API. Set via KARI_ANIME_SKIP_CLIENT_ID; falls back to the
+	// bundled default client ID.
+	AnimeSkipClientID string
 }
 
 // AndroidUA returns the shared Android browser User-Agent constant. It
@@ -50,6 +54,7 @@ func Load() (*Config, error) {
 		PreferredPlayer:     firstEnv("KARI_PLAYER"),
 		JellyfinURL:         strings.TrimSpace(os.Getenv("JELLYFIN_URL")),
 		JellyfinAPIKey:      strings.TrimSpace(os.Getenv("JELLYFIN_API_KEY")),
+		AnimeSkipClientID:   firstEnv("KARI_ANIME_SKIP_CLIENT_ID"),
 	}
 
 	// Apply hardcoded defaults if env vars are missing
@@ -64,6 +69,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.AniListClientSecret == "" {
 		cfg.AniListClientSecret = DefaultAniListClientSecret
+	}
+	if cfg.AnimeSkipClientID == "" {
+		cfg.AnimeSkipClientID = DefaultAnimeSkipClientID
 	}
 	if cfg.DownloadDir == "" {
 		cfg.DownloadDir = "./downloads"

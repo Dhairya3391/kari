@@ -41,7 +41,7 @@ type skipResponse struct {
 // missing entry is not an error: the returned SkipTimes is zero-valued
 // when the API reports none found.
 func (c *Client) GetSkipTimes(ctx context.Context, malID int, episode int) (*SkipTimes, error) {
-	url := fmt.Sprintf("https://api.aniskip.com/v1/skip-times/%d/%d?types=op&types=ed", malID, episode)
+	url := fmt.Sprintf("https://api.aniskip.com/v1/skip-times/%d/%d?types=op&types=ed&episodeLength=0", malID, episode)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

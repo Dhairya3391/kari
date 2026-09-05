@@ -64,7 +64,7 @@ func TestMPVPlaybackResolvesAndPlays(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	})
 
-	players := player.NewRegistry("mpv", nil)
+	players := player.NewRegistry("mpv", nil, nil, player.SkipSettings{Provider: "off"})
 	type playOutcome struct {
 		result player.PlaybackResult
 		err    error
