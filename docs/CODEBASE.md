@@ -55,7 +55,8 @@ internal/
   history/           watch-history persistence
   settings/          settings.json persistence
   lang/              language-code normalization/display
-  aniskip/           aniskip API client
+  aniskip/           aniskip REST API client
+  animeskip/         anime-skip GraphQL API client
   termimg/           terminal image rendering (kitty protocol / half blocks)
   logging/           slog wrapper with rotation
   util/              tiny generic helpers

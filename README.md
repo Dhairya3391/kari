@@ -105,7 +105,7 @@ kari "frieren"
 - **Multi-Source Parallel Search** — Queries multiple streaming sources concurrently (Miruro, MovieBox, RiveStream, VidKing, PirateX, and optional Jellyfin).
 - **5 Media Categories** — Dedicated modes for Anime, Movies, TV Series, Cartoons, and private Jellyfin servers. Switch effortlessly with `Tab`.
 - **Accurate Resume & History** — MPV reports timestamps back via local IPC socket. Quit anytime and Kari remembers your exact position, selected audio mode (Sub/Dub), and preferred stream language.
-- **Auto-Skip Intro / Outro** — Fetches AniSkip timestamps automatically for anime and injects an on-the-fly MPV Lua script.
+- **Smart Skip & Virtual Chapters** — Hybrid skip engine combining Anime-Skip GraphQL and AniSkip. Automatically injects seekbar chapters (`Opening`, `Ending`, `Recap`, `Preview`) and context-aware OSD skip prompts (`Press Enter to Skip`) into MPV. Switchable in Settings.
 - **Scrobbling Sync** — Native device-flow authorization for Trakt.tv (Movies & TV) and AniList (Anime). No tokens or API keys to copy manually.
 - **Smart Subtitle Fallback** — Prioritizes provider-embedded subtitles matching your preferred language, gracefully falling back to other providers and OpenSubtitles.
 - **Terminal Poster Art** — Renders real pixel graphics on modern terminals (Kitty, WezTerm, Ghostty) with automatic fallback to high-density Unicode half-blocks on standard terminals.
@@ -224,6 +224,7 @@ Kari works with zero configuration. You can optionally customize its behavior wi
 | `TRAKT_CLIENT_SECRET` / `TRAKT_SECRET` | Custom Trakt.tv OAuth Client Secret. |
 | `ANILIST_CLIENT_ID` / `ANILIST_ID` | Custom AniList OAuth Client ID. |
 | `ANILIST_CLIENT_SECRET` / `ANILIST_SECRET` | Custom AniList OAuth Client Secret. |
+| `KARI_ANIME_SKIP_CLIENT_ID` | Custom Anime-Skip Client ID (create at [anime-skip.com/account/api-clients](https://anime-skip.com/account/api-clients)). A default client ID is provided automatically if unset. |
 
 ---
 
