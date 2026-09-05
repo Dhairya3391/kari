@@ -229,6 +229,8 @@ type modelImpl struct {
 	statusType           statusLevel
 	statusID             int
 	showHelp             bool
+	bodyScroll           int
+	helpScroll           int
 	selectedPlayback     int
 	prevSourceLanguage   string
 	prevSourceQuality    int
@@ -288,7 +290,11 @@ type modelImpl struct {
 	customAccentHex       string
 	editingAccentHex      bool
 	hexInput              textinput.Model
-
+	skipProvider          string
+	autoSkipIntro         bool
+	autoSkipEnding        bool
+	skipRecap             bool
+	skipPreview           bool
 	selectedEpisodes     map[int]struct{}
 	batchInProgress      bool
 	batchCurrent         int

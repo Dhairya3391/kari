@@ -171,6 +171,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		qualityMode:      qualityAll,
 		languageFilter:   make(map[string]bool),
 		subtitleLanguage: "en",
+		skipProvider:     "hybrid",
 		selectedEpisodes: make(map[int]struct{}),
 		batchChan:        make(chan tea.Msg, 50),
 		posterClient:     posterClient,
@@ -218,6 +219,13 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			}
 			model.customAccentHex = normalized // "" when it matched a preset
 		}
+		if s.SkipProvider != "" {
+			model.skipProvider = s.SkipProvider
+		}
+		model.autoSkipIntro = s.AutoSkipIntro
+		model.autoSkipEnding = s.AutoSkipEnding
+		model.skipRecap = s.SkipRecap
+		model.skipPreview = s.SkipPreview
 	}
 	for i, code := range lang.SubtitleOptions {
 		if code == model.subtitleLanguage {

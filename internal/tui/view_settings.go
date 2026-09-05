@@ -12,9 +12,14 @@ import (
 	"kari/internal/provider"
 )
 
-// settingsLastIndex bounds the vertically navigable setting slots
-// (0=Trakt 1=AniList 2=Quality 3=Languages 4=SubtitleLang 5=Images 6=Appearance).
-const settingsLastIndex = 6
+const (
+	settingsSkipProviderIndex = 7
+	settingsAutoIntroIndex    = 8
+	settingsAutoEndingIndex   = 9
+	settingsAutoRecapIndex    = 10
+	settingsAutoPreviewIndex  = 11
+	settingsLastIndex         = settingsAutoPreviewIndex
+)
 
 func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 	rows := []string{
@@ -216,6 +221,51 @@ func (m *modelImpl) renderSettingsScreen(dims layoutDims) string {
 	}
 	rows = append(rows, "")
 
+	// Skip section
+	skipStyle := lipgloss.NewStyle().PaddingLeft(2)
+	if m.settingsIndex == settingsSkipProviderIndex {
+		skipStyle = skipStyle.BorderLeft(true).BorderStyle(lipgloss.ThickBorder()).BorderForeground(colorPrimary)
+	}
+
+	providerDisplay := "Hybrid (Anime-Skip + AniSkip)"
+	switch m.skipProvider {
+	case "anime-skip":
+		providerDisplay = "Anime-Skip"
+	case "aniskip":
+		providerDisplay = "AniSkip"
+	case "off":
+		providerDisplay = "Off"
+	}
+
+	rows = append(rows, sectionTitleStyle.Render("Skip"))
+	rows = append(rows, skipStyle.Render(mutedStyle.Render("SKIP PROVIDER")))
+	rows = append(rows, skipStyle.Render(lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render(providerDisplay)))
+	rows = append(rows, skipStyle.Render(mutedStyle.Render("[←] [→] to change provider")))
+	rows = append(rows, mutedStyle.Render("  Auto-skip preferences"))
+
+	skipOptions := []struct {
+		index   int
+		label   string
+		enabled bool
+	}{
+		{index: settingsAutoIntroIndex, label: "Opening", enabled: m.autoSkipIntro},
+		{index: settingsAutoEndingIndex, label: "Ending", enabled: m.autoSkipEnding},
+		{index: settingsAutoRecapIndex, label: "Recap", enabled: m.skipRecap},
+		{index: settingsAutoPreviewIndex, label: "Preview", enabled: m.skipPreview},
+	}
+	for _, option := range skipOptions {
+		optionStyle := lipgloss.NewStyle().PaddingLeft(4)
+		if m.settingsIndex == option.index {
+			optionStyle = optionStyle.BorderLeft(true).BorderStyle(lipgloss.ThickBorder()).BorderForeground(colorPrimary)
+		}
+		status := "Off"
+		if option.enabled {
+			status = "On"
+		}
+		rows = append(rows, optionStyle.Render(fmt.Sprintf("%s  %s", option.label, modeColor(status))))
+	}
+	rows = append(rows, skipStyle.Render(mutedStyle.Render("[←] [→] [space] toggle · Off shows an Enter-to-skip prompt")))
+	rows = append(rows, "")
 	return strings.Join(rows, "\n")
 }
 

@@ -17,6 +17,7 @@ import (
 func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		defer m.ensureSettingsVisible()
 		// Esc while either of these text inputs is focused is handled by
 		// exitInputMode (called from handleGlobalKeys' Back case, which
 		// runs before this function ever sees the key) rather than here —
@@ -58,33 +59,9 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "up", "k":
-			// Vertical navigation wraps so the list never dead-ends, and
-			// skips the Languages slot when the mode has none.
-			for {
-				m.settingsIndex--
-				if m.settingsIndex < 0 {
-					m.settingsIndex = settingsLastIndex
-				}
-				if m.settingsIndex != 3 || len(m.availableLanguages()) > 0 {
-					break
-				}
-			}
-			if m.settingsIndex == 3 {
-				m.languageIndex = 0 // entering Languages resets its cursor
-			}
+			m.moveSettings(-1)
 		case "down", "j":
-			for {
-				m.settingsIndex++
-				if m.settingsIndex > settingsLastIndex {
-					m.settingsIndex = 0
-				}
-				if m.settingsIndex != 3 || len(m.availableLanguages()) > 0 {
-					break
-				}
-			}
-			if m.settingsIndex == 3 {
-				m.languageIndex = 0 // entering Languages resets its cursor
-			}
+			m.moveSettings(1)
 		case "left":
 			switch m.settingsIndex {
 			case 2:
@@ -122,6 +99,12 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.accentIndex = len(accentPresets)
 				}
 				m.setAccent(m.accentIndex)
+			case settingsSkipProviderIndex:
+				m.skipProvider = cycleSkipProvider(m.skipProvider, true)
+				m.saveSettings()
+			case settingsAutoIntroIndex, settingsAutoEndingIndex, settingsAutoRecapIndex, settingsAutoPreviewIndex:
+				m.toggleAutoSkip(m.settingsIndex)
+				m.saveSettings()
 			}
 			return m, m.triggerSubtitleSync()
 		case "right":
@@ -160,6 +143,12 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.accentIndex = 0
 				}
 				m.setAccent(m.accentIndex)
+			case settingsSkipProviderIndex:
+				m.skipProvider = cycleSkipProvider(m.skipProvider, false)
+				m.saveSettings()
+			case settingsAutoIntroIndex, settingsAutoEndingIndex, settingsAutoRecapIndex, settingsAutoPreviewIndex:
+				m.toggleAutoSkip(m.settingsIndex)
+				m.saveSettings()
 			}
 			return m, m.triggerSubtitleSync()
 		case " ":
@@ -180,6 +169,11 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					m.saveSettings()
 				}
+			} else if m.settingsIndex == settingsSkipProviderIndex {
+				m.skipProvider = cycleSkipProvider(m.skipProvider, false)
+				m.saveSettings()
+			} else if m.toggleAutoSkip(m.settingsIndex) {
+				m.saveSettings()
 			}
 			return m, m.triggerSubtitleSync()
 		case "c", "C":
@@ -353,4 +347,63 @@ func (m *modelImpl) triggerScrobble(entry history.Entry) {
 			}
 		}
 	}()
+}
+
+var skipProviderOptions = []string{"hybrid", "anime-skip", "aniskip", "off"}
+
+func (m *modelImpl) toggleAutoSkip(index int) bool {
+	switch index {
+	case settingsAutoIntroIndex:
+		m.autoSkipIntro = !m.autoSkipIntro
+	case settingsAutoEndingIndex:
+		m.autoSkipEnding = !m.autoSkipEnding
+	case settingsAutoRecapIndex:
+		m.skipRecap = !m.skipRecap
+	case settingsAutoPreviewIndex:
+		m.skipPreview = !m.skipPreview
+	default:
+		return false
+	}
+	return true
+}
+
+func (m *modelImpl) moveSettings(direction int) {
+	for index := m.settingsIndex + direction; index >= 0 && index <= settingsLastIndex; index += direction {
+		if index == 3 && len(m.availableLanguages()) == 0 {
+			continue
+		}
+		m.settingsIndex = index
+		if index == 3 {
+			m.languageIndex = 0
+		}
+		return
+	}
+}
+
+func (m *modelImpl) ensureSettingsVisible() {
+	selectedLine := 2 + m.settingsIndex*4
+	visibleHeight := max(1, m.bodyHeight()-1)
+	if selectedLine < m.bodyScroll {
+		m.bodyScroll = selectedLine
+		return
+	}
+	if selectedLine >= m.bodyScroll+visibleHeight {
+		m.bodyScroll = selectedLine - visibleHeight + 1
+	}
+}
+
+func cycleSkipProvider(current string, reverse bool) string {
+	idx := 0
+	for i, opt := range skipProviderOptions {
+		if opt == current {
+			idx = i
+			break
+		}
+	}
+	if reverse {
+		idx = (idx - 1 + len(skipProviderOptions)) % len(skipProviderOptions)
+	} else {
+		idx = (idx + 1) % len(skipProviderOptions)
+	}
+	return skipProviderOptions[idx]
 }

@@ -25,6 +25,17 @@ type Data struct {
 	// AccentColor is a hex color string; empty means the default purple, so
 	// existing settings.json files need no migration.
 	AccentColor string `json:"accent_color,omitempty"`
+	// SkipProvider determines which service resolves OP/ED/recap/preview skip
+	// boundaries: "hybrid" (default if empty), "anime-skip", "aniskip", or "off".
+	SkipProvider string `json:"skip_provider,omitempty"`
+	// AutoSkipIntro automatically seeks past the opening without prompting.
+	AutoSkipIntro bool `json:"auto_skip_intro,omitempty"`
+	// AutoSkipEnding automatically seeks past the ending without prompting.
+	AutoSkipEnding bool `json:"auto_skip_ending,omitempty"`
+	// SkipRecap automatically seeks past detected recap segments.
+	SkipRecap bool `json:"skip_recap,omitempty"`
+	// SkipPreview automatically seeks past detected preview segments.
+	SkipPreview bool `json:"skip_preview,omitempty"`
 }
 
 // path resolves the settings file location, warning when the home

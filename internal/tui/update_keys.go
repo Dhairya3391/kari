@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/player"
 	"kari/internal/settings"
 )
 
@@ -25,7 +26,27 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			m.showHelp = false
 			return nil, true
 		}
+		switch msg.String() {
+		case "up", "k":
+			m.helpScroll--
+		case "down", "j":
+			m.helpScroll++
+		case "pgup":
+			m.helpScroll -= max(1, m.height-8)
+		case "pgdown":
+			m.helpScroll += max(1, m.height-8)
+		}
 		return nil, true
+	}
+	if m.activeView == viewSettings || (m.activeView == viewPreview && !m.confirmCompletion) {
+		switch msg.String() {
+		case "ctrl+u":
+			m.scrollBody(-max(1, m.bodyHeight()-1))
+			return nil, true
+		case "ctrl+d":
+			m.scrollBody(max(1, m.bodyHeight()-1))
+			return nil, true
+		}
 	}
 
 	switch {
@@ -192,6 +213,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return nil, false
 		}
 		m.showHelp = !m.showHelp
+		m.helpScroll = 0
 		return nil, true
 	}
 	return nil, false
@@ -237,7 +259,21 @@ func (m *modelImpl) saveSettings() {
 		SubtitleLanguage: m.subtitleLanguage,
 		DisableImages:    !m.imagesEnabled,
 		AccentColor:      string(colorPrimary),
+		SkipProvider:     m.skipProvider,
+		AutoSkipIntro:    m.autoSkipIntro,
+		AutoSkipEnding:   m.autoSkipEnding,
+		SkipRecap:        m.skipRecap,
+		SkipPreview:      m.skipPreview,
 	})
+	if m.players != nil {
+		m.players.SetSkipSettings(player.SkipSettings{
+			Provider:       m.skipProvider,
+			AutoSkipIntro:  m.autoSkipIntro,
+			AutoSkipEnding: m.autoSkipEnding,
+			SkipRecap:      m.skipRecap,
+			SkipPreview:    m.skipPreview,
+		})
+	}
 }
 
 func (m *modelImpl) cycleMode(reverse bool) tea.Cmd {

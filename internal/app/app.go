@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 
+	"kari/internal/animeskip"
 	"kari/internal/aniskip"
 	"kari/internal/config"
 	"kari/internal/downloader"
@@ -21,6 +22,7 @@ import (
 	"kari/internal/provider/defaults"
 	"kari/internal/scrobble"
 	"kari/internal/service"
+	"kari/internal/settings"
 	"kari/internal/tmdb"
 	"kari/internal/tui"
 )
@@ -84,14 +86,31 @@ func Run() error {
 
 	keyPool := tmdb.NewKeyPool(cfg.TMDBAPIKeys)
 	aniskipClient := aniskip.NewClient(httpclient.NewWithTimeout(10 * time.Second))
+	animeskipClient, err := animeskip.NewClient(httpclient.NewWithTimeout(10*time.Second), cfg.AnimeSkipClientID)
+	if err != nil {
+		logging.Warn("anime-skip client init failed; continuing without anime-skip", "err", err)
+		animeskipClient = nil
+	}
+
+	skipSettings := player.SkipSettings{
+		Provider: "hybrid",
+	}
+	if savedSettings := settings.Load(); savedSettings != nil {
+		if savedSettings.SkipProvider != "" {
+			skipSettings.Provider = savedSettings.SkipProvider
+		}
+		skipSettings.AutoSkipIntro = savedSettings.AutoSkipIntro
+		skipSettings.AutoSkipEnding = savedSettings.AutoSkipEnding
+		skipSettings.SkipRecap = savedSettings.SkipRecap
+		skipSettings.SkipPreview = savedSettings.SkipPreview
+	}
 
 	registry, err := defaults.NewDefaultRegistry(keyPool, cfg)
 	if err != nil {
 		return err
 	}
-
-	players := player.NewRegistry(cfg.PreferredPlayer, aniskipClient)
 	mediaService := service.NewMediaService(registry)
+	players := player.NewRegistry(cfg.PreferredPlayer, aniskipClient, animeskipClient, skipSettings)
 	downloadService := service.NewDownloadService(cfg.DownloadDir, downloader.NewYTDLPDownloader(), mediaService)
 	subtitleService := service.NewSubtitleService(cfg)
 
