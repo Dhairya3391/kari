@@ -23,7 +23,7 @@ func searchLeftWidth(contentW int) int {
 }
 
 func (m *modelImpl) renderSearchScreen(dims layoutDims) string {
-	if dims.contentW <= narrowTerminalThreshold {
+	if dims.contentW <= narrowTerminalThreshold || dims.bodyH < 12 {
 		return m.renderSearchLeft(dims.contentW)
 	}
 

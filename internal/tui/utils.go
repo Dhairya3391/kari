@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ const (
 type layoutDims struct {
 	contentW int
 	bodyW    int
+	bodyH    int
 }
 
 func (m *modelImpl) computeLayoutDims() layoutDims {
@@ -26,18 +28,53 @@ func (m *modelImpl) computeLayoutDims() layoutDims {
 	if contentW > maxContentWidth {
 		contentW = maxContentWidth
 	}
-	return layoutDims{contentW: contentW, bodyW: contentW}
+	return layoutDims{
+		contentW: contentW,
+		bodyW:    contentW,
+		bodyH:    m.bodyHeight(),
+	}
+}
+
+func (m *modelImpl) bodyHeight() int {
+	height := m.height - 5 // Header, rule, two spacer rows, and footer.
+	if m.loading {
+		height -= 2
+	}
+	if m.statusText != "" {
+		height--
+	}
+	return max(1, height)
+}
+
+func scrollLines(content string, offset, height int, hint string) (string, int) {
+	lines := strings.Split(content, "\n")
+	if len(lines) <= height {
+		return content, 0
+	}
+
+	visibleHeight := max(1, height-1)
+	maxOffset := max(0, len(lines)-visibleHeight)
+	offset = min(max(0, offset), maxOffset)
+	end := min(len(lines), offset+visibleHeight)
+	indicator := mutedStyle.Render(fmt.Sprintf("%s · %d–%d of %d", hint, offset+1, end, len(lines)))
+	return strings.Join(append(lines[offset:end], indicator), "\n"), offset
+}
+
+func (m *modelImpl) scrollBody(delta int) {
+	m.bodyScroll = max(0, m.bodyScroll+delta)
 }
 
 func (m *modelImpl) resizeLists() {
 	dims := m.computeLayoutDims()
 	w := max(20, dims.bodyW-4)
-	h := max(4, m.height-12)
+	seriesH := max(1, dims.bodyH-6)
+	episodeH := max(1, dims.bodyH-5)
+	historyH := max(1, dims.bodyH-5)
 
 	seriesW := max(20, searchLeftWidth(dims.bodyW)-4)
-	m.seriesList.SetSize(seriesW, h)
-	m.episodeList.SetSize(w, h)
-	m.historyList.SetSize(w, h)
+	m.seriesList.SetSize(seriesW, seriesH)
+	m.episodeList.SetSize(w, episodeH)
+	m.historyList.SetSize(w, historyH)
 
 	inputW := max(15, dims.contentW-12)
 	m.queryInput.Width = inputW

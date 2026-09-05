@@ -105,8 +105,8 @@ func (m *modelImpl) renderSourceColumn(filtered []int, width int) string {
 		var line string
 		if row.provider != "" {
 			if row.actualIdx == m.selectedPlayback {
-				line = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("● " + paddedQuality) +
-					mutedStyle.Render("  · " + row.provider)
+				line = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("● "+paddedQuality) +
+					mutedStyle.Render("  · "+row.provider)
 			} else {
 				line = mutedStyle.Render("○ " + paddedQuality + "  · " + row.provider)
 			}
@@ -252,7 +252,11 @@ func (m *modelImpl) renderHelpOverlay() string {
 	)
 
 	content := strings.Join(sections, "\n")
-	boxW := min(48, max(28, m.width-4))
+	innerH := max(1, m.height-8)
+	// Idempotent clamp (see renderMainView comment) — keeps helpScroll
+	// valid after resize without introducing non-deterministic state.
+	content, m.helpScroll = scrollLines(content, m.helpScroll, innerH, "↑/↓ scroll")
+	boxW := min(48, max(12, m.width-6))
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorPrimary).

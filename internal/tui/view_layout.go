@@ -10,8 +10,14 @@ import (
 )
 
 func (m *modelImpl) View() string {
+	if m.width == 0 || m.height == 0 {
+		return ""
+	}
+
 	var output string
-	if m.showHelp {
+	if m.width < 36 || m.height < 10 {
+		output = m.renderSmallTerminalNotice()
+	} else if m.showHelp {
 		output = m.renderHelpOverlay()
 	} else {
 		output = m.renderMainView()
@@ -41,6 +47,18 @@ func (m *modelImpl) View() string {
 	return output
 }
 
+func (m *modelImpl) renderSmallTerminalNotice() string {
+	notice := lipgloss.NewStyle().
+		Foreground(colorWarn).
+		Align(lipgloss.Center).
+		Render(fmt.Sprintf(
+			"Kari needs at least 36 × 10 cells\nCurrent terminal: %d × %d\nResize the terminal to continue.",
+			m.width,
+			m.height,
+		))
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, notice)
+}
+
 // searchPosterVisible/previewPosterVisible report whether this frame will
 // actually show that slot's poster — every state that hides it (switching
 // screens, the help overlay, a confirm dialog covering the screen, still
@@ -61,6 +79,17 @@ func (m *modelImpl) renderMainView() string {
 	rule := m.renderRule(dims.contentW)
 	body := m.renderBody(dims)
 	footer := m.renderFooter(dims)
+	// scrollLines clamps the offset to the valid range and renders the
+	// visible window. The assignment here is an idempotent clamp (never
+	// increases the offset, only decreases it when content shrank or the
+	// terminal was resized), so calling View() repeatedly without an
+	// intervening Update is stable — it is not business-logic state
+	// mutation, just keeping scroll within bounds.
+	if m.activeView == viewSettings || (m.activeView == viewPreview && !m.confirmCompletion) {
+		body, m.bodyScroll = scrollLines(body, m.bodyScroll, dims.bodyH, "ctrl+u/d scroll")
+	} else {
+		m.bodyScroll = 0
+	}
 
 	rows := []string{
 		header,
@@ -123,8 +152,31 @@ func (m *modelImpl) renderFooter(dims layoutDims) string {
 		bindParts = append(bindParts, pair)
 	}
 
-	footerContent := strings.Join(bindParts, "  ")
+	footerContent := fitFooterBindings(bindParts, dims.contentW)
 	return lipgloss.NewStyle().Width(dims.contentW).Align(lipgloss.Center).Render(footerContent)
+}
+
+func fitFooterBindings(parts []string, width int) string {
+	visible := []string{}
+	for _, part := range parts {
+		candidate := strings.Join(append(visible, part), "  ")
+		if lipgloss.Width(candidate) > width {
+			break
+		}
+		visible = append(visible, part)
+	}
+	if len(visible) == len(parts) {
+		return strings.Join(visible, "  ")
+	}
+
+	more := mutedStyle.Render("…")
+	for len(visible) > 0 && lipgloss.Width(strings.Join(append(visible, more), "  ")) > width {
+		visible = visible[:len(visible)-1]
+	}
+	if len(visible) == 0 {
+		return more
+	}
+	return strings.Join(append(visible, more), "  ")
 }
 
 func (m *modelImpl) renderLoadingLine(width int) string {
