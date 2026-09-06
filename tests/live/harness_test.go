@@ -13,6 +13,7 @@ package live
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,8 +75,18 @@ func skipOnCatalogDrift(t *testing.T, name string, err error) {
 	}
 	if errors.Is(err, provider.ErrNoResults) ||
 		errors.Is(err, provider.ErrNoEpisodes) ||
-		errors.Is(err, provider.ErrNoSources) {
+		errors.Is(err, provider.ErrNoSources) ||
+		errors.Is(err, provider.ErrAuthRequired) {
 		t.Skipf("%s: %v", name, err)
+		return
+	}
+	var httpErr *provider.HTTPError
+	if errors.As(err, &httpErr) && (httpErr.Code == 429 || httpErr.Code >= 500) {
+		t.Skipf("%s: transient HTTP %d: %v", name, httpErr.Code, err)
+		return
+	}
+	if strings.Contains(err.Error(), "giving up after") || strings.Contains(err.Error(), "429") {
+		t.Skipf("%s: rate limited: %v", name, err)
 		return
 	}
 	t.Fatalf("%s: %v", name, err)

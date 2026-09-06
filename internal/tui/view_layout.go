@@ -41,6 +41,9 @@ func (m *modelImpl) View() string {
 		if !m.previewPosterVisible() {
 			cleanup.WriteString(termimg.DeleteKitty(kittyPreviewImageID))
 		}
+		if !m.searchPosterVisible() && !m.previewPosterVisible() {
+			cleanup.WriteString(termimg.DeleteAllKitty())
+		}
 		output = cleanup.String() + output
 	}
 
@@ -91,6 +94,14 @@ func (m *modelImpl) renderMainView() string {
 		m.bodyScroll = 0
 	}
 
+	// Status / loading slot (stable layout so loading never shifts views)
+	var statusRow string
+	if m.loading {
+		statusRow = m.renderLoadingLine(dims.contentW)
+	} else if statusLine := m.renderStatusLine(dims.contentW); statusLine != "" {
+		statusRow = statusLine
+	}
+
 	rows := []string{
 		header,
 		rule,
@@ -98,13 +109,11 @@ func (m *modelImpl) renderMainView() string {
 		body,
 		"",
 	}
-	if m.loading {
-		rows = append(rows, m.renderLoadingLine(dims.contentW))
+	if statusRow != "" {
+		rows = append(rows, statusRow)
+	} else {
+		rows = append(rows, "")
 	}
-	if statusLine := m.renderStatusLine(dims.contentW); statusLine != "" {
-		rows = append(rows, statusLine)
-	}
-
 	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
 	contentHeight := lipgloss.Height(content)
 

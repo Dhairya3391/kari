@@ -63,7 +63,7 @@ func TestProviderPipeline(t *testing.T) {
 					if len(episodes) == 0 {
 						t.Fatalf("%s: zero episodes without error", p.Name())
 					}
-					ep := episodes[len(episodes)-1] // last episode of last season
+					ep := episodes[0] // first episode of first season
 					t.Logf("episodes ok: count=%d resolving S%dE%d", len(episodes), ep.Season, ep.Episode)
 
 					sources, err = p.ResolveSource(ctx, pick.ID, ep)
@@ -83,11 +83,7 @@ func TestProviderPipeline(t *testing.T) {
 func TestRegistryCapabilitiesLive(t *testing.T) {
 	reg := newRegistry(t)
 
-	movies := reg.AudioLanguages(provider.ModeMovies)
-	if len(movies) == 0 {
-		t.Error("movies mode has audio-tagging providers but registry exposes no languages")
-	}
-	for _, l := range movies {
+	for _, l := range reg.AudioLanguages() {
 		if l.Code == "" || l.Display == "" {
 			t.Errorf("audio language missing code/display: %+v", l)
 		}

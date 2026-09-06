@@ -33,14 +33,18 @@ func cleanErrorForUI(err error) string {
 		msg = strings.ReplaceAll(msg, m, "…")
 	}
 
-	if strings.Contains(msg, "no sources found") {
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "no results found") || strings.Contains(lower, "no results") {
+		return "No results found"
+	}
+	if strings.Contains(lower, "no sources found") {
 		return "No sources found"
 	}
-	if strings.Contains(msg, "context deadline") {
-		return "Request timed out"
+	if strings.Contains(lower, "deadline") || strings.Contains(lower, "timeout") {
+		return "Request timed out — please try again"
 	}
-	if strings.Contains(msg, "connection") {
-		return "Connection failed"
+	if strings.Contains(lower, "connection") || strings.Contains(lower, "no such host") {
+		return "Network connection failed — check your connection"
 	}
 
 	parts := strings.Split(msg, "; ")
@@ -78,8 +82,18 @@ func (m *modelImpl) onSearchDone(msg searchDoneMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
 	m.loadingText = ""
 	if msg.err != nil {
+		if errors.Is(msg.err, provider.ErrNoResults) {
+			m.allSeriesResults = nil
+			m.usedQuery = msg.usedQuery
+			m.seriesResults = nil
+			m.seriesList.SetItems(nil)
+			m.clearSearchPoster()
+			m.setStatus(statusWarn, fmt.Sprintf("No results found for %q — press Tab to switch categories", msg.usedQuery))
+			m.queryInput.Focus()
+			return m, nil
+		}
 		logging.Error("onSearchDone failed", "opID", msg.opID, "err", msg.err)
-		m.setStatus(statusError, "Search failed: "+cleanErrorForUI(msg.err))
+		m.setStatus(statusError, cleanErrorForUI(msg.err))
 		m.queryInput.Focus()
 		return m, nil
 	}
@@ -90,7 +104,7 @@ func (m *modelImpl) onSearchDone(msg searchDoneMsg) (tea.Model, tea.Cmd) {
 	m.seriesResults = msg.results
 	m.seriesList.SetItems(seriesToItems(m.seriesResults))
 	if len(m.seriesResults) == 0 {
-		m.setStatus(statusWarn, "No results for "+msg.usedQuery+" — try another mode (tab to switch)")
+		m.setStatus(statusWarn, fmt.Sprintf("No results found for %q — press Tab to switch categories", msg.usedQuery))
 		m.queryInput.Focus()
 		return m, nil
 	}
@@ -411,20 +425,31 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 		m.applyResumeFromHistory(m.resolved)
 		return
 	}
-
-	// Append new sources, avoiding duplicates
-	seen := make(map[string]struct{})
-	for _, p := range m.resolved.Playback {
-		seen[p.URL] = struct{}{}
+	// Update playback sources directly from the aggregated snapshot.
+	// resolved.Playback is already sorted by MediaService with VidKing on top.
+	var selectedURL string
+	if src, ok := m.selectedPlaybackSource(); ok {
+		selectedURL = src.URL
 	}
 
-	for _, p := range resolved.Playback {
-		if _, ok := seen[p.URL]; !ok {
-			m.resolved.Playback = append(m.resolved.Playback, p)
-			seen[p.URL] = struct{}{}
+	m.resolved.Playback = append([]provider.MediaSource{}, resolved.Playback...)
+
+	// If user manually switched sources with Tab, restore that specific source URL.
+	// Otherwise default to the top-ranked source (index 0, e.g. VidKing).
+	if m.manualPlaybackSelected {
+		newSelected := 0
+		if selectedURL != "" {
+			for i, p := range m.resolved.Playback {
+				if p.URL == selectedURL {
+					newSelected = i
+					break
+				}
+			}
 		}
+		m.selectedPlayback = newSelected
+	} else {
+		m.selectedPlayback = 0
 	}
-
 	// Accumulate raw subtitles from all provider updates
 	seenSub := make(map[string]struct{})
 	for _, s := range m.rawSubtitles {

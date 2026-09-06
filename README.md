@@ -102,7 +102,7 @@ kari "frieren"
 
 ## Features
 
-- **Multi-Source Parallel Search** — Queries multiple streaming sources concurrently (Miruro, MovieBox, RiveStream, VidKing, PirateX, and optional Jellyfin).
+- **Multi-Source Parallel Search** — Queries multiple streaming sources concurrently (Miruro, VidKing, Pengu, and optional Jellyfin).
 - **5 Media Categories** — Dedicated modes for Anime, Movies, TV Series, Cartoons, and private Jellyfin servers. Switch effortlessly with `Tab`.
 - **Accurate Resume & History** — MPV reports timestamps back via local IPC socket. Quit anytime and Kari remembers your exact position, selected audio mode (Sub/Dub), and preferred stream language.
 - **Smart Skip & Virtual Chapters** — Hybrid skip engine combining Anime-Skip GraphQL and AniSkip. Automatically injects seekbar chapters (`Opening`, `Ending`, `Recap`, `Preview`) and context-aware OSD skip prompts (`Press Enter to Skip`) into MPV. Switchable in Settings.
@@ -119,11 +119,9 @@ kari "frieren"
 
 | Provider | Mode | Method | Priority |
 | --- | --- | --- | --- |
+| **VidKing** | Movies, TV, Cartoons | API (TMDB-indexed) | 1 |
+| **Pengu** | Movies, TV, Cartoons | Aggregator API (TMDB-indexed) | 2 |
 | **Miruro** | Anime | API | 1 |
-| **PirateX** | Cartoons | Scraper (HLS stream) | 1 |
-| **VidKing** | Movies, TV | API (TMDB-indexed) | 1 (TV), 2 (Movies) |
-| **MovieBox** | Movies, TV | API (TMDB-indexed) | 2 |
-| **RiveStream** | Movies, TV | API (TMDB-indexed) | 2 |
 | **Jellyfin** | Movies, TV | Jellyfin Server API | 1 |
 
 *Lower priority number = primary provider. All providers are queried simultaneously in parallel.*
@@ -210,7 +208,7 @@ Kari works with zero configuration. You can optionally customize its behavior wi
 
 ### Integrations & Custom API Keys
 
-*Note: Built-in keys are provided automatically for TMDB, Trakt, and AniList. Set these only if you want to use your own personal accounts or hit rate limits.*
+*Note: Built-in keys and tokens are provided automatically for TMDB, Trakt, AniList, Anime-Skip, and Pengu. Set these only if you want to use your own personal accounts or custom access tokens.*
 
 | Variable | Description |
 | --- | --- |
@@ -225,6 +223,7 @@ Kari works with zero configuration. You can optionally customize its behavior wi
 | `ANILIST_CLIENT_ID` / `ANILIST_ID` | Custom AniList OAuth Client ID. |
 | `ANILIST_CLIENT_SECRET` / `ANILIST_SECRET` | Custom AniList OAuth Client Secret. |
 | `KARI_ANIME_SKIP_CLIENT_ID` | Custom Anime-Skip Client ID (create at [anime-skip.com/account/api-clients](https://anime-skip.com/account/api-clients)). A default client ID is provided automatically if unset. |
+| `PENGU_AUTH_TOKEN` / `PENGU_TOKEN` | Custom PenguPlay access token (from [pengu.uk](https://pengu.uk/), Telegram @PenguPlayBot, or Discord `/token`). A bundled default token is provided automatically if unset. |
 
 ---
 

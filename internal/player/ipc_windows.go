@@ -38,7 +38,7 @@ func dialIPC(socketPath string, timeout time.Duration) (net.Conn, error) {
 			}
 			return conn, nil
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("timeout connecting to mpv IPC pipe: %s", socketPath)
 }

@@ -103,6 +103,7 @@ func (m *modelImpl) playHistoryGroup(keyStr string) (tea.Model, tea.Cmd) {
 	m.selectedSeries = nil
 	m.selectedEpisode = nil
 	m.resolved = nil
+	m.manualPlaybackSelected = false
 	m.clearPreviewPoster()
 	m.pendingHistoryTarget = nil
 	m.loading = true
@@ -170,6 +171,7 @@ func (m *modelImpl) onHistoryResolveSeries(msg historyResolveSeriesMsg) (tea.Mod
 	m.selectedSeries = &series
 	m.selectedEpisode = nil
 	m.resolved = nil
+	m.manualPlaybackSelected = false
 	m.clearPreviewPoster()
 	m.selectedPlayback = 0
 	m.episodeResults = nil

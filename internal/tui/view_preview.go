@@ -44,11 +44,6 @@ func (m *modelImpl) renderPreviewScreen(dims layoutDims) string {
 				rows = append(rows, mutedStyle.Render(shorten(cleanedTitle, width-6)))
 			}
 
-			if m.selectedSeries != nil && m.selectedSeries.Provider != "" {
-				// Codename only — internal provider names never reach the UI.
-				rows = append(rows, "", mutedStyle.Render("via ")+lipgloss.NewStyle().Foreground(colorInfo).Render(m.registry.DisplayName(m.selectedSeries.Provider)))
-			}
-
 			return lipgloss.Place(dims.contentW, m.height/2, lipgloss.Center, lipgloss.Center, cardStyle.Width(width).Render(strings.Join(rows, "\n")))
 		}
 		return mutedStyle.Render("No media selected")

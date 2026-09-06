@@ -259,3 +259,39 @@ func TestResolvedMediaSnapshotIsCopied(t *testing.T) {
 		t.Fatal("onResult snapshot aliases the aggregator's backing array")
 	}
 }
+
+func TestAggregatorSortPrioritizesVidKing(t *testing.T) {
+	agg := &sourceAggregator{
+		priority: map[string]int{
+			"vidking": 0,
+			"pengu":   1,
+		},
+		sources: []provider.MediaSource{
+			{Resolver: "pengu", Quality: "4K [4KHDHub]"},
+			{Resolver: "vidking", Quality: "1080p"},
+			{Resolver: "pengu", Quality: "1080p [VegaMovies]"},
+			{Resolver: "vidking", Quality: "2160p"},
+		},
+	}
+
+	agg.sort()
+
+	if len(agg.sources) != 4 {
+		t.Fatalf("expected 4 sources, got %d", len(agg.sources))
+	}
+
+	// VidKing sources must be at the top, sorted by quality
+	if agg.sources[0].Resolver != "vidking" || agg.sources[0].Quality != "2160p" {
+		t.Errorf("sources[0] = %+v, want vidking 2160p", agg.sources[0])
+	}
+	if agg.sources[1].Resolver != "vidking" || agg.sources[1].Quality != "1080p" {
+		t.Errorf("sources[1] = %+v, want vidking 1080p", agg.sources[1])
+	}
+	// Pengu sources follow, sorted by quality
+	if agg.sources[2].Resolver != "pengu" || agg.sources[2].Quality != "4K [4KHDHub]" {
+		t.Errorf("sources[2] = %+v, want pengu 4K", agg.sources[2])
+	}
+	if agg.sources[3].Resolver != "pengu" || agg.sources[3].Quality != "1080p [VegaMovies]" {
+		t.Errorf("sources[3] = %+v, want pengu 1080p", agg.sources[3])
+	}
+}

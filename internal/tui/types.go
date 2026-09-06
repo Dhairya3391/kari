@@ -223,24 +223,25 @@ type modelImpl struct {
 	searchIndex  int
 	episodeIndex int
 
-	loading              bool
-	loadingText          string
-	statusText           string
-	statusType           statusLevel
-	statusID             int
-	showHelp             bool
-	bodyScroll           int
-	helpScroll           int
-	selectedPlayback     int
-	prevSourceLanguage   string
-	prevSourceQuality    int
-	availablePlayers     []string
-	selectedPlayer       int
-	autoPlayAfterResolve bool
-	pendingAutoPlay      bool
-	pendingManualPlay    bool
-	pendingPlayFromStart bool
-	autoplay             bool
+	loading                bool
+	loadingText            string
+	statusText             string
+	statusType             statusLevel
+	statusID               int
+	showHelp               bool
+	bodyScroll             int
+	helpScroll             int
+	selectedPlayback       int
+	manualPlaybackSelected bool
+	prevSourceLanguage     string
+	prevSourceQuality      int
+	availablePlayers       []string
+	selectedPlayer         int
+	autoPlayAfterResolve   bool
+	pendingAutoPlay        bool
+	pendingManualPlay      bool
+	pendingPlayFromStart   bool
+	autoplay               bool
 
 	appMode provider.ContentType
 	modes   []provider.ContentType
@@ -295,13 +296,13 @@ type modelImpl struct {
 	autoSkipEnding        bool
 	skipRecap             bool
 	skipPreview           bool
-	selectedEpisodes     map[int]struct{}
-	batchInProgress      bool
-	batchCurrent         int
-	batchTotal           int
-	batchEpisodeProgress float64
-	batchCancel          context.CancelFunc
-	batchChan            chan tea.Msg
+	selectedEpisodes      map[int]struct{}
+	batchInProgress       bool
+	batchCurrent          int
+	batchTotal            int
+	batchEpisodeProgress  float64
+	batchCancel           context.CancelFunc
+	batchChan             chan tea.Msg
 
 	posterClient             *poster.Client
 	imgProtocol              termimg.Protocol

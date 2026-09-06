@@ -203,6 +203,7 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		pos = (pos + step + len(filtered)) % len(filtered)
 		m.selectedPlayback = filtered[pos]
+		m.manualPlaybackSelected = true
 		m.setStatus(statusInfo, "")
 		return m, m.triggerSubtitleSync()
 	case "d":

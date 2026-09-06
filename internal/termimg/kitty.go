@@ -24,7 +24,22 @@ const kittyChunkSize = 4096
 // terminal to remove it, and it just sits on screen indefinitely (this is
 // what caused stale/duplicate posters to linger behind other screens).
 func DeleteKitty(imageID uint32) string {
-	return fmt.Sprintf("%sa=d,d=i,i=%d;%s", rasterm.KITTY_IMG_HDR, imageID, rasterm.KITTY_IMG_FTR)
+	if imageID == 0 {
+		return fmt.Sprintf("%sa=d,d=a;%s", rasterm.KITTY_IMG_HDR, rasterm.KITTY_IMG_FTR)
+	}
+	return fmt.Sprintf("%sa=d,d=i,i=%d;%s%sa=d,d=I,i=%d;%s%sa=d,d=p,p=%d;%s",
+		rasterm.KITTY_IMG_HDR, imageID, rasterm.KITTY_IMG_FTR,
+		rasterm.KITTY_IMG_HDR, imageID, rasterm.KITTY_IMG_FTR,
+		rasterm.KITTY_IMG_HDR, imageID, rasterm.KITTY_IMG_FTR,
+	)
+}
+
+// DeleteAllKitty returns the escape sequence to delete all visible image placements.
+func DeleteAllKitty() string {
+	return fmt.Sprintf("%sa=d,d=a;%s%sa=d,d=A;%s",
+		rasterm.KITTY_IMG_HDR, rasterm.KITTY_IMG_FTR,
+		rasterm.KITTY_IMG_HDR, rasterm.KITTY_IMG_FTR,
+	)
 }
 
 // renderKitty encodes img via the Kitty graphics protocol, tagged with
@@ -78,7 +93,9 @@ func renderKitty(img image.Image, cellW, cellH int, imageID uint32) (string, err
 		if i == 0 {
 			seq.WriteString(opts.ToHeader("a=T", "f=100", "t=d", "C=1", "m="+more))
 		} else {
-			seq.WriteString(rasterm.KITTY_IMG_HDR + "m=" + more + ";")
+			seq.WriteString(rasterm.KITTY_IMG_HDR + "m=")
+			seq.WriteString(more)
+			seq.WriteString(";")
 		}
 		seq.WriteString(b64[i:end])
 		seq.WriteString(rasterm.KITTY_IMG_FTR)

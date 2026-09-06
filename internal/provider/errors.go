@@ -7,10 +7,11 @@ import (
 
 // Sentinel errors used by providers for common failure cases.
 var (
-	ErrNoResults  = errors.New("no results found")
-	ErrNoEpisodes = errors.New("no episodes found")
-	ErrNoSources  = errors.New("no sources found")
-	ErrNotFound   = errors.New("not found")
+	ErrNoResults    = errors.New("no results found")
+	ErrNoEpisodes   = errors.New("no episodes found")
+	ErrNoSources    = errors.New("no sources found")
+	ErrNotFound     = errors.New("not found")
+	ErrAuthRequired = errors.New("authentication required")
 )
 
 // HTTPError represents a non-2xx HTTP response from an upstream API.

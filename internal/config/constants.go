@@ -1,28 +1,26 @@
 package config
 
 const (
-	MiruroAPIBase     = "https://noob2.broggl.farm"
-	MiruroOrigin      = "https://miruro.tv"
-	VidKingAPIBase    = "https://noob.broggl.farm"
-	VidKingReferer    = "https://www.vidking.net/"
-	MovieboxAPIBase   = "https://noob3.broggl.farm"
-	RiveStreamAPIBase = "https://noob4.broggl.farm"
-	PirateXAPIBase    = "https://piratex.dhairya.codes"
-	TMDBAPIBase       = "https://api.themoviedb.org/3"
-	TMDBBaseURL       = "https://www.themoviedb.org"
-	TMDBImageBase     = "https://image.tmdb.org/t/p/"
-	DesktopUserAgent  = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
-	AndroidUAConst    = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Mobile Safari/537.36"
-	AppName           = "Kari"
-	OpenSubtitlesAPI  = "https://api.opensubtitles.com/api/v1"
-	OpenSubtitlesUA   = "kari v1.0"
-	SearchAPIBase     = "https://noobsearch.broggl.farm"
-	KariClientHeader  = "X-Kari-Client"
-	KariClientToken   = "kari-app-v1"
-	TraktAPIBase      = "https://api.trakt.tv"
-	TraktAuthBase     = "https://trakt.tv"
-	AniListAPIBase    = "https://graphql.anilist.co"
-	AniListAuthBase   = "https://anilist.co"
+	MiruroAPIBase    = "https://noob2.broggl.farm"
+	MiruroOrigin     = "https://miruro.tv"
+	VidKingAPIBase   = "https://noob.broggl.farm"
+	VidKingReferer   = "https://www.vidking.net/"
+	PenguAPIBase     = "https://pengu.uk"
+	TMDBAPIBase      = "https://api.themoviedb.org/3"
+	TMDBBaseURL      = "https://www.themoviedb.org"
+	TMDBImageBase    = "https://image.tmdb.org/t/p/"
+	DesktopUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+	AndroidUAConst   = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Mobile Safari/537.36"
+	AppName          = "Kari"
+	OpenSubtitlesAPI = "https://api.opensubtitles.com/api/v1"
+	OpenSubtitlesUA  = "kari v1.0"
+	SearchAPIBase    = "https://noobsearch.broggl.farm"
+	KariClientHeader = "X-Kari-Client"
+	KariClientToken  = "kari-app-v1"
+	TraktAPIBase     = "https://api.trakt.tv"
+	TraktAuthBase    = "https://trakt.tv"
+	AniListAPIBase   = "https://graphql.anilist.co"
+	AniListAuthBase  = "https://anilist.co"
 
 	DefaultTraktClientID       = "3638fff997ff24c5deb51646a7520bc531f5d482a30def91c238a8d2a0bd648d"
 	DefaultTraktClientSecret   = "3aeb56d02d938833b0395ddd484b9c13849b0523bb32d0b0635cb9b048eed91d"
@@ -33,6 +31,9 @@ const (
 	AnimeSkipAPIBase = "https://api.anime-skip.com/graphql"
 	// DefaultAnimeSkipClientID is the bundled X-Client-ID for the Anime-Skip API.
 	DefaultAnimeSkipClientID = "q5ZuG3MoJxy3c4dKJvpOjFIh1HFGTsrm"
+
+	// DefaultPenguAuthToken is the bundled fallback token for PenguPlay (https://pengu.uk).
+	DefaultPenguAuthToken = "ZXKooMjPl9wu9A4JI8HNQY54Jocc3H_qkUW422U6cpQ"
 )
 
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var

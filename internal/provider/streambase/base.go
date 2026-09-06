@@ -45,14 +45,29 @@ func New(keyPool *tmdb.KeyPool) (*Base, error) {
 	return &Base{httpClient: httpclient.New(), keyPool: keyPool}, nil
 }
 
-// Search resolves titles to TMDB ids through the meilisearch index,
-// normalizing media types to the selected mode.
+// tmdbAnimationGenreID is TMDB's canonical genre ID for animation, shared
+// across both movie and TV classifications.
+const tmdbAnimationGenreID = 16
+
+// Search resolves titles to TMDB ids. For ModeCartoon, it queries TMDB
+// multi-search directly and filters exclusively for animation titles (genre
+// ID 16). For movies/TV, it queries the meilisearch index and normalizes
+// media types.
 func (b *Base) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	logging.Debug("stream search start", "mode", mode, "query", query)
+	if mode == provider.ModeCartoon {
+		results, err := b.searchTMDBCartoons(ctx, query)
+		if err != nil {
+			logging.Debug("stream cartoon search failed", "query", query, "err", err)
+			return nil, fmt.Errorf("streambase cartoon search: %w", err)
+		}
+		logging.Debug("stream cartoon search done", "query", query, "results", len(results))
+		return results, nil
+	}
+
 	results, err := search.NewClient().SearchWithMode(ctx, query, mode)
 	if err != nil {
 		logging.Debug("stream search failed", "mode", mode, "query", query, "err", err)
-
 		return nil, fmt.Errorf("streambase search: %w", err)
 	}
 
@@ -73,6 +88,149 @@ func (b *Base) Search(ctx context.Context, query string, mode provider.ContentTy
 	}
 	logging.Debug("stream search done", "mode", mode, "query", query, "results", len(providerResults))
 	return providerResults, nil
+}
+
+type tmdbMultiSearchResponse struct {
+	Page         int                  `json:"page"`
+	TotalPages   int                  `json:"total_pages"`
+	TotalResults int                  `json:"total_results"`
+	Results      []tmdbMultiSearchHit `json:"results"`
+}
+
+type tmdbMultiSearchHit struct {
+	ID           int     `json:"id"`
+	Title        string  `json:"title"`
+	Name         string  `json:"name"`
+	MediaType    string  `json:"media_type"`
+	ReleaseDate  string  `json:"release_date"`
+	FirstAirDate string  `json:"first_air_date"`
+	GenreIDs     []int   `json:"genre_ids"`
+	Popularity   float64 `json:"popularity"`
+}
+
+// searchTMDBCartoons queries the TMDB multi-search endpoint directly and filters
+// results to include only animation titles (genre ID 16), ensuring cartoon mode
+// returns only animated TV shows and movies.
+func (b *Base) searchTMDBCartoons(ctx context.Context, query string) ([]provider.SearchResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("empty query")
+	}
+
+	page1, err := b.fetchTMDBMultiSearchPage(ctx, query, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	hits := page1.Results
+	// If page 1 has fewer than 10 animation items and more pages exist, fetch
+	// page 2 to provide a richer search result set.
+	if page1.TotalPages > 1 && countAnimationHits(hits) < 10 {
+		page2, err := b.fetchTMDBMultiSearchPage(ctx, query, 2)
+		if err == nil && len(page2.Results) > 0 {
+			hits = append(hits, page2.Results...)
+		}
+	}
+
+	var results []provider.SearchResult
+	seen := make(map[int]bool)
+
+	for _, h := range hits {
+		if h.ID <= 0 || seen[h.ID] {
+			continue
+		}
+		// Exclude persons and non-animation content.
+		if h.MediaType != "movie" && h.MediaType != "tv" {
+			continue
+		}
+		if !hasAnimationGenre(h.GenreIDs) {
+			continue
+		}
+
+		seen[h.ID] = true
+		title := util.NormalizeSpace(h.Title)
+		mediaType := provider.MediaTypeMovie
+		yearStr := extractYear(h.ReleaseDate)
+
+		if h.MediaType == "tv" {
+			title = util.NormalizeSpace(h.Name)
+			mediaType = provider.MediaTypeTV
+			yearStr = extractYear(h.FirstAirDate)
+		}
+		if title == "" {
+			continue
+		}
+
+		results = append(results, provider.SearchResult{
+			Title:     title,
+			ID:        strconv.Itoa(h.ID),
+			Type:      provider.ModeCartoon,
+			Year:      yearStr,
+			TMDBID:    h.ID,
+			MediaType: mediaType,
+		})
+	}
+
+	if len(results) == 0 {
+		return nil, provider.ErrNoResults
+	}
+	return results, nil
+}
+
+func (b *Base) fetchTMDBMultiSearchPage(ctx context.Context, query string, page int) (tmdbMultiSearchResponse, error) {
+	var lastAuthErr error
+	for {
+		apiKey, err := b.keyPool.NextKey()
+		if err != nil {
+			if lastAuthErr != nil {
+				return tmdbMultiSearchResponse{}, fmt.Errorf("tmdb multi search auth failed after key rotation: %w", lastAuthErr)
+			}
+			return tmdbMultiSearchResponse{}, err
+		}
+		target := fmt.Sprintf("%s/search/multi?api_key=%s&query=%s&include_adult=false&page=%d",
+			config.TMDBAPIBase,
+			url.QueryEscape(apiKey),
+			url.QueryEscape(query),
+			page,
+		)
+		resp, err := fetchTMDBJSON[tmdbMultiSearchResponse](b, ctx, target)
+		if err == nil {
+			return resp, nil
+		}
+		if !isAuthError(err) {
+			return resp, err
+		}
+		logging.Debug("tmdb multi search unauthorized, rotating key", "query", query, "page", page, "err", err)
+		b.keyPool.MarkFailed(apiKey)
+		lastAuthErr = err
+	}
+}
+
+func countAnimationHits(hits []tmdbMultiSearchHit) int {
+	count := 0
+	for _, h := range hits {
+		if (h.MediaType == "movie" || h.MediaType == "tv") && hasAnimationGenre(h.GenreIDs) {
+			count++
+		}
+	}
+	return count
+}
+
+func hasAnimationGenre(genres []int) bool {
+	for _, g := range genres {
+		if g == tmdbAnimationGenreID {
+			return true
+		}
+	}
+	return false
+}
+
+func extractYear(dateStr string) string {
+	dateStr = strings.TrimSpace(dateStr)
+	if len(dateStr) >= 4 {
+		return dateStr[:4]
+	}
+	return ""
 }
 
 // FetchEpisodes returns a synthetic single episode for movies or the full

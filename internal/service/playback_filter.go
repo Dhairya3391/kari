@@ -106,21 +106,41 @@ func filterByQuality(playback []provider.MediaSource, candidates []int, keep fun
 }
 
 var (
+	reBracketTag = regexp.MustCompile(`\[[^\]]+\]`)
+	reQuality4K  = regexp.MustCompile(`(?i)\b(4k|uhd|2160p?)\b`)
+	reQualityQHD = regexp.MustCompile(`(?i)\b(qhd|1440p?|2k)\b`)
+	reQualityFHD = regexp.MustCompile(`(?i)\b(fhd|1080p?)\b`)
+	reQualityHD  = regexp.MustCompile(`(?i)\b(hd|720p?)\b`)
+	reQualitySD  = regexp.MustCompile(`(?i)\b(sd|480p?|360p?|576p?)\b`)
 	reQualityP   = regexp.MustCompile(`(\d{3,4})p`)
 	reQualityNum = regexp.MustCompile(`\b(\d{3,4})\b`)
 )
 
 // SourceQuality extracts a numeric resolution (2160/1080/…) from a quality
-// label like "1080p Hindi" or bare "480"; 0 when unparseable.
+// label like "4K [4KHDHub]", "FHD [VegaMovies]", "HD", "SD", or "1080p"; 0 when unparseable.
 func SourceQuality(label string) int {
-	normalized := strings.ToLower(label)
-	if strings.Contains(normalized, "4k") || strings.Contains(normalized, "uhd") {
+	// Strip bracketed source tags e.g. "[4KHDHub]" so provider names don't trigger false resolution matches
+	stripped := reBracketTag.ReplaceAllString(label, "")
+	normalized := strings.ToLower(stripped)
+
+	if reQuality4K.MatchString(normalized) {
 		return 2160
+	}
+	if reQualityQHD.MatchString(normalized) {
+		return 1440
+	}
+	if reQualityFHD.MatchString(normalized) {
+		return 1080
+	}
+	if reQualityHD.MatchString(normalized) {
+		return 720
+	}
+	if reQualitySD.MatchString(normalized) {
+		return 480
 	}
 	if m := reQualityP.FindStringSubmatch(normalized); len(m) >= 2 {
 		return atoiOrZero(m[1])
 	}
-	// Bare resolutions from providers that return just "480", "720", "1080".
 	if m := reQualityNum.FindStringSubmatch(normalized); len(m) >= 2 {
 		return atoiOrZero(m[1])
 	}

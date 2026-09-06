@@ -77,7 +77,11 @@ func (c *Client) Name() string { return "vidking" }
 
 // Modes implements Provider.
 func (c *Client) Modes() []provider.Mode {
-	return []provider.Mode{{Name: provider.ModeMovies, Priority: 2}, {Name: provider.ModeTV, Priority: 1}}
+	return []provider.Mode{
+		{Name: provider.ModeMovies, Priority: 1},
+		{Name: provider.ModeTV, Priority: 1},
+		{Name: provider.ModeCartoon, Priority: 1},
+	}
 }
 
 // Search delegates to the shared TMDB-keyed base.
@@ -155,8 +159,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	return sources, nil
 }
 
-// FetchVidKingSources performs the raw API call and decodes the response;
-// exported because piratex-style flows may reuse it.
+// FetchVidKingSources performs the raw API call and decodes the response.
 func (c *Client) FetchVidKingSources(ctx context.Context, tmdbID int, mediaType string, season, episode int) (*vidKingResponse, error) {
 	vkLog.Debug("fetch start", "tmdbID", tmdbID, "mediaType", mediaType, "season", season, "episode", episode)
 	mt := provider.MediaTypeMovie

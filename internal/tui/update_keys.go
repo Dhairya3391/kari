@@ -179,6 +179,9 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return nil, false
 	case key.Matches(msg, m.keys.Home):
+		if m.activeView == viewPreview {
+			m.clearPreviewPoster()
+		}
 		m.activeView = viewSearch
 		m.backStack = nil
 		m.loading = false

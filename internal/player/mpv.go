@@ -114,7 +114,8 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		"--no-ytdl",
 		"--really-quiet",
 		"--msg-level=all=error",
-		"--vo=gpu-next",
+		"--vo=gpu-next,gpu",
+		"--gpu-context=auto",
 		"--cache=yes",
 		"--demuxer-seekable-cache=yes",
 		"--demuxer-max-bytes=150M",
@@ -132,8 +133,12 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 
 	pipeMpvArgs = appendTitleArgs(pipeMpvArgs, media.DisplayTitle())
 	pipeMpvArgs = appendSubtitleArgs(pipeMpvArgs, media.SubtitlePaths())
+	pipeMpvArgs = appendAudioLangArgs(pipeMpvArgs, source.Language)
 	pipeMpvArgs = append(pipeMpvArgs, aniskipArgs...)
 	pipeMpvArgs = append(pipeMpvArgs, source.ExtraArgs...)
+	if runtime.GOOS == "windows" {
+		pipeMpvArgs = append(pipeMpvArgs, "--terminal=no")
+	}
 	pipeMpvArgs = append(pipeMpvArgs, "-")
 
 	curlArgs := buildCurlArgs(source.URL, headers)
@@ -167,7 +172,8 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 	args := []string{
 		"--no-ytdl",
 		"--msg-level=all=warn",
-		"--vo=gpu-next",
+		"--vo=gpu-next,gpu",
+		"--gpu-context=auto",
 		hwdecOptionArg(),
 		"--network-timeout=15",
 		"--cache=yes",
@@ -178,6 +184,10 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 		"--demuxer-readahead-secs=60",
 		"--stream-buffer-size=8M",
 		"--hls-bitrate=max",
+	}
+
+	if runtime.GOOS == "windows" {
+		args = append(args, "--terminal=no")
 	}
 
 	if media.StartTime > 5 {
@@ -204,9 +214,8 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 	var headers []string
 	if strings.TrimSpace(source.Referer) != "" {
 		// Some CDNs reject an Origin header outright (or only accept a bare
-		// scheme://host), so it's opt-in via SuppressOrigin (e.g. PirateX,
-		// whose CDN validates Referer only). When sent it stays derived from
-		// the referer, matching what a browser would send.
+		// scheme://host), so it's opt-in via SuppressOrigin. When sent it stays
+		// derived from the referer, matching what a browser would send.
 		if !source.SuppressOrigin {
 			ref := strings.TrimSuffix(source.Referer, "/")
 			headers = append(headers, "Origin: "+ref)
@@ -225,6 +234,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendSubtitleArgs(args, media.SubtitlePaths())
+	args = appendAudioLangArgs(args, source.Language)
 	args = append(args, aniskipArgs...)
 	args = append(args, source.ExtraArgs...)
 	args = append(args, "--input-ipc-server="+socketPath)
@@ -290,6 +300,46 @@ func appendSubtitleArgs(args []string, subtitleFiles []string) []string {
 		args = append(args, "--sub-file="+sub)
 	}
 	return args
+}
+
+// appendAudioLangArgs passes preferred audio-track languages (--alang) to MPV.
+func appendAudioLangArgs(args []string, language string) []string {
+	langCode := strings.ToLower(strings.TrimSpace(language))
+	if langCode == "" {
+		return args
+	}
+	var alang []string
+	switch langCode {
+	case "hi", "hindi":
+		alang = []string{"hi", "hin", "hindi", "en", "eng"}
+	case "ja", "japanese":
+		alang = []string{"ja", "jpn", "japanese", "en", "eng"}
+	case "es", "spanish":
+		alang = []string{"es", "spa", "spanish", "esla", "es-la", "en", "eng"}
+	case "fr", "french":
+		alang = []string{"fr", "fra", "fre", "french", "en", "eng"}
+	case "de", "german":
+		alang = []string{"de", "deu", "ger", "german", "en", "eng"}
+	case "it", "italian":
+		alang = []string{"it", "ita", "italian", "en", "eng"}
+	case "pt", "portuguese":
+		alang = []string{"pt", "por", "portuguese", "ptbr", "pt-br", "en", "eng"}
+	case "ru", "russian":
+		alang = []string{"ru", "rus", "russian", "en", "eng"}
+	case "ar", "arabic":
+		alang = []string{"ar", "ara", "arabic", "en", "eng"}
+	case "ko", "korean":
+		alang = []string{"ko", "kor", "korean", "en", "eng"}
+	case "zh", "chinese":
+		alang = []string{"zh", "chi", "zho", "chinese", "en", "eng"}
+	case "ta", "tamil":
+		alang = []string{"ta", "tam", "tamil", "en", "eng"}
+	case "te", "telugu":
+		alang = []string{"te", "tel", "telugu", "en", "eng"}
+	default:
+		alang = []string{langCode, "en", "eng"}
+	}
+	return append(args, "--alang="+strings.Join(alang, ","))
 }
 
 // joinNonEmpty concatenates parts with " ; ", skipping blanks.

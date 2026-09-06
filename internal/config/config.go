@@ -27,6 +27,9 @@ type Config struct {
 	// GraphQL API. Set via KARI_ANIME_SKIP_CLIENT_ID; falls back to the
 	// bundled default client ID.
 	AnimeSkipClientID string
+	// PenguAuthToken is the access token for PenguPlay (https://pengu.uk).
+	// Set via PENGU_AUTH_TOKEN; falls back to the bundled default token.
+	PenguAuthToken string
 }
 
 // AndroidUA returns the shared Android browser User-Agent constant. It
@@ -55,6 +58,7 @@ func Load() (*Config, error) {
 		JellyfinURL:         strings.TrimSpace(os.Getenv("JELLYFIN_URL")),
 		JellyfinAPIKey:      strings.TrimSpace(os.Getenv("JELLYFIN_API_KEY")),
 		AnimeSkipClientID:   firstEnv("KARI_ANIME_SKIP_CLIENT_ID"),
+		PenguAuthToken:      firstEnv("PENGU_AUTH_TOKEN", "PENGU_TOKEN"),
 	}
 
 	// Apply hardcoded defaults if env vars are missing
@@ -72,6 +76,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.AnimeSkipClientID == "" {
 		cfg.AnimeSkipClientID = DefaultAnimeSkipClientID
+	}
+	if cfg.PenguAuthToken == "" {
+		cfg.PenguAuthToken = DefaultPenguAuthToken
 	}
 	if cfg.DownloadDir == "" {
 		cfg.DownloadDir = "./downloads"

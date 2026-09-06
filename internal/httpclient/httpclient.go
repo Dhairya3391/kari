@@ -57,40 +57,11 @@ func newClient(timeout time.Duration) *http.Client {
 	transport.MaxIdleConnsPerHost = 16
 	transport.IdleConnTimeout = 90 * time.Second
 
-	// Termux/Android cross-compiled binaries often fail DNS resolution
-	// because they lack a working /etc/resolv.conf (the stub resolver on
-	// [::1]:53 refuses connections). Dial public resolvers directly instead.
-	// TCP is tried first because a TCP handshake proves the server is
-	// reachable — UDP connects always "succeed" even when the server is
-	// unreachable, so a UDP-only fallback chain never triggers on timeouts.
-	if runtime.GOOS == "android" {
-		resolver := &net.Resolver{
-			PreferGo:     true,
-			StrictErrors: false,
-			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				d := net.Dialer{Timeout: 5 * time.Second}
-				var lastErr error
-				for _, proto := range []string{"tcp", "udp"} {
-					for _, server := range []string{"1.1.1.1:53", "8.8.8.8:53", "8.8.4.4:53", "9.9.9.9:53"} {
-						conn, err := d.DialContext(ctx, proto, server)
-						if err == nil {
-							return conn, nil
-						}
-						lastErr = err
-					}
-				}
-				return nil, fmt.Errorf("no reachable public DNS server: %w", lastErr)
-			},
-		}
-
-		dialer := &net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-			Resolver:  resolver,
-		}
-
-		transport.DialContext = dialer.DialContext
-	}
+	// Universal resilient DNS dialer: uses system DNS first, falling back to
+	// public DNS (Cloudflare 1.1.1.1/1.0.0.1, Google 8.8.8.8/8.8.4.4) over
+	// UDP/TCP if system DNS is blocked, hijacked, or fails.
+	dialer := newResilientDialer()
+	transport.DialContext = dialer.DialContext
 
 	retryClient.HTTPClient.Transport = &kariClientRoundTripper{next: transport}
 	retryClient.Logger = &leveledLogger{}
@@ -137,3 +108,56 @@ func (l *leveledLogger) Warn(msg string, keysAndValues ...interface{}) {
 }
 func (l *leveledLogger) Info(msg string, keysAndValues ...interface{})  {} // suppress retryablehttp chatter
 func (l *leveledLogger) Debug(msg string, keysAndValues ...interface{}) {} // suppress retryablehttp chatter
+
+func newResilientDialer() *net.Dialer {
+	publicDNSServers := [...]string{
+		"1.1.1.1:53",
+		"1.0.0.1:53",
+		"8.8.8.8:53",
+		"8.8.4.4:53",
+		"9.9.9.9:53",
+	}
+	fallbackResolver := &net.Resolver{
+		PreferGo:     true,
+		StrictErrors: false,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 4 * time.Second}
+			var lastErr error
+			// A UDP dial only creates a local socket; it does not prove that
+			// a resolver is reachable. Prefer TCP so a successful connection
+			// reflects a reachable DNS server on networks that drop UDP/53.
+			for _, proto := range []string{"tcp", "udp"} {
+				for _, server := range publicDNSServers {
+					conn, err := d.DialContext(ctx, proto, server)
+					if err == nil {
+						return conn, nil
+					}
+					lastErr = err
+				}
+			}
+			return nil, fmt.Errorf("public dns lookup failed: %w", lastErr)
+		},
+	}
+
+	dualResolver := &net.Resolver{
+		PreferGo:     true,
+		StrictErrors: false,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			if runtime.GOOS == "android" {
+				return fallbackResolver.Dial(ctx, network, address)
+			}
+			d := net.Dialer{Timeout: 3 * time.Second}
+			conn, err := d.DialContext(ctx, network, address)
+			if err == nil {
+				return conn, nil
+			}
+			return fallbackResolver.Dial(ctx, network, address)
+		},
+	}
+
+	return &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Resolver:  dualResolver,
+	}
+}

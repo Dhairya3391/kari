@@ -36,13 +36,10 @@ func (m *modelImpl) computeLayoutDims() layoutDims {
 }
 
 func (m *modelImpl) bodyHeight() int {
-	height := m.height - 5 // Header, rule, two spacer rows, and footer.
-	if m.loading {
-		height -= 2
-	}
-	if m.statusText != "" {
-		height--
-	}
+	// Stable layout height: header (1), rule (1), body spacer (1), bottom spacer (1),
+	// status/loading reserved slot (2), and footer (1) = 7 rows.
+	// Kept constant so loading states and status banners never resize lists or shift screens.
+	height := m.height - 7
 	return max(1, height)
 }
 
@@ -150,6 +147,9 @@ func (m *modelImpl) pushView(next viewState) {
 func (m *modelImpl) goBackOne() bool {
 	if len(m.backStack) == 0 {
 		return false
+	}
+	if m.activeView == viewPreview {
+		m.clearPreviewPoster()
 	}
 	prev := m.backStack[len(m.backStack)-1]
 	m.backStack = m.backStack[:len(m.backStack)-1]

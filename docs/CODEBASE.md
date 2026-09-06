@@ -83,7 +83,7 @@ cmd → app → {tui, service, player, …} → {provider, model, …}
 
 | Kind of type | Lives in | Examples |
 | --- | --- | --- |
-| A provider's private API response/request shapes | that provider's package | `miruro.linkResp`, `moviebox.movieboxMeta` |
+| A provider's private API response/request shapes | that provider's package | `miruro.linkResp`, `pengu.penguResponse`, `vidking.vidkingSourceItem` |
 | Shared wire DTOs crossing layer boundaries | `internal/provider` | `SearchResult`, `Episode`, `MediaSource`, `SubtitleOption` |
 | Cross-layer vocabularies | `internal/provider` constants only | `MediaTypeMovie`, `ModeAnime`, `AudioSub`, `SourceTypeHLS` |
 | Playback aggregates with behavior | `internal/model` | `ResolvedMedia`, `SubtitleTrack` |
@@ -106,8 +106,8 @@ Rules:
 
 ## 4. Naming
 
-- Packages: lowercase, single word, no underscores (`moviebox`, not
-  `movie_box` or `movieboxprovider`).
+- Packages: lowercase, single word, no underscores (`vidking`, not
+  `vid_king` or `vidkingprovider`).
 - Files: snake_case, grouped by role. TUI files are prefixed by role:
   `view_*.go`, `update_*.go`, `*_helpers.go`. Tests: `_test.go` beside the
   subject.

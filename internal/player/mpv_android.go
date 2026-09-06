@@ -102,7 +102,9 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) {
 	confBuilder.WriteString("demuxer-max-back-bytes=20M\n")
 	confBuilder.WriteString("demuxer-readahead-secs=60\n")
 	confBuilder.WriteString("hls-bitrate=max\n")
-
+	if langList := formatAudioLangList(source.Language); langList != "" {
+		confBuilder.WriteString(fmt.Sprintf("alang=%s\n", langList))
+	}
 	if source.Referer != "" {
 		confBuilder.WriteString(fmt.Sprintf("referrer=%s\n", source.Referer))
 	}
@@ -200,4 +202,43 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) {
 	if wroteCount == 0 {
 		mpvLog.Debug("could not write mpv.conf to any path; headers and title will not be set")
 	}
+}
+
+func formatAudioLangList(language string) string {
+	langCode := strings.ToLower(strings.TrimSpace(language))
+	if langCode == "" {
+		return ""
+	}
+	var alang []string
+	switch langCode {
+	case "hi", "hindi":
+		alang = []string{"hi", "hin", "hindi", "en", "eng"}
+	case "ja", "japanese":
+		alang = []string{"ja", "jpn", "japanese", "en", "eng"}
+	case "es", "spanish":
+		alang = []string{"es", "spa", "spanish", "esla", "es-la", "en", "eng"}
+	case "fr", "french":
+		alang = []string{"fr", "fra", "fre", "french", "en", "eng"}
+	case "de", "german":
+		alang = []string{"de", "deu", "ger", "german", "en", "eng"}
+	case "it", "italian":
+		alang = []string{"it", "ita", "italian", "en", "eng"}
+	case "pt", "portuguese":
+		alang = []string{"pt", "por", "portuguese", "ptbr", "pt-br", "en", "eng"}
+	case "ru", "russian":
+		alang = []string{"ru", "rus", "russian", "en", "eng"}
+	case "ar", "arabic":
+		alang = []string{"ar", "ara", "arabic", "en", "eng"}
+	case "ko", "korean":
+		alang = []string{"ko", "kor", "korean", "en", "eng"}
+	case "zh", "chinese":
+		alang = []string{"zh", "chi", "zho", "chinese", "en", "eng"}
+	case "ta", "tamil":
+		alang = []string{"ta", "tam", "tamil", "en", "eng"}
+	case "te", "telugu":
+		alang = []string{"te", "tel", "telugu", "en", "eng"}
+	default:
+		alang = []string{langCode, "en", "eng"}
+	}
+	return strings.Join(alang, ",")
 }

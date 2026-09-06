@@ -6,9 +6,7 @@ import (
 	"kari/internal/provider"
 	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/miruro"
-	"kari/internal/provider/moviebox"
-	"kari/internal/provider/piratex"
-	"kari/internal/provider/rivestream"
+	"kari/internal/provider/pengu"
 	"kari/internal/provider/vidking"
 	"kari/internal/tmdb"
 )
@@ -19,21 +17,9 @@ import (
 // modes, features, languages, and aliases automatically.
 var DefaultProviders = []provider.Descriptor{
 	{
-		ID: "moviebox",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return moviebox.NewClient(d.KeyPool)
-		},
-	},
-	{
 		ID: "vidking",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return vidking.NewClient(d.KeyPool)
-		},
-	},
-	{
-		ID: "rivestream",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return rivestream.NewClient(d.KeyPool)
 		},
 	},
 	{
@@ -43,9 +29,9 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
-		ID: "piratex",
+		ID: "pengu",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return piratex.NewClient()
+			return pengu.NewClient(d.KeyPool, d.Config.PenguAuthToken)
 		},
 	},
 	{

@@ -40,6 +40,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.loadingText = "Preparing playback..."
 		m.resolved = nil
 		m.rawSubtitles = nil
+		m.manualPlaybackSelected = false
 		m.clearPreviewPoster()
 		opID := m.newOpID()
 		m.resolveOpID = opID
@@ -110,6 +111,7 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	}
 	m.resolved = nil
 	m.rawSubtitles = nil
+	m.manualPlaybackSelected = false
 	m.clearPreviewPoster()
 	m.autoPlayAfterResolve = autoPlay
 	series := provider.SearchResult{}

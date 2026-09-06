@@ -12,6 +12,18 @@ func TestSourceQuality(t *testing.T) {
 		want  int
 	}{
 		{"1080p", 1080},
+		{"FHD", 1080},
+		{"FHD [4KHDHub]", 1080},
+		{"4K", 2160},
+		{"4K [4KHDHub]", 2160},
+		{"HD", 720},
+		{"HD [VidFast]", 720},
+		{"SD", 480},
+		{"SD [VAPlayer]", 480},
+		{"QHD", 1440},
+		{"1080p [VegaMovies]", 1080},
+		{"1080p [HDHub4u] (Hindi)", 1080},
+		{"720p [VAPlayer]", 720},
 		{"[X] 720p Hindi", 720},
 		{"2160p", 2160},
 		{"4k HDR", 2160},
@@ -48,6 +60,18 @@ func TestFilterPlaybackIndicesLanguageFilter(t *testing.T) {
 	got = FilterPlaybackIndices(playback, 0, map[string]bool{"english": false})
 	if len(got) != 1 || playback[got[0]].URL != "b" {
 		t.Fatalf("case-insensitive language match failed: %v", got)
+	}
+}
+
+func TestFilterPlaybackIndicesMatchesPenguLanguageCodes(t *testing.T) {
+	playback := []provider.MediaSource{
+		{URL: "hindi", Quality: "1080p", Language: "hi"},
+		{URL: "english", Quality: "1080p", Language: "en"},
+	}
+
+	got := FilterPlaybackIndices(playback, 0, map[string]bool{"hi": true, "en": false})
+	if len(got) != 1 || playback[got[0]].URL != "hindi" {
+		t.Fatalf("Pengu language filter wrong: %v", got)
 	}
 }
 

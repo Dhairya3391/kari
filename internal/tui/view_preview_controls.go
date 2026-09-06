@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -53,21 +54,59 @@ func (m *modelImpl) renderPreviewControlsRow(width int) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, cols[0], "  ", cols[1], "  ", cols[2])
 }
 
-// sourceSplitThreshold is how many playback sources trigger splitting the
-// list into two side-by-side columns instead of one tall one — otherwise a
-// title with a dozen quality/language variants makes Source towers over
-// Players and Actions next to it.
-const sourceSplitThreshold = 8
+const maxVisibleSources = 5
 
-func cleanQualityDisplay(q string) string {
-	q = strings.TrimSpace(q)
+var (
+	reResolutionTier = regexp.MustCompile(`(?i)\b(2160p?|4k|uhd|1440p?|2k|qhd|1080p?|fhd|720p?|hd|480p?|360p?|576p?|sd)\b`)
+	reSourceBracket  = regexp.MustCompile(`\[([^\]]+)\]`)
+)
+
+func parseQualityAndSource(rawQuality, defaultResolver string) (qualityDisplay, sourceDisplay string) {
+	q := strings.TrimSpace(rawQuality)
 	if q == "" {
-		return "Unknown"
+		return "Unknown", defaultResolver
 	}
-	if q == "720" || q == "1080" || q == "480" || q == "360" || q == "2160" {
-		q += "p"
+
+	tier := "FHD"
+	if m := reResolutionTier.FindString(q); m != "" {
+		tier = formatResolutionTier(m)
 	}
-	return strings.ReplaceAll(q, " | ", " · ")
+
+	extra := ""
+	if idx := strings.Index(q, "("); idx != -1 {
+		extra = strings.TrimSpace(q[idx:])
+	}
+
+	qualityDisplay = tier
+	if extra != "" {
+		qualityDisplay = tier + " " + extra
+	}
+
+	if m := reSourceBracket.FindStringSubmatch(q); len(m) == 2 {
+		sourceDisplay = strings.TrimSpace(m[1])
+	} else {
+		sourceDisplay = defaultResolver
+	}
+
+	return qualityDisplay, sourceDisplay
+}
+
+func formatResolutionTier(res string) string {
+	lower := strings.ToLower(strings.TrimSpace(res))
+	switch {
+	case strings.Contains(lower, "4k") || strings.Contains(lower, "uhd") || strings.HasPrefix(lower, "2160"):
+		return "4K"
+	case strings.Contains(lower, "qhd") || strings.Contains(lower, "2k") || strings.HasPrefix(lower, "1440"):
+		return "QHD"
+	case strings.Contains(lower, "fhd") || strings.HasPrefix(lower, "1080"):
+		return "FHD"
+	case strings.EqualFold(lower, "hd") || strings.HasPrefix(lower, "720"):
+		return "HD"
+	case strings.EqualFold(lower, "sd") || strings.HasPrefix(lower, "480") || strings.HasPrefix(lower, "360") || strings.HasPrefix(lower, "576"):
+		return "SD"
+	default:
+		return strings.ToUpper(res)
+	}
 }
 
 func (m *modelImpl) renderSourceColumn(filtered []int, width int) string {
@@ -78,12 +117,19 @@ func (m *modelImpl) renderSourceColumn(filtered []int, width int) string {
 		provider  string
 	}
 
+	selectedPos := 0
+	for i, actualIdx := range filtered {
+		if actualIdx == m.selectedPlayback {
+			selectedPos = i
+			break
+		}
+	}
+
 	rowsData := make([]sourceRow, 0, len(filtered))
 	maxQualityW := 0
 	for _, actualIdx := range filtered {
 		src := r.Playback[actualIdx]
-		q := cleanQualityDisplay(src.Quality)
-		p := m.registry.DisplayName(src.Resolver)
+		q, p := parseQualityAndSource(src.Quality, m.registry.DisplayName(src.Resolver))
 		if w := lipgloss.Width(q); w > maxQualityW {
 			maxQualityW = w
 		}
@@ -120,41 +166,36 @@ func (m *modelImpl) renderSourceColumn(filtered []int, width int) string {
 		items = append(items, line)
 	}
 
-	sourceTitle := "Source"
-	if len(filtered) > 1 {
-		pos := 1
-		for i, actualIdx := range filtered {
-			if actualIdx == m.selectedPlayback {
-				pos = i + 1
-				break
+	// Window the items to maxVisibleSources to keep the preview UI compact and stable
+	visibleItems := items
+	if len(items) > maxVisibleSources {
+		start := selectedPos - maxVisibleSources/2
+		if start < 0 {
+			start = 0
+		}
+		end := start + maxVisibleSources
+		if end > len(items) {
+			end = len(items)
+			start = end - maxVisibleSources
+			if start < 0 {
+				start = 0
 			}
 		}
-		sourceTitle = fmt.Sprintf("Source (%d/%d)", pos, len(filtered))
+		visibleItems = items[start:end]
 	}
-	rows := []string{sectionTitleStyle.Render(sourceTitle), "", layoutSourceItems(items, width), "", mutedStyle.Render("tab / shift+tab to switch")}
+
+	sourceTitle := "Source"
+	if len(filtered) > 1 {
+		sourceTitle = fmt.Sprintf("Source (%d/%d)", selectedPos+1, len(filtered))
+	}
+	rows := []string{
+		sectionTitleStyle.Render(sourceTitle),
+		"",
+		strings.Join(visibleItems, "\n"),
+		"",
+		mutedStyle.Render("tab / shift+tab to switch"),
+	}
 	return strings.Join(rows, "\n")
-}
-
-// layoutSourceItems splits items into two side-by-side columns once there
-// are more than sourceSplitThreshold of them and width can actually fit two
-// columns without wrapping the longer labels (e.g. "[MOVIEBOX] 1080p
-// Hindi") — otherwise it's just one column, same as before.
-func layoutSourceItems(items []string, width int) string {
-	itemW := 0
-	for _, it := range items {
-		if w := lipgloss.Width(it); w > itemW {
-			itemW = w
-		}
-	}
-
-	if len(items) <= sourceSplitThreshold || itemW*2+2 > width {
-		return strings.Join(items, "\n")
-	}
-
-	half := (len(items) + 1) / 2
-	left := lipgloss.NewStyle().Width(itemW).Render(strings.Join(items[:half], "\n"))
-	right := strings.Join(items[half:], "\n")
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right)
 }
 
 func (m *modelImpl) renderPlayersColumn() string {

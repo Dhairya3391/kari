@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -74,7 +75,6 @@ collectResults:
 		allResults []provider.SearchResult
 		warnings   []string
 	)
-
 	for _, p := range providers {
 		res, ok := resultsMap[p.Name()]
 		if !ok || res.err != nil {
@@ -92,12 +92,24 @@ collectResults:
 	}
 
 	if len(allResults) == 0 {
-		if len(warnings) > 0 {
-			return nil, query, warnings, fmt.Errorf("%s search failed: %s", strings.ToUpper(string(mode)), warnings[0])
-		}
 		if err := ctx.Err(); err != nil {
 			return nil, query, nil, err
 		}
+		allNoResults := true
+		for _, p := range providers {
+			res, ok := resultsMap[p.Name()]
+			if !ok || (res.err != nil && !errors.Is(res.err, provider.ErrNoResults)) {
+				allNoResults = false
+				break
+			}
+		}
+		if allNoResults {
+			return nil, query, warnings, provider.ErrNoResults
+		}
+		if len(warnings) > 0 {
+			return nil, query, warnings, errors.New(warnings[0])
+		}
+		return nil, query, warnings, provider.ErrNoResults
 	}
 
 	return allResults, query, warnings, nil
@@ -350,10 +362,17 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 	}
 }
 
-// sort orders sources highest quality first, breaking ties by provider
-// priority so earlier-registered providers surface before fallbacks.
+// sort orders sources with VidKing sources always on top (if available/arrived),
+// then by highest quality first, breaking ties by provider priority so
+// earlier-registered providers surface before fallbacks.
 func (a *sourceAggregator) sort() {
 	sort.SliceStable(a.sources, func(i, j int) bool {
+		isVidKingI := strings.EqualFold(a.sources[i].Resolver, "vidking")
+		isVidKingJ := strings.EqualFold(a.sources[j].Resolver, "vidking")
+		if isVidKingI != isVidKingJ {
+			return isVidKingI
+		}
+
 		leftQuality := SourceQuality(a.sources[i].Quality)
 		rightQuality := SourceQuality(a.sources[j].Quality)
 		if leftQuality != rightQuality {
