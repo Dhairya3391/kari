@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -45,5 +46,21 @@ func TestMoveSettingsStopsAtBounds(t *testing.T) {
 	m.moveSettings(1)
 	if m.settingsIndex != settingsLastIndex {
 		t.Fatalf("bottom settings index = %d, want %d", m.settingsIndex, settingsLastIndex)
+	}
+}
+
+func TestCleanErrorForUIRateLimited(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{errors.New("pengu: rate limited"), "Rate limited by Pengu, use your own token for better rate limits"},
+		{errors.New("http status 429 for https://pengu.uk/stream.json"), "Rate limited by Pengu, use your own token for better rate limits"},
+		{errors.New("vidking: no sources found; pengu: rate limited"), "Rate limited by Pengu, use your own token for better rate limits"},
+	}
+	for _, tt := range tests {
+		if got := cleanErrorForUI(tt.err); got != tt.want {
+			t.Errorf("cleanErrorForUI(%v) = %q, want %q", tt.err, got, tt.want)
+		}
 	}
 }

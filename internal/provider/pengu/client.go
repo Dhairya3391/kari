@@ -31,10 +31,9 @@ import (
 // log scopes every line from this package with its identity.
 var pgLog = logging.With("provider", "pengu")
 
-const (
-	penguAPIBase = config.PenguAPIBase
-	penguUA      = config.DesktopUserAgent
-)
+var penguAPIBase = config.PenguAPIBase
+
+const penguUA = config.DesktopUserAgent
 
 var (
 	reResolution = regexp.MustCompile(`(?i)\b(4k|2160p|1440p|1080p|720p|480p|360p)\b`)
@@ -78,6 +77,7 @@ type penguSubtitle struct {
 
 type penguResponse struct {
 	Streams []penguStreamItem `json:"streams"`
+	Error   string            `json:"error,omitempty"`
 }
 
 // NewClient constructs the Pengu provider over the shared TMDB search base.
@@ -307,6 +307,10 @@ func (c *Client) fetchPenguStreams(ctx context.Context, mediaType, stremioID str
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		pgLog.Warn("pengu rate limited", "mediaType", mediaType, "id", stremioID)
+		return nil, fmt.Errorf("pengu: %w", provider.ErrRateLimited)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &provider.HTTPError{Code: resp.StatusCode}
 	}
@@ -319,6 +323,11 @@ func (c *Client) fetchPenguStreams(ctx context.Context, mediaType, stremioID str
 	var payload penguResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("pengu decode response: %w", err)
+	}
+
+	if payload.Error == "rate_limited" {
+		pgLog.Warn("pengu rate limited", "mediaType", mediaType, "id", stremioID)
+		return nil, fmt.Errorf("pengu: %w", provider.ErrRateLimited)
 	}
 
 	pgLog.Debug("fetch success", "mediaType", mediaType, "id", stremioID, "streams", len(payload.Streams))

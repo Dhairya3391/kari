@@ -306,6 +306,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		}
 		if len(failures) > 0 {
 			mediaLog.Warn("all providers failed to resolve", "providers", len(providers), "failures", strings.Join(failures, " | "))
+			return model.ResolvedMedia{}, errors.New(strings.Join(failures, "; "))
 		}
 		return model.ResolvedMedia{}, provider.ErrNoSources
 	}

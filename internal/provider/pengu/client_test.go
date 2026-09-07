@@ -3,10 +3,13 @@ package pengu
 import (
 	"bytes"
 	"compress/flate"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -207,4 +210,47 @@ func TestAudioLanguagesCoverage(t *testing.T) {
 			t.Errorf("invalid audio language: %+v", l)
 		}
 	}
+}
+
+func TestFetchPenguStreamsRateLimit(t *testing.T) {
+	origBase := penguAPIBase
+	defer func() { penguAPIBase = origBase }()
+
+	t.Run("429 status code returns ErrRateLimited", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":"rate_limited"}`))
+		}))
+		defer server.Close()
+
+		penguAPIBase = server.URL
+		c := &Client{
+			httpClient:    server.Client(),
+			configSegment: "ztest",
+		}
+
+		_, err := c.fetchPenguStreams(context.Background(), provider.MediaTypeMovie, "tmdb:550")
+		if !errors.Is(err, provider.ErrRateLimited) {
+			t.Fatalf("fetchPenguStreams want ErrRateLimited, got %v", err)
+		}
+	})
+
+	t.Run("200 status code with rate_limited error returns ErrRateLimited", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"streams":[],"error":"rate_limited"}`))
+		}))
+		defer server.Close()
+
+		penguAPIBase = server.URL
+		c := &Client{
+			httpClient:    server.Client(),
+			configSegment: "ztest",
+		}
+
+		_, err := c.fetchPenguStreams(context.Background(), provider.MediaTypeMovie, "tmdb:550")
+		if !errors.Is(err, provider.ErrRateLimited) {
+			t.Fatalf("fetchPenguStreams want ErrRateLimited, got %v", err)
+		}
+	})
 }

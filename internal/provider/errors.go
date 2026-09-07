@@ -12,6 +12,7 @@ var (
 	ErrNoSources    = errors.New("no sources found")
 	ErrNotFound     = errors.New("not found")
 	ErrAuthRequired = errors.New("authentication required")
+	ErrRateLimited  = errors.New("rate limited")
 )
 
 // HTTPError represents a non-2xx HTTP response from an upstream API.

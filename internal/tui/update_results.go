@@ -34,6 +34,9 @@ func cleanErrorForUI(err error) string {
 	}
 
 	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "rate limited") || strings.Contains(lower, "rate limit") || strings.Contains(lower, "429") {
+		return "Rate limited by Pengu, use your own token for better rate limits"
+	}
 	if strings.Contains(lower, "no results found") || strings.Contains(lower, "no results") {
 		return "No results found"
 	}
