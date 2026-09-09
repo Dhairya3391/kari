@@ -57,6 +57,9 @@ func (c *Client) GetIDs(ctx context.Context, title string) (anilistID int, malID
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://anilist.co")
+	req.Header.Set("Referer", "https://anilist.co/")
+	req.Header.Set("User-Agent", config.DesktopUserAgent)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

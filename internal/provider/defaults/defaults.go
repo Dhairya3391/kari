@@ -5,7 +5,7 @@ import (
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/provider/jellyfin"
-	"kari/internal/provider/miruro"
+	"kari/internal/provider/anikoto"
 	"kari/internal/provider/pengu"
 	"kari/internal/provider/vidking"
 	"kari/internal/tmdb"
@@ -23,9 +23,9 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
-		ID: "miruro",
+		ID: "anikoto",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return miruro.NewClient()
+			return anikoto.NewClient()
 		},
 	},
 	{

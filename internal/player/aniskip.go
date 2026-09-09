@@ -233,7 +233,7 @@ func getSkipArgs(
 	// 1. Resolve IDs
 	var anilistID, malID int
 	if aniskipClient != nil {
-		// Check if SeriesURL is an all-numeric AniList ID (from Miruro).
+		// Check if SeriesURL is an all-numeric AniList ID (from Anikoto).
 		// Trim surrounding slashes/spaces to handle IDs like "12345/".
 		if trimmed := strings.Trim(strings.TrimSpace(media.SeriesURL), "/"); trimmed != "" {
 			if _, err := strconv.Atoi(trimmed); err == nil {

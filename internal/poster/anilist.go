@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"kari/internal/config"
@@ -28,13 +29,14 @@ type anilistMedia struct {
 // AniList. Cover art and the description/genres shown on screen are both
 // derived from this one query.
 func (c *Client) fetchAnilistMedia(ctx context.Context, title string) (anilistMedia, error) {
+	title = strings.TrimSpace(title)
 	if title == "" {
 		return anilistMedia{}, fmt.Errorf("poster: anilist lookup requires a title")
 	}
 
 	query := `
-	query ($search: String) {
-		Media (search: $search, type: ANIME) {
+	query ($id: Int, $search: String) {
+		Media (id: $id, search: $search, type: ANIME) {
 			coverImage {
 				large
 				medium
@@ -45,20 +47,34 @@ func (c *Client) fetchAnilistMedia(ctx context.Context, title string) (anilistMe
 		}
 	}
 	`
+	vars := map[string]any{}
+	if id, err := strconv.Atoi(title); err == nil && id > 0 {
+		vars["id"] = id
+	} else {
+		vars["search"] = title
+	}
+
 	body, err := json.Marshal(map[string]any{
 		"query":     query,
-		"variables": map[string]any{"search": title},
+		"variables": vars,
 	})
 	if err != nil {
 		return anilistMedia{}, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, config.AniListAPIBase, bytes.NewReader(body))
+	endpoint := config.AniListAPIBase
+	if c.anilistURL != "" {
+		endpoint = c.anilistURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return anilistMedia{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://anilist.co")
+	req.Header.Set("Referer", "https://anilist.co/")
+	req.Header.Set("User-Agent", config.DesktopUserAgent)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

@@ -102,7 +102,7 @@ kari "frieren"
 
 ## Features
 
-- **Multi-Source Parallel Search** — Queries multiple streaming sources concurrently (Miruro, VidKing, Pengu, and optional Jellyfin).
+- **Multi-Source Parallel Search** — Queries multiple streaming sources concurrently (Anikoto, VidKing, Pengu, and optional Jellyfin).
 - **5 Media Categories** — Dedicated modes for Anime, Movies, TV Series, Cartoons, and private Jellyfin servers. Switch effortlessly with `Tab`.
 - **Accurate Resume & History** — MPV reports timestamps back via local IPC socket. Quit anytime and Kari remembers your exact position, selected audio mode (Sub/Dub), and preferred stream language.
 - **Smart Skip & Virtual Chapters** — Hybrid skip engine combining Anime-Skip GraphQL and AniSkip. Automatically injects seekbar chapters (`Opening`, `Ending`, `Recap`, `Preview`) and context-aware OSD skip prompts (`Press Enter to Skip`) into MPV. Switchable in Settings.
@@ -121,7 +121,7 @@ kari "frieren"
 | --- | --- | --- | --- |
 | **VidKing** | Movies, TV, Cartoons | API (TMDB-indexed) | 1 |
 | **Pengu** | Movies, TV, Cartoons | Aggregator API (TMDB-indexed) | 2 |
-| **Miruro** | Anime | API | 1 |
+| **Anikoto** | Anime | API | 1 |
 | **Jellyfin** | Movies, TV | Jellyfin Server API | 1 |
 
 *Lower priority number = primary provider. All providers are queried simultaneously in parallel.*

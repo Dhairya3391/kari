@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/logging"
 	"kari/internal/tmdb"
@@ -54,6 +55,7 @@ type Details struct {
 type Client struct {
 	http    *http.Client
 	keyPool *tmdb.KeyPool
+	anilistURL   string
 
 	imgCache     *util.BoundedCache[image.Image]
 	detailsCache *util.BoundedCache[Details]
@@ -160,6 +162,8 @@ func (c *Client) download(ctx context.Context, target string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", config.DesktopUserAgent)
+	req.Header.Set("Referer", "https://anilist.co/")
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err

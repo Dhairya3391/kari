@@ -83,7 +83,7 @@ cmd → app → {tui, service, player, …} → {provider, model, …}
 
 | Kind of type | Lives in | Examples |
 | --- | --- | --- |
-| A provider's private API response/request shapes | that provider's package | `miruro.linkResp`, `pengu.penguResponse`, `vidking.vidkingSourceItem` |
+| A provider's private API response/request shapes | that provider's package | `anikoto.linkResp`, `pengu.penguResponse`, `vidking.vidkingSourceItem` |
 | Shared wire DTOs crossing layer boundaries | `internal/provider` | `SearchResult`, `Episode`, `MediaSource`, `SubtitleOption` |
 | Cross-layer vocabularies | `internal/provider` constants only | `MediaTypeMovie`, `ModeAnime`, `AudioSub`, `SourceTypeHLS` |
 | Playback aggregates with behavior | `internal/model` | `ResolvedMedia`, `SubtitleTrack` |
@@ -407,7 +407,7 @@ Conventional Commits, enforced (changelog depends on it):
 ```
 
 Types: `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`, `ci`.
-Scope = area touched: `provider/miruro`, `player/mpv`, `tui`, `service`,
+Scope = area touched: `provider/anikoto`, `player/mpv`, `tui`, `service`,
 `docs`. One logical change per commit; mixed changes get split.
 
 ---

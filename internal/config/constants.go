@@ -1,8 +1,8 @@
 package config
 
 const (
-	MiruroAPIBase    = "https://noob2.broggl.farm"
-	MiruroOrigin     = "https://miruro.tv"
+	AnikotoAPIBase   = "https://noob2.broggl.farm"
+	AnikotoReferer   = "https://megaplay.buzz/"
 	VidKingAPIBase   = "https://noob.broggl.farm"
 	VidKingReferer   = "https://www.vidking.net/"
 	PenguAPIBase     = "https://pengu.uk"

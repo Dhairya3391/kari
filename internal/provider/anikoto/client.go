@@ -1,4 +1,4 @@
-package miruro
+package anikoto
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 
 	"kari/internal/config"
@@ -18,35 +17,34 @@ import (
 	"kari/internal/provider"
 )
 
-const (
-	apiURL = config.MiruroAPIBase
-)
-
-// Client implements provider.Provider against the Miruro API.
+// Client implements provider.Provider against the Anikoto streaming API.
 type Client struct {
-	http *http.Client
+	http    *http.Client
+	baseURL string
 }
 
-// Alias implements provider.Presenter.
-func (c *Client) Alias() string { return "Miruro" }
-// Name implements Provider.
+// Alias implements provider.Presenter, providing the human-readable display name.
+func (c *Client) Alias() string { return "Anikoto" }
+
+// Name implements provider.Provider, returning the stable registry identifier.
 func (c *Client) Name() string {
-	return "miruro"
+	return "anikoto"
 }
 
-// Modes implements Provider.
+// Modes implements provider.Provider, registering Anikoto as the primary anime provider.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{
 		{Name: provider.ModeAnime, Priority: 1},
 	}
 }
 
-// RequiresEpisodeListForMovies implements provider.MovieEpisodeFlow. Miruro
-// resolves by per-episode IDs that only the episode listing provides, so
-// even anime movies must go through FetchEpisodes first.
+// RequiresEpisodeListForMovies implements provider.MovieEpisodeFlow. Anikoto
+// resolves playback via per-episode route IDs (e.g. watch/anikoto/{id}/sub/1)
+// that only the episode listing endpoint produces, so anime movies must query
+// FetchEpisodes first.
 func (c *Client) RequiresEpisodeListForMovies() bool { return true }
 
-// Features implements provider.FeatureSource.
+// Features implements provider.FeatureSource. Anime media supports separate sub/dub audio tracks.
 func (c *Client) Features(mode provider.ContentType) provider.Features {
 	if mode != provider.ModeAnime {
 		return provider.Features{}
@@ -54,22 +52,29 @@ func (c *Client) Features(mode provider.ContentType) provider.Features {
 	return provider.Features{AudioSelection: true}
 }
 
-// NewClient constructs the Miruro provider with the shared HTTP client.
+// NewClient constructs the Anikoto provider with the shared HTTP client.
 func NewClient() (*Client, error) {
+	return NewClientWithBaseURL(config.AnikotoAPIBase)
+}
+
+// NewClientWithBaseURL constructs the Anikoto provider against a custom base URL (useful in tests).
+func NewClientWithBaseURL(baseURL string) (*Client, error) {
+	baseURL = strings.TrimRight(baseURL, "/")
 	return &Client{
-		http: httpclient.New(),
+		http:    httpclient.New(),
+		baseURL: baseURL,
 	}, nil
 }
 
-// Search queries Miruro's AniList-backed index. Anime movies are reported
-// as MediaType "movie" but still resolve through the episode flow.
+// Search queries Anikoto's AniList-backed search index. Movies report MediaTypeMovie
+// so the TUI renders movie badges while still routing through the episode flow.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	logging.Debug("search start", "provider", c.Name(), "query", query)
 	if query == "" {
 		return nil, fmt.Errorf("empty query")
 	}
 
-	u, err := url.Parse(apiURL + "/search")
+	u, err := url.Parse(c.baseURL + "/search")
 	if err != nil {
 		return nil, err
 	}
@@ -79,12 +84,12 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("miruro search: build request: %w", err)
+		return nil, fmt.Errorf("anikoto search: build request: %w", err)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("miruro search: %w", err)
+		return nil, fmt.Errorf("anikoto search: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -94,7 +99,7 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 
 	var sr searchResp
 	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
-		return nil, fmt.Errorf("miruro search: decode response: %w", err)
+		return nil, fmt.Errorf("anikoto search: decode response: %w", err)
 	}
 	results := make([]provider.SearchResult, 0, len(sr.Results))
 	for _, r := range sr.Results {
@@ -102,11 +107,19 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 		if strings.EqualFold(r.Format, "MOVIE") {
 			mediaType = provider.MediaTypeMovie
 		}
+		idStr := r.ID.String()
+		if idStr == "" {
+			continue
+		}
+		yearStr := ""
+		if r.Year > 0 {
+			yearStr = fmt.Sprintf("%d", r.Year)
+		}
 		results = append(results, provider.SearchResult{
 			Title:     r.Name,
-			ID:        strconv.Itoa(r.ID),
+			ID:        idStr,
 			Type:      provider.ModeAnime,
-			Year:      strconv.Itoa(r.Year),
+			Year:      yearStr,
 			MediaType: mediaType,
 		})
 	}
@@ -122,16 +135,16 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	mediaID := series.ID
 	logging.Debug("fetch episodes", "provider", c.Name(), "mediaID", mediaID)
-	u := fmt.Sprintf("%s/episodes/%s", apiURL, mediaID)
+	u := fmt.Sprintf("%s/episodes/%s", c.baseURL, mediaID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, fmt.Errorf("miruro episodes: build request: %w", err)
+		return nil, fmt.Errorf("anikoto episodes: build request: %w", err)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("miruro episodes: %w", err)
+		return nil, fmt.Errorf("anikoto episodes: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -141,7 +154,7 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 
 	var er []episodeResp
 	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
-		return nil, fmt.Errorf("miruro episodes: decode response: %w", err)
+		return nil, fmt.Errorf("anikoto episodes: decode response: %w", err)
 	}
 	eps := make([]provider.Episode, 0, len(er))
 	for _, e := range er {
@@ -177,9 +190,9 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 // extracting referer/UA from headers and mpv args and attaching subtitles.
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
 	logging.Debug("resolve source", "provider", c.Name(), "mediaID", mediaID, "episodeID", episode.ID)
-	u, err := url.Parse(apiURL + "/link")
+	u, err := url.Parse(c.baseURL + "/link")
 	if err != nil {
-		return nil, fmt.Errorf("miruro resolve: build url: %w", err)
+		return nil, fmt.Errorf("anikoto resolve: build url: %w", err)
 	}
 	q := u.Query()
 	q.Set("id", episode.ID)
@@ -187,12 +200,12 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("miruro resolve: build request: %w", err)
+		return nil, fmt.Errorf("anikoto resolve: build request: %w", err)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("miruro resolve: %w", err)
+		return nil, fmt.Errorf("anikoto resolve: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -211,12 +224,12 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("miruro resolve: read body: %w", err)
+		return nil, fmt.Errorf("anikoto resolve: read body: %w", err)
 	}
 
 	var lr linkResp
 	if err := json.Unmarshal(body, &lr); err != nil {
-		return nil, fmt.Errorf("miruro resolve: decode response: %w", err)
+		return nil, fmt.Errorf("anikoto resolve: decode response: %w", err)
 	}
 
 	subtitleOptions := make([]provider.SubtitleOption, 0, len(lr.Subtitles))
@@ -253,8 +266,8 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		}
 		score := func(s linkStream) int {
 			sc := 0
-			q := strings.ToLower(cleanMiruroText(s.Quality))
-			t := strings.ToLower(cleanMiruroText(s.Type))
+			q := strings.ToLower(cleanAnikotoText(s.Quality))
+			t := strings.ToLower(cleanAnikotoText(s.Type))
 
 			if strings.Contains(q, "1080") {
 				sc += 100
@@ -283,14 +296,14 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		if streams[i].Default != streams[j].Default {
 			return streams[i].Default
 		}
-		return miruroStreamKey(streams[i]) < miruroStreamKey(streams[j])
+		return anikotoStreamKey(streams[i]) < anikotoStreamKey(streams[j])
 	})
 
 	seen := make(map[string]struct{}, len(streams))
 	sources := make([]provider.MediaSource, 0, len(streams))
 	for _, raw := range streams {
-		s := normalizeMiruroStream(raw)
-		key := miruroStreamKey(s)
+		s := normalizeAnikotoStream(raw)
+		key := anikotoStreamKey(s)
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -331,7 +344,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		}
 
 		if referer == "" {
-			referer = config.MiruroOrigin
+			referer = config.AnikotoReferer
 		}
 		if userAgent == "" {
 			userAgent = config.DesktopUserAgent
@@ -369,29 +382,31 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	return sources, nil
 }
 
-func normalizeMiruroStream(s linkStream) linkStream {
-	s.URL = cleanMiruroText(s.URL)
-	s.Type = cleanMiruroText(s.Type)
-	s.Quality = cleanMiruroText(s.Quality)
-	s.Referer = cleanMiruroText(s.Referer)
-	s.Server = cleanMiruroText(s.Server)
-	s.Provider = cleanMiruroText(s.Provider)
+func normalizeAnikotoStream(s linkStream) linkStream {
+	s.URL = cleanAnikotoText(s.URL)
+	s.Type = cleanAnikotoText(s.Type)
+	s.Quality = cleanAnikotoText(s.Quality)
+	s.Referer = cleanAnikotoText(s.Referer)
+	s.Server = cleanAnikotoText(s.Server)
+	s.Provider = cleanAnikotoText(s.Provider)
 	return s
 }
 
-func miruroStreamKey(s linkStream) string {
+func anikotoStreamKey(s linkStream) string {
 	return strings.Join([]string{
-		cleanMiruroText(s.URL),
-		strings.ToLower(cleanMiruroText(s.Server)),
-		strings.ToLower(cleanMiruroText(s.Provider)),
-		strings.ToLower(cleanMiruroText(s.Type)),
-		strings.ToLower(cleanMiruroText(s.Quality)),
-		cleanMiruroText(s.Referer),
+		cleanAnikotoText(s.URL),
+		strings.ToLower(cleanAnikotoText(s.Server)),
+		strings.ToLower(cleanAnikotoText(s.Provider)),
+		strings.ToLower(cleanAnikotoText(s.Type)),
+		strings.ToLower(cleanAnikotoText(s.Quality)),
+		cleanAnikotoText(s.Referer),
 	}, "|")
 }
-func cleanMiruroText(value string) string {
+
+func cleanAnikotoText(value string) string {
 	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
+
 var (
 	_ provider.Provider         = (*Client)(nil)
 	_ provider.Presenter        = (*Client)(nil)

@@ -203,6 +203,9 @@ func (c *AniListClient) doGraphQL(ctx context.Context, query string, vars map[st
 	req, _ := http.NewRequestWithContext(ctx, "POST", config.AniListAPIBase, bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Origin", "https://anilist.co")
+	req.Header.Set("Referer", "https://anilist.co/")
+	req.Header.Set("User-Agent", config.DesktopUserAgent)
 	req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
 
 	resp, err := c.httpClient.Do(req)
