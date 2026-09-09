@@ -15,6 +15,7 @@ package lang
 import "strings"
 
 var names = map[string]string{
+	"off": "Off",
 	"en":  "English",
 	"es":  "Spanish",
 	"fr":  "French",
@@ -177,6 +178,11 @@ var aliases = map[string]string{
 	"macedonian":      "mk",
 	"mkd":             "mk",
 	"malay":           "ms",
+	"may":             "ms",
+	"off":             "off",
+	"disabled":        "off",
+	"none":            "off",
+	"disable":         "off",
 	"msa":             "ms",
 	"serbian":         "sr",
 	"srp":             "sr",
@@ -197,7 +203,7 @@ var aliases = map[string]string{
 // SubtitleOptions is the curated, ordered list of languages selectable as
 // the default subtitle language in settings.
 var SubtitleOptions = []string{
-	"en", "es", "fr", "de", "pt", "it", "ar", "hi", "ja", "ko", "zh", "ru", "tr", "id",
+	"off", "en", "es", "fr", "de", "pt", "it", "ar", "hi", "ja", "ko", "zh", "ru", "tr", "id", "th", "vi", "ms", "fil", "pl", "nl",
 }
 
 // nativeAliases maps the native-script spellings of our curated languages

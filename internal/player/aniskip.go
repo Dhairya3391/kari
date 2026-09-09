@@ -9,10 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"kari/internal/animeskip"
 	"kari/internal/aniskip"
 	"kari/internal/logging"
 	"kari/internal/model"
+	"kari/internal/util"
 )
 
 // log scopes every line from this package/component.
@@ -207,6 +210,8 @@ type combinedSkipTimes struct {
 	PreviewStart float64
 	PreviewEnd   float64
 }
+var skipTimesCache = util.NewBoundedCache[combinedSkipTimes](100)
+
 
 // getSkipArgs resolves skip intervals according to settings and writes a
 // temporary Lua script for MPV. Returns MPV arguments and script path.
@@ -227,28 +232,19 @@ func getSkipArgs(
 		return nil, ""
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	cacheKey := fmt.Sprintf("%s:%d:%s", media.SeriesTitle, media.EpisodeNumber, providerMode)
+	if cached, ok := skipTimesCache.Get(cacheKey); ok {
+		return buildSkipArgsFromTimes(cached, settings)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	// 1. Resolve IDs
-	var anilistID, malID int
-	if aniskipClient != nil {
-		// Check if SeriesURL is an all-numeric AniList ID (from Anikoto).
-		// Trim surrounding slashes/spaces to handle IDs like "12345/".
-		if trimmed := strings.Trim(strings.TrimSpace(media.SeriesURL), "/"); trimmed != "" {
-			if _, err := strconv.Atoi(trimmed); err == nil {
-				anilistID, _ = strconv.Atoi(trimmed)
-			}
-		}
-		// Query AniList for missing IDs
-		foundAniListID, foundMALID, err := aniskipClient.GetIDs(ctx, media.SeriesTitle)
-		if err == nil {
-			if anilistID == 0 {
-				anilistID = foundAniListID
-			}
-			malID = foundMALID
-		} else {
-			skipLog.Debug("anilist lookup failed", "title", media.SeriesTitle, "err", err)
+	// 1. Resolve AniList ID from media metadata if available
+	var anilistID int
+	if trimmed := strings.Trim(strings.TrimSpace(media.SeriesURL), "/"); trimmed != "" {
+		if id, err := strconv.Atoi(trimmed); err == nil && id > 0 {
+			anilistID = id
 		}
 	}
 
@@ -259,50 +255,74 @@ func getSkipArgs(
 		PreviewStart: -1, PreviewEnd: -1,
 	}
 
-	// 2. Query Anime-Skip if provider is "hybrid" or "anime-skip"
+	var g errgroup.Group
+
+	// 2. Query Anime-Skip concurrently if provider is "hybrid" or "anime-skip"
 	if (providerMode == "hybrid" || providerMode == "anime-skip") && animeskipClient != nil {
-		aniIDStr := ""
-		if anilistID > 0 {
-			aniIDStr = strconv.Itoa(anilistID)
-		}
-		askipTimes, err := animeskipClient.GetTimestamps(ctx, aniIDStr, media.EpisodeNumber, media.SeriesTitle, media.EpisodeTitle)
-		if err != nil {
-			skipLog.Debug("anime-skip lookup error", "err", err)
-		} else if askipTimes != nil {
-			times.OpStart = askipTimes.OpStart
-			times.OpEnd = askipTimes.OpEnd
-			times.EdStart = askipTimes.EdStart
-			times.EdEnd = askipTimes.EdEnd
-			times.RecapStart = askipTimes.RecapStart
-			times.RecapEnd = askipTimes.RecapEnd
-			times.PreviewStart = askipTimes.PreviewStart
-			times.PreviewEnd = askipTimes.PreviewEnd
-		}
+		g.Go(func() error {
+			aniIDStr := ""
+			if anilistID > 0 {
+				aniIDStr = strconv.Itoa(anilistID)
+			}
+			askipTimes, err := animeskipClient.GetTimestamps(ctx, aniIDStr, media.EpisodeNumber, media.SeriesTitle, media.EpisodeTitle)
+			if err != nil {
+				skipLog.Debug("anime-skip lookup error", "err", err)
+			} else if askipTimes != nil {
+				times.OpStart = askipTimes.OpStart
+				times.OpEnd = askipTimes.OpEnd
+				times.EdStart = askipTimes.EdStart
+				times.EdEnd = askipTimes.EdEnd
+				times.RecapStart = askipTimes.RecapStart
+				times.RecapEnd = askipTimes.RecapEnd
+				times.PreviewStart = askipTimes.PreviewStart
+				times.PreviewEnd = askipTimes.PreviewEnd
+			}
+			return nil
+		})
 	}
 
-	// 3. Query AniSkip if provider is "aniskip" or ("hybrid" gap-filling missing OP/ED)
-	if (providerMode == "aniskip" || (providerMode == "hybrid" && (times.OpStart < 0 || times.EdStart < 0))) && aniskipClient != nil && malID > 0 {
-		aniskipRes, err := aniskipClient.GetSkipTimes(ctx, malID, media.EpisodeNumber)
-		if err != nil {
-			skipLog.Debug("aniskip lookup error", "err", err)
-		} else if aniskipRes != nil {
-			if times.OpStart < 0 && aniskipRes.OpStart >= 0 {
-				times.OpStart = aniskipRes.OpStart
-				times.OpEnd = aniskipRes.OpEnd
+	// 3. Query AniSkip/AniList concurrently
+	if (providerMode == "hybrid" || providerMode == "aniskip") && aniskipClient != nil {
+		g.Go(func() error {
+			foundAniListID, malID, err := aniskipClient.GetIDs(ctx, media.SeriesTitle)
+			if err != nil {
+				skipLog.Debug("anilist lookup failed", "title", media.SeriesTitle, "err", err)
+				return nil
 			}
-			if times.EdStart < 0 && aniskipRes.EdStart >= 0 {
-				times.EdStart = aniskipRes.EdStart
-				times.EdEnd = aniskipRes.EdEnd
+			if anilistID == 0 && foundAniListID > 0 {
+				anilistID = foundAniListID
 			}
-		}
+			if malID > 0 {
+				aniskipRes, err := aniskipClient.GetSkipTimes(ctx, malID, media.EpisodeNumber)
+				if err != nil {
+					skipLog.Debug("aniskip lookup error", "err", err)
+				} else if aniskipRes != nil {
+					if times.OpStart < 0 && aniskipRes.OpStart >= 0 {
+						times.OpStart = aniskipRes.OpStart
+						times.OpEnd = aniskipRes.OpEnd
+					}
+					if times.EdStart < 0 && aniskipRes.EdStart >= 0 {
+						times.EdStart = aniskipRes.EdStart
+						times.EdEnd = aniskipRes.EdEnd
+					}
+				}
+			}
+			return nil
+		})
 	}
 
-	// If no intervals were found at all, don't generate a script
+	_ = g.Wait()
+
 	if times.OpStart < 0 && times.EdStart < 0 && times.RecapStart < 0 && times.PreviewStart < 0 {
 		skipLog.Debug("no skip intervals found", "title", media.SeriesTitle, "episode", media.EpisodeNumber)
 		return nil, ""
 	}
 
+	skipTimesCache.Set(cacheKey, times)
+	return buildSkipArgsFromTimes(times, settings)
+}
+
+func buildSkipArgsFromTimes(times combinedSkipTimes, settings SkipSettings) ([]string, string) {
 	cleanupStaleScripts()
 
 	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("kari-skip-%d-%d.lua", os.Getpid(), time.Now().UnixNano()))
@@ -310,7 +330,6 @@ func getSkipArgs(
 		skipLog.Debug("temp lua script write failed", "err", err)
 		return nil, ""
 	}
-
 	autoIntro := 0
 	if settings.AutoSkipIntro {
 		autoIntro = 1

@@ -18,6 +18,15 @@ type Data struct {
 	QualityMode      int             `json:"quality_mode"`
 	LanguageFilter   map[string]bool `json:"language_filter"`
 	SubtitleLanguage string          `json:"subtitle_language"`
+	// DisableAnimeSubtitles suppresses subtitles specifically for anime content,
+	// while keeping them active in the preferred language for movies and TV.
+	DisableAnimeSubtitles bool `json:"disable_anime_subtitles,omitempty"`
+	// DefaultAnimeAudio sets the startup audio track for anime: "sub" (default) or "dub".
+	DefaultAnimeAudio string `json:"default_anime_audio,omitempty"`
+	// PreferredPlayer sets the default player name (e.g. "mpv", "iina", "vlc").
+	PreferredPlayer string `json:"preferred_player,omitempty"`
+	// Autoplay enables automatic playback transition to the next episode upon completion.
+	Autoplay bool `json:"autoplay,omitempty"`
 	// DisableImages defaults to false (zero value) so image rendering stays
 	// on for both fresh configs and existing settings.json files saved
 	// before this option existed.

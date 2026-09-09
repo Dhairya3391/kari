@@ -287,6 +287,7 @@ type modelImpl struct {
 	languageFilter        map[string]bool
 	subtitleLanguage      string
 	subtitleLanguageIndex int
+	disableAnimeSubtitles bool
 	accentIndex           int
 	customAccentHex       string
 	editingAccentHex      bool

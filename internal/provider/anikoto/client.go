@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"kari/internal/config"
@@ -190,14 +191,48 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 // extracting referer/UA from headers and mpv args and attaching subtitles.
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
 	logging.Debug("resolve source", "provider", c.Name(), "mediaID", mediaID, "episodeID", episode.ID)
+	epID := strings.TrimSpace(episode.ID)
+	if !strings.HasPrefix(epID, "watch/anikoto/") {
+		category := strings.ToLower(strings.TrimSpace(episode.Audio))
+		if category == "" {
+			category = "sub"
+		}
+		epNum := episode.Episode
+		anilistID := strings.TrimSpace(mediaID)
+		if strings.Contains(epID, "/") {
+			parts := strings.Split(epID, "/")
+			if len(parts) >= 5 && parts[0] == "watch" {
+				anilistID = parts[2]
+				category = parts[3]
+				if n, err := strconv.Atoi(parts[4]); err == nil && n > 0 {
+					epNum = n
+				}
+			} else if len(parts) == 4 && parts[0] == "watch" {
+				anilistID = parts[1]
+				category = parts[2]
+				if n, err := strconv.Atoi(parts[3]); err == nil && n > 0 {
+					epNum = n
+				}
+			} else if len(parts) == 3 {
+				anilistID = parts[0]
+				category = parts[1]
+				if n, err := strconv.Atoi(parts[2]); err == nil && n > 0 {
+					epNum = n
+				}
+			}
+		}
+		if anilistID != "" && epNum > 0 {
+			epID = fmt.Sprintf("watch/anikoto/%s/%s/%d", anilistID, category, epNum)
+		}
+	}
+
 	u, err := url.Parse(c.baseURL + "/link")
 	if err != nil {
 		return nil, fmt.Errorf("anikoto resolve: build url: %w", err)
 	}
 	q := u.Query()
-	q.Set("id", episode.ID)
+	q.Set("id", epID)
 	u.RawQuery = q.Encode()
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("anikoto resolve: build request: %w", err)

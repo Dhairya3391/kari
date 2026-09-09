@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"kari/internal/provider"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -48,6 +49,24 @@ func TestMoveSettingsStopsAtBounds(t *testing.T) {
 		t.Fatalf("bottom settings index = %d, want %d", m.settingsIndex, settingsLastIndex)
 	}
 }
+func TestRenderSettingsScreenAllIndices(t *testing.T) {
+	m := &modelImpl{
+		settingsIndex:    0,
+		availablePlayers: []string{"mpv", "iina"},
+		subtitleLanguage: "en",
+		registry:         &provider.Registry{},
+	}
+	dims := layoutDims{contentW: 80, bodyH: 24}
+
+	for i := 0; i <= settingsLastIndex; i++ {
+		m.settingsIndex = i
+		rendered := m.renderSettingsScreen(dims)
+		if rendered == "" {
+			t.Fatalf("rendered settings screen for index %d is empty", i)
+		}
+	}
+}
+
 
 func TestCleanErrorForUIRateLimited(t *testing.T) {
 	tests := []struct {

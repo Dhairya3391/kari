@@ -75,6 +75,7 @@ collectResults:
 		allResults []provider.SearchResult
 		warnings   []string
 	)
+	seenTitles := make(map[string]struct{})
 	for _, p := range providers {
 		res, ok := resultsMap[p.Name()]
 		if !ok || res.err != nil {
@@ -87,6 +88,13 @@ collectResults:
 		}
 		for _, r := range res.results {
 			r.Provider = res.provider
+			key := fmt.Sprintf("%s:%s", r.Type, strings.TrimSpace(r.ID))
+			if r.ID != "" {
+				if _, seen := seenTitles[key]; seen {
+					continue
+				}
+				seenTitles[key] = struct{}{}
+			}
 			allResults = append(allResults, r)
 		}
 	}
@@ -219,13 +227,16 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		p := p
 		g.Go(func() error {
 			// Determine the ID to use for this provider: results from other
-			// providers can only be resolved cross-provider via TMDB ID.
+			// providers can be resolved cross-provider via TMDB ID (for movies/TV)
+			// or AniList ID (for anime).
 			mediaID := series.ID
 			if p.Name() != series.Provider {
 				if series.TMDBID > 0 {
 					mediaID = strconv.Itoa(series.TMDBID)
+				} else if (mode == provider.ModeAnime || series.Type == provider.ModeAnime) && series.ID != "" {
+					mediaID = series.ID
 				} else {
-					return nil // Cannot resolve with this provider without TMDB ID
+					return nil // Cannot resolve with this provider without shared ID
 				}
 			}
 
@@ -234,6 +245,8 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 				ID:      episode.ID,
 				Season:  episode.Season,
 				Episode: episode.Episode,
+				Audio:   episode.Audio,
+				Filler:  episode.Filler,
 				TMDBID:  series.TMDBID,
 			}
 
@@ -384,11 +397,12 @@ func (a *sourceAggregator) sort() {
 }
 
 func containsSource(sources []provider.MediaSource, candidate provider.MediaSource) bool {
+	candURL := strings.TrimSpace(candidate.URL)
+	if candURL == "" {
+		return true
+	}
 	for _, source := range sources {
-		if source.URL == candidate.URL &&
-			source.Referer == candidate.Referer &&
-			source.UserAgent == candidate.UserAgent &&
-			source.CookieHeader == candidate.CookieHeader {
+		if strings.TrimSpace(source.URL) == candURL {
 			return true
 		}
 	}

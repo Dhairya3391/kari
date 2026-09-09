@@ -5,9 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"kari/internal/config"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/provider/defaults"
+	"kari/internal/tmdb"
 )
 
 // stubProvider is a minimal provider double for MediaService tests.
@@ -60,6 +64,40 @@ func TestMediaServiceSearchStampsProviderAndAggregates(t *testing.T) {
 		t.Fatalf("provider stamping wrong: %+v", results)
 	}
 }
+func TestMediaServiceSearchDedupesAnimeByAniListID(t *testing.T) {
+	p1 := &stubProvider{
+		name: "anikoto",
+		mode: provider.ModeAnime,
+		results: []provider.SearchResult{
+			{Title: "One Piece", ID: "21", Type: provider.ModeAnime, Year: "1999"},
+			{Title: "Solo Leveling", ID: "151807", Type: provider.ModeAnime, Year: "2024"},
+		},
+	}
+	p2 := &stubProvider{
+		name: "anilight",
+		mode: provider.ModeAnime,
+		results: []provider.SearchResult{
+			{Title: "One Piece", ID: "21", Type: provider.ModeAnime, Year: "1999"},
+			{Title: "Other Anime", ID: "999", Type: provider.ModeAnime, Year: "2021"},
+		},
+	}
+
+	svc := NewMediaService(newTestRegistry(p1, p2))
+	results, _, _, err := svc.Search(context.Background(), provider.ModeAnime, "One Piece")
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 unique results, got %d: %+v", len(results), results)
+	}
+	if results[0].ID != "21" || results[0].Provider != "anikoto" {
+		t.Errorf("expected first result to be anikoto 21, got %+v", results[0])
+	}
+	if results[1].ID != "151807" || results[2].ID != "999" {
+		t.Errorf("unexpected results order/IDs: %+v", results)
+	}
+}
+
 
 func TestMediaServiceSearchCollectsWarningsAndFailsWhenEmpty(t *testing.T) {
 	a := &stubProvider{name: "alpha", mode: provider.ModeAnime, err: fmt.Errorf("boom")}
@@ -174,6 +212,94 @@ func TestResolveUsesCrossProviderTMDBID(t *testing.T) {
 	}
 	if gotID != "42" {
 		t.Fatalf("cross-provider mediaID = %q, want \"42\"", gotID)
+	}
+}
+func TestResolveUsesCrossProviderAnimeAniListID(t *testing.T) {
+	var gotID string
+	var gotAudio string
+	origin := &stubProvider{name: "anikoto", mode: provider.ModeAnime,
+		results: []provider.SearchResult{{Title: "One Piece", ID: "21", Type: provider.ModeAnime, MediaType: provider.MediaTypeAnime}}}
+	other := &resolveCaptureWithAudio{name: "anilight", mode: provider.ModeAnime, captureID: &gotID, captureAudio: &gotAudio}
+
+	svc := NewMediaService(newTestRegistry(origin, other))
+	_, err := svc.Resolve(context.Background(), provider.ModeAnime,
+		provider.SearchResult{Title: "One Piece", ID: "21", Provider: "anikoto", Type: provider.ModeAnime, MediaType: provider.MediaTypeAnime},
+		provider.Episode{Episode: 1, Audio: "dub", ID: "watch/anikoto/21/dub/1"}, nil)
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if gotID != "21" {
+		t.Fatalf("cross-provider anime mediaID = %q, want \"21\"", gotID)
+	}
+	if gotAudio != "dub" {
+		t.Fatalf("cross-provider anime audio = %q, want \"dub\"", gotAudio)
+	}
+}
+
+type resolveCaptureWithAudio struct {
+	name         string
+	mode         provider.ContentType
+	captureID    *string
+	captureAudio *string
+}
+
+func (r *resolveCaptureWithAudio) Name() string { return r.name }
+func (r *resolveCaptureWithAudio) Modes() []provider.Mode {
+	return []provider.Mode{{Name: r.mode, Priority: 2}}
+}
+func (r *resolveCaptureWithAudio) Search(ctx context.Context, q string, m provider.ContentType) ([]provider.SearchResult, error) {
+	return nil, provider.ErrNoResults
+}
+func (r *resolveCaptureWithAudio) FetchEpisodes(ctx context.Context, s provider.SearchResult) ([]provider.Episode, error) {
+	return nil, provider.ErrNoEpisodes
+}
+func (r *resolveCaptureWithAudio) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
+	*r.captureID = mediaID
+	*r.captureAudio = episode.Audio
+	return []provider.MediaSource{{URL: "http://anilight-stream", Quality: "1080p"}}, nil
+}
+func TestLiveAnimeResolution(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live test in short mode")
+	}
+	cfg := &config.Config{
+		TMDBAPIKeys: []string{"test"},
+	}
+	keyPool := tmdb.NewKeyPool(cfg.TMDBAPIKeys)
+	reg, err := defaults.NewDefaultRegistry(keyPool, cfg)
+	if err != nil {
+		t.Fatalf("defaults.NewDefaultRegistry failed: %v", err)
+	}
+
+	svc := NewMediaService(reg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Resolve One Piece Ep 1177
+	series := provider.SearchResult{
+		Title:     "ONE PIECE",
+		ID:        "21",
+		Provider:  "anikoto",
+		Type:      provider.ModeAnime,
+		MediaType: provider.MediaTypeAnime,
+	}
+	ep := provider.Episode{
+		Episode: 1177,
+		Audio:   "sub",
+		ID:      "watch/anikoto/21/sub/1177",
+	}
+	resolved, err := svc.Resolve(ctx, provider.ModeAnime, series, ep, nil)
+	if err != nil {
+		t.Logf("Resolve warning (live API): %v", err)
+		return
+	}
+	t.Logf("Resolved sources: %d", len(resolved.Playback))
+	for _, s := range resolved.Playback {
+		t.Logf("  - Source: [%s] %s %s", s.Resolver, s.Quality, s.URL)
+	}
+	t.Logf("Resolved subtitles: %d", len(resolved.Subtitles))
+	for _, sub := range resolved.Subtitles {
+		t.Logf("  - Sub: [%s] %s (%s)", sub.Resolver, sub.Label, sub.Language)
 	}
 }
 

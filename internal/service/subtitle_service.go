@@ -15,6 +15,7 @@ import (
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/model"
+	"kari/internal/provider"
 	"kari/internal/subtitles"
 	"kari/internal/util"
 )
@@ -34,9 +35,15 @@ const subtitleCacheMaxAge = 7 * 24 * time.Hour
 // track in preferred language first, then that provider's English, then
 // OpenSubtitles, then other providers' tracks — never another language.
 type SubtitleService struct {
-	openSubtitles *subtitles.Client
-	httpClient    *http.Client
-	cache         *util.BoundedCache[[]model.SubtitleTrack]
+	openSubtitles         *subtitles.Client
+	httpClient            *http.Client
+	cache                 *util.BoundedCache[[]model.SubtitleTrack]
+	disableAnimeSubtitles bool
+}
+
+// SetDisableAnimeSubtitles toggles anime-specific subtitle suppression.
+func (s *SubtitleService) SetDisableAnimeSubtitles(disable bool) {
+	s.disableAnimeSubtitles = disable
 }
 
 // NewSubtitleService builds the service; OpenSubtitles stays unconfigured
@@ -66,6 +73,10 @@ func NewSubtitleService(cfg *config.Config) *SubtitleService {
 // caching results by (media, language, resolver).
 func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, preferredLang, preferredResolver string) ([]model.SubtitleTrack, error) {
 	preferredLang = lang.Normalize(preferredLang)
+	if preferredLang == "off" {
+		subSvcLog.Debug("subtitles disabled in settings; skipping fetch")
+		return nil, nil
+	}
 	if preferredLang == "" {
 		preferredLang = "en"
 	}
@@ -80,6 +91,12 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 	originalSubtitles := media.Subtitles
 	for i, t := range originalSubtitles {
 		subSvcLog.Debug("incoming subtitle candidate", "index", i, "label", t.Label, "language", t.Language, "resolver", t.Resolver, "url", t.URL, "path", t.Path)
+	}
+
+	isAnime := media.MediaType == provider.MediaTypeAnime
+	if isAnime && s.disableAnimeSubtitles {
+		subSvcLog.Debug("anime subtitles disabled in settings; skipping fetch")
+		return nil, nil
 	}
 
 	// Priority 1: Subtitles from the MATCHING provider (preferredResolver)
@@ -98,7 +115,27 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 		}
 	}
 
-	// Fast-path: if the active provider lacks subtitles (e.g. VidKing), reuse an
+	// Priority 2 for Anime: Fall back to OTHER providers' soft subtitles
+	if isAnime {
+		otherSubs := selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
+		if len(otherSubs) > 0 {
+			subSvcLog.Debug("falling back to other providers' tracks", "count", len(otherSubs))
+			mCopy := model.ResolvedMedia{Subtitles: otherSubs}
+			if s.downloadProviderSubtitles(ctx, &mCopy) {
+				if track, ok := s.pickBestSubtitle(mCopy.Subtitles); ok {
+					tracks := []model.SubtitleTrack{track}
+					subSvcLog.Debug("selected fallback other provider sub", "path", track.Path, "lang", track.Language, "resolver", track.Resolver)
+					s.cache.Set(cacheKey, tracks)
+					s.cache.Set(titleKey, tracks)
+					return tracks, nil
+				}
+			}
+		}
+		// For anime without soft subtitles (e.g. hardsubbed releases or dubs), do not overlay OpenSubtitles
+		return nil, fmt.Errorf("no soft subtitles available for this anime episode")
+	}
+
+	// Fast-path for non-anime: if the active provider lacks subtitles (e.g. VidKing), reuse an
 	// already-downloaded subtitle track for this title/language from a sibling provider.
 	if cachedTracks, ok := s.cache.Get(titleKey); ok && len(cachedTracks) > 0 {
 		if _, err := os.Stat(cachedTracks[0].Path); err == nil {
@@ -113,7 +150,7 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 		query = strings.TrimSpace(media.EpisodeTitle)
 	}
 
-	// Priority 2: Try OpenSubtitles
+	// Priority 2 for non-anime: Try OpenSubtitles
 	if s.openSubtitles != nil && s.openSubtitles.Configured() {
 		track, found, err := s.openSubtitles.FetchBestSubtitle(ctx, query, preferredLang, media.TMDBID, media.SeasonNumber, media.EpisodeNumber)
 		if err == nil && found {
@@ -128,8 +165,7 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 		}
 	}
 
-	// Priority 3: Fall back to OTHER providers (only if matching provider and
-	// OpenSubtitles had no usable subs)
+	// Priority 3 for non-anime: Fall back to OTHER providers
 	otherSubs := selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
 	if len(otherSubs) > 0 {
 		subSvcLog.Debug("falling back to other providers' tracks", "count", len(otherSubs))

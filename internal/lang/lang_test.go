@@ -22,6 +22,9 @@ func TestNormalizeFoldsNativeScripts(t *testing.T) {
 		{"EN", "en"},              // case folding
 		{"zh-cn", "zh"},           // regional variant
 		{"Protuguese (BR)", "pt"}, // VidKing typo, verbatim
+		{"may", "ms"},             // ISO 639-2/B Malay code
+		{"disabled", "off"},       // subtitle off alias
+		{"none", "off"},           // subtitle off alias
 	}
 	for _, tt := range tests {
 		if got := Normalize(tt.raw); got != tt.want {
@@ -41,6 +44,11 @@ func TestNameAlwaysRendersEnglish(t *testing.T) {
 		{"gu", "Gujarati"},
 		{"ja", "Japanese"},
 		{"en", "English"},
+		{"off", "Off"},
+		{"th", "Thai"},
+		{"vi", "Vietnamese"},
+		{"ms", "Malay"},
+		{"may", "Malay"},
 	}
 	for _, tt := range tests {
 		if got := Name(tt.raw); got != tt.want {

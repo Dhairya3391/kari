@@ -284,14 +284,12 @@ func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.subtitleOpID = 0
-	if msg.err == nil && len(msg.tracks) > 0 && m.resolved != nil {
-		// Set directly rather than through mergeResolved: its subtitle merge
-		// deliberately refuses to replace an already-downloaded subtitle
-		// (to protect against a stale/duplicate progress update undoing a
-		// real fetch), but this IS a deliberate replacement — the whole
-		// point of a re-sync triggered by switching sources is to swap out
-		// whatever subtitle was already there for the new source's own one.
-		m.resolved.Subtitles = msg.tracks
+	if msg.err == nil && m.resolved != nil {
+		if m.subtitleLanguage == "off" || (m.disableAnimeSubtitles && m.resolved.MediaType == provider.MediaTypeAnime) {
+			m.resolved.Subtitles = nil
+		} else if len(msg.tracks) > 0 {
+			m.resolved.Subtitles = msg.tracks
+		}
 	}
 	if m.pendingManualPlay {
 		m.pendingManualPlay = false

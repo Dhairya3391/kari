@@ -207,6 +207,10 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		if code := lang.Normalize(s.SubtitleLanguage); code != "" {
 			model.subtitleLanguage = code
 		}
+		model.disableAnimeSubtitles = s.DisableAnimeSubtitles
+		if model.subtitleService != nil {
+			model.subtitleService.SetDisableAnimeSubtitles(model.disableAnimeSubtitles)
+		}
 		model.imagesEnabled = !s.DisableImages
 		if normalized, ok := normalizeHexColor(s.AccentColor); ok {
 			model.accentIndex = len(accentPresets) // default: custom slot
@@ -226,6 +230,18 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		model.autoSkipEnding = s.AutoSkipEnding
 		model.skipRecap = s.SkipRecap
 		model.skipPreview = s.SkipPreview
+		if s.DefaultAnimeAudio != "" {
+			model.audioMode = s.DefaultAnimeAudio
+		}
+		if s.PreferredPlayer != "" {
+			for i, p := range model.availablePlayers {
+				if strings.EqualFold(p, s.PreferredPlayer) {
+					model.selectedPlayer = i
+					break
+				}
+			}
+		}
+		model.autoPlayAfterResolve = s.Autoplay
 	}
 	for i, code := range lang.SubtitleOptions {
 		if code == model.subtitleLanguage {

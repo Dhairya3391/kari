@@ -3,6 +3,8 @@ package config
 const (
 	AnikotoAPIBase   = "https://noob2.broggl.farm"
 	AnikotoReferer   = "https://megaplay.buzz/"
+	AniLightAPIBase  = "https://noob3.broggl.farm"
+	AniLightReferer  = "https://anilight.live/"
 	VidKingAPIBase   = "https://noob.broggl.farm"
 	VidKingReferer   = "https://www.vidking.net/"
 	PenguAPIBase     = "https://pengu.uk"

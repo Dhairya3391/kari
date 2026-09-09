@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -64,8 +65,46 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.moveSettings(1)
 		case "left":
 			switch m.settingsIndex {
-			case 2:
-				// Value rows wrap instead of hard-stopping at the ends.
+			case settingsAnimeAudioIndex:
+				if strings.EqualFold(m.audioMode, provider.AudioDub) {
+					m.audioMode = provider.AudioSub
+				} else {
+					m.audioMode = provider.AudioDub
+				}
+				m.saveSettings()
+			case settingsAnimeSubsIndex:
+				m.disableAnimeSubtitles = !m.disableAnimeSubtitles
+				if m.subtitleService != nil {
+					m.subtitleService.SetDisableAnimeSubtitles(m.disableAnimeSubtitles)
+				}
+				m.saveSettings()
+			case settingsSkipProviderIndex:
+				m.skipProvider = cycleSkipProvider(m.skipProvider, true)
+				m.saveSettings()
+			case settingsAutoIntroIndex, settingsAutoEndingIndex, settingsAutoRecapIndex, settingsAutoPreviewIndex:
+				m.toggleAutoSkip(m.settingsIndex)
+				m.saveSettings()
+			case settingsAudioLangIndex:
+				languages := m.availableLanguages()
+				if len(languages) > 0 {
+					m.languageIndex--
+					if m.languageIndex < 0 {
+						m.languageIndex = len(languages) - 1
+					}
+				}
+			case settingsSubLangIndex:
+				m.subtitleLanguageIndex--
+				if m.subtitleLanguageIndex < 0 {
+					m.subtitleLanguageIndex = len(lang.SubtitleOptions) - 1
+				}
+				m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
+				m.saveSettings()
+			case settingsPlayerIndex:
+				if len(m.availablePlayers) > 1 {
+					m.selectedPlayer = (m.selectedPlayer - 1 + len(m.availablePlayers)) % len(m.availablePlayers)
+					m.saveSettings()
+				}
+			case settingsQualityIndex:
 				m.qualityMode--
 				if m.qualityMode < 0 {
 					m.qualityMode = qualityLowest
@@ -75,41 +114,61 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedPlayback = filtered[0]
 				}
 				m.saveSettings()
-			case 3:
-				languages := m.availableLanguages()
-				if len(languages) == 0 {
-					break
-				}
-				m.languageIndex--
-				if m.languageIndex < 0 {
-					m.languageIndex = len(languages) - 1
-				}
-			case 4:
-				m.subtitleLanguageIndex--
-				if m.subtitleLanguageIndex < 0 {
-					m.subtitleLanguageIndex = len(lang.SubtitleOptions) - 1
-				}
-				m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
+			case settingsAutoplayIndex:
+				m.autoPlayAfterResolve = !m.autoPlayAfterResolve
 				m.saveSettings()
-			case 5:
+			case settingsImagesIndex:
 				return m, tea.Batch(m.setImagesEnabled(false), m.triggerSubtitleSync())
-			case 6:
+			case settingsAppearanceIndex:
 				m.accentIndex--
 				if m.accentIndex < 0 {
 					m.accentIndex = len(accentPresets)
 				}
 				m.setAccent(m.accentIndex)
-			case settingsSkipProviderIndex:
-				m.skipProvider = cycleSkipProvider(m.skipProvider, true)
-				m.saveSettings()
-			case settingsAutoIntroIndex, settingsAutoEndingIndex, settingsAutoRecapIndex, settingsAutoPreviewIndex:
-				m.toggleAutoSkip(m.settingsIndex)
-				m.saveSettings()
 			}
 			return m, m.triggerSubtitleSync()
 		case "right":
 			switch m.settingsIndex {
-			case 2:
+			case settingsAnimeAudioIndex:
+				if strings.EqualFold(m.audioMode, provider.AudioDub) {
+					m.audioMode = provider.AudioSub
+				} else {
+					m.audioMode = provider.AudioDub
+				}
+				m.saveSettings()
+			case settingsAnimeSubsIndex:
+				m.disableAnimeSubtitles = !m.disableAnimeSubtitles
+				if m.subtitleService != nil {
+					m.subtitleService.SetDisableAnimeSubtitles(m.disableAnimeSubtitles)
+				}
+				m.saveSettings()
+			case settingsSkipProviderIndex:
+				m.skipProvider = cycleSkipProvider(m.skipProvider, false)
+				m.saveSettings()
+			case settingsAutoIntroIndex, settingsAutoEndingIndex, settingsAutoRecapIndex, settingsAutoPreviewIndex:
+				m.toggleAutoSkip(m.settingsIndex)
+				m.saveSettings()
+			case settingsAudioLangIndex:
+				languages := m.availableLanguages()
+				if len(languages) > 0 {
+					m.languageIndex++
+					if m.languageIndex >= len(languages) {
+						m.languageIndex = 0
+					}
+				}
+			case settingsSubLangIndex:
+				m.subtitleLanguageIndex++
+				if m.subtitleLanguageIndex >= len(lang.SubtitleOptions) {
+					m.subtitleLanguageIndex = 0
+				}
+				m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
+				m.saveSettings()
+			case settingsPlayerIndex:
+				if len(m.availablePlayers) > 1 {
+					m.selectedPlayer = (m.selectedPlayer + 1) % len(m.availablePlayers)
+					m.saveSettings()
+				}
+			case settingsQualityIndex:
 				m.qualityMode++
 				if m.qualityMode > qualityLowest {
 					m.qualityMode = 0
@@ -119,81 +178,103 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedPlayback = filtered[0]
 				}
 				m.saveSettings()
-			case 3:
-				languages := m.availableLanguages()
-				if len(languages) == 0 {
-					break
-				}
-				m.languageIndex++
-				if m.languageIndex >= len(languages) {
-					m.languageIndex = 0
-				}
-			case 4:
-				m.subtitleLanguageIndex++
-				if m.subtitleLanguageIndex >= len(lang.SubtitleOptions) {
-					m.subtitleLanguageIndex = 0
-				}
-				m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
+			case settingsAutoplayIndex:
+				m.autoPlayAfterResolve = !m.autoPlayAfterResolve
 				m.saveSettings()
-			case 5:
+			case settingsImagesIndex:
 				return m, tea.Batch(m.setImagesEnabled(true), m.triggerSubtitleSync())
-			case 6:
+			case settingsAppearanceIndex:
 				m.accentIndex++
 				if m.accentIndex > len(accentPresets) {
 					m.accentIndex = 0
 				}
 				m.setAccent(m.accentIndex)
+			}
+			return m, m.triggerSubtitleSync()
+		case " ":
+			switch m.settingsIndex {
+			case settingsAnimeAudioIndex:
+				if strings.EqualFold(m.audioMode, provider.AudioDub) {
+					m.audioMode = provider.AudioSub
+				} else {
+					m.audioMode = provider.AudioDub
+				}
+				m.saveSettings()
+			case settingsAnimeSubsIndex:
+				m.disableAnimeSubtitles = !m.disableAnimeSubtitles
+				if m.subtitleService != nil {
+					m.subtitleService.SetDisableAnimeSubtitles(m.disableAnimeSubtitles)
+				}
+				m.saveSettings()
 			case settingsSkipProviderIndex:
 				m.skipProvider = cycleSkipProvider(m.skipProvider, false)
 				m.saveSettings()
 			case settingsAutoIntroIndex, settingsAutoEndingIndex, settingsAutoRecapIndex, settingsAutoPreviewIndex:
 				m.toggleAutoSkip(m.settingsIndex)
 				m.saveSettings()
-			}
-			return m, m.triggerSubtitleSync()
-		case " ":
-			if m.settingsIndex == 3 && m.languageFilter != nil {
-				languages := m.availableLanguages()
-				if len(languages) > 0 {
-					if m.languageIndex >= len(languages) {
-						m.languageIndex = 0
+			case settingsAudioLangIndex:
+				if m.languageFilter != nil {
+					languages := m.availableLanguages()
+					if len(languages) > 0 {
+						if m.languageIndex >= len(languages) {
+							m.languageIndex = 0
+						}
+						selected := languages[m.languageIndex].Code
+						m.languageFilter[selected] = !m.languageEnabled(selected)
+						if !m.hasEnabledLanguage() {
+							m.languageFilter[selected] = true
+						}
+						m.selectedPlayback = 0
+						if filtered := m.filteredPlayback(); len(filtered) > 0 {
+							m.selectedPlayback = filtered[0]
+						}
+						m.saveSettings()
 					}
-					selected := languages[m.languageIndex].Code
-					m.languageFilter[selected] = !m.languageEnabled(selected)
-					if !m.hasEnabledLanguage() {
-						m.languageFilter[selected] = true
+				}
+			case settingsSubLangIndex:
+				if m.subtitleLanguage == "off" {
+					m.subtitleLanguage = "en"
+					for i, code := range lang.SubtitleOptions {
+						if code == "en" {
+							m.subtitleLanguageIndex = i
+							break
+						}
 					}
-					m.selectedPlayback = 0
-					if filtered := m.filteredPlayback(); len(filtered) > 0 {
-						m.selectedPlayback = filtered[0]
-					}
+				} else {
+					m.subtitleLanguage = "off"
+					m.subtitleLanguageIndex = 0
+				}
+				m.saveSettings()
+			case settingsPlayerIndex:
+				if len(m.availablePlayers) > 1 {
+					m.selectedPlayer = (m.selectedPlayer + 1) % len(m.availablePlayers)
 					m.saveSettings()
 				}
-			} else if m.settingsIndex == settingsSkipProviderIndex {
-				m.skipProvider = cycleSkipProvider(m.skipProvider, false)
+			case settingsAutoplayIndex:
+				m.autoPlayAfterResolve = !m.autoPlayAfterResolve
 				m.saveSettings()
-			} else if m.toggleAutoSkip(m.settingsIndex) {
-				m.saveSettings()
+			case settingsImagesIndex:
+				return m, tea.Batch(m.setImagesEnabled(!m.imagesEnabled), m.triggerSubtitleSync())
 			}
 			return m, m.triggerSubtitleSync()
 		case "c", "C":
 			switch m.settingsIndex {
-			case 0:
+			case settingsTraktIndex:
 				return m.startTraktAuth()
-			case 1:
+			case settingsAniListIndex:
 				return m.startAniListAuth()
-			case 6:
+			case settingsAppearanceIndex:
 				if m.accentIndex == len(accentPresets) {
 					return m.startCustomAccentInput()
 				}
 			}
 		case "r", "R":
 			switch m.settingsIndex {
-			case 0:
+			case settingsTraktIndex:
 				if m.traktClient != nil {
 					_ = m.traktClient.Revoke()
 				}
-			case 1:
+			case settingsAniListIndex:
 				if m.anilistClient != nil {
 					_ = m.anilistClient.Revoke()
 				}
@@ -369,11 +450,11 @@ func (m *modelImpl) toggleAutoSkip(index int) bool {
 
 func (m *modelImpl) moveSettings(direction int) {
 	for index := m.settingsIndex + direction; index >= 0 && index <= settingsLastIndex; index += direction {
-		if index == 3 && len(m.availableLanguages()) == 0 {
+		if index == settingsAudioLangIndex && len(m.availableLanguages()) == 0 {
 			continue
 		}
 		m.settingsIndex = index
-		if index == 3 {
+		if index == settingsAudioLangIndex {
 			m.languageIndex = 0
 		}
 		return
@@ -381,7 +462,28 @@ func (m *modelImpl) moveSettings(direction int) {
 }
 
 func (m *modelImpl) ensureSettingsVisible() {
-	selectedLine := 2 + m.settingsIndex*4
+	lineMap := map[int]int{
+		settingsTraktIndex:        2,
+		settingsAniListIndex:      7,
+		settingsAnimeAudioIndex:   14,
+		settingsAnimeSubsIndex:    18,
+		settingsSkipProviderIndex: 22,
+		settingsAutoIntroIndex:    26,
+		settingsAutoEndingIndex:   29,
+		settingsAutoRecapIndex:    32,
+		settingsAutoPreviewIndex:  35,
+		settingsAudioLangIndex:    40,
+		settingsSubLangIndex:      46,
+		settingsPlayerIndex:       52,
+		settingsQualityIndex:      56,
+		settingsAutoplayIndex:     60,
+		settingsImagesIndex:       65,
+		settingsAppearanceIndex:   70,
+	}
+	selectedLine := 0
+	if l, ok := lineMap[m.settingsIndex]; ok {
+		selectedLine = l
+	}
 	visibleHeight := max(1, m.bodyHeight()-1)
 	if selectedLine < m.bodyScroll {
 		m.bodyScroll = selectedLine

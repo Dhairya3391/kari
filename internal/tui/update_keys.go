@@ -257,16 +257,20 @@ func (m *modelImpl) startCustomAccentInput() (tea.Model, tea.Cmd) {
 // always the actual color in effect, whether from a preset or custom hex.
 func (m *modelImpl) saveSettings() {
 	settings.Save(&settings.Data{
-		QualityMode:      m.qualityMode,
-		LanguageFilter:   m.languageFilter,
-		SubtitleLanguage: m.subtitleLanguage,
-		DisableImages:    !m.imagesEnabled,
-		AccentColor:      string(colorPrimary),
-		SkipProvider:     m.skipProvider,
-		AutoSkipIntro:    m.autoSkipIntro,
-		AutoSkipEnding:   m.autoSkipEnding,
-		SkipRecap:        m.skipRecap,
-		SkipPreview:      m.skipPreview,
+		QualityMode:           m.qualityMode,
+		LanguageFilter:        m.languageFilter,
+		SubtitleLanguage:      m.subtitleLanguage,
+		DisableAnimeSubtitles: m.disableAnimeSubtitles,
+		DefaultAnimeAudio:     m.audioMode,
+		PreferredPlayer:       m.selectedPlayerName(),
+		Autoplay:              m.autoPlayAfterResolve,
+		DisableImages:         !m.imagesEnabled,
+		AccentColor:           string(colorPrimary),
+		SkipProvider:          m.skipProvider,
+		AutoSkipIntro:         m.autoSkipIntro,
+		AutoSkipEnding:        m.autoSkipEnding,
+		SkipRecap:             m.skipRecap,
+		SkipPreview:           m.skipPreview,
 	})
 	if m.players != nil {
 		m.players.SetSkipSettings(player.SkipSettings{
