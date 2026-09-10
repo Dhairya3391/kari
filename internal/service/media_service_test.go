@@ -421,3 +421,30 @@ func TestAggregatorSortPrioritizesVidKing(t *testing.T) {
 		t.Errorf("sources[3] = %+v, want pengu 1080p", agg.sources[3])
 	}
 }
+
+func TestAggregatorSortPrioritizesVidstream2Anikoto(t *testing.T) {
+	agg := &sourceAggregator{
+		priority: map[string]int{
+			"anikoto":  0,
+			"anilight": 1,
+			"reanime":  2,
+		},
+		sources: []provider.MediaSource{
+			{Resolver: "anilight", Quality: "Auto (l)", URL: "http://anilight-stream"},
+			{Resolver: "reanime", Quality: "Auto (HD1)", URL: "http://reanime-stream"},
+			{Resolver: "anikoto", Quality: "1080p (HD-2)", URL: "http://anikoto-hd2"},
+			{Resolver: "anikoto", Quality: "1080p (Vidstream-2)", URL: "http://anikoto-vidstream2"},
+		},
+	}
+
+	agg.sort()
+
+	if len(agg.sources) != 4 {
+		t.Fatalf("expected 4 sources, got %d", len(agg.sources))
+	}
+
+	// Vidstream-2 from Anikoto MUST be at position 0
+	if agg.sources[0].Resolver != "anikoto" || agg.sources[0].Quality != "1080p (Vidstream-2)" {
+		t.Errorf("sources[0] = %+v, want anikoto Vidstream-2", agg.sources[0])
+	}
+}

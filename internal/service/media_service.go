@@ -393,6 +393,13 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 // earlier-registered providers surface before fallbacks.
 func (a *sourceAggregator) sort() {
 	sort.SliceStable(a.sources, func(i, j int) bool {
+		// Prioritize Vidstream-2 from Anikoto at the top
+		isVidstream2I := strings.EqualFold(a.sources[i].Resolver, "anikoto") && strings.Contains(strings.ToLower(a.sources[i].Quality), "vidstream-2")
+		isVidstream2J := strings.EqualFold(a.sources[j].Resolver, "anikoto") && strings.Contains(strings.ToLower(a.sources[j].Quality), "vidstream-2")
+		if isVidstream2I != isVidstream2J {
+			return isVidstream2I
+		}
+
 		isVidKingI := strings.EqualFold(a.sources[i].Resolver, "vidking")
 		isVidKingJ := strings.EqualFold(a.sources[j].Resolver, "vidking")
 		if isVidKingI != isVidKingJ {
