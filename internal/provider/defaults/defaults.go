@@ -7,6 +7,7 @@ import (
 	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/anikoto"
 	"kari/internal/provider/anilight"
+	"kari/internal/provider/reanime"
 	"kari/internal/provider/pengu"
 	"kari/internal/provider/vidking"
 	"kari/internal/tmdb"
@@ -33,6 +34,12 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "anilight",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return anilight.NewClient()
+		},
+	},
+	{
+		ID: "reanime",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return reanime.NewClient()
 		},
 	},
 	{

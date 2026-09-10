@@ -41,7 +41,7 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 		return nil, query, nil, fmt.Errorf("no providers available for mode %q", mode)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 
 	type providerSearchResult struct {
@@ -60,13 +60,25 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 	}
 
 	resultsMap := make(map[string]providerSearchResult, len(providers))
+	var graceTimer <-chan time.Time
+	gotValidResults := false
+
 collectResults:
-	for i := 0; i < len(providers); i++ {
+	for remaining := len(providers); remaining > 0; {
 		select {
 		case res := <-ch:
+			remaining--
 			resultsMap[res.provider] = res
+			if res.err == nil && len(res.results) > 0 && !gotValidResults {
+				gotValidResults = true
+				// Once at least one provider succeeds with results, give other providers up to 1.5s grace period
+				graceTimer = time.After(1500 * time.Millisecond)
+			}
+		case <-graceTimer:
+			mediaLog.Debug("search grace period expired; returning fast results", "mode", mode, "query", query)
+			break collectResults
 		case <-ctx.Done():
-			mediaLog.Warn("search deadline hit while waiting for providers", "pending", len(providers)-i, "mode", mode, "query", query)
+			mediaLog.Warn("search deadline hit while waiting for providers", "pending", remaining, "mode", mode, "query", query)
 			break collectResults
 		}
 	}

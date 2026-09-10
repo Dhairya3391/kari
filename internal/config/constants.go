@@ -5,6 +5,8 @@ const (
 	AnikotoReferer   = "https://megaplay.buzz/"
 	AniLightAPIBase  = "https://noob3.broggl.farm"
 	AniLightReferer  = "https://anilight.live/"
+	ReAnimeAPIBase   = "https://noob4.broggl.farm"
+	ReAnimeReferer   = "https://flixcloud.cc/"
 	VidKingAPIBase   = "https://noob.broggl.farm"
 	VidKingReferer   = "https://www.vidking.net/"
 	PenguAPIBase     = "https://pengu.uk"
