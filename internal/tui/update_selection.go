@@ -112,6 +112,8 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	m.resolved = nil
 	m.rawSubtitles = nil
 	m.manualPlaybackSelected = false
+	m.subtitleResolverUsed = ""
+	m.subtitleLangUsed = ""
 	m.clearPreviewPoster()
 	m.autoPlayAfterResolve = autoPlay
 	series := provider.SearchResult{}
