@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	defaultTimeout = 30 * time.Second
-	defaultRetries = 3
+	defaultTimeout = 15 * time.Second
+	defaultRetries = 2
 )
 
 // New returns a shared HTTP client with retry and timeout settings.
@@ -42,8 +42,8 @@ func NewWithUserAgent(userAgent string) *http.Client {
 func newClient(timeout time.Duration) *http.Client {
 	retryClient := retryablehttp.NewClient()
 	retryClient.RetryMax = defaultRetries
-	retryClient.RetryWaitMin = 500 * time.Millisecond
-	retryClient.RetryWaitMax = 3 * time.Second
+	retryClient.RetryWaitMin = 200 * time.Millisecond
+	retryClient.RetryWaitMax = 1500 * time.Millisecond
 	retryClient.HTTPClient.Timeout = timeout
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()

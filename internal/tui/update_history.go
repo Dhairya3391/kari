@@ -124,10 +124,28 @@ func (m *modelImpl) historyResolveSeriesCmd(opID int, entry history.Entry, group
 	mode := modeForHistoryEntry(entry)
 	return func() tea.Msg {
 		results, _, _, err := m.mediaService.Search(m.appCtx, mode, entry.Title)
-		if err == nil && len(results) == 0 {
-			err = fmt.Errorf("no provider currently has %q", entry.Title)
+		if len(results) == 0 {
+			// Fallback 1: try title with subtitle split (e.g. before " - ")
+			if strings.Contains(entry.Title, " - ") {
+				shortTitle := strings.TrimSpace(strings.Split(entry.Title, " - ")[0])
+				if shortTitle != "" {
+					results, _, _, _ = m.mediaService.Search(m.appCtx, mode, shortTitle)
+				}
+			}
 		}
-		if err != nil {
+		if len(results) == 0 {
+			// Fallback 2: try title with colon split (e.g. before ":")
+			if strings.Contains(entry.Title, ":") {
+				shortTitle := strings.TrimSpace(strings.Split(entry.Title, ":")[0])
+				if shortTitle != "" {
+					results, _, _, _ = m.mediaService.Search(m.appCtx, mode, shortTitle)
+				}
+			}
+		}
+		if len(results) == 0 {
+			if err == nil {
+				err = fmt.Errorf("no provider currently has %q", entry.Title)
+			}
 			return historyResolveSeriesMsg{entry: entry, group: group, opID: opID, err: err}
 		}
 		return historyResolveSeriesMsg{entry: entry, group: group, series: bestHistorySeriesMatch(results, entry), opID: opID}
@@ -137,7 +155,7 @@ func (m *modelImpl) historyResolveSeriesCmd(opID int, entry history.Entry, group
 // bestHistorySeriesMatch picks the live search result that most likely
 // corresponds to a history entry: an exact TMDBID match first (most
 // reliable, provider-independent), falling back to an exact title match,
-// and finally just the top result.
+// then a fuzzy title contains match, and finally just the top result.
 func bestHistorySeriesMatch(results []provider.SearchResult, entry history.Entry) provider.SearchResult {
 	if entry.TMDBID > 0 {
 		for _, r := range results {
@@ -149,6 +167,12 @@ func bestHistorySeriesMatch(results []provider.SearchResult, entry history.Entry
 	target := strings.ToLower(strings.TrimSpace(entry.Title))
 	for _, r := range results {
 		if strings.ToLower(strings.TrimSpace(r.Title)) == target {
+			return r
+		}
+	}
+	for _, r := range results {
+		rTitle := strings.ToLower(strings.TrimSpace(r.Title))
+		if strings.Contains(target, rTitle) || strings.Contains(rTitle, target) {
 			return r
 		}
 	}

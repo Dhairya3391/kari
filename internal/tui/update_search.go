@@ -136,10 +136,14 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch keyMsg.String() {
 	case "p", "enter":
 		if len(m.orderedPlaybackSources()) == 0 {
+			if m.loading {
+				m.setStatus(statusInfo, "Resolving playback streams...")
+				return m, nil
+			}
 			m.setStatus(statusWarn, "No playback source matches the current filters")
 			return m, nil
 		}
-		if m.loading || m.playOpID != 0 || m.pendingManualPlay {
+		if m.playOpID != 0 || m.pendingManualPlay {
 			return m, nil
 		}
 		if m.subtitleOpID != 0 {
@@ -156,10 +160,14 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
 	case "r":
 		if len(m.orderedPlaybackSources()) == 0 {
+			if m.loading {
+				m.setStatus(statusInfo, "Resolving playback streams...")
+				return m, nil
+			}
 			m.setStatus(statusWarn, "No playback source matches the current filters")
 			return m, nil
 		}
-		if m.loading || m.playOpID != 0 || m.pendingManualPlay {
+		if m.playOpID != 0 || m.pendingManualPlay {
 			return m, nil
 		}
 		if m.subtitleOpID != 0 {

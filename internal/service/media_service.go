@@ -41,7 +41,7 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 		return nil, query, nil, fmt.Errorf("no providers available for mode %q", mode)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 
 	type providerSearchResult struct {

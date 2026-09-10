@@ -259,17 +259,24 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.resolveOpID = 0
 	if msg.err != nil {
-		m.loading = false
-		m.loadingText = ""
-		m.autoPlayAfterResolve = false
-		m.pendingAutoPlay = false
-		if m.resolved == nil {
-			logging.Error("resolve failed", "provider", selectedSeriesProvider(m.selectedSeries), "series", selectedSeriesTitle(m.selectedSeries), "episode", selectedEpisodeTitle(m.selectedEpisode), "err", msg.err)
-			m.setStatus(statusError, cleanErrorForUI(msg.err))
+		if m.playOpID == 0 {
+			m.loading = false
+			m.loadingText = ""
+			m.autoPlayAfterResolve = false
+			m.pendingAutoPlay = false
+			if m.resolved == nil {
+				logging.Error("resolve failed", "provider", selectedSeriesProvider(m.selectedSeries), "series", selectedSeriesTitle(m.selectedSeries), "episode", selectedEpisodeTitle(m.selectedEpisode), "err", msg.err)
+				m.setStatus(statusError, cleanErrorForUI(msg.err))
+			}
 		}
 		return m, nil
 	}
 	m.mergeResolved(msg.resolved)
+
+	// If playback is already active, don't re-trigger playback or override player status
+	if m.playOpID != 0 {
+		return m, nil
+	}
 
 	// All providers have now reported in, so this is the first point where
 	// every provider's subtitles are actually known — fetch now rather than
@@ -378,6 +385,10 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 	wasNil := m.resolved == nil
 	m.mergeResolved(msg.resolved)
 	m.pushView(viewPreview)
+	if len(m.orderedPlaybackSources()) > 0 && !m.autoPlayAfterResolve {
+		m.loading = false
+		m.loadingText = ""
+	}
 
 	subCmd := m.triggerSubtitleSync()
 
