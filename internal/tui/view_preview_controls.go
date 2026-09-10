@@ -240,64 +240,75 @@ func fillerBadge() string {
 }
 
 func (m *modelImpl) renderHelpOverlay() string {
-	var sections []string
+	navLines := []string{
+		sectionTitleStyle.Render("Navigation & Search"),
+		"",
+		"  " + keyStyle.Render("↑/↓ j/k") + "   " + mutedStyle.Render("move selection"),
+		"  " + keyStyle.Render("g / G") + "     " + mutedStyle.Render("top / bottom"),
+		"  " + keyStyle.Render("esc") + "       " + mutedStyle.Render("back / cancel"),
+		"  " + keyStyle.Render("space") + "     " + mutedStyle.Render("focus search box"),
+		"  " + keyStyle.Render("enter") + "     " + mutedStyle.Render("search / select"),
+		"  " + keyStyle.Render("tab") + "       " + mutedStyle.Render("switch content mode"),
+		"  " + keyStyle.Render("/") + "         " + mutedStyle.Render("filter results"),
+		"",
+		sectionTitleStyle.Render("Views & System"),
+		"",
+		"  " + keyStyle.Render("h") + "         " + mutedStyle.Render("watch history"),
+		"  " + keyStyle.Render("s") + "         " + mutedStyle.Render("settings"),
+		"  " + keyStyle.Render("ctrl+p") + "    " + mutedStyle.Render("switch player"),
+		"  " + keyStyle.Render("?") + "         " + mutedStyle.Render("toggle this help"),
+		"  " + keyStyle.Render("q") + "         " + mutedStyle.Render("quit kari"),
+	}
 
-	sections = append(sections, sectionTitleStyle.Render("Navigation"), "")
-	sections = append(sections,
-		"  "+keyStyle.Render("↑/↓ j/k")+"   "+mutedStyle.Render("move"),
-		"  "+keyStyle.Render("g/G")+"      "+mutedStyle.Render("top/bottom"),
-		"  "+keyStyle.Render("esc")+"      "+mutedStyle.Render("back / cancel"),
-		"  "+keyStyle.Render("ctrl+h")+"   "+mutedStyle.Render("home"),
-		"  "+keyStyle.Render("q")+"        "+mutedStyle.Render("quit"),
-	)
-
-	sections = append(sections, "", sectionTitleStyle.Render("Search"), "")
-	sections = append(sections,
-		"  "+keyStyle.Render("space")+"    "+mutedStyle.Render("focus search"),
-		"  "+keyStyle.Render("enter")+"    "+mutedStyle.Render("search / select"),
-		"  "+keyStyle.Render("tab")+"      "+mutedStyle.Render("switch mode"),
-		"  "+keyStyle.Render("/")+"        "+mutedStyle.Render("filter results"),
-	)
-
-	sections = append(sections, "", sectionTitleStyle.Render("Episodes"), "")
 	epKeys := []string{
-		"  " + keyStyle.Render("space") + "    " + mutedStyle.Render("toggle select"),
-		"  " + keyStyle.Render("ctrl+a") + "   " + mutedStyle.Render("select all"),
-		"  " + keyStyle.Render("ctrl+d") + "   " + mutedStyle.Render("deselect all"),
-		"  " + keyStyle.Render("D") + "        " + mutedStyle.Render("batch download"),
+		sectionTitleStyle.Render("Episodes & Seasons"),
+		"",
+		"  " + keyStyle.Render("space") + "     " + mutedStyle.Render("toggle select"),
+		"  " + keyStyle.Render("[ / ]") + "     " + mutedStyle.Render("jump season"),
+		"  " + keyStyle.Render("1 - 9") + "     " + mutedStyle.Render("season 1 - 9"),
+		"  " + keyStyle.Render("ctrl+a") + "    " + mutedStyle.Render("select all"),
+		"  " + keyStyle.Render("ctrl+d") + "    " + mutedStyle.Render("deselect all"),
+		"  " + keyStyle.Render("D") + "         " + mutedStyle.Render("batch download"),
 	}
-	// The sub/dub key only exists when the mode's providers declare
-	// audio-track selection.
 	if m.modeFeatures().AudioSelection {
-		epKeys = append(epKeys, "  "+keyStyle.Render("a")+"        "+mutedStyle.Render("sub/dub"))
+		epKeys = append(epKeys, "  "+keyStyle.Render("a")+"         "+mutedStyle.Render("sub / dub audio"))
 	}
-	sections = append(sections, epKeys...)
 
-	sections = append(sections, "", sectionTitleStyle.Render("Playback"), "")
-	sections = append(sections,
-		"  "+keyStyle.Render("enter/p")+"  "+mutedStyle.Render("play"),
-		"  "+keyStyle.Render("n")+"        "+mutedStyle.Render("play next"),
-		"  "+keyStyle.Render("r")+"        "+mutedStyle.Render("restart"),
-		"  "+keyStyle.Render("A")+"        "+mutedStyle.Render("autoplay toggle"),
-		"  "+keyStyle.Render("d")+"        "+mutedStyle.Render("download"),
-		"  "+keyStyle.Render("tab")+"      "+mutedStyle.Render("switch source"),
-		"  "+keyStyle.Render("ctrl+p")+"   "+mutedStyle.Render("switch player"),
-	)
+	playbackLines := []string{
+		"",
+		sectionTitleStyle.Render("Playback & Actions"),
+		"",
+		"  " + keyStyle.Render("enter/p") + "   " + mutedStyle.Render("play stream"),
+		"  " + keyStyle.Render("n") + "         " + mutedStyle.Render("play next episode"),
+		"  " + keyStyle.Render("r") + "         " + mutedStyle.Render("restart from start"),
+		"  " + keyStyle.Render("A") + "         " + mutedStyle.Render("toggle autoplay"),
+		"  " + keyStyle.Render("d") + "         " + mutedStyle.Render("download stream"),
+		"  " + keyStyle.Render("tab") + "       " + mutedStyle.Render("switch source"),
+		"  " + keyStyle.Render("x") + "         " + mutedStyle.Render("cancel download"),
+	}
+	rightLines := append(epKeys, playbackLines...)
 
-	sections = append(sections, "", sectionTitleStyle.Render("General"), "")
-	sections = append(sections,
-		"  "+keyStyle.Render("h")+"        "+mutedStyle.Render("history"),
-		"  "+keyStyle.Render("s")+"        "+mutedStyle.Render("settings"),
-		"  "+keyStyle.Render("x")+"        "+mutedStyle.Render("stop download"),
-		"  "+keyStyle.Render("?")+"        "+mutedStyle.Render("toggle this help"),
-	)
+	titleRow := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render("⌨  KEYBOARD SHORTCUTS")
+	footerHint := mutedStyle.Render("[?] or [Esc] close cheatsheet")
 
-	content := strings.Join(sections, "\n")
-	innerH := max(1, m.height-8)
-	// Idempotent clamp (see renderMainView comment) — keeps helpScroll
-	// valid after resize without introducing non-deterministic state.
+	var body string
+	var boxW int
+	if m.width >= 76 {
+		colW := 33
+		leftCol := lipgloss.NewStyle().Width(colW).Render(strings.Join(navLines, "\n"))
+		rightCol := lipgloss.NewStyle().Width(colW).Render(strings.Join(rightLines, "\n"))
+		body = lipgloss.JoinHorizontal(lipgloss.Top, leftCol, "    ", rightCol)
+		boxW = colW*2 + 8
+	} else {
+		allLines := append(navLines, append([]string{""}, rightLines...)...)
+		body = strings.Join(allLines, "\n")
+		boxW = min(50, max(24, m.width-6))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, titleRow, "", body, "", footerHint)
+	innerH := max(1, m.height-6)
 	content, m.helpScroll = scrollLines(content, m.helpScroll, innerH, "↑/↓ scroll")
-	boxW := min(48, max(12, m.width-6))
+
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorPrimary).
@@ -305,7 +316,5 @@ func (m *modelImpl) renderHelpOverlay() string {
 		Width(boxW).
 		Render(content)
 
-	overlay := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceChars(" "), lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
-
-	return overlay
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box, lipgloss.WithWhitespaceChars(" "), lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
 }
