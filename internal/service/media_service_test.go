@@ -98,7 +98,6 @@ func TestMediaServiceSearchDedupesAnimeByAniListID(t *testing.T) {
 	}
 }
 
-
 func TestMediaServiceSearchCollectsWarningsAndFailsWhenEmpty(t *testing.T) {
 	a := &stubProvider{name: "alpha", mode: provider.ModeAnime, err: fmt.Errorf("boom")}
 	svc := NewMediaService(newTestRegistry(a))

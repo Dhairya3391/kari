@@ -210,8 +210,8 @@ type combinedSkipTimes struct {
 	PreviewStart float64
 	PreviewEnd   float64
 }
-var skipTimesCache = util.NewBoundedCache[combinedSkipTimes](100)
 
+var skipTimesCache = util.NewBoundedCache[combinedSkipTimes](100)
 
 // getSkipArgs resolves skip intervals according to settings and writes a
 // temporary Lua script for MPV. Returns MPV arguments and script path.

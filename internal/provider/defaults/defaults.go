@@ -4,11 +4,11 @@ import (
 	"kari/internal/config"
 	"kari/internal/logging"
 	"kari/internal/provider"
-	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/anikoto"
 	"kari/internal/provider/anilight"
-	"kari/internal/provider/reanime"
+	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/pengu"
+	"kari/internal/provider/reanime"
 	"kari/internal/provider/vidking"
 	"kari/internal/tmdb"
 )

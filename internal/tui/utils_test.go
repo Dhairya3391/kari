@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"kari/internal/provider"
 	"github.com/charmbracelet/lipgloss"
+	"kari/internal/provider"
 )
 
 func TestScrollLinesBoundsOutput(t *testing.T) {
@@ -66,7 +66,6 @@ func TestRenderSettingsScreenAllIndices(t *testing.T) {
 		}
 	}
 }
-
 
 func TestCleanErrorForUIRateLimited(t *testing.T) {
 	tests := []struct {

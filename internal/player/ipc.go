@@ -148,6 +148,7 @@ func (c *IPCClient) GetProperty(property string) (interface{}, error) {
 	}
 	return nil, fmt.Errorf("no response from mpv")
 }
+
 // SendCommand sends a command array to mpv without waiting for a request_id response.
 func (c *IPCClient) SendCommand(command ...any) error {
 	c.mu.Lock()

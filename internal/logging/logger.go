@@ -33,6 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 )
+
 var (
 	logger      atomic.Pointer[slog.Logger]
 	logFile     *os.File
@@ -183,6 +184,7 @@ func (h *dynamicHandler) WithGroup(name string) slog.Handler {
 func With(args ...any) *slog.Logger {
 	return slog.New(&dynamicHandler{}).With(args...)
 }
+
 // Debug logs at debug level; args are alternating key/value pairs.
 func Debug(msg string, args ...any) { logger.Load().Debug(msg, args...) }
 

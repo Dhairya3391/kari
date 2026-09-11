@@ -53,9 +53,9 @@ type Details struct {
 
 // Client fetches and caches poster images from TMDB and AniList.
 type Client struct {
-	http    *http.Client
-	keyPool *tmdb.KeyPool
-	anilistURL   string
+	http       *http.Client
+	keyPool    *tmdb.KeyPool
+	anilistURL string
 
 	imgCache     *util.BoundedCache[image.Image]
 	detailsCache *util.BoundedCache[Details]

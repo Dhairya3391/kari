@@ -183,6 +183,7 @@ func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, 
 
 	return nil, fmt.Errorf("no subtitles found")
 }
+
 // pickBestSubtitle returns the first successfully-downloaded candidate.
 // It doesn't need to check language itself — selectSubtitleCandidates has
 // already restricted and ordered the list (active provider before others,

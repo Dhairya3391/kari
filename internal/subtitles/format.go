@@ -87,6 +87,7 @@ func isSRT(data []byte) bool {
 }
 
 var srtTimestampPattern = regexp.MustCompile(`^\d+[\r\n]+\d{2}:\d{2}:\d{2},\d{3}`)
+
 func decompressGZIP(data []byte) ([]byte, error) {
 	reader, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -233,7 +234,6 @@ func vttToSRT(data []byte) ([]byte, error) {
 
 	return []byte(strings.Join(blocks, "\n\n") + "\n"), nil
 }
-
 
 func detectFormatByContent(data []byte) string {
 	if isVTT(data) {
