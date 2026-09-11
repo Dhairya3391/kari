@@ -79,6 +79,27 @@ func TestDesktopPlayersUseTheirNativeAudioLanguageOptions(t *testing.T) {
 	}
 }
 
+func TestBuildIINAArgsUsesSubFilesOption(t *testing.T) {
+	source := provider.MediaSource{URL: "https://example.com/stream.m3u8"}
+	media := model.ResolvedMedia{
+		SeriesTitle: "Sintel",
+		Subtitles: []model.SubtitleTrack{
+			{Path: "/Users/test/.config/kari/subs/test.srt", Language: "en"},
+		},
+	}
+
+	args := buildIINAArgs(source, media, "/tmp/iina.sock")
+
+	if !containsArg(args, "--sub-files=/Users/test/.config/kari/subs/test.srt") {
+		t.Errorf("IINA args missing --sub-files option: %v", args)
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "--sub-file=") || strings.HasPrefix(a, "--sub-files-append=") {
+			t.Errorf("IINA args contain option IINA ignores via libmpv: %q (full args: %v)", a, args)
+		}
+	}
+}
+
 func containsArg(args []string, want string) bool {
 	for _, arg := range args {
 		if arg == want {

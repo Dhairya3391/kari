@@ -5,7 +5,8 @@ package player
 import "runtime"
 
 // registerDesktopPlayers registers the players available on desktop
-// platforms. mpv is universal; IINA joins on macOS where VLC is uncommon.
+// platforms. mpv is universal; IINA joins on macOS where it is common, and
+// VLC stays available everywhere its binary can be found.
 func registerPlayers(r *Registry) {
 	r.Register(&MPVPlayer{
 		aniskip:      r.aniskipClient,
@@ -14,7 +15,6 @@ func registerPlayers(r *Registry) {
 	})
 	if runtime.GOOS == "darwin" {
 		r.Register(&IINAPlayer{})
-		return
 	}
 	r.Register(&VLCPlayer{})
 }

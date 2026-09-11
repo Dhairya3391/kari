@@ -35,10 +35,7 @@ var _ Player = (*VLCPlayer)(nil)
 func (p *VLCPlayer) Name() string { return "vlc" }
 
 // Available implements Player.
-func (p *VLCPlayer) Available() bool {
-	_, err := exec.LookPath("vlc")
-	return err == nil
-}
+func (p *VLCPlayer) Available() bool { return vlcBinary() != "" }
 
 // Play implements Player.
 func (p *VLCPlayer) Play(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
@@ -50,13 +47,26 @@ func (p *VLCPlayer) Play(sources []provider.MediaSource, media model.ResolvedMed
 	})
 }
 
+// vlcBinary locates VLC across PATH and the standard macOS app bundle,
+// which is never on PATH after a drag-install.
+func vlcBinary() string {
+	if path, err := exec.LookPath("vlc"); err == nil {
+		return path
+	}
+	path := "/Applications/VLC.app/Contents/MacOS/VLC"
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	return ""
+}
+
 // playSingleSourceWithVLC starts VLC and treats a launch that survives the
 // startup window as success; VLC gives no usable exit semantics for streams.
 func playSingleSourceWithVLC(source provider.MediaSource, media model.ResolvedMedia) error {
 	args := buildVLCArgs(source, media)
 	playerLog.Debug("vlc launching", "args", len(args))
 
-	cmd := exec.Command("vlc", args...)
+	cmd := exec.Command(vlcBinary(), args...)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start vlc: %w", err)
 	}
@@ -218,7 +228,24 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 	}
 
 	args = appendTitleArgs(args, media.DisplayTitle())
-	args = appendSubtitleArgs(args, media.SubtitlePaths())
+	args = appendIINASubtitleArgs(args, media.SubtitlePaths())
 	args = appendAudioLangArgs(args, source.Language)
 	return append(args, source.ExtraArgs...)
+}
+
+// appendIINASubtitleArgs side-loads subtitle files using mpv's canonical
+// list option. iina-cli forwards everything after "--" as --mpv-* into
+// libmpv, where the --sub-file CLI alias is never resolved (iina/iina#1991),
+// so --sub-file silently loads nothing. Verified against IINA 1.4.4:
+// --sub-files=<path> loads the track, --sub-files-append does not.
+func appendIINASubtitleArgs(args []string, subtitleFiles []string) []string {
+	for _, sub := range subtitleFiles {
+		if strings.TrimSpace(sub) == "" {
+			continue
+		}
+		sub = strings.ReplaceAll(sub, `\`, `/`)
+		playerLog.Debug("subtitle side-loaded", "player", "iina", "path", sub)
+		args = append(args, "--sub-files="+sub)
+	}
+	return args
 }
