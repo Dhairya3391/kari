@@ -38,33 +38,30 @@ func TestLiveSubtitleFetch(t *testing.T) {
 	pick := results[0]
 	t.Logf("Selected title: %s (TMDB ID: %d, Provider: %s)", pick.Title, pick.TMDBID, pick.Provider)
 
-	resolved, err := mediaSvc.Resolve(ctx, provider.ModeMovies, pick, provider.Episode{}, nil)
+	resolved, err := mediaSvc.Resolve(ctx, provider.ModeMovies, pick, provider.Episode{}, nil, service.ResolveOptions{})
 	if err != nil {
 		t.Fatalf("resolve failed: %v", err)
 	}
 
 	t.Logf("Resolved %d playback sources and %d candidate subtitle tracks", len(resolved.Playback), len(resolved.Subtitles))
 	for i, sub := range resolved.Subtitles {
-		t.Logf("  Candidate %d: Lang=%q Label=%q Resolver=%q URL=%s", i, sub.Language, sub.Label, sub.Resolver, sub.URL)
+		t.Logf("  Candidate %d: Lang=%q Label=%q Resolver=%q", i, sub.Language, sub.Label, sub.Resolver)
 	}
 
 	// Test fetching subtitles with preferred language "en"
-	for _, resolver := range []string{"vidking", "pengu"} {
+	for _, resolver := range []string{"movysx", "pengu"} {
 		start := time.Now()
-		tracks, err := subSvc.Fetch(ctx, resolved, "en", resolver)
+		track, err := subSvc.Fetch(ctx, resolved, "en", resolver)
 		duration := time.Since(start)
 
 		if err != nil {
 			t.Logf("[%s] Subtitle fetch returned: %v (took %v)", resolver, err, duration)
 			continue
 		}
-
-		if len(tracks) == 0 {
-			t.Logf("[%s] No tracks returned (took %v)", resolver, duration)
+		if track.Path == "" {
+			t.Logf("[%s] No track returned (took %v)", resolver, duration)
 			continue
 		}
-
-		track := tracks[0]
 		t.Logf("[%s] Successfully fetched subtitle in %v: Path=%s, Lang=%s, Label=%s", resolver, duration, track.Path, track.Language, track.Label)
 
 		data, err := os.ReadFile(track.Path)
@@ -113,28 +110,26 @@ func TestLiveProviderSubtitles(t *testing.T) {
 		t.Fatalf("fetch episodes: %v (count: %d)", err, len(eps))
 	}
 
-	resolved, err := mediaSvc.Resolve(ctx, provider.ModeAnime, pick, eps[0], nil)
+	resolved, err := mediaSvc.Resolve(ctx, provider.ModeAnime, pick, eps[0], nil, service.ResolveOptions{})
 	if err != nil {
 		t.Fatalf("resolve failed: %v", err)
 	}
 
 	t.Logf("Resolved %d playback sources and %d candidate subtitle tracks", len(resolved.Playback), len(resolved.Subtitles))
 	for i, sub := range resolved.Subtitles {
-		t.Logf("  Provider Candidate %d: Lang=%q Label=%q Resolver=%q URL=%s", i, sub.Language, sub.Label, sub.Resolver, sub.URL)
+		t.Logf("  Provider Candidate %d: Lang=%q Label=%q Resolver=%q", i, sub.Language, sub.Label, sub.Resolver)
 	}
 
 	if len(resolved.Subtitles) > 0 {
 		start := time.Now()
-		tracks, err := subSvc.Fetch(ctx, resolved, "en", resolved.Subtitles[0].Resolver)
+		track, err := subSvc.Fetch(ctx, resolved, "en", resolved.Subtitles[0].Resolver)
 		duration := time.Since(start)
 		if err != nil {
 			t.Fatalf("provider subtitle fetch failed: %v", err)
 		}
-		if len(tracks) == 0 {
-			t.Fatal("expected at least 1 subtitle track")
+		if track.Path == "" {
+			t.Fatal("expected one subtitle track")
 		}
-
-		track := tracks[0]
 		t.Logf("Fetched direct provider subtitle in %v: Path=%s, Lang=%s, Label=%s", duration, track.Path, track.Language, track.Label)
 
 		data, err := os.ReadFile(track.Path)

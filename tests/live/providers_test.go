@@ -3,6 +3,7 @@
 package live
 
 import (
+	"strings"
 	"testing"
 
 	"kari/internal/provider"
@@ -73,6 +74,40 @@ func TestProviderPipeline(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestAnistreamOnePieceUsesPlayableBackends(t *testing.T) {
+	reg := newRegistry(t)
+	p, ok := reg.ProviderByName("anistream")
+	if !ok {
+		t.Skip("anistream provider unavailable")
+	}
+	ctx := ctxWithTimeout(t)
+	sources, err := p.ResolveSource(ctx, "21", provider.Episode{
+		ID:      "watch/anistream/21/sub/1",
+		Episode: 1,
+		Audio:   provider.AudioSub,
+	})
+	skipOnCatalogDrift(t, "anistream one piece resolve", err)
+	if len(sources) == 0 {
+		t.Fatal("anistream returned no sources")
+	}
+	foundLoli := false
+	for _, source := range sources {
+		quality := strings.ToLower(source.Quality)
+		if strings.Contains(quality, "loli") {
+			foundLoli = true
+			if source.SubType != provider.SubTypeHard {
+				t.Errorf("loli source subtype = %q, want hard", source.SubType)
+			}
+		}
+		if strings.Contains(quality, "uwu") || strings.Contains(quality, "sora") || strings.Contains(source.URL, "token=") {
+			t.Errorf("unplayable backend leaked into sources: %+v", source)
+		}
+	}
+	if !foundLoli {
+		t.Fatalf("verified hard-sub backend missing from sources: %+v", sources)
 	}
 }
 

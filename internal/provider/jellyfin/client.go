@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -115,17 +115,21 @@ func (c *Client) searchHints(ctx context.Context, query string) ([]provider.Sear
 	if err != nil {
 		return nil, fmt.Errorf("jellyfin search hints: %w", err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
 		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: u}
 	}
 
-	var sr searchHintsResult
-	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
-		return nil, fmt.Errorf("jellyfin search hints: decode response: %w", err)
+	body, err := httpclient.ReadCapped(resp)
+	if err != nil {
+		return nil, fmt.Errorf("jellyfin search hints: read body: %w", err)
 	}
 
+	var sr searchHintsResult
+	if err := json.Unmarshal(body, &sr); err != nil {
+		return nil, fmt.Errorf("jellyfin search hints: decode response: %w", err)
+	}
 	results := make([]provider.SearchResult, 0, len(sr.SearchHints))
 	for _, h := range sr.SearchHints {
 		mediaType := ""
@@ -183,17 +187,21 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 	if err != nil {
 		return nil, fmt.Errorf("jellyfin fetch episodes: %w", err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
 		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: u}
 	}
 
-	var ir itemsResult
-	if err := json.NewDecoder(resp.Body).Decode(&ir); err != nil {
-		return nil, fmt.Errorf("jellyfin fetch episodes: decode response: %w", err)
+	body, err := httpclient.ReadCapped(resp)
+	if err != nil {
+		return nil, fmt.Errorf("jellyfin fetch episodes: read body: %w", err)
 	}
 
+	var ir itemsResult
+	if err := json.Unmarshal(body, &ir); err != nil {
+		return nil, fmt.Errorf("jellyfin fetch episodes: decode response: %w", err)
+	}
 	eps := make([]provider.Episode, 0, len(ir.Items))
 	for _, it := range ir.Items {
 		eps = append(eps, provider.Episode{
@@ -208,11 +216,11 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 		return nil, provider.ErrNoEpisodes
 	}
 
-	sort.Slice(eps, func(i, j int) bool {
-		if eps[i].Season != eps[j].Season {
-			return eps[i].Season < eps[j].Season
+	slices.SortFunc(eps, func(a, b provider.Episode) int {
+		if a.Season != b.Season {
+			return a.Season - b.Season
 		}
-		return eps[i].Episode < eps[j].Episode
+		return a.Episode - b.Episode
 	})
 
 	logging.Debug("fetch episodes done", "provider", c.Name(), "count", len(eps))

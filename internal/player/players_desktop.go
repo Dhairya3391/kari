@@ -18,13 +18,7 @@ import (
 	"kari/internal/provider"
 )
 
-const (
-	// vlcStartupTimeout bounds how long a VLC launch is watched before
-	// assuming it started fine.
-	vlcStartupTimeout = 3 * time.Second
-	// iinaStartupTimeout matches IINA's mpv-derived startup behavior.
-	iinaStartupTimeout = 4500 * time.Millisecond
-)
+const vlcStartupTimeout = 3 * time.Second
 
 // VLCPlayer launches VLC with per-source args.
 type VLCPlayer struct{}
@@ -43,7 +37,7 @@ func (p *VLCPlayer) Play(sources []provider.MediaSource, media model.ResolvedMed
 		if err := playSingleSourceWithVLC(source, media); err != nil {
 			return PlaybackResult{}, err
 		}
-		return PlaybackResult{}, &NeedsCompletionConfirmError{Media: media}
+		return PlaybackResult{}, &NeedsCompletionConfirmError{}
 	})
 }
 
@@ -117,11 +111,8 @@ func buildVLCArgs(source provider.MediaSource, media model.ResolvedMedia) []stri
 	if lang := strings.ToLower(strings.TrimSpace(source.Language)); lang != "" {
 		args = append(args, "--audio-language="+lang)
 	}
-	for _, sub := range media.SubtitlePaths() {
-		if strings.TrimSpace(sub) != "" {
-			sub = strings.ReplaceAll(sub, `\`, `/`)
-			args = append(args, "--sub-file="+sub)
-		}
+	if subtitlePath := media.SubtitlePath(); subtitlePath != "" {
+		args = append(args, "--sub-file="+strings.ReplaceAll(subtitlePath, `\`, `/`))
 	}
 
 	return append(args, source.URL)
@@ -170,15 +161,22 @@ func iinaBinary() string {
 func playSingleSourceWithIINA(binary string, source provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
 	socketPath := DefaultMPVSocketPath()
 	args := buildIINAArgs(source, media, socketPath)
-	stderr, exitCode, launched, quickExit, stats :=
-		startPlayerWithStartupCheck(binary, args, iinaStartupTimeout, socketPath)
-	if attemptSucceeded(launched, exitCode, quickExit, stats) {
-		return stats, nil
+	result := startPlayerWithStartupCheck(startupCheck{
+		binary:     binary,
+		args:       args,
+		socketPath: socketPath,
+	})
+	if result.succeeded() {
+		return result.playback, nil
 	}
-	if stderr == "" {
-		return PlaybackResult{}, fmt.Errorf("process exited with code %d", exitCode)
+	if result.mpvStderr == "" {
+		return PlaybackResult{}, fmt.Errorf("process exited with code %d", result.exitCode)
 	}
-	return PlaybackResult{}, fmt.Errorf("process exited with code %d: %s", exitCode, stderr)
+	return PlaybackResult{}, fmt.Errorf(
+		"process exited with code %d: %s",
+		result.exitCode,
+		result.mpvStderr,
+	)
 }
 
 // buildIINAArgs mirrors buildMPVArgs minus mpv-only options IINA rejects;
@@ -190,11 +188,11 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 		"--network-timeout=15",
 		"--cache=yes",
 		"--cache-pause-initial=no",
-		"--stream-buffer-size=8M",
 		"--demuxer-seekable-cache=yes",
 		"--demuxer-max-bytes=150M",
 		"--demuxer-max-back-bytes=30M",
 		"--demuxer-readahead-secs=60",
+		"--stream-buffer-size=8M",
 		"--hls-bitrate=max",
 		"--input-ipc-server="+socketPath,
 	)
@@ -217,8 +215,9 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 	// Same header rules as buildMPVArgs: UA/Referer via native options only.
 	var headers []string
 	if strings.TrimSpace(source.Referer) != "" && !source.SuppressOrigin {
-		ref := strings.TrimSuffix(source.Referer, "/")
-		headers = append(headers, "Origin: "+ref)
+		if origin := originFromReferer(strings.TrimSpace(source.Referer)); origin != "" {
+			headers = append(headers, "Origin: "+origin)
+		}
 	}
 	if strings.TrimSpace(source.CookieHeader) != "" {
 		headers = append(headers, "Cookie: "+source.CookieHeader)
@@ -228,24 +227,22 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 	}
 
 	args = appendTitleArgs(args, media.DisplayTitle())
-	args = appendIINASubtitleArgs(args, media.SubtitlePaths())
+	args = appendIINASubtitleArgs(args, media.SubtitlePath())
 	args = appendAudioLangArgs(args, source.Language)
 	return append(args, source.ExtraArgs...)
 }
 
-// appendIINASubtitleArgs side-loads subtitle files using mpv's canonical
+// appendIINASubtitleArgs side-loads subtitle inputs using mpv's canonical
 // list option. iina-cli forwards everything after "--" as --mpv-* into
 // libmpv, where the --sub-file CLI alias is never resolved (iina/iina#1991),
 // so --sub-file silently loads nothing. Verified against IINA 1.4.4:
 // --sub-files=<path> loads the track, --sub-files-append does not.
-func appendIINASubtitleArgs(args []string, subtitleFiles []string) []string {
-	for _, sub := range subtitleFiles {
-		if strings.TrimSpace(sub) == "" {
-			continue
-		}
-		sub = strings.ReplaceAll(sub, `\`, `/`)
-		playerLog.Debug("subtitle side-loaded", "player", "iina", "path", sub)
-		args = append(args, "--sub-files="+sub)
+func appendIINASubtitleArgs(args []string, subtitlePath string) []string {
+	subtitlePath = strings.TrimSpace(subtitlePath)
+	if subtitlePath == "" {
+		return args
 	}
-	return args
+	subtitlePath = strings.ReplaceAll(subtitlePath, `\`, `/`)
+	playerLog.Debug("subtitle side-loaded", "player", "iina", "path", subtitlePath)
+	return append(args, "--sub-files="+subtitlePath)
 }

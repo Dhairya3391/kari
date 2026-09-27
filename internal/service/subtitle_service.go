@@ -2,308 +2,466 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/lang"
-	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/subtitles"
 	"kari/internal/util"
 )
 
-// log scopes every line from this package/component.
-var subSvcLog = logging.With("component", "service.subtitles")
+const (
+	subtitleCacheSize               = 100
+	subtitleFetchTimeout            = 10 * time.Second
+	subtitleProviderCandidateLimit  = 3
+	subtitleProviderDownloadTimeout = 3 * time.Second
+)
 
-// subtitleCacheSize bounds SubtitleService's in-memory result cache so a
-// long session watching many different titles doesn't grow it forever.
-const subtitleCacheSize = 100
-
-// subtitleCacheMaxAge is how long downloaded subtitle files are kept on
-// disk in internal/subtitles.CacheDir() before being pruned on startup.
-const subtitleCacheMaxAge = 7 * 24 * time.Hour
-
-// SubtitleService selects and materializes subtitles: active provider's
-// track in preferred language first, then that provider's English, then
-// OpenSubtitles, then other providers' tracks — never another language.
+// SubtitleService selects and materializes one subtitle track for playback.
 type SubtitleService struct {
-	openSubtitles         *subtitles.Client
-	httpClient            *http.Client
-	cache                 *util.BoundedCache[[]model.SubtitleTrack]
-	disableAnimeSubtitles bool
+	openSubtitles *subtitles.Client
+	httpClient    *http.Client
+	cache         *util.BoundedCache[model.SubtitleTrack]
+	disableMu     sync.RWMutex
+	disableAnime  bool
 }
 
 // SetDisableAnimeSubtitles toggles anime-specific subtitle suppression.
 func (s *SubtitleService) SetDisableAnimeSubtitles(disable bool) {
-	s.disableAnimeSubtitles = disable
+	s.disableMu.Lock()
+	s.disableAnime = disable
+	s.disableMu.Unlock()
 }
 
 // NewSubtitleService builds the service; OpenSubtitles stays unconfigured
-// unless credentials are present. A background goroutine prunes stale cache
-// files at startup.
+// unless credentials are present.
 func NewSubtitleService(cfg *config.Config) *SubtitleService {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
 	var openSubtitles *subtitles.Client
-	if strings.TrimSpace(cfg.OpenSubtitlesKey) != "" && strings.TrimSpace(cfg.OpenSubtitlesUser) != "" && strings.TrimSpace(cfg.OpenSubtitlesPass) != "" {
-		openSubtitles = subtitles.NewClient(cfg.OpenSubtitlesKey, cfg.OpenSubtitlesUser, cfg.OpenSubtitlesPass)
+	if strings.TrimSpace(cfg.OpenSubtitlesKey) != "" &&
+		strings.TrimSpace(cfg.OpenSubtitlesUser) != "" &&
+		strings.TrimSpace(cfg.OpenSubtitlesPass) != "" {
+		openSubtitles = subtitles.NewClient(
+			cfg.OpenSubtitlesKey,
+			cfg.OpenSubtitlesUser,
+			cfg.OpenSubtitlesPass,
+		)
 	}
-	go func() {
-		if err := subtitles.PruneCacheDir(subtitleCacheMaxAge); err != nil {
-			subSvcLog.Debug("subtitle cache prune failed", "err", err)
-		}
-	}()
 	return &SubtitleService{
 		openSubtitles: openSubtitles,
 		httpClient:    httpclient.New(),
-		cache:         util.NewBoundedCache[[]model.SubtitleTrack](subtitleCacheSize),
+		cache:         util.NewBoundedCache[model.SubtitleTrack](subtitleCacheSize),
 	}
 }
 
-// Fetch picks and downloads the best subtitle track for resolved media,
-// caching results by (media, language, resolver).
-func (s *SubtitleService) Fetch(ctx context.Context, media model.ResolvedMedia, preferredLang, preferredResolver string) ([]model.SubtitleTrack, error) {
+// Fetch picks and validates one subtitle track for resolved media, caching
+// results by media, language, and resolver.
+func (s *SubtitleService) Fetch(
+	ctx context.Context,
+	media model.ResolvedMedia,
+	preferredLang string,
+	preferredResolver string,
+) (model.SubtitleTrack, error) {
+	ctx, cancel := context.WithTimeout(ctx, subtitleFetchTimeout)
+	defer cancel()
+
 	preferredLang = lang.Normalize(preferredLang)
 	if preferredLang == "off" {
-		subSvcLog.Debug("subtitles disabled in settings; skipping fetch")
-		return nil, nil
+		return model.SubtitleTrack{}, nil
 	}
 	if preferredLang == "" {
 		preferredLang = "en"
 	}
 
-	cacheKey := fmt.Sprintf("%d:%d:%d:%s:%s:%s", media.TMDBID, media.SeasonNumber, media.EpisodeNumber, media.SeriesTitle, preferredLang, preferredResolver)
-	if tracks, ok := s.cache.Get(cacheKey); ok {
-		return tracks, nil
+	isAnime := media.MediaType == provider.MediaTypeAnime
+	if isAnime && s.areAnimeSubtitlesDisabled() {
+		return model.SubtitleTrack{}, nil
 	}
 
-	titleKey := fmt.Sprintf("%d:%d:%d:%s:%s", media.TMDBID, media.SeasonNumber, media.EpisodeNumber, media.SeriesTitle, preferredLang)
+	mediaTitle := strings.TrimSpace(media.SeriesTitle)
+	if mediaTitle == "" {
+		mediaTitle = strings.TrimSpace(media.EpisodeTitle)
+	}
+	cacheKey := fmt.Sprintf(
+		"%d:%d:%d:%s:%s:%s",
+		media.TMDBID,
+		media.SeasonNumber,
+		media.EpisodeNumber,
+		mediaTitle,
+		preferredLang,
+		preferredResolver,
+	)
+	if track, ok := s.cache.Get(cacheKey); ok && usableCachedTrack(track) {
+		return track, nil
+	}
+
+	titleKey := fmt.Sprintf(
+		"%d:%d:%d:%s:%s",
+		media.TMDBID,
+		media.SeasonNumber,
+		media.EpisodeNumber,
+		mediaTitle,
+		preferredLang,
+	)
+	if !isAnime {
+		if track, ok := s.cache.Get(titleKey); ok && usableCachedTrack(track) {
+			s.cache.Set(cacheKey, track)
+			return track, nil
+		}
+	}
 
 	originalSubtitles := media.Subtitles
-	for i, t := range originalSubtitles {
-		subSvcLog.Debug("incoming subtitle candidate", "index", i, "label", t.Label, "language", t.Language, "resolver", t.Resolver, "url", t.URL, "path", t.Path)
-	}
+	attempted := make(map[string]struct{})
+	var failures []error
 
-	isAnime := media.MediaType == provider.MediaTypeAnime
-	if isAnime && s.disableAnimeSubtitles {
-		subSvcLog.Debug("anime subtitles disabled in settings; skipping fetch")
-		return nil, nil
+	phases := [][]model.SubtitleTrack{
+		selectMatchingProviderCandidates(originalSubtitles, preferredLang, preferredResolver),
 	}
-
-	// Priority 1: Subtitles from the MATCHING provider (preferredResolver)
-	matchingSubs := selectMatchingProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
-	if len(matchingSubs) > 0 {
-		subSvcLog.Debug("matching provider subtitles found", "count", len(matchingSubs), "resolver", preferredResolver)
-		mCopy := model.ResolvedMedia{Subtitles: matchingSubs}
-		if s.downloadProviderSubtitles(ctx, &mCopy) {
-			if track, ok := s.pickBestSubtitle(mCopy.Subtitles); ok {
-				tracks := []model.SubtitleTrack{track}
-				subSvcLog.Debug("selected matching provider sub", "path", track.Path, "lang", track.Language, "resolver", track.Resolver)
-				s.cache.Set(cacheKey, tracks)
-				s.cache.Set(titleKey, tracks)
-				return tracks, nil
-			}
-		}
-	}
-
-	// Priority 2 for Anime: Fall back to OTHER providers' soft subtitles
 	if isAnime {
-		otherSubs := selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
-		if len(otherSubs) > 0 {
-			subSvcLog.Debug("falling back to other providers' tracks", "count", len(otherSubs))
-			mCopy := model.ResolvedMedia{Subtitles: otherSubs}
-			if s.downloadProviderSubtitles(ctx, &mCopy) {
-				if track, ok := s.pickBestSubtitle(mCopy.Subtitles); ok {
-					tracks := []model.SubtitleTrack{track}
-					subSvcLog.Debug("selected fallback other provider sub", "path", track.Path, "lang", track.Language, "resolver", track.Resolver)
-					s.cache.Set(cacheKey, tracks)
-					s.cache.Set(titleKey, tracks)
-					return tracks, nil
-				}
-			}
-		}
-		// For anime without soft subtitles (e.g. hardsubbed releases or dubs), do not overlay OpenSubtitles
-		return nil, fmt.Errorf("no soft subtitles available for this anime episode")
+		phases = append(phases, selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver))
 	}
 
-	// Fast-path for non-anime: if the active provider lacks subtitles (e.g. VidKing), reuse an
-	// already-downloaded subtitle track for this title/language from a sibling provider.
-	if cachedTracks, ok := s.cache.Get(titleKey); ok && len(cachedTracks) > 0 {
-		if _, err := os.Stat(cachedTracks[0].Path); err == nil {
-			subSvcLog.Debug("reusing title cached subtitle", "path", cachedTracks[0].Path, "lang", cachedTracks[0].Language)
-			s.cache.Set(cacheKey, cachedTracks)
-			return cachedTracks, nil
-		}
-	}
-
-	query := strings.TrimSpace(media.SeriesTitle)
-	if query == "" {
-		query = strings.TrimSpace(media.EpisodeTitle)
-	}
-
-	// Priority 2 for non-anime: Try OpenSubtitles
-	if s.openSubtitles != nil && s.openSubtitles.Configured() {
-		track, found, err := s.openSubtitles.FetchBestSubtitle(ctx, query, preferredLang, media.TMDBID, media.SeasonNumber, media.EpisodeNumber)
-		if err == nil && found {
-			tracks := []model.SubtitleTrack{track}
-			subSvcLog.Debug("selected opensubtitles sub", "path", track.Path, "lang", track.Language)
-			s.cache.Set(cacheKey, tracks)
-			s.cache.Set(titleKey, tracks)
-			return tracks, nil
+	for _, candidates := range phases {
+		track, err := s.downloadProviderCandidates(ctx, media, candidates, attempted)
+		if err == nil && usableCachedTrack(track) {
+			s.cacheTrack(track, cacheKey, titleKey)
+			return track, nil
 		}
 		if err != nil {
-			subSvcLog.Warn("opensubtitles lookup failed", "err", err)
+			failures = append(failures, err)
 		}
 	}
 
-	// Priority 3 for non-anime: Fall back to OTHER providers
-	otherSubs := selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
-	if len(otherSubs) > 0 {
-		subSvcLog.Debug("falling back to other providers' tracks", "count", len(otherSubs))
-		mCopy := model.ResolvedMedia{Subtitles: otherSubs}
-		if s.downloadProviderSubtitles(ctx, &mCopy) {
-			if track, ok := s.pickBestSubtitle(mCopy.Subtitles); ok {
-				tracks := []model.SubtitleTrack{track}
-				subSvcLog.Debug("selected fallback other provider sub", "path", track.Path, "lang", track.Language, "resolver", track.Resolver)
-				s.cache.Set(cacheKey, tracks)
-				s.cache.Set(titleKey, tracks)
-				return tracks, nil
-			}
+	if s.openSubtitles != nil && s.openSubtitles.Configured() {
+		track, found, err := s.openSubtitles.FetchBestSubtitle(
+			ctx,
+			mediaTitle,
+			preferredLang,
+			media.TMDBID,
+			media.SeasonNumber,
+			media.EpisodeNumber,
+		)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("opensubtitles: %w", err))
+		} else if found && usableCachedTrack(track) {
+			s.cacheTrack(track, cacheKey, titleKey)
+			return track, nil
 		}
 	}
 
-	return nil, fmt.Errorf("no subtitles found")
+	if !isAnime {
+		candidates := selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
+		track, err := s.downloadProviderCandidates(ctx, media, candidates, attempted)
+		if err == nil && usableCachedTrack(track) {
+			s.cacheTrack(track, cacheKey, titleKey)
+			return track, nil
+		}
+		if err != nil {
+			failures = append(failures, err)
+		}
+	}
+
+	candidates := selectAnyProviderCandidates(originalSubtitles, preferredResolver)
+	track, err := s.downloadProviderCandidates(ctx, media, candidates, attempted)
+	if err == nil && usableCachedTrack(track) {
+		s.cacheTrack(track, cacheKey, titleKey)
+		return track, nil
+	}
+	if err != nil {
+		failures = append(failures, err)
+	}
+
+	if len(failures) == 0 {
+		return model.SubtitleTrack{}, errors.New("no subtitles found")
+	}
+	return model.SubtitleTrack{}, fmt.Errorf("no subtitles found: %w", errors.Join(failures...))
 }
 
-// pickBestSubtitle returns the first successfully-downloaded candidate.
-// It doesn't need to check language itself — selectSubtitleCandidates has
-// already restricted and ordered the list (active provider before others,
-// preferred language before English, never any other language), so "first
-// downloaded" is already the best available choice.
-func (s *SubtitleService) pickBestSubtitle(tracks []model.SubtitleTrack) (model.SubtitleTrack, bool) {
-	for _, t := range tracks {
-		if t.Path != "" {
-			return t, true
-		}
-	}
-	return model.SubtitleTrack{}, false
+func (s *SubtitleService) areAnimeSubtitlesDisabled() bool {
+	s.disableMu.RLock()
+	disabled := s.disableAnime
+	s.disableMu.RUnlock()
+	return disabled
 }
 
-// selectMatchingProviderCandidates returns subtitles from the matched provider (preferredResolver)
-// filtered to preferredLang or English.
-func selectMatchingProviderCandidates(tracks []model.SubtitleTrack, preferredLang, preferredResolver string) []model.SubtitleTrack {
+func (s *SubtitleService) cacheTrack(track model.SubtitleTrack, cacheKey, titleKey string) {
+	s.cache.Set(cacheKey, track)
+	s.cache.Set(titleKey, track)
+}
+
+func usableCachedTrack(track model.SubtitleTrack) bool {
+	path := strings.TrimSpace(track.Path)
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Size() > 0
+}
+
+func selectMatchingProviderCandidates(
+	tracks []model.SubtitleTrack,
+	preferredLang string,
+	preferredResolver string,
+) []model.SubtitleTrack {
 	if preferredResolver == "" {
 		return nil
 	}
 	preferredLang = lang.Normalize(preferredLang)
-	var exact, english []model.SubtitleTrack
-	for _, t := range tracks {
-		if !strings.EqualFold(t.Resolver, preferredResolver) {
+	var exact, english, alternate []model.SubtitleTrack
+	for _, track := range tracks {
+		if !strings.EqualFold(track.Resolver, preferredResolver) {
 			continue
 		}
-		tLang := lang.Normalize(t.Language)
-		if tLang == preferredLang {
-			exact = append(exact, t)
-		} else if preferredLang != "en" && tLang == "en" {
-			english = append(english, t)
+		trackLang := lang.Normalize(track.Language)
+		switch {
+		case trackLang == preferredLang:
+			exact = append(exact, track)
+		case trackLang == "en":
+			english = append(english, track)
+		default:
+			alternate = append(alternate, track)
 		}
 	}
-	return append(exact, english...)
+	return append(append(defaultFirst(exact), defaultFirst(english)...), defaultFirst(alternate)...)
 }
 
-func selectOtherProviderCandidates(tracks []model.SubtitleTrack, preferredLang, preferredResolver string) []model.SubtitleTrack {
+func selectOtherProviderCandidates(
+	tracks []model.SubtitleTrack,
+	preferredLang string,
+	preferredResolver string,
+) []model.SubtitleTrack {
 	preferredLang = lang.Normalize(preferredLang)
 	var exact, english []model.SubtitleTrack
-	for _, t := range tracks {
-		if preferredResolver != "" && strings.EqualFold(t.Resolver, preferredResolver) {
+	for _, track := range tracks {
+		if preferredResolver != "" && strings.EqualFold(track.Resolver, preferredResolver) {
 			continue
 		}
-		tLang := lang.Normalize(t.Language)
-		if tLang == preferredLang {
-			exact = append(exact, t)
-		} else if preferredLang != "en" && tLang == "en" {
-			english = append(english, t)
+		trackLang := lang.Normalize(track.Language)
+		switch {
+		case trackLang == preferredLang:
+			exact = append(exact, track)
+		case preferredLang != "en" && trackLang == "en":
+			english = append(english, track)
 		}
 	}
-	return append(exact, english...)
+	return append(defaultFirst(exact), defaultFirst(english)...)
 }
 
-func (s *SubtitleService) downloadProviderSubtitles(ctx context.Context, media *model.ResolvedMedia) bool {
-	for i, sub := range media.Subtitles {
-		if sub.URL != "" && sub.Path == "" {
-			dlCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
-			localPath, err := s.downloadProviderSubtitle(dlCtx, sub.URL, sub.Referer)
-			cancel()
-			if err == nil {
-				media.Subtitles[i].Path = localPath
-				media.Subtitles[i].URL = ""
-				return true
-			}
-			subSvcLog.Warn("provider subtitle download failed", "url", sub.URL, "err", err)
-		} else if sub.Path != "" {
-			return true
+func selectAnyProviderCandidates(
+	tracks []model.SubtitleTrack,
+	preferredResolver string,
+) []model.SubtitleTrack {
+	out := make([]model.SubtitleTrack, 0, len(tracks))
+	for _, track := range tracks {
+		if preferredResolver != "" && strings.EqualFold(track.Resolver, preferredResolver) {
+			continue
+		}
+		out = append(out, track)
+	}
+	return defaultFirst(out)
+}
+
+func defaultFirst(tracks []model.SubtitleTrack) []model.SubtitleTrack {
+	out := make([]model.SubtitleTrack, 0, len(tracks))
+	for _, track := range tracks {
+		if track.Default {
+			out = append(out, track)
 		}
 	}
-	return false
+	for _, track := range tracks {
+		if !track.Default {
+			out = append(out, track)
+		}
+	}
+	return out
 }
 
-func (s *SubtitleService) downloadProviderSubtitle(ctx context.Context, subURL string, referer string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, subURL, nil)
+func (s *SubtitleService) downloadProviderCandidates(
+	ctx context.Context,
+	media model.ResolvedMedia,
+	candidates []model.SubtitleTrack,
+	attempted map[string]struct{},
+) (model.SubtitleTrack, error) {
+	var failures []error
+	for _, track := range candidates {
+		if len(attempted) >= subtitleProviderCandidateLimit {
+			break
+		}
+		key := subtitleCandidateKey(track)
+		if key == "" {
+			continue
+		}
+		if _, ok := attempted[key]; ok {
+			continue
+		}
+		attempted[key] = struct{}{}
+		if usableCachedTrack(track) {
+			return track, nil
+		}
+		if strings.TrimSpace(track.URL) == "" {
+			failures = append(failures, errors.New("subtitle candidate has no URL"))
+			continue
+		}
+
+		downloadCtx, cancel := context.WithTimeout(ctx, subtitleProviderDownloadTimeout)
+		downloaded, err := s.downloadProviderSubtitle(downloadCtx, media, track)
+		cancel()
+		if err == nil {
+			return downloaded, nil
+		}
+		failures = append(failures, err)
+	}
+	if len(failures) == 0 {
+		return model.SubtitleTrack{}, nil
+	}
+	return model.SubtitleTrack{}, errors.Join(failures...)
+}
+
+func (s *SubtitleService) downloadProviderSubtitle(
+	ctx context.Context,
+	media model.ResolvedMedia,
+	track model.SubtitleTrack,
+) (model.SubtitleTrack, error) {
+	parsed, err := url.Parse(strings.TrimSpace(track.URL))
 	if err != nil {
-		return "", err
+		return model.SubtitleTrack{}, fmt.Errorf("parse subtitle URL: %w", err)
 	}
-	req.Header.Set("User-Agent", config.DesktopUserAgent)
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return model.SubtitleTrack{}, fmt.Errorf("unsupported subtitle URL scheme %q", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return model.SubtitleTrack{}, errors.New("subtitle URL has no host")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return model.SubtitleTrack{}, fmt.Errorf("create subtitle request: %w", err)
+	}
+	source := subtitleParentSource(media.Playback, track.SourceID, track.SourceURL)
+	req.Header.Set("User-Agent", sourceUserAgent(source))
+	referer := firstNonEmptyTrackValue(track.Referer, source.Referer)
 	if referer != "" {
 		req.Header.Set("Referer", referer)
+		if !source.SuppressOrigin {
+			if origin := subtitleOrigin(referer); origin != "" {
+				req.Header.Set("Origin", origin)
+			}
+		}
+	}
+	if strings.TrimSpace(source.CookieHeader) != "" {
+		req.Header.Set("Cookie", source.CookieHeader)
 	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return model.SubtitleTrack{}, fmt.Errorf("download subtitle: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("status %d", resp.StatusCode)
+		return model.SubtitleTrack{}, fmt.Errorf("download subtitle: status %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := readProviderSubtitle(resp.Body)
 	if err != nil {
-		return "", err
+		return model.SubtitleTrack{}, err
 	}
-	if len(data) == 0 {
-		return "", fmt.Errorf("empty subtitle file")
-	}
-
-	processedData, detectedFormat := subtitles.ProcessSubtitleData(data)
-
-	subDir, err := subtitles.CacheDir()
+	processed, format, err := subtitles.ProcessSubtitleData(data)
 	if err != nil {
-		return "", err
+		return model.SubtitleTrack{}, fmt.Errorf("validate subtitle: %w", err)
 	}
 
-	ext := ".srt"
-	if detectedFormat == "ass" || strings.HasSuffix(strings.ToLower(subURL), ".ass") {
-		ext = ".ass"
-	} else if detectedFormat == "vtt" {
-		ext = ".vtt"
+	cacheDir, err := subtitles.CacheDir()
+	if err != nil {
+		return model.SubtitleTrack{}, fmt.Errorf("subtitle cache dir: %w", err)
+	}
+	filename := fmt.Sprintf("provider_sub_%d%s", time.Now().UnixNano(), subtitles.FileExtension(format))
+	path := filepath.Join(cacheDir, filename)
+	if err := util.AtomicWriteFile(path, processed, 0o644); err != nil {
+		return model.SubtitleTrack{}, fmt.Errorf("write subtitle: %w", err)
 	}
 
-	filename := fmt.Sprintf("provider_sub_%d%s", time.Now().UnixNano(), ext)
-	localPath := filepath.Join(subDir, filename)
+	track.Path = path
+	track.URL = ""
+	return track, nil
+}
 
-	if err := os.WriteFile(localPath, processedData, 0o644); err != nil {
-		return "", err
+func readProviderSubtitle(body io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(body, httpclient.MaxBodyBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read subtitle: %w", err)
 	}
+	if len(data) > httpclient.MaxBodyBytes {
+		return nil, httpclient.ErrBodyTooLarge
+	}
+	return data, nil
+}
 
-	return localPath, nil
+func subtitleParentSource(
+	sources []provider.MediaSource,
+	sourceID string,
+	sourceURL string,
+) provider.MediaSource {
+	sourceID = strings.TrimSpace(sourceID)
+	sourceURL = strings.TrimSpace(sourceURL)
+	for _, source := range sources {
+		if sourceID != "" && source.TransportIdentity() == sourceID {
+			return source
+		}
+	}
+	for _, source := range sources {
+		if sourceURL != "" && strings.TrimSpace(source.URL) == sourceURL {
+			return source
+		}
+	}
+	return provider.MediaSource{}
+}
+
+func sourceUserAgent(source provider.MediaSource) string {
+	if userAgent := strings.TrimSpace(source.UserAgent); userAgent != "" {
+		return userAgent
+	}
+	return config.DesktopUserAgent
+}
+
+func firstNonEmptyTrackValue(values ...string) string {
+	for _, value := range values {
+		if clean := strings.TrimSpace(value); clean != "" {
+			return clean
+		}
+	}
+	return ""
+}
+
+func subtitleOrigin(referer string) string {
+	parsed, err := url.Parse(strings.TrimSpace(referer))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+func subtitleCandidateKey(track model.SubtitleTrack) string {
+	if usableCachedTrack(track) {
+		return "path:" + strings.TrimSpace(track.Path)
+	}
+	return strings.Join([]string{
+		strings.TrimSpace(track.URL),
+		strings.TrimSpace(track.SourceID),
+		strings.TrimSpace(track.SourceURL),
+		strings.TrimSpace(track.Referer),
+	}, "\x00")
 }

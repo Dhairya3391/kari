@@ -46,17 +46,12 @@ func (r ResolvedMedia) DisplayTitle() string {
 	return prefix + " - " + episodeTag + " - " + episode
 }
 
-// SubtitlePaths returns on-disk paths of downloaded subtitle tracks, for
-// players that take subtitle files as arguments.
-func (r ResolvedMedia) SubtitlePaths() []string {
-	out := make([]string, 0, len(r.Subtitles))
-	for _, sub := range r.Subtitles {
-		path := strings.TrimSpace(sub.Path)
-		if path != "" {
-			out = append(out, path)
-		}
+// SubtitlePath returns the validated local subtitle selected for playback.
+func (r ResolvedMedia) SubtitlePath() string {
+	if r.SelectedSubtitle == nil {
+		return ""
 	}
-	return out
+	return strings.TrimSpace(r.SelectedSubtitle.Path)
 }
 
 // IsEpisodeBased reports whether the given media type is episodic content
@@ -73,7 +68,7 @@ func IsEpisodeBased(mediaType string) bool {
 
 func isMovieLike(mediaType string) bool {
 	switch strings.ToLower(strings.TrimSpace(mediaType)) {
-	case provider.MediaTypeMovie, "film":
+	case provider.MediaTypeMovie, "film", provider.MediaTypeLive:
 		return true
 	default:
 		return false

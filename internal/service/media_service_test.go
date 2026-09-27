@@ -174,6 +174,44 @@ func TestSourceAggregatorDedupesSourcesAndSubtitles(t *testing.T) {
 	}
 }
 
+func TestSourceAggregatorPreservesTransportBoundSubtitles(t *testing.T) {
+	agg := newSourceAggregatorForMode(provider.ModeMovies, nil, func(name string) string { return name })
+	agg.add("pengu", []provider.MediaSource{
+		{
+			URL:       "https://cdn.example.com/video.m3u8",
+			Referer:   "https://one.example/",
+			UserAgent: "one",
+			Subtitles: []provider.SubtitleOption{{
+				URL:      "https://cdn.example.com/en.vtt",
+				Language: "en",
+				Default:  true,
+			}},
+		},
+		{
+			URL:       "https://cdn.example.com/video.m3u8",
+			Referer:   "https://two.example/",
+			UserAgent: "two",
+			Subtitles: []provider.SubtitleOption{{
+				URL:      "https://cdn.example.com/en.vtt",
+				Language: "en",
+			}},
+		},
+	})
+
+	if len(agg.sources) != 2 {
+		t.Fatalf("sources = %d, want 2 transport variants", len(agg.sources))
+	}
+	if len(agg.subs) != 2 {
+		t.Fatalf("subtitles = %d, want 2 transport variants", len(agg.subs))
+	}
+	if agg.subs[0].SourceURL != "https://cdn.example.com/video.m3u8" {
+		t.Fatalf("source URL not preserved: %+v", agg.subs[0])
+	}
+	if !agg.subs[0].Default || agg.subs[0].Referer != "https://one.example/" {
+		t.Fatalf("subtitle metadata not preserved: %+v", agg.subs[0])
+	}
+}
+
 func TestSourceAggregatorSortQualityThenPriority(t *testing.T) {
 	first := &stubProvider{name: "first", mode: provider.ModeTV}
 	second := &stubProvider{name: "second", mode: provider.ModeTV}
@@ -205,7 +243,7 @@ func TestResolveUsesCrossProviderTMDBID(t *testing.T) {
 	svc := NewMediaService(newTestRegistry(origin, other))
 	_, err := svc.Resolve(context.Background(), provider.ModeMovies,
 		provider.SearchResult{Title: "T", ID: "opaque", Provider: "origin", TMDBID: 42, MediaType: provider.MediaTypeMovie},
-		provider.Episode{}, nil)
+		provider.Episode{}, nil, ResolveOptions{})
 	if err != nil {
 		t.Fatalf("resolve failed: %v", err)
 	}
@@ -223,7 +261,7 @@ func TestResolveUsesCrossProviderAnimeAniListID(t *testing.T) {
 	svc := NewMediaService(newTestRegistry(origin, other))
 	_, err := svc.Resolve(context.Background(), provider.ModeAnime,
 		provider.SearchResult{Title: "One Piece", ID: "21", Provider: "anikoto", Type: provider.ModeAnime, MediaType: provider.MediaTypeAnime},
-		provider.Episode{Episode: 1, Audio: "dub", ID: "watch/anikoto/21/dub/1"}, nil)
+		provider.Episode{Episode: 1, Audio: "dub", ID: "watch/anikoto/21/dub/1"}, nil, ResolveOptions{})
 	if err != nil {
 		t.Fatalf("resolve failed: %v", err)
 	}
@@ -265,7 +303,7 @@ func TestLiveAnimeResolution(t *testing.T) {
 		TMDBAPIKeys: []string{"test"},
 	}
 	keyPool := tmdb.NewKeyPool(cfg.TMDBAPIKeys)
-	reg, err := defaults.NewDefaultRegistry(keyPool, cfg)
+	reg, err := defaults.NewDefaultRegistry(keyPool, cfg, nil)
 	if err != nil {
 		t.Fatalf("defaults.NewDefaultRegistry failed: %v", err)
 	}
@@ -287,7 +325,7 @@ func TestLiveAnimeResolution(t *testing.T) {
 		Audio:   "sub",
 		ID:      "watch/anikoto/21/sub/1177",
 	}
-	resolved, err := svc.Resolve(ctx, provider.ModeAnime, series, ep, nil)
+	resolved, err := svc.Resolve(ctx, provider.ModeAnime, series, ep, nil, ResolveOptions{})
 	if err != nil {
 		t.Logf("Resolve warning (live API): %v", err)
 		return
@@ -364,7 +402,7 @@ func TestResolvedMediaSnapshotIsCopied(t *testing.T) {
 				firstSnap = resolved
 			}
 			snapCount++
-		})
+		}, ResolveOptions{})
 	if err != nil {
 		t.Fatalf("resolve failed: %v", err)
 	}
@@ -385,17 +423,18 @@ func TestResolvedMediaSnapshotIsCopied(t *testing.T) {
 	}
 }
 
-func TestAggregatorSortPrioritizesVidKing(t *testing.T) {
+func TestAggregatorSortPrioritizesMovy(t *testing.T) {
 	agg := &sourceAggregator{
+		mode: provider.ModeMovies,
 		priority: map[string]int{
-			"vidking": 0,
-			"pengu":   1,
+			"movysx": 0,
+			"pengu":  1,
 		},
 		sources: []provider.MediaSource{
 			{Resolver: "pengu", Quality: "4K [4KHDHub]"},
-			{Resolver: "vidking", Quality: "1080p"},
+			{Resolver: "movysx", Quality: "1080p"},
 			{Resolver: "pengu", Quality: "1080p [VegaMovies]"},
-			{Resolver: "vidking", Quality: "2160p"},
+			{Resolver: "movysx", Quality: "2160p"},
 		},
 	}
 
@@ -405,12 +444,12 @@ func TestAggregatorSortPrioritizesVidKing(t *testing.T) {
 		t.Fatalf("expected 4 sources, got %d", len(agg.sources))
 	}
 
-	// VidKing sources must be at the top, sorted by quality
-	if agg.sources[0].Resolver != "vidking" || agg.sources[0].Quality != "2160p" {
-		t.Errorf("sources[0] = %+v, want vidking 2160p", agg.sources[0])
+	// Movy sources must be at the top, sorted by quality
+	if agg.sources[0].Resolver != "movysx" || agg.sources[0].Quality != "2160p" {
+		t.Errorf("sources[0] = %+v, want movysx 2160p", agg.sources[0])
 	}
-	if agg.sources[1].Resolver != "vidking" || agg.sources[1].Quality != "1080p" {
-		t.Errorf("sources[1] = %+v, want vidking 1080p", agg.sources[1])
+	if agg.sources[1].Resolver != "movysx" || agg.sources[1].Quality != "1080p" {
+		t.Errorf("sources[1] = %+v, want movysx 1080p", agg.sources[1])
 	}
 	// Pengu sources follow, sorted by quality
 	if agg.sources[2].Resolver != "pengu" || agg.sources[2].Quality != "4K [4KHDHub]" {
@@ -423,6 +462,7 @@ func TestAggregatorSortPrioritizesVidKing(t *testing.T) {
 
 func TestAggregatorSortPrioritizesVidstream2Anikoto(t *testing.T) {
 	agg := &sourceAggregator{
+		mode: provider.ModeAnime,
 		priority: map[string]int{
 			"anikoto":  0,
 			"anilight": 1,

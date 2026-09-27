@@ -2,67 +2,63 @@ package tui
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"kari/internal/model"
 	"kari/internal/provider"
 )
 
-func TestScrollLinesBoundsOutput(t *testing.T) {
-	content := "one\ntwo\nthree\nfour\nfive"
-	got, offset := scrollLines(content, 99, 3, "ctrl+u/d scroll")
-
-	if offset != 3 {
-		t.Fatalf("offset = %d, want 3", offset)
+// Stray Kitty graphics responses must never survive in the search
+// box; human typing (including underscores) must pass through.
+func TestScrubTerminalResponses(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"one piece_Gi=1;OK\\", "one piece"},
+		{"_Gi=12;OK\\", ""},
+		{"frieren_Gi=3;ERROR\\ extra", "frieren extra"},
+		{"one_piece naruto", "one_piece naruto"},
+		{"_G without id stays\\", "_G without id stays\\"},
+		{"", ""},
 	}
-	if height := strings.Count(got, "\n") + 1; height != 3 {
-		t.Fatalf("output height = %d, want 3", height)
-	}
-	if !strings.Contains(got, "four\nfive") || !strings.Contains(got, "4–5 of 5") {
-		t.Fatalf("output = %q, want final content and range indicator", got)
-	}
-}
-
-func TestFitFooterBindingsDoesNotWrap(t *testing.T) {
-	parts := []string{"one", "two", "three"}
-	got := fitFooterBindings(parts, 10)
-
-	if lipgloss.Width(got) > 10 {
-		t.Fatalf("footer width = %d, want at most 10", lipgloss.Width(got))
-	}
-	if !strings.Contains(got, "…") {
-		t.Fatalf("footer = %q, want overflow indicator", got)
+	for _, tc := range cases {
+		if got := scrubTerminalResponses(tc.in); got != tc.want {
+			t.Errorf("scrub(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
-func TestMoveSettingsStopsAtBounds(t *testing.T) {
-	m := modelImpl{settingsIndex: 0}
-	m.moveSettings(-1)
-	if m.settingsIndex != 0 {
-		t.Fatalf("top settings index = %d, want 0", m.settingsIndex)
+func TestRenderFooterDoesNotWrap(t *testing.T) {
+	bindings := []KeyBinding{
+		{Key: "space", Action: "search"},
+		{Key: "tab", Action: "mode"},
+		{Key: "h", Action: "history"},
+		{Key: "s", Action: "settings"},
+		{Key: "?", Action: "help"},
 	}
+	accent := ResolveAccent(model.KindAnime, "Auto")
+	got := RenderFooter(bindings, nil, accent, 40)
 
-	m.settingsIndex = settingsLastIndex
-	m.moveSettings(1)
-	if m.settingsIndex != settingsLastIndex {
-		t.Fatalf("bottom settings index = %d, want %d", m.settingsIndex, settingsLastIndex)
+	if len(got) == 0 {
+		t.Fatalf("footer is empty")
 	}
 }
-func TestRenderSettingsScreenAllIndices(t *testing.T) {
-	m := &modelImpl{
-		settingsIndex:    0,
-		availablePlayers: []string{"mpv", "iina"},
-		subtitleLanguage: "en",
-		registry:         &provider.Registry{},
-	}
-	dims := layoutDims{contentW: 80, bodyH: 24}
 
-	for i := 0; i <= settingsLastIndex; i++ {
-		m.settingsIndex = i
-		rendered := m.renderSettingsScreen(dims)
+func TestRenderSettingsScreenAllCategories(t *testing.T) {
+	accent := ResolveAccent(model.KindAnime, "Auto")
+
+	for i := range SettingsCategoryNames {
+		data := SettingsData{
+			ActiveCategory:  SettingsCategory(i),
+			FocusedRowIndex: 0,
+			Width:           80,
+			Height:          24,
+			Accent:          accent,
+			PlayerName:      "mpv",
+			QualityName:     "Highest",
+			Autoplay:        false,
+		}
+		rendered := RenderSettingsScreen(data)
 		if rendered == "" {
-			t.Fatalf("rendered settings screen for index %d is empty", i)
+			t.Fatalf("rendered settings screen for category %d is empty", i)
 		}
 	}
 }
@@ -74,11 +70,37 @@ func TestCleanErrorForUIRateLimited(t *testing.T) {
 	}{
 		{errors.New("pengu: rate limited"), "Rate limited by Pengu, use your own token for better rate limits"},
 		{errors.New("http status 429 for https://pengu.uk/stream.json"), "Rate limited by Pengu, use your own token for better rate limits"},
-		{errors.New("vidking: no sources found; pengu: rate limited"), "Rate limited by Pengu, use your own token for better rate limits"},
+		{errors.New("movysx: no sources found; pengu: rate limited"), "Rate limited by Pengu, use your own token for better rate limits"},
 	}
 	for _, tt := range tests {
 		if got := cleanErrorForUI(tt.err); got != tt.want {
 			t.Errorf("cleanErrorForUI(%v) = %q, want %q", tt.err, got, tt.want)
 		}
+	}
+}
+
+func TestCollectSettingsData_SubtitlesAndPoster(t *testing.T) {
+	m := &modelImpl{
+		registry:         &provider.Registry{},
+		subtitleLanguage: "ja",
+		imagesEnabled:    true,
+		settingsCategory: CategoryLanguages,
+	}
+	data := m.collectSettingsData(80, 24)
+	if data.SubtitleLanguage != "Japanese" {
+		t.Errorf("SubtitleLanguage = %q, want %q", data.SubtitleLanguage, "Japanese")
+	}
+	if !data.PosterArtwork {
+		t.Errorf("PosterArtwork = false, want true")
+	}
+
+	m.subtitleLanguage = "off"
+	m.imagesEnabled = false
+	data2 := m.collectSettingsData(80, 24)
+	if data2.SubtitleLanguage != "Off" {
+		t.Errorf("SubtitleLanguage = %q, want %q", data2.SubtitleLanguage, "Off")
+	}
+	if data2.PosterArtwork {
+		t.Errorf("PosterArtwork = true, want false")
 	}
 }

@@ -57,6 +57,8 @@ internal/
   lang/              language-code normalization/display
   aniskip/           aniskip REST API client
   animeskip/         anime-skip GraphQL API client
+  skipdb/            skipdb.tv REST API client
+  introdb/           introdb.app REST API client
   termimg/           terminal image rendering (kitty protocol / half blocks)
   logging/           slog wrapper with rotation
   util/              tiny generic helpers
@@ -83,7 +85,7 @@ cmd → app → {tui, service, player, …} → {provider, model, …}
 
 | Kind of type | Lives in | Examples |
 | --- | --- | --- |
-| A provider's private API response/request shapes | that provider's package | `anikoto.linkResp`, `pengu.penguResponse`, `vidking.vidkingSourceItem` |
+| A provider's private API response/request shapes | that provider's package | `anikoto.linkResp`, `pengu.penguResponse`, `movysx.movySourceItem` |
 | Shared wire DTOs crossing layer boundaries | `internal/provider` | `SearchResult`, `Episode`, `MediaSource`, `SubtitleOption` |
 | Cross-layer vocabularies | `internal/provider` constants only | `MediaTypeMovie`, `ModeAnime`, `AudioSub`, `SourceTypeHLS` |
 | Playback aggregates with behavior | `internal/model` | `ResolvedMedia`, `SubtitleTrack` |
@@ -106,8 +108,8 @@ Rules:
 
 ## 4. Naming
 
-- Packages: lowercase, single word, no underscores (`vidking`, not
-  `vid_king` or `vidkingprovider`).
+- Packages: lowercase, single word, no underscores (`movysx`, not
+  `movy_sx` or `movysxprovider`).
 - Files: snake_case, grouped by role. TUI files are prefixed by role:
   `view_*.go`, `update_*.go`, `*_helpers.go`. Tests: `_test.go` beside the
   subject.

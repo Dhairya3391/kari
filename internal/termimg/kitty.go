@@ -23,21 +23,23 @@ const kittyChunkSize = 4096
 // placement is a persistent overlay that has nothing left telling the
 // terminal to remove it, and it just sits on screen indefinitely (this is
 // what caused stale/duplicate posters to linger behind other screens).
+//
+// Deliberately a single `a=d,d=i` form: the wider scope variants
+// (`d=I`, `d=p`, `d=A`) EINVAL on terminals with partial Kitty
+// implementations, and those error responses land on stdin as typed
+// garbage in the search box.
 func DeleteKitty(imageID uint32) string {
 	if imageID == 0 {
 		return fmt.Sprintf("%sa=d,d=a;%s", rasterm.KITTY_IMG_HDR, rasterm.KITTY_IMG_FTR)
 	}
-	return fmt.Sprintf("%sa=d,d=i,i=%d;%s%sa=d,d=I,i=%d;%s%sa=d,d=p,p=%d;%s",
-		rasterm.KITTY_IMG_HDR, imageID, rasterm.KITTY_IMG_FTR,
-		rasterm.KITTY_IMG_HDR, imageID, rasterm.KITTY_IMG_FTR,
+	return fmt.Sprintf("%sa=d,d=i,i=%d;%s",
 		rasterm.KITTY_IMG_HDR, imageID, rasterm.KITTY_IMG_FTR,
 	)
 }
 
 // DeleteAllKitty returns the escape sequence to delete all visible image placements.
 func DeleteAllKitty() string {
-	return fmt.Sprintf("%sa=d,d=a;%s%sa=d,d=A;%s",
-		rasterm.KITTY_IMG_HDR, rasterm.KITTY_IMG_FTR,
+	return fmt.Sprintf("%sa=d,d=a;%s",
 		rasterm.KITTY_IMG_HDR, rasterm.KITTY_IMG_FTR,
 	)
 }
@@ -70,9 +72,25 @@ func DeleteAllKitty() string {
 //     replacing it — visible as leftover pixels around the edges whenever
 //     the new image is smaller than the last one shown in that slot. So
 //     every call deletes imageID's previous placement before drawing.
-func renderKitty(img image.Image, cellW, cellH int, imageID uint32) (string, error) {
+func renderKitty(img image.Image, cellW, cellH int, imageID uint32, termCols, termRows int) (string, error) {
+	// Downscale to display size before encoding: transmitting source
+	// pixels for multi-megapixel uploads turns every frame into
+	// megabytes of escape sequences that terminals silently drop
+	// (blank reader on large pages), while the on-screen box only ever
+	// shows cellW x cellH cells worth. termCols/termRows are the live
+	// terminal dimensions, used to measure the real cell size — encoding
+	// at the assumed 8x16 fallback size and letting the terminal upscale
+	// is what made every image render soft. Same cap discipline as the
+	// Sixel path (roomier: PNG compresses better than Sixel RLE);
+	// never upscales.
+	cw, ch := cellPixels(termCols, termRows)
+	pxW, pxH := fitKittyPixels(img, cellW, cellH, cw, ch)
+	small := img
+	if pxW < img.Bounds().Dx() || pxH < img.Bounds().Dy() {
+		small = resizeBox(img, pxW, pxH)
+	}
 	var pngBuf bytes.Buffer
-	if err := png.Encode(&pngBuf, img); err != nil {
+	if err := png.Encode(&pngBuf, small); err != nil {
 		return "", fmt.Errorf("termimg: png encode failed: %w", err)
 	}
 	b64 := base64.StdEncoding.EncodeToString(pngBuf.Bytes())

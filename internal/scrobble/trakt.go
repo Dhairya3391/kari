@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/logging"
 	"kari/internal/model"
@@ -35,15 +34,14 @@ type TraktClient struct {
 	token        *TraktToken
 	tokenPath    string
 	httpClient   *http.Client
+	// apiBase overrides the REST endpoint (tests point it at an httptest
+	// server); empty selects config.TraktAPIBase.
+	apiBase string
 }
 
 // NewTraktClient constructs a client, loading any persisted token from disk.
 func NewTraktClient(clientID, clientSecret string) *TraktClient {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = os.Getenv("HOME")
-	}
-	tokenPath := filepath.Join(home, ".config", "kari", "trakt_token.json")
+	tokenPath := resolveTokenPath("trakt.json", "trakt_token.json")
 
 	c := &TraktClient{
 		clientID:     clientID,
@@ -101,7 +99,7 @@ func (c *TraktClient) StartDeviceAuth(ctx context.Context) (userCode, verificati
 	body := map[string]string{"client_id": c.clientID}
 	data, _ := json.Marshal(body)
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", config.TraktAPIBase+"/oauth/device/code", bytes.NewBuffer(data))
+	req, _ := http.NewRequestWithContext(ctx, "POST", c.endpoint()+"/oauth/device/code", bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
@@ -159,7 +157,7 @@ func (c *TraktClient) PollDeviceAuth(ctx context.Context, deviceCode string, int
 			}
 			data, _ := json.Marshal(body)
 
-			req, _ := http.NewRequestWithContext(ctx, "POST", config.TraktAPIBase+"/oauth/device/token", bytes.NewBuffer(data))
+			req, _ := http.NewRequestWithContext(ctx, "POST", c.endpoint()+"/oauth/device/token", bytes.NewBuffer(data))
 			req.Header.Set("Content-Type", "application/json")
 
 			resp, err := c.httpClient.Do(req)
@@ -219,7 +217,7 @@ func (c *TraktClient) RefreshIfNeeded(ctx context.Context) error {
 	}
 	data, _ := json.Marshal(body)
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", config.TraktAPIBase+"/oauth/token", bytes.NewBuffer(data))
+	req, _ := http.NewRequestWithContext(ctx, "POST", c.endpoint()+"/oauth/token", bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
@@ -315,7 +313,7 @@ func (c *TraktClient) ScrobbleMovie(ctx context.Context, media model.ResolvedMed
 
 func (c *TraktClient) doScrobble(ctx context.Context, payload interface{}) error {
 	data, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, "POST", config.TraktAPIBase+"/scrobble/stop", bytes.NewBuffer(data))
+	req, _ := http.NewRequestWithContext(ctx, "POST", c.endpoint()+"/scrobble/stop", bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
 	req.Header.Set("trakt-api-version", "2")

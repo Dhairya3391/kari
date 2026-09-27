@@ -6,24 +6,23 @@ BUILD_DIR="kari-build"
 PKG="./cmd/kari"
 
 DESCRIBE=$(git describe --tags --match='v*' 2>/dev/null || true)
-COMMIT=$(git rev-parse --short HEAD)
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
 
 if [ -z "$DESCRIBE" ]; then
-  VERSION="1.0.$(git rev-list --count HEAD)"
+  COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+  VERSION="v1.0.${COUNT}"
 else
   D="${DESCRIBE#v}"
-  # If past a tag: v1.0.0-3-gabcde → add commits to patch → 1.0.3
   case "$D" in
     *-*-g*)
       IFS='.-' read -r MAJOR MINOR PATCH COMMITS HASH <<< "$D"
-      VERSION="${MAJOR}.${MINOR}.$((PATCH + COMMITS))"
+      VERSION="v${MAJOR}.${MINOR}.$((PATCH + COMMITS))"
       ;;
     *)
-      VERSION="$D"
+      VERSION="v${D}"
       ;;
   esac
 fi
-git diff-index --quiet HEAD 2>/dev/null || VERSION="${VERSION}-dirty"
 LDFLAGS="-s -w -X kari/internal/app.Version=$VERSION -X kari/internal/app.Commit=$COMMIT"
 
 get_host_os() {

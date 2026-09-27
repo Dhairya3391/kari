@@ -21,7 +21,7 @@ func TestNormalizeFoldsNativeScripts(t *testing.T) {
 		{"hin", "hi"},             // 3-letter code
 		{"EN", "en"},              // case folding
 		{"zh-cn", "zh"},           // regional variant
-		{"Protuguese (BR)", "pt"}, // VidKing typo, verbatim
+		{"Protuguese (BR)", "pt"}, // typo form, verbatim
 		{"may", "ms"},             // ISO 639-2/B Malay code
 		{"disabled", "off"},       // subtitle off alias
 		{"none", "off"},           // subtitle off alias

@@ -2,64 +2,88 @@ package subtitles
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding/charmap"
 
-	"kari/internal/logging"
+	"kari/internal/httpclient"
 )
 
-// log scopes every line from this package.
-var subLog = logging.With("component", "subtitles")
+// FileExtension returns the local file extension for a normalized subtitle
+// format returned by ProcessSubtitleData.
+func FileExtension(format string) string {
+	switch format {
+	case "ass":
+		return ".ass"
+	case "vtt":
+		return ".vtt"
+	default:
+		return ".srt"
+	}
+}
 
-// ProcessSubtitleData unzips, converts encoding, and normalizes subtitle bytes into UTF-8 SRT/text.
-func ProcessSubtitleData(data []byte) ([]byte, string) {
-	if len(data) < 2 {
-		return data, detectFormatByContent(data)
+// ProcessSubtitleData unzips, converts encoding, and validates subtitle
+// bytes. It rejects HTML, JSON, images, malformed archives, and unknown data.
+func ProcessSubtitleData(data []byte) ([]byte, string, error) {
+	if len(data) == 0 {
+		return nil, "", fmt.Errorf("empty subtitle data")
+	}
+	if len(data) > httpclient.MaxBodyBytes {
+		return nil, "", httpclient.ErrBodyTooLarge
+	}
+	if isImage(data) {
+		return nil, "", fmt.Errorf("image data is not a subtitle")
+	}
+	if looksLikeHTML(data) {
+		return nil, "", fmt.Errorf("HTML response is not a subtitle")
+	}
+	if looksLikeJSON(data) {
+		return nil, "", fmt.Errorf("JSON response is not a subtitle")
 	}
 
 	if isGZIP(data) {
 		decompressed, err := decompressGZIP(data)
 		if err != nil {
-			subLog.Debug("gzip decompression failed", "err", err)
-			return data, "gzip-failed"
+			return nil, "", fmt.Errorf("decompress gzip subtitle: %w", err)
 		}
 		data = decompressed
-		subLog.Debug("gzip decompressed", "size", len(data))
 	}
 
 	if isZIP(data) {
 		extracted, err := extractFromZIP(data)
 		if err != nil {
-			subLog.Debug("zip extraction failed", "err", err)
-			return data, "zip-failed"
+			return nil, "", fmt.Errorf("extract zip subtitle: %w", err)
 		}
 		data = extracted
-		subLog.Debug("zip extracted", "size", len(data))
 	}
 
 	data = stripBOM(data)
-
 	data = convertToUTF8(data)
 
 	if isVTT(data) {
 		converted, err := vttToSRT(data)
 		if err != nil {
-			subLog.Debug("vtt-to-srt conversion failed", "err", err)
-			return data, "vtt-convert-failed"
+			return nil, "", fmt.Errorf("convert vtt subtitle: %w", err)
 		}
-		subLog.Debug("converted vtt to srt")
-		return converted, "srt-from-vtt"
+		if len(converted) == 0 {
+			return nil, "", fmt.Errorf("vtt subtitle contains no cues")
+		}
+		return converted, "srt-from-vtt", nil
 	}
 
 	detected := detectFormatByContent(data)
-	return data, detected
+	if detected == "unknown" {
+		return nil, "", fmt.Errorf("unsupported subtitle content")
+	}
+	return data, detected, nil
 }
 
 func isGZIP(data []byte) bool {
@@ -82,11 +106,11 @@ func isSRT(data []byte) bool {
 	if len(data) < 10 {
 		return false
 	}
-	text := string(data[:min(100, len(data))])
+	text := string(data[:min(512, len(data))])
 	return srtTimestampPattern.MatchString(text)
 }
 
-var srtTimestampPattern = regexp.MustCompile(`^\d+[\r\n]+\d{2}:\d{2}:\d{2},\d{3}`)
+var srtTimestampPattern = regexp.MustCompile(`(?m)(?:^|\r?\n)\s*(?:\d+\s*)?\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s*-->`)
 
 func decompressGZIP(data []byte) ([]byte, error) {
 	reader, err := gzip.NewReader(bytes.NewReader(data))
@@ -94,7 +118,14 @@ func decompressGZIP(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer reader.Close()
-	return io.ReadAll(reader)
+	decoded, err := io.ReadAll(io.LimitReader(reader, httpclient.MaxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(decoded) > httpclient.MaxBodyBytes {
+		return nil, httpclient.ErrBodyTooLarge
+	}
+	return decoded, nil
 }
 
 func extractFromZIP(data []byte) ([]byte, error) {
@@ -104,18 +135,31 @@ func extractFromZIP(data []byte) ([]byte, error) {
 	}
 	for _, f := range reader.File {
 		name := strings.ToLower(f.Name)
-		if strings.HasSuffix(name, ".srt") || strings.HasSuffix(name, ".vtt") || strings.HasSuffix(name, ".ass") {
-			rc, err := f.Open()
-			if err != nil {
-				continue
-			}
-			data, err := io.ReadAll(rc)
-			rc.Close()
-			if err != nil {
-				continue
-			}
-			return data, nil
+		if !strings.HasSuffix(name, ".srt") &&
+			!strings.HasSuffix(name, ".vtt") &&
+			!strings.HasSuffix(name, ".ass") &&
+			!strings.HasSuffix(name, ".ssa") {
+			continue
 		}
+		if f.UncompressedSize64 > httpclient.MaxBodyBytes {
+			return nil, httpclient.ErrBodyTooLarge
+		}
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		decoded, readErr := io.ReadAll(io.LimitReader(rc, httpclient.MaxBodyBytes+1))
+		closeErr := rc.Close()
+		if readErr != nil {
+			continue
+		}
+		if closeErr != nil {
+			continue
+		}
+		if len(decoded) > httpclient.MaxBodyBytes {
+			return nil, httpclient.ErrBodyTooLarge
+		}
+		return decoded, nil
 	}
 	return nil, fmt.Errorf("no subtitle found in zip")
 }
@@ -163,19 +207,42 @@ func formatSRTTimestamp(ts string) string {
 }
 
 func vttToSRT(data []byte) ([]byte, error) {
-	text := string(data)
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	text = strings.ReplaceAll(text, "\r", "\n")
-
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	var (
-		blocks   []string
+		buf      bytes.Buffer
 		inHeader = true
 		curIndex = 1
 	)
+	buf.Grow(len(data))
 
-	lines := strings.Split(text, "\n")
-	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
+	var (
+		timeLine  string
+		textLines []string
+	)
+
+	flushBlock := func() {
+		if timeLine != "" && len(textLines) > 0 {
+			if curIndex > 1 {
+				buf.WriteString("\n\n")
+			}
+			buf.WriteString(strconv.Itoa(curIndex))
+			buf.WriteByte('\n')
+			buf.WriteString(timeLine)
+			buf.WriteByte('\n')
+			for j, tl := range textLines {
+				if j > 0 {
+					buf.WriteByte('\n')
+				}
+				buf.WriteString(tl)
+			}
+			curIndex++
+		}
+		timeLine = ""
+		textLines = textLines[:0]
+	}
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
 		if inHeader {
 			if strings.HasPrefix(line, "WEBVTT") || strings.HasPrefix(line, "NOTE") || strings.HasPrefix(line, "STYLE") || strings.HasPrefix(line, "REGION") {
 				continue
@@ -192,47 +259,41 @@ func vttToSRT(data []byte) ([]byte, error) {
 		}
 
 		if strings.Contains(line, "-->") {
+			flushBlock()
 			parts := strings.Split(line, "-->")
-			if len(parts) != 2 {
-				continue
-			}
-			start := strings.TrimSpace(parts[0])
-			endPart := strings.TrimSpace(parts[1])
-			endFields := strings.Fields(endPart)
-			if len(endFields) == 0 {
-				continue
-			}
-			end := endFields[0]
-
-			timeLine := formatSRTTimestamp(start) + " --> " + formatSRTTimestamp(end)
-
-			var textLines []string
-			for i+1 < len(lines) {
-				nextLine := strings.TrimSpace(lines[i+1])
-				if nextLine == "" {
-					i++
-					break
+			if len(parts) == 2 {
+				start := strings.TrimSpace(parts[0])
+				endPart := strings.TrimSpace(parts[1])
+				endFields := strings.Fields(endPart)
+				if len(endFields) > 0 {
+					end := endFields[0]
+					timeLine = formatSRTTimestamp(start) + " --> " + formatSRTTimestamp(end)
 				}
-				if strings.Contains(nextLine, "-->") {
-					break
-				}
-				cleaned := vttTagRegex.ReplaceAllString(nextLine, "")
+			}
+			continue
+		}
+
+		if timeLine != "" {
+			if line == "" {
+				flushBlock()
+			} else {
+				cleaned := vttTagRegex.ReplaceAllString(line, "")
 				cleaned = strings.TrimSpace(cleaned)
 				if cleaned != "" {
 					textLines = append(textLines, cleaned)
 				}
-				i++
-			}
-
-			if len(textLines) > 0 {
-				block := fmt.Sprintf("%d\n%s\n%s", curIndex, timeLine, strings.Join(textLines, "\n"))
-				blocks = append(blocks, block)
-				curIndex++
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	flushBlock()
 
-	return []byte(strings.Join(blocks, "\n\n") + "\n"), nil
+	if buf.Len() > 0 {
+		buf.WriteByte('\n')
+	}
+	return buf.Bytes(), nil
 }
 
 func detectFormatByContent(data []byte) string {
@@ -242,9 +303,37 @@ func detectFormatByContent(data []byte) string {
 	if isSRT(data) {
 		return "srt"
 	}
-	text := string(data[:min(50, len(data))])
-	if strings.Contains(text, "[Script Info]") || strings.Contains(text, "[Events]") {
+	if isASS(data) {
 		return "ass"
 	}
 	return "unknown"
+}
+
+func isASS(data []byte) bool {
+	text := strings.ToLower(string(data[:min(4096, len(data))]))
+	return strings.Contains(text, "[script info]") ||
+		strings.Contains(text, "[v4+ styles]") ||
+		strings.Contains(text, "[v4 styles]") ||
+		strings.Contains(text, "[events]")
+}
+
+func isImage(data []byte) bool {
+	return len(data) >= 12 &&
+		(string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP") ||
+		(len(data) >= 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n") ||
+		(len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff) ||
+		(len(data) >= 6 && (string(data[:6]) == "GIF87a" || string(data[:6]) == "GIF89a"))
+}
+
+func looksLikeHTML(data []byte) bool {
+	text := strings.ToLower(strings.TrimSpace(string(data[:min(512, len(data))])))
+	return strings.HasPrefix(text, "<!doctype html") ||
+		strings.HasPrefix(text, "<html") ||
+		strings.Contains(text, "<head") ||
+		strings.Contains(text, "<body")
+}
+
+func looksLikeJSON(data []byte) bool {
+	trimmed := strings.TrimSpace(string(data[:min(16, len(data))]))
+	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
 }

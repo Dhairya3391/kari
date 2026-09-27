@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 
 	"kari/internal/logging"
+	"kari/internal/model"
 	"kari/internal/provider"
 )
 
@@ -62,7 +63,7 @@ var knownMediaExts = map[string]struct{}{
 var progressRe = regexp.MustCompile(`^KARI_PROGRESS:\s*(\d+(?:\.\d+)?)%$`)
 
 var extendedProgressRe = regexp.MustCompile(
-	`^KARI_PROGRESS:\s*(\d+(?:\.\d+)?)%\|\s*TOTAL:\s*(.*?)\|\s*TOTAL_EST:\s*(.+?)\|\s*SPEED:\s*(.+?)\|\s*ETA:\s*(.+?)\|\s*DOWNLOADED:\s*(.+)$`,
+	`^KARI_PROGRESS:\s*(\S+?)\|\s*FRAG:\s*(\S+?)\|\s*TOTAL:\s*(.*?)\|\s*TOTAL_EST:\s*(.+?)\|\s*SPEED:\s*(.+?)\|\s*ETA:\s*(.+?)\|\s*DOWNLOADED:\s*(.+)$`,
 )
 
 func downloadParallelism() int {
@@ -77,19 +78,25 @@ func downloadParallelism() int {
 }
 
 func sanitizeDownloadTitle(title string) string {
-	cleaned := strings.Map(func(r rune) rune {
-		switch r {
-		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
-			return '-'
-		case '\n', '\r', '\t':
-			return ' '
+	var b strings.Builder
+	b.Grow(len(title))
+	inSpace := false
+	for _, r := range title {
+		switch {
+		case r == '/' || r == '\\' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|':
+			b.WriteByte('-')
+			inSpace = false
+		case r == '\n' || r == '\r' || r == '\t' || r == ' ':
+			if !inSpace && b.Len() > 0 {
+				b.WriteByte(' ')
+				inSpace = true
+			}
+		case r >= 32:
+			b.WriteRune(r)
+			inSpace = false
 		}
-		if r < 32 {
-			return -1
-		}
-		return r
-	}, title)
-	cleaned = strings.TrimSpace(strings.Join(strings.Fields(cleaned), " "))
+	}
+	cleaned := strings.TrimSpace(b.String())
 	if cleaned == "" || cleaned == "." || cleaned == ".." {
 		return "download"
 	}
@@ -154,8 +161,9 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 	seenSources := make(map[string]struct{}, len(req.Sources))
 	for i, source := range req.Sources {
 		if err := ctx.Err(); err != nil {
-			d.CleanupPartial(req.OutputDir, req.Title)
-			d.cleanupAriaControlFiles(req.OutputDir, req.Title)
+			// Pause/cancel keeps partial data on disk: the .aria2 control
+			// file and .part fragments are the resume checkpoints. Only
+			// CleanupPartial (explicit delete from the UI) removes them.
 			return err
 		}
 
@@ -163,7 +171,7 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 		if source.URL == "" {
 			continue
 		}
-		key := source.URL + "\x00" + source.Referer + "\x00" + source.CookieHeader
+		key := source.TransportIdentity()
 		if _, ok := seenSources[key]; ok {
 			continue
 		}
@@ -172,7 +180,7 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 		ytdlpLog.Info("trying source",
 			"index", i+1, "total", len(req.Sources),
 			"resolver", source.Resolver, "quality", source.Quality,
-			"strategy", downloadStrategy(source), "url", source.URL)
+			"strategy", downloadStrategy(source))
 		if err := d.downloadSource(ctx, req, source); err == nil {
 			if req.Progress != nil {
 				finalSize := d.findOutputSize(req.OutputDir, baseTitle)
@@ -181,8 +189,6 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 			ytdlpLog.Info("download complete", "title", req.Title, "source", i+1)
 			return nil
 		} else if ctx.Err() != nil {
-			d.CleanupPartial(req.OutputDir, req.Title)
-			d.cleanupAriaControlFiles(req.OutputDir, req.Title)
 			return ctx.Err()
 		} else {
 			// Preserve .aria2 control files so the next source can resume.
@@ -192,14 +198,11 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 		}
 	}
 
-	// All sources exhausted — abandon is final, so clean .aria2 control files too.
-	if len(errs) > 0 {
-		d.cleanupAriaControlFiles(req.OutputDir, req.Title)
-	}
-
 	if len(errs) == 0 {
 		return fmt.Errorf("ytdlp: no usable sources provided")
 	}
+	// .aria2 control files survive a full failure so a later retry of the
+	// same source resumes instead of restarting from zero.
 	return fmt.Errorf("ytdlp: all %d usable sources failed: %w", len(errs), errors.Join(errs...))
 }
 
@@ -269,6 +272,8 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	args := []string{
 		"-o", outputPattern,
 		"--concurrent-fragments", strconv.Itoa(downloadParallelism()),
+		// Resume from .part files when a paused download restarts.
+		"--continue",
 		"--retries", "10",
 		"--fragment-retries", "10",
 		"--retry-sleep", "http:exp=1:10",
@@ -277,7 +282,7 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 		"--socket-timeout", "30",
 		"--hls-use-mpegts",
 		"--newline",
-		"--progress-template", "download:KARI_PROGRESS:%(progress._percent_str)s|TOTAL:%(progress._total_bytes_str)s|TOTAL_EST:%(progress._total_bytes_estimate_str)s|SPEED:%(progress._speed_str)s|ETA:%(progress._eta_str)s|DOWNLOADED:%(progress._downloaded_bytes_str)s",
+		"--progress-template", "download:KARI_PROGRESS:%(progress._percent_str)s|FRAG:%(progress.fragment_index)s/%(progress.fragment_count)s|TOTAL:%(progress._total_bytes_str)s|TOTAL_EST:%(progress._total_bytes_estimate_str)s|SPEED:%(progress._speed_str)s|ETA:%(progress._eta_str)s|DOWNLOADED:%(progress._downloaded_bytes_str)s",
 		"--progress-delta", "0.5",
 	}
 
@@ -295,7 +300,7 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	}
 
 	args = append(args, source.URL)
-	ytdlpLog.Debug("download start", "title", req.Title, "quality", source.Quality, "args", args)
+	ytdlpLog.Debug("download start", "title", req.Title, "quality", source.Quality, "strategy", strategy)
 
 	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
 	// Force unbuffered Python stdout so progress lines arrive immediately.
@@ -327,20 +332,47 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 			}
 			if req.Progress != nil {
 				if ematches := extendedProgressRe.FindStringSubmatch(line); len(ematches) > 1 {
-					if val, err := strconv.ParseFloat(ematches[1], 64); err == nil {
-						p := val / 100.0
-						totalSize := strings.TrimSpace(ematches[2])
-						totalSizeEst := strings.TrimSpace(ematches[3])
-						speed := strings.TrimSpace(ematches[4])
-						eta := strings.TrimSpace(ematches[5])
-						downloaded := strings.TrimSpace(ematches[6])
+					pctStr := ematches[1]
+					fragStr := ematches[2]
+					totalSize := strings.TrimSpace(ematches[3])
+					totalSizeEst := strings.TrimSpace(ematches[4])
+					speed := strings.TrimSpace(ematches[5])
+					eta := strings.TrimSpace(ematches[6])
+					downloaded := strings.TrimSpace(ematches[7])
+
+					var p float64
+					var parsed bool
+
+					// 1. If fragmented HLS/DASH, fragment count gives exact overall percentage
+					if strings.Contains(fragStr, "/") {
+						parts := strings.Split(fragStr, "/")
+						if len(parts) == 2 {
+							cur, err1 := strconv.Atoi(parts[0])
+							total, err2 := strconv.Atoi(parts[1])
+							if err1 == nil && err2 == nil && total > 0 && cur >= 0 {
+								p = float64(cur) / float64(total)
+								parsed = true
+							}
+						}
+					}
+
+					// 2. Direct file percentage fallback
+					if !parsed {
+						cleanPct := strings.TrimSpace(strings.TrimSuffix(pctStr, "%"))
+						if val, err := strconv.ParseFloat(cleanPct, 64); err == nil {
+							p = val / 100.0
+							parsed = true
+						}
+					}
+
+					if parsed {
 						if totalSize == "N/A" || totalSize == "Unknown" || totalSize == "" {
 							totalSize = totalSizeEst
 						}
 						if totalSize == "N/A" || totalSize == "Unknown" {
 							totalSize = ""
 						}
-						if speed == "Unknown B/s" || speed == "N/A" || speed == "" {
+						if speed == "Unknown B/s" || speed == "N/A" || speed == "Unknown" || speed == "" {
 							speed = ""
 						}
 						if eta == "Unknown" || eta == "N/A" || eta == "" {
@@ -362,7 +394,6 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 						}
 					}
 				} else if matches := progressRe.FindStringSubmatch(line); len(matches) > 1 {
-					ytdlpLog.Debug("extended progress line unmatched; simple fallback", "line", line)
 					if val, err := strconv.ParseFloat(matches[1], 64); err == nil {
 						p := val / 100.0
 						current := int64(p * 10000)
@@ -393,7 +424,11 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	return nil
 }
 
-// CleanupPartial removes partial artifacts of an interrupted download.
+// CleanupPartial removes ALL partial artifacts of a cancelled or failed
+// download: yt-dlp resume files (.part, .ytdl, .part-Frag) always, and for
+// aria2 the .aria2 control file plus the media file it checkpoints — a media
+// file with a control file beside it is by definition incomplete. A pause
+// must NOT call this: the control file is the resume anchor.
 func (d *YTDLPDownloader) CleanupPartial(outputDir, title string) {
 	baseTitle, _ := splitTitleExt(title)
 	files, err := os.ReadDir(outputDir)
@@ -405,53 +440,55 @@ func (d *YTDLPDownloader) CleanupPartial(outputDir, title string) {
 			continue
 		}
 		name := f.Name()
-		if strings.HasPrefix(name, baseTitle) {
-			if strings.HasSuffix(name, ".part") ||
-				strings.HasSuffix(name, ".ytdl") ||
-				strings.Contains(name, ".part-Frag") {
-				if err := os.Remove(filepath.Join(outputDir, name)); err != nil {
-					ytdlpLog.Debug("cleanup remove failed", "file", name, "err", err)
-				}
-			}
-		}
-	}
-}
-
-// cleanupAriaControlFiles removes aria2c .aria2 control files that were
-// intentionally preserved across retries. Call this only when a download is
-// truly abandoned (all sources exhausted or context cancelled) so that future
-// retries with the same source can resume from the .aria2 checkpoint.
-func (d *YTDLPDownloader) cleanupAriaControlFiles(outputDir, title string) {
-	baseTitle, _ := splitTitleExt(title)
-	files, err := os.ReadDir(outputDir)
-	if err != nil {
-		return
-	}
-	for _, f := range files {
-		if f.IsDir() {
+		if !strings.HasPrefix(name, baseTitle) {
 			continue
 		}
-		name := f.Name()
-		if strings.HasPrefix(name, baseTitle) && strings.HasSuffix(name, ".aria2") {
-			if err := os.Remove(filepath.Join(outputDir, name)); err != nil {
-				ytdlpLog.Debug("cleanup aria2 control file remove failed", "file", name, "err", err)
+		full := filepath.Join(outputDir, name)
+		switch {
+		case strings.HasSuffix(name, ".aria2"):
+			// Control file + the incomplete media it belongs to.
+			if err := os.Remove(full); err != nil {
+				ytdlpLog.Debug("cleanup aria2 control remove failed", "file", name, "err", err)
+			}
+			if err := os.Remove(strings.TrimSuffix(full, ".aria2")); err != nil && !os.IsNotExist(err) {
+				ytdlpLog.Debug("cleanup aria2 partial media remove failed", "file", name, "err", err)
+			}
+		case strings.HasSuffix(name, ".part"),
+			strings.HasSuffix(name, ".ytdl"),
+			strings.Contains(name, ".part-Frag"):
+			if err := os.Remove(full); err != nil {
+				ytdlpLog.Debug("cleanup remove failed", "file", name, "err", err)
 			}
 		}
 	}
 }
 
-func originFromReferer(referer string) string {
-	// Simple extraction: scheme + "://" + host.
-	for i := 0; i < len(referer); i++ {
-		if referer[i] == ':' && i+3 <= len(referer) && referer[i+1] == '/' && referer[i+2] == '/' {
-			end := strings.IndexAny(referer[i+3:], "/?#")
-			if end == -1 {
-				return referer
-			}
-			return referer[:i+3+end]
+// toMediaSource converts provider fields once so header derivation stays in
+// Source.Headers, the single place Referer/Origin/User-Agent/Cookie
+// are derived.
+func toMediaSource(source provider.MediaSource) model.Source {
+	return model.Source{
+		URL:            source.URL,
+		Quality:        source.Quality,
+		Provider:       source.Resolver,
+		Referer:        source.Referer,
+		UserAgent:      source.UserAgent,
+		Cookie:         source.CookieHeader,
+		Language:       source.Language,
+		SuppressOrigin: source.SuppressOrigin,
+	}
+}
+
+func sourceHeaders(source provider.MediaSource) []string {
+	h := toMediaSource(source).Headers()
+	headers := []string{}
+	// Fixed order keeps yt-dlp args deterministic for logs and tests.
+	for _, name := range []string{"User-Agent", "Referer", "Origin", "Cookie"} {
+		for _, value := range h.Values(name) {
+			headers = append(headers, name+": "+value)
 		}
 	}
-	return ""
+	return headers
 }
 
 func isHLSSource(source provider.MediaSource) bool {
@@ -479,23 +516,4 @@ func downloadStrategy(source provider.MediaSource) string {
 	}
 
 	return "native"
-}
-
-func sourceHeaders(source provider.MediaSource) []string {
-	headers := []string{}
-	if ua := strings.TrimSpace(source.UserAgent); ua != "" {
-		headers = append(headers, "User-Agent: "+ua)
-	}
-	if ref := strings.TrimSpace(source.Referer); ref != "" {
-		headers = append(headers, "Referer: "+ref)
-		if !source.SuppressOrigin {
-			if origin := originFromReferer(ref); origin != "" {
-				headers = append(headers, "Origin: "+origin)
-			}
-		}
-	}
-	if cookie := strings.TrimSpace(source.CookieHeader); cookie != "" {
-		headers = append(headers, "Cookie: "+cookie)
-	}
-	return headers
 }

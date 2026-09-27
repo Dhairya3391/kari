@@ -17,11 +17,23 @@ func CacheDir() (string, error) {
 	if home == "" {
 		return "", fmt.Errorf("subtitles cache dir: could not determine home directory: %w", err)
 	}
-	dir := filepath.Join(home, ".config", "kari", "subs")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	baseDir := filepath.Join(home, ".config", "kari")
+	newDir := filepath.Join(baseDir, "cache", "subs")
+	legacyDir := filepath.Join(baseDir, "subs")
+
+	if _, err := os.Stat(newDir); err == nil {
+		return newDir, nil
+	}
+	if _, err := os.Stat(legacyDir); err == nil {
+		_ = os.MkdirAll(filepath.Dir(newDir), 0o755)
+		if err := os.Rename(legacyDir, newDir); err == nil {
+			return newDir, nil
+		}
+	}
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
 		return "", err
 	}
-	return dir, nil
+	return newDir, nil
 }
 
 // PruneCacheDir deletes cached subtitle files older than maxAge. Every

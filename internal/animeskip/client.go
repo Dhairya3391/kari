@@ -2,12 +2,13 @@ package animeskip
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -316,12 +317,10 @@ func parseIntervals(timestamps []timestamp) *SkipTimes {
 		return nil
 	}
 
-	sorted := make([]timestamp, len(timestamps))
-	copy(sorted, timestamps)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].At < sorted[j].At
+	sorted := append([]timestamp(nil), timestamps...)
+	slices.SortFunc(sorted, func(a, b timestamp) int {
+		return cmp.Compare(a.At, b.At)
 	})
-
 	st := &SkipTimes{
 		OpStart: -1, OpEnd: -1,
 		EdStart: -1, EdEnd: -1,
@@ -330,10 +329,10 @@ func parseIntervals(timestamps []timestamp) *SkipTimes {
 	}
 
 	introTypes := map[string]bool{
-		"Intro": true, "New Intro": true, "Mixed Intro": true,
+		"Intro": true, "New Intro": true, "Mixed Intro": true, "Opening": true, "OP": true,
 	}
 	creditsTypes := map[string]bool{
-		"Credits": true, "New Credits": true, "Mixed Credits": true,
+		"Credits": true, "New Credits": true, "Mixed Credits": true, "Ending": true, "Outro": true, "ED": true,
 	}
 
 	for i, ts := range sorted {

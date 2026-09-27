@@ -22,30 +22,49 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.setStatus(statusError, "Series selection out of range")
 		return m, nil
 	}
+	// One pipeline at a time: a series pick while anything loads waits with
+	// visible feedback instead of orphaning the active operation.
+	if !m.guardLoad() {
+		return m, nil
+	}
 	m.selectedSeries = &m.seriesResults[idx]
 	m.searchIndex = idx
 	m.selectedEpisode = nil // Reset episode selection for new series
 	m.selectedEpisodes = make(map[int]struct{})
 	m.episodeIndex = 0
 
-	// Movie-titled results skip the episode listing and resolve directly,
+	// Titles from manga/comic providers flow into the chapter listing
+	// and the fullscreen reader instead of episode resolution. The
+	// branch is on the MangaSource capability, never on names or modes.
+	if m.isMangaProvider(m.selectedSeries.Provider) {
+		tuiLog.Debug("manga result; loading chapters", "title", m.selectedSeries.Title)
+		return m.selectMangaSeries(idx)
+	}
+
+	// Movie-titled and live results skip the episode listing and resolve directly,
 	// unless the selected provider declares (via provider.MovieEpisodeFlow)
 	// that it needs a fetched episode ID even for movies.
-	if m.selectedSeries.MediaType == provider.MediaTypeMovie && !m.registry.RequiresEpisodeListForMovies(m.selectedSeries.Provider) {
-		tuiLog.Debug("movie result; resolving directly", "title", m.selectedSeries.Title)
+	if (m.selectedSeries.MediaType == provider.MediaTypeMovie || m.selectedSeries.MediaType == provider.MediaTypeLive || m.selectedSeries.Type == provider.ModeLive || m.appMode == provider.ModeLive) && !m.registry.RequiresEpisodeListForMovies(m.selectedSeries.Provider) {
+		tuiLog.Debug("direct result; resolving directly", "title", m.selectedSeries.Title)
 		m.selectedEpisode = &provider.Episode{
 			Title: m.selectedSeries.Title,
+			ID:    m.selectedSeries.ID,
 		}
-		m.loading = true
 		m.loadingText = "Preparing playback..."
 		m.resolved = nil
 		m.rawSubtitles = nil
+		m.subtitleResolverUsed = ""
+		m.subtitleLangUsed = ""
+		m.subtitleSourceUsed = ""
 		m.manualPlaybackSelected = false
+		m.resolveAttempts = 0
+		m.preferredRepairAttempts = 0
 		m.clearPreviewPoster()
+		m.beginProviderWait(m.appMode)
 		opID := m.newOpID()
 		m.resolveOpID = opID
 		m.pushView(viewPreview)
-		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode))
+		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode, nil, nil), m.prefetchPreviewPoster())
 	}
 
 	tuiLog.Debug("loading episodes", "title", m.selectedSeries.Title)
@@ -71,6 +90,42 @@ func (m *modelImpl) selectedSeriesIndex() int {
 	return m.seriesList.Index()
 }
 
+// visibleSeriesResults narrows the search results by the / filter query,
+// keeping each row's original index aligned. An empty query returns the
+// full list unchanged. The list widget and the renderer share it so the
+// cursor position always addresses the same rows on screen.
+func (m *modelImpl) visibleSeriesResults() ([]provider.SearchResult, []int) {
+	q := strings.ToLower(strings.TrimSpace(m.resultsFilter))
+	if q == "" {
+		idxs := make([]int, len(m.seriesResults))
+		for i := range idxs {
+			idxs[i] = i
+		}
+		return m.seriesResults, idxs
+	}
+	var out []provider.SearchResult
+	var outIdx []int
+	for i, r := range m.seriesResults {
+		hay := strings.ToLower(r.Title) + " " + strings.ToLower(strings.TrimSpace(r.Year))
+		if strings.Contains(hay, q) {
+			out = append(out, r)
+			outIdx = append(outIdx, i)
+		}
+	}
+	return out, outIdx
+}
+
+// refilterSeriesList rebuilds the results widget from the current /
+// filter, preserving original indices so selection and posters still
+// resolve into the full result list.
+func (m *modelImpl) refilterSeriesList() {
+	visible, idxs := m.visibleSeriesResults()
+	m.seriesList.SetItems(seriesToItemsIndexed(visible, idxs))
+	if len(visible) > 0 {
+		m.seriesList.Select(0)
+	}
+}
+
 func (m *modelImpl) selectedEpisodeIndex() int {
 	if item, ok := m.episodeList.SelectedItem().(rowItem); ok {
 		return item.index
@@ -88,7 +143,11 @@ func (m *modelImpl) playNextEpisode() (tea.Model, tea.Cmd) {
 }
 
 func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, tea.Cmd) {
-	if m.loading {
+	// Completion-chained callers (history resume steps, movie
+	// auto-select, autoplay) arrive with settled state; user picks
+	// while anything loads wait with visible feedback instead of
+	// abandoning the running pipeline.
+	if !m.guardLoad() {
 		return m, nil
 	}
 	tuiLog.Debug("episode selected", "index", idx, "resultsLen", len(m.episodeResults))
@@ -112,9 +171,17 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	m.resolved = nil
 	m.rawSubtitles = nil
 	m.manualPlaybackSelected = false
+	m.resolveAttempts = 0
+	m.preferredRepairAttempts = 0
+	// Drop the previous episode's ranking immediately so Preview never
+	// flashes stale sources before the first snapshot re-ranks.
+	m.rankedSources = nil
+	m.previewSelectedIndex = 0
 	m.subtitleResolverUsed = ""
 	m.subtitleLangUsed = ""
+	m.subtitleSourceUsed = ""
 	m.clearPreviewPoster()
+	m.beginProviderWait(m.appMode)
 	m.autoPlayAfterResolve = autoPlay
 	series := provider.SearchResult{}
 	if m.selectedSeries != nil {
@@ -124,7 +191,7 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	m.resolveOpID = opID
 	m.pushView(viewPreview)
 	tuiLog.Debug("resolving playback", "series", series.Title, "episode", m.selectedEpisode.Title, "autoPlay", autoPlay)
-	return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, series, *m.selectedEpisode))
+	return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, series, *m.selectedEpisode, nil, nil), m.prefetchPreviewPoster())
 }
 func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 	mode := m.appMode
@@ -169,8 +236,11 @@ func (m *modelImpl) historyContinueEpisodesCmd(opID int, group history.Group, se
 	}
 }
 
-func (m *modelImpl) resolveCmd(opID int, series provider.SearchResult, episode provider.Episode) tea.Cmd {
-	tuiLog.Debug("resolve starting", "opID", opID, "series", series.Title, "episode", episode.Title)
+// resolveCmd resolves sources, skipping exclude providers that already
+// delivered: retries only ask the failed ones again, never the
+// successful. Fresh loads pass nil.
+func (m *modelImpl) resolveCmd(opID int, series provider.SearchResult, episode provider.Episode, exclude, retry []string) tea.Cmd {
+	tuiLog.Debug("resolve starting", "opID", opID, "series", series.Title, "episode", episode.Title, "exclude", exclude, "retry", retry)
 	mode := m.appMode
 
 	return tea.Batch(
@@ -185,7 +255,7 @@ func (m *modelImpl) resolveCmd(opID int, series provider.SearchResult, episode p
 				}
 			}
 
-			resolved, err := m.mediaService.Resolve(ctx, mode, series, episode, onResult)
+			resolved, err := m.mediaService.Resolve(ctx, mode, series, episode, onResult, service.ResolveOptions{Exclude: exclude, Retry: retry})
 
 			// Deliver the completion marker through the same channel the
 			// subscription reads (mirroring download/batch) so the
@@ -205,51 +275,65 @@ func (m *modelImpl) resolveCmd(opID int, series provider.SearchResult, episode p
 	)
 }
 
-// triggerSubtitleSync (re-)fetches subtitles if either the currently
-// selected playback source's provider, or the preferred subtitle language,
-// no longer matches what the last fetch targeted — e.g. the user switched
-// sources with tab/shift+tab, a quality/language filter change moved the
-// default selection to a different provider, or the subtitle language
-// setting itself changed. It's a no-op if nothing changed, so it's safe to
-// call after any selectedPlayback/subtitleLanguage update without spamming
-// fetches.
+func (m *modelImpl) invalidateSubtitleSync() {
+	m.subtitleOpID = 0
+	m.subtitleResolverUsed = ""
+	m.subtitleLangUsed = ""
+	m.subtitleSourceUsed = ""
+	if m.resolved != nil {
+		m.resolved.SelectedSubtitle = nil
+	}
+}
+
+// triggerSubtitleSync fetches subtitles in the background whenever the
+// selected source, its URL, or the preferred language changed. The fetch
+// never gates playback: play starts from sources alone and the track
+// attaches when it arrives (onSubtitleDone).
 func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
-	if m.resolved == nil || m.subtitleService == nil {
+	if m.resolved == nil {
+		return nil
+	}
+	if !m.subtitlesWanted() {
+		m.invalidateSubtitleSync()
+		return nil
+	}
+	if m.subtitleService == nil {
 		return nil
 	}
 	src, ok := m.selectedPlaybackSource()
 	if !ok {
 		return nil
 	}
-	if src.Resolver == m.subtitleResolverUsed && m.subtitleLanguage == m.subtitleLangUsed {
+
+	targetChanged := src.Resolver != m.subtitleResolverUsed ||
+		m.subtitleLanguage != m.subtitleLangUsed ||
+		src.URL != m.subtitleSourceUsed
+	if !targetChanged {
 		return nil
 	}
 
+	m.subtitleOpID = 0
+	m.resolved.SelectedSubtitle = nil
 	m.subtitleResolverUsed = src.Resolver
 	m.subtitleLangUsed = m.subtitleLanguage
+	m.subtitleSourceUsed = src.URL
 	opID := m.newOpID()
 	m.subtitleOpID = opID
 	mediaForFetch := *m.resolved
-	if len(m.rawSubtitles) > 0 {
-		mediaForFetch.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
-	}
-	return m.subtitleFetchCmd(opID, mediaForFetch)
+	mediaForFetch.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
+	return m.subtitleFetchCmd(opID, mediaForFetch, src.Resolver)
 }
 
-func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
+func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia, preferredResolver string) tea.Cmd {
 	preferredLang := m.subtitleLanguage
-	preferredResolver := ""
-	if src, ok := m.selectedPlaybackSource(); ok {
-		preferredResolver = src.Resolver
-	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.appCtx, 30*time.Second)
+		ctx, cancel := context.WithTimeout(m.appCtx, 10*time.Second)
 		defer cancel()
-		tracks, err := m.subtitleService.Fetch(ctx, resolved, preferredLang, preferredResolver)
+		track, err := m.subtitleService.Fetch(ctx, resolved, preferredLang, preferredResolver)
 		if err != nil {
-			tuiLog.Debug("subtitle fetch failed", "err", err)
+			tuiLog.Warn("subtitle fetch failed", "err", err)
 		}
-		return subtitleDoneMsg{tracks: tracks, opID: opID, err: err}
+		return subtitleDoneMsg{track: track, opID: opID, err: err}
 	}
 }
 
@@ -279,8 +363,7 @@ func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 	}
 	return func() tea.Msg {
 		tuiLog.Debug("play starting", "opID", opID, "media", resolved.DisplayTitle(), "provider", providerName, "sourcesCount", len(sources), "startTime", startTime)
-		subPaths := resolved.SubtitlePaths()
-		tuiLog.Debug("launching playback", "media", resolved.DisplayTitle(), "player", playerName, "subtitles", len(subPaths), "paths", subPaths)
+		tuiLog.Debug("launching playback", "media", resolved.DisplayTitle(), "player", playerName, "hasSubtitles", resolved.SubtitlePath() != "")
 		result, err := m.players.PlayWithSources(sources, resolved, playerName)
 		return playDoneMsg{opID: opID, provider: providerName, result: result, err: err}
 	}
@@ -364,7 +447,7 @@ func shouldFetchNextEpisode(group history.Group) bool {
 	if group.HasIncomplete || !group.HasComplete {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(group.MediaType), provider.MediaTypeMovie) {
+	if strings.EqualFold(strings.TrimSpace(group.MediaType), provider.MediaTypeMovie) || strings.EqualFold(strings.TrimSpace(group.MediaType), provider.MediaTypeLive) || group.Mode == string(provider.ModeLive) {
 		return false
 	}
 	return group.FarthestComplete.Episode > 0
@@ -385,6 +468,10 @@ func modeForHistoryEntry(entry history.Entry) provider.ContentType {
 		return provider.ModeAnime
 	case string(provider.ModeCartoon):
 		return provider.ModeCartoon
+	case provider.MediaTypeManga:
+		return provider.ModeManga
+	case provider.MediaTypeLive:
+		return provider.ModeLive
 	default:
 		return provider.ModeTV
 	}
@@ -417,7 +504,7 @@ func episodeAfterHistoryEntry(episode provider.Episode, entry history.Entry) boo
 }
 
 func (m *modelImpl) startSearchFromInput() (tea.Model, tea.Cmd) {
-	if m.loading {
+	if !m.guardLoad() {
 		return m, nil
 	}
 	q := strings.TrimSpace(m.queryInput.Value())
@@ -444,14 +531,34 @@ func (m *modelImpl) startSearchFromInput() (tea.Model, tea.Cmd) {
 func (m *modelImpl) clearActiveFilter() bool {
 	switch m.activeView {
 	case viewSearch:
+		if m.resultsFiltering || strings.TrimSpace(m.resultsFilter) != "" {
+			m.resultsFiltering = false
+			m.resultsFilter = ""
+			m.refilterSeriesList()
+			m.setStatus(statusInfo, "")
+			return true
+		}
 		if m.seriesList.SettingFilter() || m.seriesList.IsFiltered() || strings.TrimSpace(m.seriesList.FilterValue()) != "" {
 			m.seriesList.ResetFilter()
 			m.setStatus(statusInfo, "")
 			return true
 		}
 	case viewEpisodes:
+		if m.episodeFiltering || strings.TrimSpace(m.episodeFilter) != "" {
+			m.episodeFiltering = false
+			m.episodeFilter = ""
+			m.clampEpisodeIndex()
+			m.setStatus(statusInfo, "")
+			return true
+		}
 		if m.episodeList.SettingFilter() || m.episodeList.IsFiltered() || strings.TrimSpace(m.episodeList.FilterValue()) != "" {
 			m.episodeList.ResetFilter()
+			m.setStatus(statusInfo, "")
+			return true
+		}
+	case viewChapters:
+		if m.chapterList.SettingFilter() || m.chapterList.IsFiltered() || strings.TrimSpace(m.chapterList.FilterValue()) != "" {
+			m.chapterList.ResetFilter()
 			m.setStatus(statusInfo, "")
 			return true
 		}
@@ -465,12 +572,31 @@ func (m *modelImpl) exitInputMode() bool {
 		m.setStatus(statusInfo, "")
 		return true
 	}
+	if m.activeView == viewEpisodes && m.selectMode {
+		m.selectMode = false
+		return true
+	}
+	if m.activeView == viewHistory && (m.confirmDelete || m.confirmClearHistory) {
+		m.confirmDelete = false
+		m.confirmClearHistory = false
+		return true
+	}
+	if m.confirmCompletion {
+		m.confirmCompletion = false
+		m.setStatus(statusInfo, "")
+		return true
+	}
 	// Settings-screen text inputs (custom accent hex, AniList auth code)
 	// need the same treatment: handleGlobalKeys' Back case runs before
 	// updateSettings ever sees the key, so without this, Esc while typing
 	// here falls through to goBackOne() and exits the whole Settings
 	// screen instead of just closing the input.
 	if m.activeView == viewSettings {
+		if m.audioPickerOpen {
+			m.audioPickerOpen = false
+			m.saveSettings()
+			return true
+		}
 		if m.editingAccentHex {
 			m.editingAccentHex = false
 			m.hexInput.Blur()

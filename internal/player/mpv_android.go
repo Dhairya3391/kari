@@ -8,13 +8,16 @@ import (
 	"path/filepath"
 	"strings"
 
+	"kari/internal/lang"
 	"kari/internal/model"
 	"kari/internal/provider"
 )
 
 // MPVPlayer (android build) launches mpv through an Android intent; the
 // mpv.conf include bridge carries stream headers that intents cannot.
-type MPVPlayer struct{}
+type MPVPlayer struct {
+	launcher *androidLauncher
+}
 
 var _ Player = (*MPVPlayer)(nil)
 
@@ -30,20 +33,30 @@ func (p *MPVPlayer) Available() bool {
 
 // Play implements Player.
 func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
-	return playWithMPVAndroid(sources, media)
+	return playWithMPVAndroid(sources, media, p.launcher)
 }
 
-func playWithMPVAndroid(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
+func playWithMPVAndroid(
+	sources []provider.MediaSource,
+	media model.ResolvedMedia,
+	launcher *androidLauncher,
+) (PlaybackResult, error) {
 	return attemptSources("mpv", sources, func(source provider.MediaSource) (PlaybackResult, error) {
-		if err := playSingleSourceWithMPVAndroid(source, media); err != nil {
+		if err := playSingleSourceWithMPVAndroid(source, media, launcher); err != nil {
 			return PlaybackResult{}, err
 		}
-		return PlaybackResult{}, &NeedsCompletionConfirmError{Media: media}
+		return PlaybackResult{}, &NeedsCompletionConfirmError{}
 	})
 }
 
-func playSingleSourceWithMPVAndroid(source provider.MediaSource, media model.ResolvedMedia) error {
-	writeMpvConf(source, media)
+func playSingleSourceWithMPVAndroid(
+	source provider.MediaSource,
+	media model.ResolvedMedia,
+	launcher *androidLauncher,
+) error {
+	if err := writeMpvConf(source, media); err != nil {
+		return err
+	}
 
 	// mpv-android's intent accepts options only via extras for title, start
 	// position and subtitle tracks; it cannot receive HTTP headers/UA/referrer
@@ -60,13 +73,13 @@ func playSingleSourceWithMPVAndroid(source provider.MediaSource, media model.Res
 		args = append(args, "--ei", "position", fmt.Sprintf("%d", int(media.StartTime*1000)))
 	}
 
-	if err := runAmStart(args); err != nil {
+	if err := launcher.run(args); err != nil {
 		return fmt.Errorf("mpv %w", err)
 	}
 	return nil
 }
 
-func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) {
+func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error {
 	// mpv-android loads libmpv's config only from its own internal files dir
 	// (/data/user/0/is.xyz.mpv/files/), which the app sets via
 	// `config-dir=<filesDir>` (see BaseMPVView.initialize upstream). That
@@ -79,9 +92,8 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) {
 	//
 	//   include=/storage/emulated/0/Android/media/is.xyz.mpv/.mpv.conf
 	//
-	// Every play launch this function rewrites that target (and mpv.conf
-	// alongside it for includes that point there instead) with the fresh
-	// playback options: Referer/Origin/User-Agent/Cookie via
+	// Every play launch rewrites that target with fresh playback options:
+	// Referer/Origin/User-Agent/Cookie via
 	// `http-header-fields`, title, resume position, network tuning and the
 	// subtitle. Because the file is regenerated per play, per-stream tokens
 	// always reach libmpv when the app next starts. Note that writing
@@ -122,8 +134,9 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) {
 	var headers []string
 	if strings.TrimSpace(source.Referer) != "" {
 		if !source.SuppressOrigin {
-			ref := strings.TrimSuffix(source.Referer, "/")
-			headers = append(headers, "Origin: "+ref)
+			if origin := originFromReferer(strings.TrimSpace(source.Referer)); origin != "" {
+				headers = append(headers, "Origin: "+origin)
+			}
 		}
 	}
 	if strings.TrimSpace(source.CookieHeader) != "" {
@@ -156,22 +169,21 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) {
 	// to our include target and attach it with a sub-file line so it loads for
 	// this session. (mpv's sub-file is a list option, so a repeated line works.)
 	subPath := ""
-	subtitleFiles := media.SubtitlePaths()
-	if len(subtitleFiles) > 0 && subtitleFiles[0] != "" {
-		if err := os.MkdirAll(mpvAndroidDir, 0o755); err != nil {
-			mpvLog.Debug("config dir create failed", "dir", mpvAndroidDir, "err", err)
+	subtitlePath := media.SubtitlePath()
+	if subtitlePath != "" {
+		if err := os.MkdirAll(mpvAndroidDir, 0o700); err != nil {
+			return fmt.Errorf("create mpv config dir: %w", err)
 		}
-		ext := filepath.Ext(subtitleFiles[0])
+		ext := filepath.Ext(subtitlePath)
 		if ext == "" {
 			ext = ".vtt"
 		}
 		target := filepath.Join(mpvAndroidDir, "sub"+ext)
-		if err := copyFile(subtitleFiles[0], target); err == nil {
-			subPath = target
-			mpvLog.Debug("subtitle copied for config bridge", "target", target)
-		} else {
-			mpvLog.Debug("subtitle copy failed", "target", target, "err", err)
+		if err := copyFile(subtitlePath, target); err != nil {
+			return fmt.Errorf("copy subtitle for mpv android: %w", err)
 		}
+		subPath = target
+		mpvLog.Debug("subtitle copied for config bridge", "target", target)
 	}
 	if subPath != "" {
 		confBuilder.WriteString("sub-file=")
@@ -179,66 +191,14 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) {
 		confBuilder.WriteString("\n")
 	}
 
-	confData := confBuilder.String()
-
-	paths := []string{
-		mpvAndroidDir + "/.mpv.conf",
-		mpvAndroidDir + "/mpv.conf",
+	confPath := filepath.Join(mpvAndroidDir, ".mpv.conf")
+	if err := os.WriteFile(confPath, []byte(confBuilder.String()), 0o600); err != nil {
+		return fmt.Errorf("write mpv android config: %w", err)
 	}
-
-	wroteCount := 0
-	for _, confPath := range paths {
-		dir := filepath.Dir(confPath)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			continue
-		}
-		if err := os.WriteFile(confPath, []byte(confData), 0o644); err != nil {
-			mpvLog.Debug("config write failed", "path", confPath, "err", err)
-			continue
-		}
-		wroteCount++
-		mpvLog.Debug("config written", "path", confPath)
-	}
-	if wroteCount == 0 {
-		mpvLog.Debug("could not write mpv.conf to any path; headers and title will not be set")
-	}
+	mpvLog.Debug("config written", "path", confPath)
+	return nil
 }
 
 func formatAudioLangList(language string) string {
-	langCode := strings.ToLower(strings.TrimSpace(language))
-	if langCode == "" {
-		return ""
-	}
-	var alang []string
-	switch langCode {
-	case "hi", "hindi":
-		alang = []string{"hi", "hin", "hindi", "en", "eng"}
-	case "ja", "japanese":
-		alang = []string{"ja", "jpn", "japanese", "en", "eng"}
-	case "es", "spanish":
-		alang = []string{"es", "spa", "spanish", "esla", "es-la", "en", "eng"}
-	case "fr", "french":
-		alang = []string{"fr", "fra", "fre", "french", "en", "eng"}
-	case "de", "german":
-		alang = []string{"de", "deu", "ger", "german", "en", "eng"}
-	case "it", "italian":
-		alang = []string{"it", "ita", "italian", "en", "eng"}
-	case "pt", "portuguese":
-		alang = []string{"pt", "por", "portuguese", "ptbr", "pt-br", "en", "eng"}
-	case "ru", "russian":
-		alang = []string{"ru", "rus", "russian", "en", "eng"}
-	case "ar", "arabic":
-		alang = []string{"ar", "ara", "arabic", "en", "eng"}
-	case "ko", "korean":
-		alang = []string{"ko", "kor", "korean", "en", "eng"}
-	case "zh", "chinese":
-		alang = []string{"zh", "chi", "zho", "chinese", "en", "eng"}
-	case "ta", "tamil":
-		alang = []string{"ta", "tam", "tamil", "en", "eng"}
-	case "te", "telugu":
-		alang = []string{"te", "tel", "telugu", "en", "eng"}
-	default:
-		alang = []string{langCode, "en", "eng"}
-	}
-	return strings.Join(alang, ",")
+	return strings.Join(lang.AudioLangs(language), ",")
 }

@@ -8,15 +8,15 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
 	"kari/internal/lang"
 	"kari/internal/model"
+	"kari/internal/util"
 )
 
 type searchResponse struct {
@@ -95,18 +95,15 @@ func (c *Client) Search(ctx context.Context, query, language string, tmdbID, sea
 
 	results := sr.Data
 
-	var filtered []searchEntry
+	filtered := make([]searchEntry, 0, len(results))
 	for _, r := range results {
 		if strings.EqualFold(r.Attributes.Language, language) {
 			filtered = append(filtered, r)
 		}
 	}
-	if len(filtered) == 0 {
-		filtered = results
-	}
 
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].Attributes.DownloadCount > filtered[j].Attributes.DownloadCount
+	slices.SortFunc(filtered, func(a, b searchEntry) int {
+		return b.Attributes.DownloadCount - a.Attributes.DownloadCount
 	})
 	osLog.Debug("search done", "results", len(filtered))
 	return filtered, nil
@@ -159,23 +156,23 @@ func (c *Client) Download(ctx context.Context, fileID int) (string, error) {
 		return "", fmt.Errorf("opensubtitles download: empty link")
 	}
 
-	osLog.Debug("resolving file link", "link", dr.Link)
-
 	rawData, err := c.downloadFile(ctx, dr.Link)
 	if err != nil {
 		return "", fmt.Errorf("opensubtitles file download: %w", err)
 	}
 
-	processedData, detectedFormat := ProcessSubtitleData(rawData)
+	processedData, detectedFormat, err := ProcessSubtitleData(rawData)
+	if err != nil {
+		return "", fmt.Errorf("opensubtitles process file: %w", err)
+	}
 
 	subDir, err := CacheDir()
 	if err != nil {
 		return "", fmt.Errorf("opensubtitles download mkdir: %w", err)
 	}
 
-	localPath := filepath.Join(subDir, fmt.Sprintf("sub_%d.srt", fileID))
-
-	if err := os.WriteFile(localPath, processedData, 0o644); err != nil {
+	localPath := filepath.Join(subDir, fmt.Sprintf("sub_%d%s", fileID, FileExtension(detectedFormat)))
+	if err := util.AtomicWriteFile(localPath, processedData, 0o644); err != nil {
 		return "", fmt.Errorf("opensubtitles file write: %w", err)
 	}
 
@@ -218,11 +215,11 @@ func (c *Client) FetchBestSubtitle(ctx context.Context, query, language string, 
 		releaseLower := strings.ToLower(entry.Attributes.Release)
 		normalizedRelease := normalizeForSearch(entry.Attributes.Release)
 
-		if strings.Contains(normalizedRelease, normalizedTitle) {
+		if normalizedTitle != "" && strings.Contains(normalizedRelease, normalizedTitle) {
 			score += 50
 		}
 
-		if strings.EqualFold(releaseLower, strings.ToLower(query)) {
+		if normalizedTitle != "" && strings.EqualFold(releaseLower, strings.ToLower(query)) {
 			score += 100
 		}
 
@@ -264,9 +261,13 @@ func (c *Client) FetchBestSubtitle(ctx context.Context, query, language string, 
 		return model.SubtitleTrack{}, false, err
 	}
 
+	selectedLanguage := lang.Normalize(best.Attributes.Language)
+	if selectedLanguage == "" {
+		selectedLanguage = lang.Normalize(language)
+	}
 	track := model.SubtitleTrack{
-		Label:    fmt.Sprintf("%s (OpenSubtitles)", lang.Name(language)),
-		Language: lang.Normalize(language),
+		Label:    fmt.Sprintf("%s (OpenSubtitles)", lang.Name(selectedLanguage)),
+		Language: selectedLanguage,
 		Path:     localPath,
 		Default:  true,
 	}

@@ -1,14 +1,8 @@
 package config
 
 const (
-	AnikotoAPIBase   = "https://noob2.broggl.farm"
-	AnikotoReferer   = "https://megaplay.buzz/"
-	AniLightAPIBase  = "https://noob3.broggl.farm"
-	AniLightReferer  = "https://anilight.live/"
-	ReAnimeAPIBase   = "https://noob4.broggl.farm"
-	ReAnimeReferer   = "https://flixcloud.cc/"
-	VidKingAPIBase   = "https://noob.broggl.farm"
-	VidKingReferer   = "https://www.vidking.net/"
+	AnikotoBase      = "https://anikototv.to"
+	MovyReferer      = "https://www.movy.sx/"
 	PenguAPIBase     = "https://pengu.uk"
 	TMDBAPIBase      = "https://api.themoviedb.org/3"
 	TMDBBaseURL      = "https://www.themoviedb.org"
@@ -36,8 +30,26 @@ const (
 	// DefaultAnimeSkipClientID is the bundled X-Client-ID for the Anime-Skip API.
 	DefaultAnimeSkipClientID = "q5ZuG3MoJxy3c4dKJvpOjFIh1HFGTsrm"
 
+	// SkipDBAPIBase is the SkipDB API base endpoint.
+	SkipDBAPIBase = "https://api.skipdb.tv"
+	// DefaultSkipDBAPIKey is the hardcoded API key for SkipDB.
+	DefaultSkipDBAPIKey = "skdb_lBMr8tAJgeEmtebM155UK9-HscdeJDgC"
+
+	// IntroDBAPIBase is the IntroDB API base endpoint.
+	IntroDBAPIBase = "https://api.introdb.app"
+	// DefaultIntroDBAPIKey is the hardcoded API key for IntroDB.
+	DefaultIntroDBAPIKey = "idb_Cbx3JSk4-MLeS8iOXQGFY0hXvM06XdFs"
+
 	// DefaultPenguAuthToken is the bundled fallback token for PenguPlay (https://pengu.uk).
 	DefaultPenguAuthToken = "ZXKooMjPl9wu9A4JI8HNQY54Jocc3H_qkUW422U6cpQ"
+
+	// WeebCentralBase is the WeebCentral site (HTMX HTML, no API):
+	// series search, full chapter listings, and chapter page images.
+	// Shapes were verified live; polite throttling applies per client.
+	WeebCentralBase = "https://weebcentral.com"
+	// WeebCentralReferer satisfies the image CDN's hotlink protection
+	// on chapter page downloads.
+	WeebCentralReferer = "https://weebcentral.com/"
 )
 
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var

@@ -16,7 +16,14 @@ func resultTypeLabel(item provider.SearchResult) string {
 		return "Anime"
 	case provider.MediaTypeCartoon:
 		return "Cartoon"
+	case provider.MediaTypeManga:
+		return "Manga"
+	case provider.MediaTypeLive:
+		return "Live"
 	default:
+		if item.Type == provider.ModeLive {
+			return "Live"
+		}
 		return "Title"
 	}
 }
@@ -38,6 +45,10 @@ func historyKindLabel(mode, mediaType string) string {
 		return "Movie"
 	case mt == provider.MediaTypeCartoon || mode == string(provider.ModeCartoon):
 		return "Cartoon"
+	case mt == provider.MediaTypeManga || mode == string(provider.ModeManga):
+		return "Manga"
+	case mt == provider.MediaTypeLive || mode == string(provider.ModeLive):
+		return "Live"
 	case mt == provider.MediaTypeTV:
 		return "TV"
 	default:
@@ -49,6 +60,9 @@ func historyKindLabel(mode, mediaType string) string {
 // active content mode. The TUI consults this instead of hardcoding
 // per-mode or per-provider behavior.
 func (m *modelImpl) modeFeatures() provider.Features {
+	if m.registry == nil {
+		return provider.Features{}
+	}
 	return m.registry.Features(m.appMode)
 }
 
@@ -57,5 +71,8 @@ func (m *modelImpl) modeFeatures() provider.Features {
 // users can configure language preferences for movies, TV, and cartoons
 // without having to switch modes first.
 func (m *modelImpl) availableLanguages() []provider.AudioLanguage {
+	if m.registry == nil {
+		return nil
+	}
 	return m.registry.AudioLanguages()
 }

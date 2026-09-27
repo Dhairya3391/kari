@@ -1,30 +1,46 @@
 package termimg
 
 import (
+	"bytes"
 	"fmt"
 	"image"
-	"strings"
+	"strconv"
 )
 
 // Render encodes img for display in a box roughly cellW columns by cellH
 // terminal rows. Every protocol here returns a string with exactly cellH
 // lines (cellH-1 newlines) so it composes safely with Bubble Tea's
-// line-based redraw accounting — see kitty.go's doc comment for why that
-// matters and how ProtocolKitty achieves it despite being a native graphics
-// protocol. imageID is only meaningful for ProtocolKitty: it must be a
-// stable id for the on-screen "slot" this image occupies (e.g. one id for a
+// line-based redraw accounting:
+//
+//   - Kitty uses C=1 (no cursor move) plus manual padding — see kitty.go.
+//   - Sixel and iTerm2 move the cursor when drawn inline, so they are
+//     overlaid onto a placeholder block via save/restore cursor moves —
+//     see overlayInlineX in sixel.go. The sequence is position-agnostic
+//     (relative moves only), so it composes mid-line beside text and
+//     under any outer padding.
+//   - Blocks are plain text cells and compose naturally.
+//
+// imageID is only meaningful for ProtocolKitty: it must be a stable id
+// for the on-screen "slot" this image occupies (e.g. one id for a
 // search-results preview pane, a different one for a detail page), reused
 // across calls so each redraw replaces the previous placement instead of
-// stacking on top of it — see DeleteKitty. It returns an empty string (no
-// error) for ProtocolNone, so callers can render unconditionally.
-func Render(img image.Image, protocol Protocol, cellW, cellH int, imageID uint32) (string, error) {
+// stacking on top of it — see DeleteKitty. termCols/termRows are the live
+// terminal dimensions, used to measure the real cell size so downscaled
+// protocols encode at display pixels instead of the 8x16 fallback size.
+// It returns an empty string (no error) for ProtocolNone, so callers can
+// render unconditionally.
+func Render(img image.Image, protocol Protocol, cellW, cellH int, imageID uint32, termCols, termRows int) (string, error) {
 	if cellW <= 0 || cellH <= 0 {
 		return "", fmt.Errorf("termimg: invalid target size %dx%d", cellW, cellH)
 	}
 
 	switch protocol {
 	case ProtocolKitty:
-		return renderKitty(img, cellW, cellH, imageID)
+		return renderKitty(img, cellW, cellH, imageID, termCols, termRows)
+	case ProtocolIterm:
+		return renderIterm(img, cellW, cellH)
+	case ProtocolSixel:
+		return renderSixel(img, cellW, cellH, termCols, termRows)
 	case ProtocolBlocks:
 		return renderQuadrants(img, cellW, cellH), nil
 	default:
@@ -39,7 +55,7 @@ func Render(img image.Image, protocol Protocol, cellW, cellH int, imageID uint32
 // poster; this instead picks rows so the displayed box's real-world aspect
 // ratio matches the source image, capped to maxRows (shrinking cols to
 // match) if that would otherwise make the image too tall.
-func RenderFit(img image.Image, protocol Protocol, maxCols, maxRows int, imageID uint32) (string, error) {
+func RenderFit(img image.Image, protocol Protocol, maxCols, maxRows int, imageID uint32, termCols, termRows int) (string, error) {
 	b := img.Bounds()
 	if b.Dx() == 0 || b.Dy() == 0 {
 		return "", fmt.Errorf("termimg: empty image")
@@ -59,7 +75,7 @@ func RenderFit(img image.Image, protocol Protocol, maxCols, maxRows int, imageID
 		rows = 1
 	}
 
-	return Render(img, protocol, cols, rows, imageID)
+	return Render(img, protocol, cols, rows, imageID, termCols, termRows)
 }
 
 // quadrantGlyphs maps a 4-bit mask (bit0=top-left, bit1=top-right,
@@ -97,9 +113,12 @@ func renderQuadrants(img image.Image, cols, rows int) string {
 	gw, gh := cols*2, rows*2
 	grid := boxDownsample(img, gw, gh)
 
-	var b strings.Builder
-	for row := 0; row < rows; row++ {
-		for col := 0; col < cols; col++ {
+	var b bytes.Buffer
+	// Estimate ~32 bytes per cell
+	b.Grow(rows * cols * 32)
+
+	for row := range rows {
+		for col := range cols {
 			tl := grid[(row*2)*gw+col*2]
 			tr := grid[(row*2)*gw+col*2+1]
 			bl := grid[(row*2+1)*gw+col*2]
@@ -108,7 +127,21 @@ func renderQuadrants(img image.Image, cols, rows int) string {
 			mask, fg, bg := bestSplit(tl, tr, bl, br)
 			fr, fgc, fb := fg.clamp()
 			brr, bgc, bbc := bg.clamp()
-			fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm%c", fr, fgc, fb, brr, bgc, bbc, quadrantGlyphs[mask])
+
+			b.WriteString("\x1b[38;2;")
+			b.WriteString(strconv.Itoa(int(fr)))
+			b.WriteByte(';')
+			b.WriteString(strconv.Itoa(int(fgc)))
+			b.WriteByte(';')
+			b.WriteString(strconv.Itoa(int(fb)))
+			b.WriteString("m\x1b[48;2;")
+			b.WriteString(strconv.Itoa(int(brr)))
+			b.WriteByte(';')
+			b.WriteString(strconv.Itoa(int(bgc)))
+			b.WriteByte(';')
+			b.WriteString(strconv.Itoa(int(bbc)))
+			b.WriteByte('m')
+			b.WriteRune(quadrantGlyphs[mask])
 		}
 		b.WriteString("\x1b[0m")
 		if row < rows-1 {
@@ -208,31 +241,92 @@ func boxDownsample(img image.Image, w, h int) []avgColor {
 	sw, sh := src.Dx(), src.Dy()
 
 	out := make([]avgColor, w*h)
-	for gy := 0; gy < h; gy++ {
-		y0 := src.Min.Y + gy*sh/h
-		y1 := src.Min.Y + (gy+1)*sh/h
-		if y1 <= y0 {
-			y1 = y0 + 1
-		}
-		for gx := 0; gx < w; gx++ {
-			x0 := src.Min.X + gx*sw/w
-			x1 := src.Min.X + (gx+1)*sw/w
-			if x1 <= x0 {
-				x1 = x0 + 1
+	switch im := img.(type) {
+	case *image.RGBA:
+		for gy := range h {
+			y0 := src.Min.Y + gy*sh/h
+			y1 := src.Min.Y + (gy+1)*sh/h
+			if y1 <= y0 {
+				y1 = y0 + 1
 			}
-
-			var sum avgColor
-			var n int
-			for y := y0; y < y1; y++ {
-				for x := x0; x < x1; x++ {
-					r, g, b, _ := img.At(x, y).RGBA()
-					sum.r += float64(r >> 8)
-					sum.g += float64(g >> 8)
-					sum.b += float64(b >> 8)
-					n++
+			for gx := range w {
+				x0 := src.Min.X + gx*sw/w
+				x1 := src.Min.X + (gx+1)*sw/w
+				if x1 <= x0 {
+					x1 = x0 + 1
 				}
+
+				var sum avgColor
+				var n int
+				for y := y0; y < y1; y++ {
+					rowOff := (y - im.Rect.Min.Y) * im.Stride
+					for x := x0; x < x1; x++ {
+						pixOff := rowOff + (x-im.Rect.Min.X)*4
+						sum.r += float64(im.Pix[pixOff+0])
+						sum.g += float64(im.Pix[pixOff+1])
+						sum.b += float64(im.Pix[pixOff+2])
+						n++
+					}
+				}
+				out[gy*w+gx] = sum.mean(n)
 			}
-			out[gy*w+gx] = sum.mean(n)
+		}
+	case *image.NRGBA:
+		for gy := range h {
+			y0 := src.Min.Y + gy*sh/h
+			y1 := src.Min.Y + (gy+1)*sh/h
+			if y1 <= y0 {
+				y1 = y0 + 1
+			}
+			for gx := range w {
+				x0 := src.Min.X + gx*sw/w
+				x1 := src.Min.X + (gx+1)*sw/w
+				if x1 <= x0 {
+					x1 = x0 + 1
+				}
+
+				var sum avgColor
+				var n int
+				for y := y0; y < y1; y++ {
+					rowOff := (y - im.Rect.Min.Y) * im.Stride
+					for x := x0; x < x1; x++ {
+						pixOff := rowOff + (x-im.Rect.Min.X)*4
+						sum.r += float64(im.Pix[pixOff+0])
+						sum.g += float64(im.Pix[pixOff+1])
+						sum.b += float64(im.Pix[pixOff+2])
+						n++
+					}
+				}
+				out[gy*w+gx] = sum.mean(n)
+			}
+		}
+	default:
+		for gy := range h {
+			y0 := src.Min.Y + gy*sh/h
+			y1 := src.Min.Y + (gy+1)*sh/h
+			if y1 <= y0 {
+				y1 = y0 + 1
+			}
+			for gx := range w {
+				x0 := src.Min.X + gx*sw/w
+				x1 := src.Min.X + (gx+1)*sw/w
+				if x1 <= x0 {
+					x1 = x0 + 1
+				}
+
+				var sum avgColor
+				var n int
+				for y := y0; y < y1; y++ {
+					for x := x0; x < x1; x++ {
+						r, g, b, _ := img.At(x, y).RGBA()
+						sum.r += float64(r >> 8)
+						sum.g += float64(g >> 8)
+						sum.b += float64(b >> 8)
+						n++
+					}
+				}
+				out[gy*w+gx] = sum.mean(n)
+			}
 		}
 	}
 	return out

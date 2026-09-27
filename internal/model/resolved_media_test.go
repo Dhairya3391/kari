@@ -18,6 +18,7 @@ func TestIsEpisodeBased(t *testing.T) {
 		{" anime ", true},
 		{"movie", false},
 		{"film", false},
+		{"live", false},
 		{"", false},
 	}
 	for _, tt := range tests {
@@ -64,6 +65,11 @@ func TestDisplayTitle(t *testing.T) {
 			want: "Film (2019)",
 		},
 		{
+			name: "live event renders single title",
+			r:    ResolvedMedia{SeriesTitle: "🔴 LIVE: Match 1", MediaType: provider.MediaTypeLive},
+			want: "🔴 LIVE: Match 1",
+		},
+		{
 			name: "empty everything renders empty",
 			r:    ResolvedMedia{},
 			want: "",
@@ -78,14 +84,29 @@ func TestDisplayTitle(t *testing.T) {
 	}
 }
 
-func TestSubtitlePathsSkipsUndownloaded(t *testing.T) {
-	r := ResolvedMedia{Subtitles: []SubtitleTrack{
-		{Label: "downloaded", Path: "/tmp/a.srt"},
-		{Label: "remote-only"},
-		{Label: "also-downloaded", Path: "/tmp/b.ass"},
-	}}
-	got := r.SubtitlePaths()
-	if len(got) != 2 || got[0] != "/tmp/a.srt" || got[1] != "/tmp/b.ass" {
-		t.Fatalf("SubtitlePaths()=%v", got)
+func TestSubtitlePathUsesOnlySelectedLocalTrack(t *testing.T) {
+	selected := SubtitleTrack{Path: "/tmp/selected.srt"}
+	r := ResolvedMedia{
+		Subtitles: []SubtitleTrack{
+			{Path: "/tmp/candidate.srt"},
+			{URL: "https://cdn.example.com/en.vtt"},
+		},
+		SelectedSubtitle: &selected,
+	}
+	if got := r.SubtitlePath(); got != "/tmp/selected.srt" {
+		t.Fatalf("SubtitlePath()=%q want %q", got, "/tmp/selected.srt")
+	}
+
+	r.SelectedSubtitle = nil
+	if got := r.SubtitlePath(); got != "" {
+		t.Fatalf("unselected candidates must not reach playback, got %q", got)
+	}
+}
+
+func TestSubtitlePathRequiresMaterializedTrack(t *testing.T) {
+	selected := SubtitleTrack{URL: "https://cdn.example.com/en.vtt"}
+	r := ResolvedMedia{SelectedSubtitle: &selected}
+	if got := r.SubtitlePath(); got != "" {
+		t.Fatalf("remote subtitle must be materialized before playback, got %q", got)
 	}
 }

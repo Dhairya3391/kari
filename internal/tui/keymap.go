@@ -2,38 +2,40 @@ package tui
 
 import (
 	"github.com/charmbracelet/bubbles/key"
-
-	"kari/internal/model"
 )
 
 type keyMap struct {
-	Move          key.Binding
-	Filter        key.Binding
-	Search        key.Binding
-	Type          key.Binding
-	Audio         key.Binding
-	Select        key.Binding
-	Play          key.Binding
-	PlayNext      key.Binding
-	Player        key.Binding
-	Download      key.Binding
-	Autoplay      key.Binding
-	Help          key.Binding
-	Back          key.Binding
-	Home          key.Binding
-	Quit          key.Binding
-	Stop          key.Binding
-	Restart       key.Binding
-	History       key.Binding
-	Settings      key.Binding
-	Delete        key.Binding
-	ClearHistory  key.Binding
-	ToggleSelect  key.Binding
-	SelectAll     key.Binding
-	DeselectAll   key.Binding
-	BatchDownload key.Binding
-	Top           key.Binding
-	Bottom        key.Binding
+	Move              key.Binding
+	Filter            key.Binding
+	Search            key.Binding
+	Type              key.Binding
+	Audio             key.Binding
+	Select            key.Binding
+	Play              key.Binding
+	PlayNext          key.Binding
+	Player            key.Binding
+	Download          key.Binding
+	Autoplay          key.Binding
+	Help              key.Binding
+	Back              key.Binding
+	Home              key.Binding
+	Quit              key.Binding
+	Stop              key.Binding
+	Restart           key.Binding
+	History           key.Binding
+	Settings          key.Binding
+	Delete            key.Binding
+	ClearHistory      key.Binding
+	ToggleSelect      key.Binding
+	SelectAll         key.Binding
+	DeselectAll       key.Binding
+	BatchDownload     key.Binding
+	Top               key.Binding
+	Bottom            key.Binding
+	ReaderNext        key.Binding
+	ReaderPrev        key.Binding
+	ReaderNextChapter key.Binding
+	ReaderPrevChapter key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -75,8 +77,8 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("ctrl+p", "player"),
 		),
 		Download: key.NewBinding(
-			key.WithKeys("d"),
-			key.WithHelp("d", "download"),
+			key.WithKeys("D"),
+			key.WithHelp("D", "download"),
 		),
 		Autoplay: key.NewBinding(
 			key.WithKeys("A"),
@@ -123,7 +125,7 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("D", "clear all"),
 		),
 		ToggleSelect: key.NewBinding(
-			key.WithKeys(" "),
+			key.WithKeys(" ", "space"),
 			key.WithHelp("space", "toggle"),
 		),
 		SelectAll: key.NewBinding(
@@ -146,35 +148,21 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("G"),
 			key.WithHelp("G", "bottom"),
 		),
+		ReaderNext: key.NewBinding(
+			key.WithKeys("right", "l", "pgdown"),
+			key.WithHelp("→", "next page"),
+		),
+		ReaderPrev: key.NewBinding(
+			key.WithKeys("left", "h", "pgup"),
+			key.WithHelp("←", "prev page"),
+		),
+		ReaderNextChapter: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("n", "next chapter"),
+		),
+		ReaderPrevChapter: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "prev chapter"),
+		),
 	}
-}
-
-func (m *modelImpl) shortHelpBindings() []key.Binding {
-	var bindings []key.Binding
-	switch m.activeView {
-	case viewSearch:
-		bindings = []key.Binding{m.keys.Search, m.keys.Type, m.keys.Select, m.keys.History, m.keys.Help, m.keys.Quit}
-	case viewEpisodes:
-		bindings = []key.Binding{m.keys.Move, m.keys.ToggleSelect, m.keys.BatchDownload, m.keys.Select, m.keys.Help, m.keys.Quit}
-		if m.selectedSeries != nil && m.modeFeatures().AudioSelection {
-			bindings = append(bindings[:3], append([]key.Binding{m.keys.Audio}, bindings[3:]...)...)
-		}
-	case viewHistory:
-		bindings = []key.Binding{m.keys.Move, m.keys.Select, m.keys.Delete, m.keys.Help, m.keys.Quit}
-	case viewSettings:
-		bindings = []key.Binding{m.keys.Move, m.keys.Select, m.keys.Help, m.keys.Quit}
-	case viewPreview:
-		bindings = []key.Binding{m.keys.Play}
-		if m.resolved != nil && m.resolved.StartTime > 5 {
-			bindings = append(bindings, m.keys.Restart)
-		}
-		if m.canPlayNextEpisode() {
-			bindings = append(bindings, m.keys.PlayNext)
-		}
-		if m.resolved != nil && model.IsEpisodeBased(m.resolved.MediaType) {
-			bindings = append(bindings, m.keys.Autoplay)
-		}
-		bindings = append(bindings, m.keys.Download, m.keys.Help, m.keys.Quit)
-	}
-	return bindings
 }

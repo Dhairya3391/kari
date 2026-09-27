@@ -31,9 +31,7 @@ type PlaybackResult struct {
 
 // NeedsCompletionConfirmError signals "launched fine, but completion is
 // unobservable" — registry unwraps it as success with confirmation needed.
-type NeedsCompletionConfirmError struct {
-	Media model.ResolvedMedia
-}
+type NeedsCompletionConfirmError struct{}
 
 // Error implements error with a stable message players recognize.
 func (e *NeedsCompletionConfirmError) Error() string {
@@ -53,7 +51,7 @@ func attemptSources(playerLabel string, sources []provider.MediaSource, play fun
 		return PlaybackResult{}, fmt.Errorf("%s playback failed: no playback sources available", playerLabel)
 	}
 
-	errs := make([]string, 0, len(sources))
+	errs := make([]error, 0, len(sources))
 	for idx, source := range sources {
 		if strings.TrimSpace(source.URL) == "" {
 			continue
@@ -70,13 +68,13 @@ func attemptSources(playerLabel string, sources []provider.MediaSource, play fun
 		if label == "" {
 			label = fmt.Sprintf("source %d", idx+1)
 		}
-		errs = append(errs, fmt.Sprintf("%s: %v", label, err))
+		errs = append(errs, fmt.Errorf("%s: %w", label, err))
 	}
 
 	if len(errs) == 0 {
 		return PlaybackResult{}, fmt.Errorf("%s playback failed: no usable playback sources available", playerLabel)
 	}
-	return PlaybackResult{}, fmt.Errorf("%s playback failed: %s", playerLabel, strings.Join(errs, " | "))
+	return PlaybackResult{}, fmt.Errorf("%s playback failed: %w", playerLabel, errors.Join(errs...))
 }
 
 func playerName(v string) string {
@@ -101,4 +99,20 @@ func sanitizeMediaTitle(mediaTitle string) string {
 	}, mediaTitle)
 
 	return strings.TrimSpace(strings.Join(strings.Fields(clean), " "))
+}
+
+// originFromReferer extracts scheme://host from a full Referer URL so the
+// Origin header sent to CDNs is never a full path (some CDNs reject that).
+// Mirrors internal/media.originFromReferer; kept here to avoid import cycles.
+func originFromReferer(referer string) string {
+	for i, c := range referer {
+		if c == ':' && i+3 <= len(referer) && referer[i+1] == '/' && referer[i+2] == '/' {
+			end := strings.IndexAny(referer[i+3:], "/?#")
+			if end == -1 {
+				return strings.TrimSuffix(referer, "/")
+			}
+			return referer[:i+3+end]
+		}
+	}
+	return ""
 }

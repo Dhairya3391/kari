@@ -1,11 +1,10 @@
 package service
 
 import (
-	"regexp"
-	"strconv"
 	"strings"
 
 	"kari/internal/provider"
+	"kari/internal/ranking"
 )
 
 // FilterPlaybackIndices returns indices of sources passing the language
@@ -23,16 +22,39 @@ func FilterPlaybackIndices(playback []provider.MediaSource, qualityMode int, lan
 
 	switch qualityMode {
 	case 1:
-		return filterByQuality(playback, candidates, func(q, maxQ, _, secondQ int) bool {
-			if q == maxQ {
-				return true
-			}
-			return maxQ >= 2160 && secondQ > 0 && q == secondQ
-		})
+		return filterByQuality(playback, candidates, keepHighestTier)
 	case 2:
-		return filterByQuality(playback, candidates, func(q, maxQ, minQ, _ int) bool { return maxQ == minQ || q < maxQ })
+		return filterByQuality(playback, candidates, keepBelowMax)
 	case 3:
-		return filterByQuality(playback, candidates, func(q, _, minQ, _ int) bool { return q == minQ })
+		return filterByQuality(playback, candidates, keepLowestTier)
+	case 10: // 4K (2160p) -> fallback 1080p -> 720p -> SD
+		for _, target := range []int{2160, 1080, 720, 480} {
+			if res := filterByTargetResolution(playback, candidates, target); len(res) > 0 {
+				return res
+			}
+		}
+		return candidates
+	case 11: // FHD (1080p) -> fallback 720p -> 4K -> SD
+		for _, target := range []int{1080, 720, 2160, 480} {
+			if res := filterByTargetResolution(playback, candidates, target); len(res) > 0 {
+				return res
+			}
+		}
+		return candidates
+	case 12: // HD (720p) -> fallback 1080p -> SD -> 4K
+		for _, target := range []int{720, 1080, 480, 2160} {
+			if res := filterByTargetResolution(playback, candidates, target); len(res) > 0 {
+				return res
+			}
+		}
+		return candidates
+	case 13: // SD (480p / 360p / 240p) -> fallback 720p -> 1080p -> 4K
+		for _, target := range []int{480, 720, 1080, 2160} {
+			if res := filterByTargetResolution(playback, candidates, target); len(res) > 0 {
+				return res
+			}
+		}
+		return candidates
 	default:
 		return candidates
 	}
@@ -47,6 +69,49 @@ func FilterPlaybackSources(playback []provider.MediaSource, qualityMode int, lan
 		sources = append(sources, playback[idx])
 	}
 	return sources
+}
+
+// Tier predicates: q is the source tier, maxQ/minQ the resolver's best and
+// worst parsed tiers, secondQ the best tier below maxQ.
+func keepHighestTier(q, maxQ, _ int, secondQ int) bool {
+	if q == maxQ {
+		return true
+	}
+	return maxQ >= 2160 && secondQ > 0 && q == secondQ
+}
+
+func keepBelowMax(q, maxQ, minQ, _ int) bool { return maxQ == minQ || q < maxQ }
+
+func keepLowestTier(q, _, minQ, _ int) bool { return q == minQ }
+
+func filterByTargetResolution(playback []provider.MediaSource, candidates []int, targetHeight int) []int {
+	var matched []int
+	for _, idx := range candidates {
+		q := SourceQuality(playback[idx].Quality)
+		switch targetHeight {
+		case 2160:
+			if q >= 2160 {
+				matched = append(matched, idx)
+			}
+		case 1080:
+			if q == 1080 || q == 1440 {
+				matched = append(matched, idx)
+			}
+		case 720:
+			if q == 720 || q == 576 {
+				matched = append(matched, idx)
+			}
+		case 480:
+			if q <= 480 && q > 0 {
+				matched = append(matched, idx)
+			}
+		default:
+			if q == targetHeight {
+				matched = append(matched, idx)
+			}
+		}
+	}
+	return matched
 }
 
 func filterByQuality(playback []provider.MediaSource, candidates []int, keep func(q, maxQ, minQ, secondQ int) bool) []int {
@@ -105,54 +170,12 @@ func filterByQuality(playback []provider.MediaSource, candidates []int, keep fun
 	return result
 }
 
-var (
-	reBracketTag = regexp.MustCompile(`\[[^\]]+\]`)
-	reQuality4K  = regexp.MustCompile(`(?i)\b(4k|uhd|2160p?)\b`)
-	reQualityQHD = regexp.MustCompile(`(?i)\b(qhd|1440p?|2k)\b`)
-	reQualityFHD = regexp.MustCompile(`(?i)\b(fhd|1080p?)\b`)
-	reQualityHD  = regexp.MustCompile(`(?i)\b(hd|720p?)\b`)
-	reQualitySD  = regexp.MustCompile(`(?i)\b(sd|480p?|360p?|576p?)\b`)
-	reQualityP   = regexp.MustCompile(`(\d{3,4})p`)
-	reQualityNum = regexp.MustCompile(`\b(\d{3,4})\b`)
-)
-
 // SourceQuality extracts a numeric resolution (2160/1080/…) from a quality
-// label like "4K [4KHDHub]", "FHD [VegaMovies]", "HD", "SD", or "1080p"; 0 when unparseable.
+// label like "4K [Movy: Server]", "1080p (Vidstream-2)", "Auto (HD1)",
+// "HD", "SD", or "360p"; 0 when unparseable. It delegates to
+// ranking.ParseResolution so downloads and Preview agree.
 func SourceQuality(label string) int {
-	// Strip bracketed source tags e.g. "[4KHDHub]" so provider names don't trigger false resolution matches
-	stripped := reBracketTag.ReplaceAllString(label, "")
-	normalized := strings.ToLower(stripped)
-
-	if reQuality4K.MatchString(normalized) {
-		return 2160
-	}
-	if reQualityQHD.MatchString(normalized) {
-		return 1440
-	}
-	if reQualityFHD.MatchString(normalized) {
-		return 1080
-	}
-	if reQualityHD.MatchString(normalized) {
-		return 720
-	}
-	if reQualitySD.MatchString(normalized) {
-		return 480
-	}
-	if m := reQualityP.FindStringSubmatch(normalized); len(m) >= 2 {
-		return atoiOrZero(m[1])
-	}
-	if m := reQualityNum.FindStringSubmatch(normalized); len(m) >= 2 {
-		return atoiOrZero(m[1])
-	}
-	return 0
-}
-
-func atoiOrZero(s string) int {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0
-	}
-	return n
+	return ranking.ParseResolution(label)
 }
 
 func caseInsensitiveLangLookup(tag string, languages map[string]bool) (enabled, configured bool) {

@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -14,6 +16,8 @@ import (
 	"kari/internal/history"
 	"kari/internal/lang"
 	"kari/internal/logging"
+	"kari/internal/manga"
+	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/poster"
 	"kari/internal/provider"
@@ -30,7 +34,7 @@ var tuiLog = logging.With("component", "tui")
 // NewModel wires every dependency into the TUI root model. This signature
 // is intentionally explicit: all components arrive pre-constructed from
 // app.Run, so nothing inside tui constructs I/O collaborators.
-func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, appVersion string) tea.Model {
+func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, mangaService *service.MangaService, mangaClient *manga.Client, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, appVersion string) tea.Model {
 	// Loaded up front (rather than where settings used to be applied,
 	// further down) so the accent color is in effect before any of the
 	// list delegates or the download bar below are built — those cache
@@ -46,8 +50,8 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 	ti.CharLimit = 150
 	ti.Width = 70
 	ti.SetValue(strings.TrimSpace(initialQuery))
-	ti.Placeholder = "Search… (Esc for controls)"
-	ti.Prompt = "search> "
+	ti.Placeholder = "search…"
+	ti.Prompt = "› "
 	ti.Focus()
 
 	seriesDelegate := list.NewDefaultDelegate()
@@ -92,6 +96,32 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 	episodeList.SetShowPagination(false)
 	episodeList.SetShowHelp(false)
 	episodeList.SetShowTitle(false)
+
+	// Chapters read like episodes (one selectable row per unit) but carry
+	// manga numbering, so they get their own list rather than sharing the
+	// episode list's items.
+	chapterDelegate := list.NewDefaultDelegate()
+	chapterDelegate.ShowDescription = false
+	chapterDelegate.SetHeight(1)
+	chapterDelegate.Styles.SelectedTitle = chapterDelegate.Styles.SelectedTitle.
+		Foreground(colorPrimary).
+		BorderLeft(true).
+		BorderStyle(lipgloss.ThickBorder()).
+		BorderForeground(colorPrimary).
+		PaddingLeft(1)
+	chapterDelegate.Styles.NormalTitle = chapterDelegate.Styles.NormalTitle.
+		Foreground(colorText).
+		BorderLeft(true).
+		BorderStyle(lipgloss.HiddenBorder()).
+		PaddingLeft(1)
+
+	chapterList := list.New([]list.Item{}, chapterDelegate, 80, 16)
+	chapterList.Title = ""
+	chapterList.SetFilteringEnabled(true)
+	chapterList.SetShowStatusBar(false)
+	chapterList.SetShowPagination(false)
+	chapterList.SetShowHelp(false)
+	chapterList.SetShowTitle(false)
 
 	historyDelegate := list.NewDefaultDelegate()
 	historyDelegate.ShowDescription = true
@@ -140,6 +170,8 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 
 	model := &modelImpl{
 		mediaService:    mediaService,
+		mangaService:    mangaService,
+		mangaClient:     mangaClient,
 		subtitleService: subtitleService,
 		downloadService: downloadService,
 		historyStore:    historyStore,
@@ -153,9 +185,11 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		hexInput:        hexInput,
 		seriesList:      seriesList,
 		episodeList:     episodeList,
+		chapterList:     chapterList,
 		historyList:     historyList,
 		spinner:         sp,
 		downloadBar:     downloadBar,
+		readerRender:    make(map[int]string),
 
 		keys:             defaultKeyMap(),
 		searchQuery:      strings.TrimSpace(initialQuery),
@@ -166,10 +200,14 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		availablePlayers: players.AvailablePlayers(),
 		searchCache:      util.NewBoundedCache[searchCacheEntry](60),
 		downloadChan:     make(chan tea.Msg, 10),
-		resolveChan:      make(chan tea.Msg, 10),
-		audioMode:        provider.AudioSub,
+		resolveChan:      make(chan tea.Msg, 50),
+		configuredModes:  (&settings.Data{}).NormalizedModes(),
+		disabledModes:    make(map[string]bool),
+		transitions:      true,
+		baseBgColor:      HexToRGBA("#0B0D10"),
 		qualityMode:      qualityAll,
 		languageFilter:   make(map[string]bool),
+		audioMode:        provider.AudioSub,
 		subtitleLanguage: "en",
 		skipProvider:     "hybrid",
 		selectedEpisodes: make(map[int]struct{}),
@@ -189,6 +227,9 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		if s.QualityMode >= qualityAll && s.QualityMode <= qualityLowest {
 			model.qualityMode = s.QualityMode
 		}
+		if s.DownloadQuality >= downloadQualityAuto && s.DownloadQuality <= downloadQualitySD {
+			model.downloadQuality = s.DownloadQuality
+		}
 		if len(s.LanguageFilter) > 0 {
 			// Saved filters only ever record overrides (a language the user
 			// explicitly disabled) — anything absent from the map is still
@@ -207,21 +248,20 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		if code := lang.Normalize(s.SubtitleLanguage); code != "" {
 			model.subtitleLanguage = code
 		}
-		model.disableAnimeSubtitles = s.DisableAnimeSubtitles
-		if model.subtitleService != nil {
-			model.subtitleService.SetDisableAnimeSubtitles(model.disableAnimeSubtitles)
-		}
-		model.imagesEnabled = !s.DisableImages
-		if normalized, ok := normalizeHexColor(s.AccentColor); ok {
-			model.accentIndex = len(accentPresets) // default: custom slot
-			for i, preset := range accentPresets {
-				if preset.hex == normalized {
-					model.accentIndex = i
-					normalized = ""
-					break
+		if s.AccentColor != "" && !strings.EqualFold(s.AccentColor, "auto") {
+			if normalized, ok := normalizeHexColor(s.AccentColor); ok {
+				model.accentIndex = len(accentPresets) // default: custom slot
+				for i, preset := range accentPresets {
+					if strings.EqualFold(preset.hex, normalized) || strings.EqualFold(preset.name, s.AccentColor) {
+						model.accentIndex = i
+						normalized = ""
+						break
+					}
 				}
+				model.customAccentHex = normalized // "" when it matched a preset
 			}
-			model.customAccentHex = normalized // "" when it matched a preset
+		} else {
+			model.accentIndex = 0 // "Auto (per mode)"
 		}
 		if s.SkipProvider != "" {
 			model.skipProvider = s.SkipProvider
@@ -241,7 +281,38 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 				}
 			}
 		}
-		model.autoPlayAfterResolve = s.Autoplay
+		model.autoplay = s.Autoplay
+		model.imagesEnabled = !s.DisableImages
+		model.disableAnimeSubtitles = s.DisableAnimeSubtitles
+		if model.subtitleService != nil {
+			model.subtitleService.SetDisableAnimeSubtitles(model.disableAnimeSubtitles)
+		}
+		model.startupSync = s.StartupSync
+		model.defaultMode = s.DefaultMode
+		model.configuredModes = s.NormalizedModes()
+		model.disabledModes = s.DisabledModeSet()
+		model.transitions = s.TransitionsEnabled()
+		model.updateEffectiveModes()
+
+		startupMode := strings.ToLower(strings.TrimSpace(s.DefaultMode))
+		switch startupMode {
+		case "", "last":
+			if s.LastMode != "" && !model.disabledModes[s.LastMode] && model.isModeAvailable(s.LastMode) {
+				model.appMode = provider.ContentType(s.LastMode)
+			} else if len(model.modes) > 0 {
+				model.appMode = model.modes[0]
+			}
+		case "first":
+			if len(model.modes) > 0 {
+				model.appMode = model.modes[0]
+			}
+		default:
+			if !model.disabledModes[startupMode] && model.isModeAvailable(startupMode) {
+				model.appMode = provider.ContentType(startupMode)
+			} else if len(model.modes) > 0 {
+				model.appMode = model.modes[0]
+			}
+		}
 	}
 	for i, code := range lang.SubtitleOptions {
 		if code == model.subtitleLanguage {
@@ -249,6 +320,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			break
 		}
 	}
+	tuiLog.Info("image protocol detected", "protocol", model.imgProtocol.String())
 	if historyLoadErr != nil {
 		// historyStore is nil in this case, silently disabling watch
 		// history/resume for the whole session — surface it instead of
@@ -271,6 +343,12 @@ func (m *modelImpl) Init() tea.Cmd {
 		cmds = append(cmds, m.clearStatusAfter(statusClearDuration(statusWarn)))
 	}
 	cmds = append(cmds, m.checkForUpdateCmd())
+	// Pull tracker state into local history on startup if enabled.
+	if m.startupSync {
+		if cmd := m.autoHistoryImportCmd(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -278,11 +356,27 @@ type historyLoadedMsg struct{}
 
 func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var spinnerCmd tea.Cmd
-	if m.loading {
+	// Keep the spinner animating while providers stream sources in
+	// progressively: loading flips false on the first partial results, but
+	// resolution isn't done until resolveOpID resets to zero.
+	if m.loading || m.resolveOpID != 0 {
 		m.spinner, spinnerCmd = m.spinner.Update(msg)
 	}
-
 	switch msg := msg.(type) {
+	case themeCrossfadeTickMsg:
+		if msg.opID == m.crossfadeOpID && m.crossfadeActive {
+			m.crossfadeStep++
+			if m.crossfadeStep >= 10 {
+				m.crossfadeActive = false
+				return m, nil
+			}
+			opID := m.crossfadeOpID
+			step := m.crossfadeStep
+			return m, tea.Tick(18*time.Millisecond, func(t time.Time) tea.Msg {
+				return themeCrossfadeTickMsg{opID: opID, step: step + 1}
+			})
+		}
+		return m, nil
 	case updateCheckMsg:
 		return m.onUpdateCheck(msg)
 	case historyLoadedMsg:
@@ -294,6 +388,13 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resizeLists()
+		// Page renders are dimension-specific; a resize invalidates them
+		// and re-renders the current page at the new size.
+		if m.activeView == viewReader {
+			m.readerRender = make(map[int]string)
+			m.readerCols, m.readerRows = 0, 0
+			return m, tea.Batch(spinnerCmd, m.gotoReaderPage(m.readerPage))
+		}
 		return m, spinnerCmd
 
 	case tea.KeyMsg:
@@ -306,6 +407,12 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return mdl, tea.Batch(spinnerCmd, cmd)
 	case episodesDoneMsg:
 		mdl, cmd := m.onEpisodesDone(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case episodeTitlesMsg:
+		mdl, cmd := m.onEpisodeTitles(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case historyImportMsg:
+		mdl, cmd := m.onHistoryImport(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)
 	case historyContinueEpisodesMsg:
 		mdl, cmd := m.onHistoryContinueEpisodes(msg)
@@ -357,32 +464,16 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.playOpID == msg.opID && m.loading {
 			m.loading = false
 			m.loadingText = ""
-			m.setStatus(statusInfo, "Playback in progress...")
+			m.setStatus(statusInfo, "Playing in progress...")
 		}
 		return m, spinnerCmd
 	case resetConfirmQuitMsg:
 		m.confirmQuit = false
-		if m.cancelDownload != nil {
-			m.loadingText = downloadLoadingText(m.downloadProgress, m.downloadTotalSize, m.downloadSpeed, m.downloadDownloaded, m.downloadETA)
-			m.setStatus(statusInfo, "")
-		} else if m.batchInProgress {
-			m.loadingText = fmt.Sprintf("Downloading %d/%d...", m.batchCurrent, m.batchTotal)
-			m.setStatus(statusInfo, "")
-		} else {
-			m.loadingText = ""
-		}
+		m.setStatus(statusInfo, "")
 		return m, spinnerCmd
 	case resetConfirmStopMsg:
 		m.confirmStop = false
-		if m.cancelDownload != nil {
-			m.loadingText = downloadLoadingText(m.downloadProgress, m.downloadTotalSize, m.downloadSpeed, m.downloadDownloaded, m.downloadETA)
-			m.setStatus(statusInfo, "")
-		} else if m.batchInProgress {
-			m.loadingText = fmt.Sprintf("Downloading %d/%d...", m.batchCurrent, m.batchTotal)
-			m.setStatus(statusInfo, "")
-		} else {
-			m.loadingText = ""
-		}
+		m.setStatus(statusInfo, "")
 		return m, spinnerCmd
 	case resetStatusMsg:
 		if m.statusID == msg.id {
@@ -396,10 +487,19 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchPoster = msg.rendered
 				m.searchPosterUnavailable = msg.err != nil
 			}
+		case posterSlotHistory:
+			if msg.opID == m.historyPosterOpID {
+				m.historyPoster = msg.rendered
+				m.historyPosterUnavailable = msg.err != nil
+			}
 		case posterSlotPreview:
 			if msg.opID == m.previewPosterOpID {
-				m.previewPoster = msg.rendered
-				m.previewPosterUnavailable = msg.err != nil
+				if msg.err == nil && msg.rendered != "" {
+					m.previewPoster = msg.rendered
+					m.previewPosterUnavailable = false
+				} else if m.previewPoster == "" {
+					m.previewPosterUnavailable = msg.err != nil
+				}
 			}
 		}
 		return m, spinnerCmd
@@ -410,8 +510,48 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.previewRating = msg.rating
 		}
 		return m, spinnerCmd
+	case chaptersDoneMsg:
+		mdl, cmd := m.onChaptersDone(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case pagesDoneMsg:
+		mdl, cmd := m.onPagesDone(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case fallbackDoneMsg:
+		mdl, cmd := m.onFallbackDone(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case readerPageMsg:
+		mdl, cmd := m.onReaderPage(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
 	}
 
 	mdl, cmd := m.updateActive(msg)
 	return mdl, tea.Batch(spinnerCmd, cmd)
+}
+
+type themeCrossfadeTickMsg struct {
+	opID int
+	step int
+}
+
+func (m *modelImpl) startThemeCrossfade(fromKind, toKind model.Kind) tea.Cmd {
+	override := ""
+	if m.accentIndex > 0 && m.accentIndex < len(accentPresets) {
+		override = accentPresets[m.accentIndex].name
+	} else if m.customAccentHex != "" {
+		override = m.customAccentHex
+	}
+
+	m.crossfadeActive = true
+	m.crossfadeStep = 0
+	m.crossfadeFrom = ThemeFor(fromKind, override)
+	m.crossfadeTo = ThemeFor(toKind, override)
+	m.crossfadeOpID++
+	opID := m.crossfadeOpID
+	return tea.Tick(18*time.Millisecond, func(t time.Time) tea.Msg {
+		return themeCrossfadeTickMsg{opID: opID, step: 1}
+	})
+}
+
+func (m *modelImpl) SetBaseBackgroundColor(c color.RGBA) {
+	m.baseBgColor = c
 }

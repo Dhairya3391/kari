@@ -1,7 +1,7 @@
 package provider
 
 import (
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -22,35 +22,29 @@ func (r *Registry) Register(p Provider) {
 
 // ProvidersForMode returns providers supporting the given mode, ordered by priority.
 func (r *Registry) ProvidersForMode(mode ContentType) []Provider {
-	var matched []Provider
+	type rankedProvider struct {
+		p        Provider
+		priority int
+	}
+	var matched []rankedProvider
 	for _, p := range r.providers {
 		for _, m := range p.Modes() {
 			if m.Name == mode {
-				matched = append(matched, p)
+				matched = append(matched, rankedProvider{p: p, priority: m.Priority})
 				break
 			}
 		}
 	}
 
-	sort.SliceStable(matched, func(i, j int) bool {
-		priorityI := 100
-		for _, m := range matched[i].Modes() {
-			if m.Name == mode {
-				priorityI = m.Priority
-				break
-			}
-		}
-		priorityJ := 100
-		for _, m := range matched[j].Modes() {
-			if m.Name == mode {
-				priorityJ = m.Priority
-				break
-			}
-		}
-		return priorityI < priorityJ
+	slices.SortStableFunc(matched, func(a, b rankedProvider) int {
+		return a.priority - b.priority
 	})
 
-	return matched
+	out := make([]Provider, len(matched))
+	for i, mp := range matched {
+		out[i] = mp.p
+	}
+	return out
 }
 
 // ProviderByName returns the registered provider with the given name.
@@ -166,7 +160,18 @@ func (r *Registry) RequiresEpisodeListForMovies(providerName string) bool {
 	return mef.RequiresEpisodeListForMovies()
 }
 
-// AllModes returns the sorted list of unique modes supported by registered providers.
+// canonicalModeOrder is the tab-strip order from the UI spec (§5.6):
+// jellyfin sits last when its server is configured. Modes outside this
+// list (from a future provider) keep alphabetical relative order at the
+// end so nothing registered silently disappears.
+var canonicalModeOrder = []ContentType{
+	ModeAnime, ModeCartoon, ModeMovies, ModeTV, ModeJellyfin, ModeLive, ModeManga,
+}
+
+// AllModes returns the unique modes supported by registered providers in
+// canonical tab order. Modes only appear when a provider supplying them
+// is registered — jellyfin and live therefore show up exactly when their
+// providers are configured.
 func (r *Registry) AllModes() []ContentType {
 	modeSet := make(map[ContentType]struct{})
 	for _, p := range r.providers {
@@ -175,12 +180,22 @@ func (r *Registry) AllModes() []ContentType {
 		}
 	}
 
-	var modes []ContentType
-	for m := range modeSet {
-		modes = append(modes, m)
+	modes := make([]ContentType, 0, len(modeSet))
+	for _, m := range canonicalModeOrder {
+		if _, ok := modeSet[m]; ok {
+			modes = append(modes, m)
+			delete(modeSet, m)
+		}
 	}
-	sort.Slice(modes, func(i, j int) bool {
-		return string(modes[i]) < string(modes[j])
-	})
+	if len(modeSet) > 0 {
+		extra := make([]string, 0, len(modeSet))
+		for m := range modeSet {
+			extra = append(extra, string(m))
+		}
+		slices.Sort(extra)
+		for _, m := range extra {
+			modes = append(modes, ContentType(m))
+		}
+	}
 	return modes
 }

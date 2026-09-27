@@ -4,6 +4,8 @@ package player
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"kari/internal/model"
@@ -12,7 +14,9 @@ import (
 
 // MXPlayer launches MX Player on Android via intent, streaming the URL
 // plus headers through its intent extras.
-type MXPlayer struct{}
+type MXPlayer struct {
+	launcher *androidLauncher
+}
 
 var _ Player = (*MXPlayer)(nil)
 
@@ -28,27 +32,41 @@ func (p *MXPlayer) Available() bool {
 
 // Play implements Player.
 func (p *MXPlayer) Play(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
-	return playWithMXPlayerAndroid(sources, media)
+	return playWithMXPlayerAndroid(sources, media, p.launcher)
 }
 
-func playWithMXPlayerAndroid(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
+func playWithMXPlayerAndroid(
+	sources []provider.MediaSource,
+	media model.ResolvedMedia,
+	launcher *androidLauncher,
+) (PlaybackResult, error) {
 	return attemptSources("mxplayer", sources, func(source provider.MediaSource) (PlaybackResult, error) {
-		if err := playSingleSourceWithMXPlayer(source, media); err != nil {
+		if err := playSingleSourceWithMXPlayer(source, media, launcher); err != nil {
 			return PlaybackResult{}, err
 		}
-		return PlaybackResult{}, &NeedsCompletionConfirmError{Media: media}
+		return PlaybackResult{}, &NeedsCompletionConfirmError{}
 	})
 }
 
-func playSingleSourceWithMXPlayer(source provider.MediaSource, media model.ResolvedMedia) error {
-	args := buildMXPlayerAndroidIntent(source, media)
-	if err := runAmStart(args); err != nil {
+func playSingleSourceWithMXPlayer(
+	source provider.MediaSource,
+	media model.ResolvedMedia,
+	launcher *androidLauncher,
+) error {
+	args, err := buildMXPlayerAndroidIntent(source, media)
+	if err != nil {
+		return err
+	}
+	if err := launcher.run(args); err != nil {
 		return fmt.Errorf("mxplayer %w", err)
 	}
 	return nil
 }
 
-func buildMXPlayerAndroidIntent(source provider.MediaSource, media model.ResolvedMedia) []string {
+func buildMXPlayerAndroidIntent(
+	source provider.MediaSource,
+	media model.ResolvedMedia,
+) ([]string, error) {
 	args := []string{"start", "-n", mxPlayerPackage + "/com.mxtech.videoplayer.ad.ActivityScreen", "-a", "android.intent.action.VIEW", "-t", "video/*", "-d", source.URL}
 
 	title := sanitizeMediaTitle(media.DisplayTitle())
@@ -56,17 +74,29 @@ func buildMXPlayerAndroidIntent(source provider.MediaSource, media model.Resolve
 		args = append(args, "--es", "title", title)
 	}
 
-	subtitleFiles := media.SubtitlePaths()
-	if len(subtitleFiles) > 0 && subtitleFiles[0] != "" {
-		args = append(args, "--es", "subs", strings.Join(subtitleFiles, ","))
+	if subtitlePath := media.SubtitlePath(); subtitlePath != "" {
+		if err := os.MkdirAll(sharedSubtitleDir, 0o700); err != nil {
+			return nil, fmt.Errorf("create shared subtitle dir: %w", err)
+		}
+		ext := filepath.Ext(subtitlePath)
+		if ext == "" {
+			ext = ".srt"
+		}
+		target := filepath.Join(sharedSubtitleDir, "subtitle"+ext)
+		if err := copyFile(subtitlePath, target); err != nil {
+			return nil, fmt.Errorf("copy subtitle for mx player: %w", err)
+		}
+		args = append(args, "--es", "subs", target)
 	}
 
 	var headers []string
 	if source.Referer != "" {
 		headers = append(headers, "Referer", strings.ReplaceAll(source.Referer, ",", "\\,"))
 		if !source.SuppressOrigin {
-			ref := strings.TrimSuffix(source.Referer, "/")
-			headers = append(headers, "Origin", strings.ReplaceAll(ref, ",", "\\,"))
+			origin := originFromReferer(source.Referer)
+			if origin != "" {
+				headers = append(headers, "Origin", strings.ReplaceAll(origin, ",", "\\,"))
+			}
 		}
 	}
 	if source.CookieHeader != "" {
@@ -84,5 +114,5 @@ func buildMXPlayerAndroidIntent(source provider.MediaSource, media model.Resolve
 		args = append(args, "--ei", "position", fmt.Sprintf("%d", int(media.StartTime*1000)))
 	}
 
-	return args
+	return args, nil
 }

@@ -3,11 +3,13 @@ package tui
 import (
 	"context"
 	"fmt"
+	"image"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/history"
 	"kari/internal/logging"
 	"kari/internal/termimg"
 )
@@ -17,15 +19,19 @@ const (
 	searchPosterMaxRows  = 16
 	previewPosterMaxCols = 36
 	previewPosterMaxRows = 18
+	historyPosterMaxCols = 26
+	historyPosterMaxRows = 16
 
 	posterFetchTimeout = 8 * time.Second
 
-	// Stable per-slot Kitty image ids. Kept distinct (and never reused for
-	// anything else) so DeleteKitty can target exactly one slot's placement
+	// Stable per-slot image ids. Kept distinct (and never reused for
+	// anything else) so Cleanup can target exactly one slot's placement
 	// — e.g. clearing the search-screen poster when navigating to a screen
 	// that doesn't show one, without touching the preview-screen poster.
+	// Only the Kitty protocol needs these; the rest ignore them.
 	kittySearchImageID  uint32 = 1
 	kittyPreviewImageID uint32 = 2
+	kittyHistoryImageID uint32 = 4
 )
 
 // clearSearchPoster resets the search poster slot's state, e.g. when the
@@ -48,7 +54,7 @@ func (m *modelImpl) triggerSearchPoster(idx int) tea.Cmd {
 		return nil
 	}
 	result := m.seriesResults[idx]
-	return m.fetchPosterCmd(posterSlotSearch, m.searchPosterOpID, result.TMDBID, result.MediaType, result.Title, searchPosterMaxCols, searchPosterMaxRows, kittySearchImageID)
+	return m.fetchPosterCmd(posterSlotSearch, m.searchPosterOpID, result.TMDBID, result.MediaType, result.Title, result.CoverURL, result.CoverReferer, searchPosterMaxCols, searchPosterMaxRows, kittySearchImageID)
 }
 
 // clearPreviewPoster resets the preview poster slot's state — call this
@@ -64,14 +70,82 @@ func (m *modelImpl) clearPreviewPoster() {
 	m.previewRating = ""
 }
 
+// prefetchPreviewPoster warms the poster caches from the selected series
+// at resolve start, before the first source snapshot arrives. The later
+// triggerPreviewPoster owns slot lifecycle (it bumps the opID, so a slow
+// prefetch never paints stale art), but a fast prefetch — almost always
+// a memory/disk cache hit — shows artwork one round-trip sooner, and a
+// slow one still warms the caches the trigger reads.
+func (m *modelImpl) prefetchPreviewPoster() tea.Cmd {
+	if m.selectedSeries == nil {
+		return nil
+	}
+	s := *m.selectedSeries
+	return m.fetchPosterCmd(posterSlotPreview, m.previewPosterOpID, s.TMDBID, s.MediaType, s.Title, s.CoverURL, s.CoverReferer, previewPosterMaxCols, previewPosterMaxRows, kittyPreviewImageID)
+}
+
 // triggerPreviewPoster starts fetching (or serves from cache) the poster for
 // the currently resolved media, shown on the preview screen.
 func (m *modelImpl) triggerPreviewPoster() tea.Cmd {
 	if m.resolved == nil {
 		return nil
 	}
+	if m.previewPoster != "" {
+		return nil
+	}
 	m.clearPreviewPoster()
-	return m.fetchPosterCmd(posterSlotPreview, m.previewPosterOpID, m.resolved.TMDBID, m.resolved.MediaType, m.resolved.SeriesTitle, previewPosterMaxCols, previewPosterMaxRows, kittyPreviewImageID)
+	coverURL := ""
+	coverReferer := ""
+	title := m.resolved.SeriesTitle
+	tmdbID := m.resolved.TMDBID
+	mediaType := m.resolved.MediaType
+	if m.selectedSeries != nil {
+		coverURL = m.selectedSeries.CoverURL
+		coverReferer = m.selectedSeries.CoverReferer
+		if title == "" {
+			title = m.selectedSeries.Title
+		}
+		if tmdbID == 0 {
+			tmdbID = m.selectedSeries.TMDBID
+		}
+		if mediaType == "" {
+			mediaType = m.selectedSeries.MediaType
+		}
+	}
+	return m.fetchPosterCmd(posterSlotPreview, m.previewPosterOpID, tmdbID, mediaType, title, coverURL, coverReferer, previewPosterMaxCols, previewPosterMaxRows, kittyPreviewImageID)
+}
+
+// clearHistoryPoster resets the history poster slot's state, e.g. when
+// the selection moves or the list rebuilds — otherwise the previous
+// title's poster lingers next to the new selection. Bumping the opID
+// also discards any fetch still in flight for the old row.
+func (m *modelImpl) clearHistoryPoster() {
+	m.historyPosterOpID++
+	m.historyPoster = ""
+	m.historyPosterUnavailable = false
+}
+
+// triggerHistoryPoster starts fetching the poster for the currently
+// selected history row (headers resolve to nothing and just clear the
+// slot), shown in the history screen's right panel.
+func (m *modelImpl) triggerHistoryPoster() tea.Cmd {
+	m.clearHistoryPoster()
+	item, ok := m.historyList.SelectedItem().(rowItem)
+	if !ok {
+		return nil
+	}
+	var group *history.Group
+	for i := range m.historyGroups {
+		if m.historyGroups[i].Key.String() == item.key {
+			group = &m.historyGroups[i]
+			break
+		}
+	}
+	if group == nil {
+		return nil
+	}
+	entry := group.ContinueEntry
+	return m.fetchPosterCmd(posterSlotHistory, m.historyPosterOpID, entry.TMDBID, group.MediaType, group.Title, "", "", historyPosterMaxCols, historyPosterMaxRows, kittyHistoryImageID)
 }
 
 // triggerPreviewDetails starts fetching the plot overview/genres for the
@@ -100,59 +174,45 @@ func (m *modelImpl) triggerPreviewDetails() tea.Cmd {
 	}
 }
 
-// setImagesEnabled flips the image-rendering setting and persists it.
-// Turning images back on needs an explicit re-fetch for whatever's
-// currently on screen: fetchPosterCmd short-circuits while disabled, so
-// nothing else would prompt a poster to actually load until the user moves
-// the selection.
-func (m *modelImpl) setImagesEnabled(enabled bool) tea.Cmd {
-	if m.imagesEnabled == enabled {
+func (m *modelImpl) fetchPosterCmd(slot posterSlot, opID int, tmdbID int, mediaType, title, coverURL, coverReferer string, maxCols, maxRows int, imageID uint32) tea.Cmd {
+	proto := m.effectiveImgProtocol()
+	if !m.imagesEnabled || m.posterClient == nil || proto == termimg.ProtocolNone {
 		return nil
 	}
-	m.imagesEnabled = enabled
-	m.saveSettings()
-	if !enabled {
+	if tmdbID == 0 && strings.TrimSpace(title) == "" && coverURL == "" {
 		return nil
 	}
 
-	var cmds []tea.Cmd
-	if cmd := m.triggerSearchPoster(m.selectedSeriesIndex()); cmd != nil {
-		cmds = append(cmds, cmd)
-	}
-	if m.resolved != nil {
-		if cmd := m.triggerPreviewPoster(); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-	}
-	return tea.Batch(cmds...)
-}
-
-func (m *modelImpl) fetchPosterCmd(slot posterSlot, opID int, tmdbID int, mediaType, title string, maxCols, maxRows int, imageID uint32) tea.Cmd {
-	if !m.imagesEnabled || m.posterClient == nil || m.imgProtocol == termimg.ProtocolNone {
-		return nil
-	}
-	if tmdbID == 0 && strings.TrimSpace(title) == "" {
-		return nil
-	}
-
-	cacheKey := fmt.Sprintf("%d|%s|%s|%d|%dx%d", tmdbID, mediaType, title, m.imgProtocol, maxCols, maxRows)
+	cacheKey := fmt.Sprintf("%d|%s|%s|%s|%s|%d|%dx%d", tmdbID, mediaType, title, coverURL, coverReferer, proto, maxCols, maxRows)
 	if cached, ok := m.posterCache.Get(cacheKey); ok {
 		return func() tea.Msg {
 			return posterLoadedMsg{slot: slot, opID: opID, rendered: cached}
 		}
 	}
 
+	// Capture the live terminal size for real cell measurement: encoding
+	// at the 8x16 fallback size and letting the terminal upscale is what
+	// made every poster render soft.
+	termCols, termRows := m.width, m.height
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.appCtx, posterFetchTimeout)
 		defer cancel()
 
-		img, err := m.posterClient.FetchImage(ctx, tmdbID, mediaType, title)
+		var img image.Image
+		var err error
+		if coverURL != "" {
+			// Provider-stamped artwork (manga covers) resolves directly;
+			// catalog titles fall through to TMDB/AniList as before.
+			img, err = m.posterClient.FetchImageURL(ctx, coverURL, coverReferer)
+		} else {
+			img, err = m.posterClient.FetchImage(ctx, tmdbID, mediaType, title)
+		}
 		if err != nil {
-			logging.Debug("poster fetch failed", "tmdb_id", tmdbID, "title", title, "err", err)
+			logging.Debug("poster fetch failed", "tmdb_id", tmdbID, "title", title, "cover", coverURL != "", "err", err)
 			return posterLoadedMsg{slot: slot, opID: opID, err: err}
 		}
 
-		rendered, err := termimg.RenderFit(img, m.imgProtocol, maxCols, maxRows, imageID)
+		rendered, err := termimg.RenderFit(img, proto, maxCols, maxRows, imageID, termCols, termRows)
 		if err != nil {
 			logging.Debug("poster render failed", "tmdb_id", tmdbID, "title", title, "err", err)
 			return posterLoadedMsg{slot: slot, opID: opID, err: err}
@@ -161,4 +221,16 @@ func (m *modelImpl) fetchPosterCmd(slot posterSlot, opID int, tmdbID int, mediaT
 		m.posterCache.Set(cacheKey, rendered)
 		return posterLoadedMsg{slot: slot, opID: opID, rendered: rendered}
 	}
+}
+
+// effectiveImgProtocol is the protocol posters and manga pages actually
+// render with. Terminals with no graphics protocol (tmux, plain xterm)
+// still get quadrant-block art instead of nothing: blocks are plain ANSI
+// output and render anywhere the rest of the UI's colors already do.
+// termimg itself is untouched — this only chooses its fallback input.
+func (m *modelImpl) effectiveImgProtocol() termimg.Protocol {
+	if m.imgProtocol == termimg.ProtocolNone {
+		return termimg.ProtocolBlocks
+	}
+	return m.imgProtocol
 }

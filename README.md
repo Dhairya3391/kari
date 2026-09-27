@@ -102,10 +102,10 @@ kari "frieren"
 
 ## Features
 
-- **Multi-Source Parallel Search** — Queries multiple streaming sources concurrently (Anikoto, VidKing, Pengu, and optional Jellyfin).
+- **Multi-Source Parallel Search** — Queries multiple streaming sources concurrently (Anikoto, Movy.sx, Pengu, and optional Jellyfin).
 - **5 Media Categories** — Dedicated modes for Anime, Movies, TV Series, Cartoons, and private Jellyfin servers. Switch effortlessly with `Tab`.
 - **Accurate Resume & History** — MPV reports timestamps back via local IPC socket. Quit anytime and Kari remembers your exact position, selected audio mode (Sub/Dub), and preferred stream language.
-- **Smart Skip & Virtual Chapters** — Hybrid skip engine combining Anime-Skip GraphQL and AniSkip. Automatically injects seekbar chapters (`Opening`, `Ending`, `Recap`, `Preview`) and context-aware OSD skip prompts (`Press Enter to Skip`) into MPV. Switchable in Settings.
+- **Smart Skip & Virtual Chapters** — Hybrid skip engine combining SkipDB, IntroDB, Anime-Skip GraphQL, and AniSkip. Automatically injects seekbar chapters (`Opening`, `Ending`, `Recap`, `Preview`) and context-aware OSD skip prompts (`Press Enter to Skip`) into MPV for anime, movies, and TV shows. Switchable in Settings.
 - **Scrobbling Sync** — Native device-flow authorization for Trakt.tv (Movies & TV) and AniList (Anime). No tokens or API keys to copy manually.
 - **Smart Subtitle Fallback** — Prioritizes provider-embedded subtitles matching your preferred language, gracefully falling back to other providers and OpenSubtitles.
 - **Terminal Poster Art** — Renders real pixel graphics on modern terminals (Kitty, WezTerm, Ghostty) with automatic fallback to high-density Unicode half-blocks on standard terminals.
@@ -119,7 +119,7 @@ kari "frieren"
 
 | Provider | Mode | Method | Priority |
 | --- | --- | --- | --- |
-| **VidKing** | Movies, TV, Cartoons | API (TMDB-indexed) | 1 |
+| **Movy.sx** | Movies, TV, Cartoons | API (TMDB-indexed) | 1 |
 | **Pengu** | Movies, TV, Cartoons | Aggregator API (TMDB-indexed) | 2 |
 | **Anikoto** | Anime | API | 1 |
 | **Jellyfin** | Movies, TV | Jellyfin Server API | 1 |

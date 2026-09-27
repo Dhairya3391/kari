@@ -5,11 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -19,7 +18,6 @@ import (
 	"kari/internal/httpclient"
 	"kari/internal/logging"
 	"kari/internal/provider"
-	"kari/internal/search"
 	"kari/internal/tmdb"
 	"kari/internal/util"
 )
@@ -35,6 +33,7 @@ var (
 type Base struct {
 	httpClient *http.Client
 	keyPool    *tmdb.KeyPool
+	searcher   *Client
 }
 
 // New validates that a key pool is available and constructs the base.
@@ -42,7 +41,20 @@ func New(keyPool *tmdb.KeyPool) (*Base, error) {
 	if keyPool == nil {
 		return nil, fmt.Errorf("tmdb key pool is required")
 	}
-	return &Base{httpClient: httpclient.New(), keyPool: keyPool}, nil
+	return &Base{httpClient: httpclient.New(), keyPool: keyPool, searcher: NewClient()}, nil
+}
+
+// newForTest builds a Base with injected search and HTTP clients so
+// offline tests can serve canned TMDB/meilisearch payloads without
+// touching production construction.
+func newForTest(keyPool *tmdb.KeyPool, hc *http.Client, searcher *Client) (*Base, error) {
+	if keyPool == nil {
+		return nil, fmt.Errorf("tmdb key pool is required")
+	}
+	if hc == nil || searcher == nil {
+		return nil, fmt.Errorf("http and search clients are required")
+	}
+	return &Base{httpClient: hc, keyPool: keyPool, searcher: searcher}, nil
 }
 
 // tmdbAnimationGenreID is TMDB's canonical genre ID for animation, shared
@@ -65,7 +77,11 @@ func (b *Base) Search(ctx context.Context, query string, mode provider.ContentTy
 		return results, nil
 	}
 
-	results, err := search.NewClient().SearchWithMode(ctx, query, mode)
+	searcher := b.searcher
+	if searcher == nil {
+		searcher = NewClient()
+	}
+	results, err := searcher.SearchWithMode(ctx, query, mode)
 	if err != nil {
 		logging.Debug("stream search failed", "mode", mode, "query", query, "err", err)
 		return nil, fmt.Errorf("streambase search: %w", err)
@@ -398,7 +414,7 @@ func fetchTMDBJSON[T any](b *Base, ctx context.Context, target string) (T, error
 		return zero, &provider.HTTPError{Code: resp.StatusCode, URL: target}
 	}
 
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := httpclient.ReadCapped(resp)
 	if err != nil {
 		return zero, fmt.Errorf("streambase read body: %w", err)
 	}
@@ -429,22 +445,39 @@ func isAuthError(err error) bool {
 }
 
 func sortEpisodesAscending(results []provider.Episode) {
-	sort.Slice(results, func(i, j int) bool {
-		a, b := results[i], results[j]
-		if numberForSort(a) < 0 && numberForSort(b) >= 0 {
-			return false
+	type epSortKey struct {
+		ep         provider.Episode
+		season     int
+		number     int
+		lowerTitle string
+	}
+	keys := make([]epSortKey, len(results))
+	for i, ep := range results {
+		keys[i] = epSortKey{
+			ep:         ep,
+			season:     seasonForSort(ep),
+			number:     numberForSort(ep),
+			lowerTitle: strings.ToLower(ep.Title),
 		}
-		if numberForSort(a) >= 0 && numberForSort(b) < 0 {
-			return true
+	}
+	slices.SortFunc(keys, func(a, b epSortKey) int {
+		if a.number < 0 && b.number >= 0 {
+			return 1
 		}
-		if seasonForSort(a) != seasonForSort(b) {
-			return seasonForSort(a) < seasonForSort(b)
+		if a.number >= 0 && b.number < 0 {
+			return -1
 		}
-		if numberForSort(a) != numberForSort(b) {
-			return numberForSort(a) < numberForSort(b)
+		if a.season != b.season {
+			return a.season - b.season
 		}
-		return strings.ToLower(a.Title) < strings.ToLower(b.Title)
+		if a.number != b.number {
+			return a.number - b.number
+		}
+		return strings.Compare(a.lowerTitle, b.lowerTitle)
 	})
+	for i, k := range keys {
+		results[i] = k.ep
+	}
 }
 
 func numberForSort(ep provider.Episode) int {

@@ -59,8 +59,19 @@ type Entry struct {
 	Mode      string `json:"mode,omitempty"`
 	MediaType string `json:"media_type,omitempty"`
 	TMDBID    int    `json:"tmdb_id,omitempty"`
+	// AniListID keys anime/manga entries to their AniList catalog id.
+	// Anime providers already catalog by it, so persisting it lets
+	// tracker sync match by id instead of title. Zero when unknown
+	// (older entries, non-AniList sources); never part of EntryKey.
+	AniListID int    `json:"anilist_id,omitempty"`
 	AudioMode string `json:"audio_mode,omitempty"`
 	Language  string `json:"language,omitempty"`
+
+	// Manga-specific progress fields (v2). In legacy v1 files these were
+	// smuggled into PositionSecs/DurationSecs/EpisodeTitle.
+	MangaChapter string `json:"manga_chapter,omitempty"` // chapter number string
+	MangaPage    int    `json:"manga_page,omitempty"`    // 1-based current page
+	MangaPages   int    `json:"manga_pages,omitempty"`   // total pages in chapter
 }
 
 // GroupKey collapses entries into one series/movie for the history list.
@@ -177,6 +188,39 @@ func BuildGroupLookup(entries []Entry) map[string]GroupKey {
 	return lookup
 }
 
+// EpisodeKey identifies a single episode by its position within a series.
+type EpisodeKey struct {
+	Season  int
+	Episode int
+}
+
+// EpisodeIndex is an O(1) lookup map built once per screen load from the
+// flat history store. Use BuildEpisodeIndex; look up with Get.
+type EpisodeIndex map[EpisodeKey]Entry
+
+// BuildEpisodeIndex builds an EpisodeIndex for all entries whose Title
+// matches seriesTitle (case-insensitive). When a key appears more than
+// once, the most recently watched entry wins.
+func BuildEpisodeIndex(entries []Entry, seriesTitle string) EpisodeIndex {
+	idx := make(EpisodeIndex, len(entries))
+	for _, e := range entries {
+		if !strings.EqualFold(e.Title, seriesTitle) {
+			continue
+		}
+		key := EpisodeKey{Season: e.Season, Episode: e.Episode}
+		if existing, ok := idx[key]; !ok || e.WatchedAt.After(existing.WatchedAt) {
+			idx[key] = e
+		}
+	}
+	return idx
+}
+
+// Get returns the history entry for the given season and episode, if any.
+func (idx EpisodeIndex) Get(season, episode int) (Entry, bool) {
+	e, ok := idx[EpisodeKey{Season: season, Episode: episode}]
+	return e, ok
+}
+
 // Store persists watch-history entries to disk as JSON with atomic
 // rewrites, and serves reads from memory.
 type Store struct {
@@ -209,12 +253,49 @@ func NewStore(path string) (*Store, error) {
 		if err != nil {
 			return nil, err
 		}
-
 		var format storageFormat
-		if err := json.Unmarshal(data, &format); err != nil {
-			return nil, fmt.Errorf("malformed history file: %w", err)
+		migrated := false
+		if err := json.Unmarshal(data, &format); err == nil && len(format.Entries) > 0 {
+			if format.Version < 2 {
+				// Migrate v1 manga entries: PositionSecs=page, DurationSecs=totalPages,
+				// EpisodeTitle=chapterNumber were the legacy encoding.
+				for i := range format.Entries {
+					e := &format.Entries[i]
+					if e.Mode == "manga" && e.MangaChapter == "" {
+						e.MangaChapter = strings.TrimSpace(e.EpisodeTitle)
+						e.MangaPage = int(e.PositionSecs)
+						e.MangaPages = int(e.DurationSecs)
+					}
+				}
+				migrated = true
+			}
+			s.items = deduplicate(format.Entries)
+		} else {
+			// Legacy v1: raw []Entry array (no version wrapper)
+			var rawEntries []Entry
+			if errRaw := json.Unmarshal(data, &rawEntries); errRaw == nil {
+				// Migrate manga entries from legacy format
+				for i := range rawEntries {
+					e := &rawEntries[i]
+					if e.Mode == "manga" && e.MangaChapter == "" {
+						e.MangaChapter = strings.TrimSpace(e.EpisodeTitle)
+						e.MangaPage = int(e.PositionSecs)
+						e.MangaPages = int(e.DurationSecs)
+					}
+				}
+				s.items = deduplicate(rawEntries)
+				migrated = true
+			} else if err != nil {
+				return nil, fmt.Errorf("malformed history file: %w", err)
+			}
 		}
-		s.items = deduplicate(format.Entries)
+		// On first v2 migration, write a backup of the original file.
+		if migrated {
+			bakPath := path + ".bak"
+			if _, statErr := os.Stat(bakPath); os.IsNotExist(statErr) {
+				_ = os.WriteFile(bakPath, data, 0600)
+			}
+		}
 	}
 
 	return s, nil
@@ -356,7 +437,7 @@ func (s *Store) save() error {
 
 	s.saveWG.Go(func() {
 		format := storageFormat{
-			Version: 1,
+			Version: 2,
 			Entries: entries,
 		}
 

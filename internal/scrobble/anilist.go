@@ -35,15 +35,39 @@ type AniListClient struct {
 	token        *AniListToken
 	tokenPath    string
 	httpClient   *http.Client
+	// apiBase overrides the GraphQL endpoint (tests point it at an
+	// httptest server); empty selects config.AniListAPIBase.
+	apiBase string
+}
+
+// resolveTokenPath resolves the token path under ~/.config/kari/tokens/<name>,
+// migrating from ~/.config/kari/<legacyName> if present.
+func resolveTokenPath(name, legacyName string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.Getenv("HOME")
+	}
+	baseDir := filepath.Join(home, ".config", "kari")
+	newDir := filepath.Join(baseDir, "tokens")
+	newPath := filepath.Join(newDir, name)
+	legacyPath := filepath.Join(baseDir, legacyName)
+
+	if _, err := os.Stat(newPath); err == nil {
+		return newPath
+	}
+	if _, err := os.Stat(legacyPath); err == nil {
+		_ = os.MkdirAll(newDir, 0o755)
+		if err := os.Rename(legacyPath, newPath); err == nil {
+			return newPath
+		}
+		return legacyPath
+	}
+	return newPath
 }
 
 // NewAniListClient constructs a client, loading any persisted token from disk.
 func NewAniListClient(clientID, clientSecret string) *AniListClient {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = os.Getenv("HOME")
-	}
-	tokenPath := filepath.Join(home, ".config", "kari", "anilist_token.json")
+	tokenPath := resolveTokenPath("anilist.json", "anilist_token.json")
 
 	c := &AniListClient{
 		clientID:     clientID,
@@ -200,7 +224,7 @@ func (c *AniListClient) doGraphQL(ctx context.Context, query string, vars map[st
 	}
 	data, _ := json.Marshal(body)
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", config.AniListAPIBase, bytes.NewBuffer(data))
+	req, _ := http.NewRequestWithContext(ctx, "POST", c.endpoint(), bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Origin", "https://anilist.co")

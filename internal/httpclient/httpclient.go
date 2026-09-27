@@ -3,9 +3,11 @@ package httpclient
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/go-retryablehttp"
@@ -17,6 +19,12 @@ import (
 const (
 	defaultTimeout = 15 * time.Second
 	defaultRetries = 2
+	// maxPerHost caps concurrent requests to one host so provider fan-out
+	// stays polite: 4 in flight per host, the rest wait on context.
+	maxPerHost = 4
+	// MaxBodyBytes caps JSON/HTML response bodies (8 MB). Media downloads
+	// never flow through the capped helpers.
+	MaxBodyBytes = 8 << 20
 )
 
 // New returns a shared HTTP client with retry and timeout settings.
@@ -44,6 +52,21 @@ func newClient(timeout time.Duration) *http.Client {
 	retryClient.RetryMax = defaultRetries
 	retryClient.RetryWaitMin = 200 * time.Millisecond
 	retryClient.RetryWaitMax = 1500 * time.Millisecond
+	// Retry idempotent reads only: connect errors, 5xx and 429 (honoring
+	// Retry-After via the base policy). POSTs never retry so a flaky
+	// transport cannot double-submit a write; the whole call stays
+	// bounded by the client timeout so retries never multiply past the
+	// caller's context deadline.
+	retryClient.CheckRetry = func(ctx context.Context, resp *http.Response, err error) (bool, error) {
+		if resp != nil && resp.Request != nil {
+			switch resp.Request.Method {
+			case http.MethodGet, http.MethodHead, http.MethodOptions:
+			default:
+				return false, nil
+			}
+		}
+		return retryablehttp.DefaultRetryPolicy(ctx, resp, err)
+	}
 	retryClient.HTTPClient.Timeout = timeout
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -56,6 +79,8 @@ func newClient(timeout time.Duration) *http.Client {
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 16
 	transport.IdleConnTimeout = 90 * time.Second
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ExpectContinueTimeout = time.Second
 
 	// Universal resilient DNS dialer: uses system DNS first, falling back to
 	// public DNS (Cloudflare 1.1.1.1/1.0.0.1, Google 8.8.8.8/8.8.4.4) over
@@ -63,9 +88,68 @@ func newClient(timeout time.Duration) *http.Client {
 	dialer := newResilientDialer()
 	transport.DialContext = dialer.DialContext
 
-	retryClient.HTTPClient.Transport = &kariClientRoundTripper{next: transport}
+	// Compression stays on (HTTP/2 + gzip via the default transport; no
+	// code sets Accept-Encoding manually) and connections are reused.
+	var rt http.RoundTripper = transport
+	rt = &hostSemaphore{next: rt}
+	rt = &kariClientRoundTripper{next: rt}
+	rt = &uaRoundTripper{next: rt, ua: config.DesktopUserAgent}
+	retryClient.HTTPClient.Transport = rt
 	retryClient.Logger = &leveledLogger{}
 	return retryClient.StandardClient()
+}
+
+// hostSemaphore caps concurrent requests per host. It is safe for
+// concurrent use; waiting acquires respect the request context.
+type hostSemaphore struct {
+	mu   sync.Mutex
+	sems map[string]chan struct{}
+	next http.RoundTripper
+}
+
+// slot returns the semaphore for host, creating it on first use.
+func (h *hostSemaphore) slot(host string) chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.sems == nil {
+		h.sems = make(map[string]chan struct{})
+	}
+	s, ok := h.sems[host]
+	if !ok {
+		s = make(chan struct{}, maxPerHost)
+		h.sems[host] = s
+	}
+	return s
+}
+
+// RoundTrip waits for a per-host slot, then delegates.
+func (h *hostSemaphore) RoundTrip(req *http.Request) (*http.Response, error) {
+	s := h.slot(req.URL.Host)
+	select {
+	case s <- struct{}{}:
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
+	}
+	defer func() { <-s }()
+	return h.next.RoundTrip(req)
+}
+
+// ErrBodyTooLarge reports a response exceeding MaxBodyBytes.
+var ErrBodyTooLarge = fmt.Errorf("response body exceeds %d bytes", MaxBodyBytes)
+
+// ReadCapped reads a JSON/HTML response body bounded by MaxBodyBytes. An
+// oversized body errors instead of being silently truncated, so a huge
+// page surfaces as a typed failure rather than a confusing parse error.
+func ReadCapped(resp *http.Response) ([]byte, error) {
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	if len(body) > MaxBodyBytes {
+		return nil, ErrBodyTooLarge
+	}
+	return body, nil
 }
 
 // kariClientRoundTripper tags every outgoing request as coming from this app.

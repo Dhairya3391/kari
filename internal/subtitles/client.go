@@ -102,22 +102,36 @@ func (c *Client) ensureToken(ctx context.Context) error {
 
 func resolveTokenCachePath() (string, error) {
 	home, err := os.UserHomeDir()
-	if err != nil {
+	if err != nil || home == "" {
+		home = os.Getenv("HOME")
+	}
+	baseDir := filepath.Join(home, ".config", "kari")
+	newDir := filepath.Join(baseDir, "tokens")
+	newPath := filepath.Join(newDir, "opensubtitles.json")
+	legacyPath := filepath.Join(baseDir, "os_token.json")
+
+	if _, err := os.Stat(newPath); err == nil {
+		return newPath, nil
+	}
+	if _, err := os.Stat(legacyPath); err == nil {
+		_ = os.MkdirAll(newDir, 0o755)
+		if err := os.Rename(legacyPath, newPath); err == nil {
+			return newPath, nil
+		}
+		return legacyPath, nil
+	}
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".config", "kari")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "os_token.json"), nil
+	return newPath, nil
 }
 
 func (c *Client) downloadFile(ctx context.Context, fileURL string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", fileURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("opensubtitles download request creation failed: %w", err)
 	}
-	c.setHeaders(req, true)
+	setFileHeaders(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
@@ -126,9 +140,18 @@ func (c *Client) downloadFile(ctx context.Context, fileURL string) ([]byte, erro
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
+	return readSubtitleResponse(resp)
+}
 
-	raw, err := io.ReadAll(resp.Body)
-	return raw, err
+func readSubtitleResponse(resp *http.Response) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(resp.Body, httpclient.MaxBodyBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read subtitle response: %w", err)
+	}
+	if len(data) > httpclient.MaxBodyBytes {
+		return nil, httpclient.ErrBodyTooLarge
+	}
+	return data, nil
 }
 
 func (c *Client) login(ctx context.Context) error {
@@ -166,13 +189,11 @@ func (c *Client) login(ctx context.Context) error {
 	c.token = lr.Token
 	c.tokenExpiry = time.Now().Add(23 * time.Hour) // Slightly less than 24h to be safe
 
-	// Save to disk
 	if cachePath, err := resolveTokenCachePath(); err == nil {
 		tc := tokenCache{Token: c.token, Expiry: c.tokenExpiry}
-		if data, err := json.Marshal(tc); err == nil {
-			if err := util.AtomicWriteFile(cachePath, data, 0o600); err != nil {
-				osLog.Warn("token cache write failed", "err", err)
-				return fmt.Errorf("opensubtitles write token cache: %w", err)
+		if data, marshalErr := json.Marshal(tc); marshalErr == nil {
+			if writeErr := util.AtomicWriteFile(cachePath, data, 0o600); writeErr != nil {
+				osLog.Warn("token cache write failed", "err", writeErr)
 			}
 		}
 	}
@@ -189,4 +210,9 @@ func (c *Client) setHeaders(req *http.Request, auth bool) {
 	if auth && c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
+}
+
+func setFileHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "application/octet-stream,text/*,*/*")
 }

@@ -42,6 +42,11 @@ func (m *modelImpl) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Back):
 			m.goBackOne()
 			return m, nil
+		case key.Matches(msg, m.keys.Type):
+			if m.historyList.SettingFilter() {
+				break
+			}
+			return m, m.cycleHistoryTab()
 		case key.Matches(msg, m.keys.Delete):
 			if len(m.historyList.Items()) > 0 {
 				m.confirmDelete = true
@@ -56,12 +61,52 @@ func (m *modelImpl) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if item, ok := m.historyList.SelectedItem().(rowItem); ok {
 				return m.playHistoryGroup(item.key)
 			}
+			return m, nil
 		}
 	}
 
+	prevSel := m.historySelectedIndex()
 	var cmd tea.Cmd
 	m.historyList, cmd = m.historyList.Update(msg)
-	return m, cmd
+	cmds := []tea.Cmd{cmd}
+	if newSel := m.historySelectedIndex(); newSel != prevSel {
+		cmds = append(cmds, m.triggerHistoryPoster())
+	}
+	return m, tea.Batch(cmds...)
+}
+
+// historySelectedIndex resolves the history list cursor to a result
+// index, or -1 when the list is empty.
+func (m *modelImpl) historySelectedIndex() int {
+	if item, ok := m.historyList.SelectedItem().(rowItem); ok {
+		return item.index
+	}
+	return m.historyList.Index()
+}
+
+// cycleHistoryTab flips between the Continue and Finished tabs,
+// restoring each tab's remembered cursor and poster.
+func (m *modelImpl) cycleHistoryTab() tea.Cmd {
+	m.historyTabIndex[m.historyTab] = m.historyList.Index()
+	m.historyTab = (m.historyTab + 1) % 2
+	m.refreshHistoryItems()
+	if idx := m.historyTabIndex[m.historyTab]; idx > 0 && idx < len(m.historyList.Items()) {
+		m.historyList.Select(idx)
+	} else {
+		m.historyList.Select(0)
+	}
+	return m.triggerHistoryPoster()
+}
+
+// refreshHistoryItems rebuilds the list for the active tab from the
+// retained groups, without re-reading the store.
+func (m *modelImpl) refreshHistoryItems() {
+	continued, finished := splitHistoryGroups(m.historyGroups)
+	if m.historyTab == historyTabFinished {
+		m.historyList.SetItems(historyTabItems(finished, true))
+	} else {
+		m.historyList.SetItems(historyTabItems(continued, false))
+	}
 }
 
 func (m *modelImpl) refreshHistory() (tea.Model, tea.Cmd) {
@@ -69,28 +114,23 @@ func (m *modelImpl) refreshHistory() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	groups := history.BuildGroups(m.historyStore.All())
-	items := historyGroupsToItems(groups)
-	m.historyList.SetItems(items)
-	return m, nil
+	m.historyGroups = groups
+	m.refreshHistoryItems()
+	if idx := m.historyTabIndex[m.historyTab]; idx > 0 && idx < len(m.historyList.Items()) {
+		m.historyList.Select(idx)
+	} else {
+		m.historyList.Select(0)
+	}
+	return m, m.triggerHistoryPoster()
 }
 
-func (m *modelImpl) playHistoryGroup(keyStr string) (tea.Model, tea.Cmd) {
+func (m *modelImpl) resumeHistoryEntry(entry history.Entry) (tea.Model, tea.Cmd) {
 	if m.historyStore == nil {
 		return m, nil
 	}
-	groups := history.BuildGroups(m.historyStore.All())
-	var group *history.Group
-	for i := range groups {
-		if groups[i].Key.String() == keyStr {
-			group = &groups[i]
-			break
-		}
-	}
-	if group == nil {
+	if !m.guardLoad() {
 		return m, nil
 	}
-
-	entry := group.ContinueEntry
 	m.appMode = modeForHistoryEntry(entry)
 	if entry.AudioMode != "" {
 		m.audioMode = entry.AudioMode
@@ -110,9 +150,57 @@ func (m *modelImpl) playHistoryGroup(keyStr string) (tea.Model, tea.Cmd) {
 	m.loadingText = fmt.Sprintf("Finding %s...", entry.Title)
 	opID := m.newOpID()
 	m.historyContinueOpID = opID
-	grp := *group
+
+	groups := history.BuildGroups(m.historyStore.All())
+	var group *history.Group
+	for i := range groups {
+		if strings.EqualFold(groups[i].Title, entry.Title) {
+			group = &groups[i]
+			break
+		}
+	}
+	var grp history.Group
+	if group != nil {
+		grp = *group
+	} else {
+		grp = history.Group{
+			Key:           history.GroupKey{Title: entry.Title, Mode: entry.Mode, MediaType: entry.MediaType},
+			Title:         entry.Title,
+			Mode:          entry.Mode,
+			MediaType:     entry.MediaType,
+			ContinueEntry: entry,
+		}
+	}
+
 	tuiLog.Info("history resume: searching providers", "title", entry.Title, "mode", m.appMode)
 	return m, tea.Batch(m.spinner.Tick, m.historyResolveSeriesCmd(opID, entry, &grp))
+}
+
+func (m *modelImpl) playHistoryGroup(keyStr string) (tea.Model, tea.Cmd) {
+	if m.historyStore == nil {
+		return m, nil
+	}
+	if !m.guardLoad() {
+		return m, nil
+	}
+	all := m.historyStore.All()
+	groups := history.BuildGroups(all)
+	var group *history.Group
+	for i := range groups {
+		if groups[i].Key.String() == keyStr || strings.EqualFold(groups[i].Title, keyStr) {
+			group = &groups[i]
+			break
+		}
+	}
+	if group == nil {
+		for _, e := range all {
+			if e.Key.String() == keyStr || strings.EqualFold(e.Title, keyStr) {
+				return m.resumeHistoryEntry(e)
+			}
+		}
+		return m, nil
+	}
+	return m.resumeHistoryEntry(group.ContinueEntry)
 }
 
 // historyResolveSeriesCmd re-searches whichever providers are CURRENTLY
@@ -193,6 +281,12 @@ func (m *modelImpl) onHistoryResolveSeries(msg historyResolveSeriesMsg) (tea.Mod
 
 	series := msg.series
 	m.selectedSeries = &series
+	// Manga resume skips the episode/preview pipeline entirely:
+	// chapters screen, then straight into the saved chapter and page.
+	if m.appMode == provider.ModeManga {
+		tuiLog.Info("history resume: opening manga chapters", "title", series.Title)
+		return m.resumeMangaSeries(msg.entry, series)
+	}
 	m.selectedEpisode = nil
 	m.resolved = nil
 	m.manualPlaybackSelected = false

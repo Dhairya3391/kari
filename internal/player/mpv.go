@@ -3,7 +3,7 @@
 // Desktop mpv playback: Player implementation, argument construction, and
 // process/readiness management, including the curl|mpv pipe fallback for
 // streams that need custom transport handling. The IPC layer beneath this
-// lives in ipc.go / socket_posix.go / ipc_windows.go.
+// lives in ipc.go / ipc_posix.go / ipc_windows.go.
 package player
 
 import (
@@ -12,20 +12,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"kari/internal/animeskip"
-	"kari/internal/aniskip"
 	"kari/internal/config"
+	"kari/internal/lang"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/util"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	mpvStartupTimeout   = 1500 * time.Millisecond
 	mpvReadinessTimeout = 20 * time.Second
 
 	// mpvQuickExitThreshold bounds how long into the readiness phase mpv can
@@ -38,12 +38,38 @@ const (
 	mpvQuickExitThreshold = 2 * time.Second
 )
 
+type startupCheck struct {
+	binary     string
+	args       []string
+	socketPath string
+}
+
+type pipeStartupCheck struct {
+	curlArgs   []string
+	mpvArgs    []string
+	socketPath string
+}
+
+type launchResult struct {
+	mpvStderr  string
+	curlStderr string
+	exitCode   int
+	launched   bool
+	quickExit  bool
+	curlFailed bool
+	playback   PlaybackResult
+}
+
+func (r launchResult) succeeded() bool {
+	return !r.curlFailed && attemptSucceeded(r.launched, r.exitCode, r.quickExit, r.playback)
+}
+
 // MPVPlayer plays via a desktop mpv process, using JSON IPC for position
 // tracking so resume/scrobble get real playback stats.
 type MPVPlayer struct {
-	aniskip      *aniskip.Client
-	animeskip    *animeskip.Client
+	skipClients  SkipClients
 	skipSettings SkipSettings
+	skipCache    *util.BoundedCache[combinedSkipTimes]
 }
 
 var _ Player = (*MPVPlayer)(nil)
@@ -64,12 +90,13 @@ func (p *MPVPlayer) setSkipSettings(s SkipSettings) {
 // Play implements Player.
 func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
 	mpvLog.Debug("playback starting", "media", media.DisplayTitle(), "sources", len(sources))
-	if len(sources) == 0 {
-		return PlaybackResult{}, errors.New("mpv playback failed: no sources available")
-	}
-
-	skipArgs, skipPath := getSkipArgs(p.aniskip, p.animeskip, p.skipSettings, media)
-	defer cleanupAniskipScript(skipPath)
+	skipArgs, skipPath := getSkipArgs(
+		p.skipClients,
+		p.skipSettings,
+		media,
+		p.skipCache,
+	)
+	defer cleanupSkipScript(skipPath)
 
 	return attemptSources("mpv", sources, func(source provider.MediaSource) (PlaybackResult, error) {
 		return playSingleSource(source, media, skipArgs)
@@ -84,12 +111,19 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 
 	// Strategy 1: direct MPV playback (primary).
 	directArgs := buildMPVArgs(source, media, socketPath, aniskipArgs)
-	directErr, directRC, directLaunched, directQuickExit, stats :=
-		startPlayerWithStartupCheck("mpv", directArgs, mpvStartupTimeout, socketPath)
-	if attemptSucceeded(directLaunched, directRC, directQuickExit, stats) {
-		return stats, nil
+	direct := startPlayerWithStartupCheck(startupCheck{
+		binary:     "mpv",
+		args:       directArgs,
+		socketPath: socketPath,
+	})
+	if direct.succeeded() {
+		return direct.playback, nil
 	}
-	mpvLog.Warn("direct playback failed", "exitCode", directRC, "stderr", summarizeErr("", directErr))
+	mpvLog.Warn(
+		"direct playback failed",
+		"exitCode", direct.exitCode,
+		"stderr", summarizeErr("", direct.mpvStderr),
+	)
 
 	// Strategy 2: curl-to-MPV pipe.
 	userAgent := config.AndroidUA()
@@ -132,7 +166,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	}
 
 	pipeMpvArgs = appendTitleArgs(pipeMpvArgs, media.DisplayTitle())
-	pipeMpvArgs = appendSubtitleArgs(pipeMpvArgs, media.SubtitlePaths())
+	pipeMpvArgs = appendSubtitleArgs(pipeMpvArgs, media.SubtitlePath())
 	pipeMpvArgs = appendAudioLangArgs(pipeMpvArgs, source.Language)
 	pipeMpvArgs = append(pipeMpvArgs, aniskipArgs...)
 	pipeMpvArgs = append(pipeMpvArgs, source.ExtraArgs...)
@@ -142,22 +176,31 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	pipeMpvArgs = append(pipeMpvArgs, "-")
 
 	curlArgs := buildCurlArgs(source.URL, headers)
-	mpvErr, curlErr, mpvRC, launched, pipeQuickExit, statsPipe, pipeErr :=
-		startPipeWithStartupCheck(curlArgs, pipeMpvArgs, socketPath)
+	pipe, pipeErr := startPipeWithStartupCheck(pipeStartupCheck{
+		curlArgs:   curlArgs,
+		mpvArgs:    pipeMpvArgs,
+		socketPath: socketPath,
+	})
 	if pipeErr != nil {
 		return PlaybackResult{}, fmt.Errorf("mpv playback failed: pipe startup error: %w", pipeErr)
 	}
-	if attemptSucceeded(launched, mpvRC, pipeQuickExit, statsPipe) {
-		return statsPipe, nil
+	if pipe.succeeded() {
+		return pipe.playback, nil
 	}
 	mpvLog.Warn("pipe playback failed",
-		"exitCode", mpvRC, "mpvStderr", summarizeErr("", mpvErr), "curlStderr", summarizeErr("", curlErr))
+		"exitCode", pipe.exitCode,
+		"mpvStderr", summarizeErr("", pipe.mpvStderr),
+		"curlStderr", summarizeErr("", pipe.curlStderr))
 
-	summary := fmt.Sprintf("mpv playback failed (direct rc=%d, pipe rc=%d)", directRC, mpvRC)
+	summary := fmt.Sprintf(
+		"mpv playback failed (direct rc=%d, pipe rc=%d)",
+		direct.exitCode,
+		pipe.exitCode,
+	)
 	details := joinNonEmpty(
-		summarizeErr("direct", directErr),
-		summarizeErr("pipe-mpv", mpvErr),
-		summarizeErr("pipe-curl", curlErr),
+		summarizeErr("direct", direct.mpvStderr),
+		summarizeErr("pipe-mpv", pipe.mpvStderr),
+		summarizeErr("pipe-curl", pipe.curlStderr),
 	)
 	if details == "" {
 		return PlaybackResult{}, errors.New(summary)
@@ -185,7 +228,6 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 		"--stream-buffer-size=8M",
 		"--hls-bitrate=max",
 	}
-
 	if runtime.GOOS == "windows" {
 		args = append(args, "--terminal=no")
 	}
@@ -217,8 +259,9 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 		// scheme://host), so it's opt-in via SuppressOrigin. When sent it stays
 		// derived from the referer, matching what a browser would send.
 		if !source.SuppressOrigin {
-			ref := strings.TrimSuffix(source.Referer, "/")
-			headers = append(headers, "Origin: "+ref)
+			if origin := originFromReferer(strings.TrimSpace(source.Referer)); origin != "" {
+				headers = append(headers, "Origin: "+origin)
+			}
 		}
 	}
 	if strings.TrimSpace(source.CookieHeader) != "" {
@@ -233,7 +276,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 	}
 
 	args = appendTitleArgs(args, media.DisplayTitle())
-	args = appendSubtitleArgs(args, media.SubtitlePaths())
+	args = appendSubtitleArgs(args, media.SubtitlePath())
 	args = appendAudioLangArgs(args, source.Language)
 	args = append(args, aniskipArgs...)
 	args = append(args, source.ExtraArgs...)
@@ -244,7 +287,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 
 // buildCurlArgs assembles the fetch side of the curl|mpv fallback pipe.
 func buildCurlArgs(url string, headers []string) []string {
-	args := []string{"-s", "-L"}
+	args := []string{"-s", "-L", "--fail"}
 	for _, h := range headers {
 		args = append(args, "-H", h)
 	}
@@ -260,13 +303,11 @@ func optionalCurlFlags(finalURL string) []string {
 	if !isHTTP {
 		return nil
 	}
-	return append([]string{}, curlOptionalFlags...)
-}
-
-var curlOptionalFlags = []string{
-	"--compressed",
-	"--connect-timeout", "5",
-	"--retry", "2",
+	return []string{
+		"--compressed",
+		"--connect-timeout", "5",
+		"--retry", "2",
+	}
 }
 
 // hwdecOptionArg picks the hardware-decode flag per platform: darwin's
@@ -289,55 +330,25 @@ func appendTitleArgs(args []string, title string) []string {
 	return append(args, "--title="+title, "--force-media-title="+title)
 }
 
-// appendSubtitleArgs side-loads downloaded subtitle files.
-func appendSubtitleArgs(args []string, subtitleFiles []string) []string {
-	for _, sub := range subtitleFiles {
-		if strings.TrimSpace(sub) == "" {
-			continue
-		}
-		sub = strings.ReplaceAll(sub, `\`, `/`)
-		mpvLog.Debug("subtitle side-loaded", "path", sub)
-		args = append(args, "--sub-file="+sub)
+// appendSubtitleArgs uses mpv's single-file CLI option so one supplied track
+// is selected by default, including when the URL is a non-file stream.
+func appendSubtitleArgs(args []string, subtitlePath string) []string {
+	subtitlePath = strings.TrimSpace(subtitlePath)
+	if subtitlePath == "" {
+		return args
 	}
-	return args
+	subtitlePath = strings.ReplaceAll(subtitlePath, `\`, `/`)
+	mpvLog.Debug("subtitle side-loaded", "path", subtitlePath)
+	return append(args, "--sub-file="+subtitlePath)
 }
 
 // appendAudioLangArgs passes preferred audio-track languages (--alang) to MPV.
+// The code-to-track mapping lives in lang.AudioLangs; this stays a thin
+// flag formatter.
 func appendAudioLangArgs(args []string, language string) []string {
-	langCode := strings.ToLower(strings.TrimSpace(language))
-	if langCode == "" {
+	alang := lang.AudioLangs(language)
+	if len(alang) == 0 {
 		return args
-	}
-	var alang []string
-	switch langCode {
-	case "hi", "hindi":
-		alang = []string{"hi", "hin", "hindi", "en", "eng"}
-	case "ja", "japanese":
-		alang = []string{"ja", "jpn", "japanese", "en", "eng"}
-	case "es", "spanish":
-		alang = []string{"es", "spa", "spanish", "esla", "es-la", "en", "eng"}
-	case "fr", "french":
-		alang = []string{"fr", "fra", "fre", "french", "en", "eng"}
-	case "de", "german":
-		alang = []string{"de", "deu", "ger", "german", "en", "eng"}
-	case "it", "italian":
-		alang = []string{"it", "ita", "italian", "en", "eng"}
-	case "pt", "portuguese":
-		alang = []string{"pt", "por", "portuguese", "ptbr", "pt-br", "en", "eng"}
-	case "ru", "russian":
-		alang = []string{"ru", "rus", "russian", "en", "eng"}
-	case "ar", "arabic":
-		alang = []string{"ar", "ara", "arabic", "en", "eng"}
-	case "ko", "korean":
-		alang = []string{"ko", "kor", "korean", "en", "eng"}
-	case "zh", "chinese":
-		alang = []string{"zh", "chi", "zho", "chinese", "en", "eng"}
-	case "ta", "tamil":
-		alang = []string{"ta", "tam", "tamil", "en", "eng"}
-	case "te", "telugu":
-		alang = []string{"te", "tel", "telugu", "en", "eng"}
-	default:
-		alang = []string{langCode, "en", "eng"}
 	}
 	return append(args, "--alang="+strings.Join(alang, ","))
 }
@@ -358,7 +369,12 @@ func joinNonEmpty(parts ...string) string {
 // reconnects when the connection goes bad (e.g. a read deadline poisoned by
 // an early "property unavailable" answer), so transient failures during HLS
 // load never permanently blind playback tracking.
-func ipcPoller(ctx context.Context, client *IPCClient, stats *playbackStats, done <-chan struct{}) {
+func ipcPoller(
+	ctx context.Context,
+	client *IPCClient,
+	stats *playbackStats,
+	done <-chan struct{},
+) {
 	defer client.Close()
 
 	poll := func() bool {
@@ -435,155 +451,198 @@ func ipcPoller(ctx context.Context, client *IPCClient, stats *playbackStats, don
 	}
 }
 
-// startPlayerWithStartupCheck launches binary and waits up to timeout for it
-// to either exit or show IPC evidence of loaded media on socketPath. Shared
-// by every single-process player (mpv direct, IINA) so there's exactly one
-// launch/readiness implementation to keep correct across all of them.
-func startPlayerWithStartupCheck(binary string, args []string, timeout time.Duration, socketPath string) (stderr string, exitCode int, launched bool, quickExit bool, stats PlaybackResult) {
-	// Clean up any stale socket from a previous run.
-	os.Remove(socketPath)
+// startPlayerWithStartupCheck launches binary and watches for IPC evidence of
+// loaded media. Shared by mpv and IINA.
+func startPlayerWithStartupCheck(check startupCheck) launchResult {
+	_ = os.Remove(check.socketPath)
 
-	cmd := exec.Command(binary, args...)
+	cmd := exec.Command(check.binary, check.args...)
 	cmd.Stdout = io.Discard
-	buf := &bytes.Buffer{}
-	cmd.Stderr = buf
+	stderr := &bytes.Buffer{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
-		return err.Error(), 1, false, false, PlaybackResult{}
+		return launchResult{mpvStderr: err.Error(), exitCode: 1}
 	}
 
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
 	}()
-
-	select {
-	case err := <-done:
-		return buf.String(), exitCodeOf(err), false, false, PlaybackResult{}
-	case <-time.After(timeout):
-		// Process stayed alive — now check actual playback readiness.
-		return waitForPlaybackReadiness(cmd, done, socketPath, buf)
-	}
+	return waitForPlaybackReadiness(cmd, done, check, stderr)
 }
 
-// waitForPlaybackReadiness waits for an already-launched, single-process
-// player (mpv direct, or IINA — both expose --input-ipc-server on
-// socketPath) to show IPC evidence of loaded media, killing it if it never
-// becomes ready within mpvReadinessTimeout instead of blocking on it
-// indefinitely.
-func waitForPlaybackReadiness(cmd *exec.Cmd, done <-chan error, socketPath string, buf *bytes.Buffer) (stderr string, exitCode int, launched bool, quickExit bool, stats PlaybackResult) {
+func waitForPlaybackReadiness(
+	cmd *exec.Cmd,
+	done <-chan error,
+	check startupCheck,
+	stderr *bytes.Buffer,
+) (result launchResult) {
 	ipcDone := make(chan struct{})
-	client := NewIPCClient(socketPath)
-	ps := newPlaybackStats()
-	go ipcPoller(context.Background(), client, ps, ipcDone)
+	var ipcWG sync.WaitGroup
+	client := NewIPCClient(check.socketPath)
+	stats := newPlaybackStats()
+	ipcWG.Add(1)
+	go func() {
+		defer ipcWG.Done()
+		ipcPoller(context.Background(), client, stats, ipcDone)
+	}()
+	defer func() {
+		close(ipcDone)
+		ipcWG.Wait()
+		result.playback = stats.snapshot()
+	}()
 
 	phaseStart := time.Now()
-	readinessTimeout := time.After(mpvReadinessTimeout)
-	ticker := time.NewTicker(500 * time.Millisecond)
+	readinessTimer := time.NewTimer(mpvReadinessTimeout)
+	defer readinessTimer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	// Phase 1: wait for playback readiness or exit.
 	for {
 		select {
 		case err := <-done:
-			close(ipcDone)
-			quickExit = time.Since(phaseStart) < mpvQuickExitThreshold
-			return buf.String(), exitCodeOf(err), true, quickExit, ps.snapshot()
-
-		case <-readinessTimeout:
+			return launchResult{
+				mpvStderr: stderr.String(),
+				exitCode:  exitCodeOf(err),
+				launched:  true,
+				quickExit: time.Since(phaseStart) < mpvQuickExitThreshold,
+			}
+		case <-readinessTimer.C:
 			_ = cmd.Process.Kill()
 			<-done
-			close(ipcDone)
-			mpvLog.Warn("readiness timeout; killed process", "stderr", summarizeErr("", buf.String()))
-			return buf.String(), 1, true, false, ps.snapshot()
-
+			mpvLog.Warn("readiness timeout; killed process", "stderr", summarizeErr("", stderr.String()))
+			return launchResult{mpvStderr: stderr.String(), exitCode: 1, launched: true}
 		case <-ticker.C:
-			if ps.playing() {
-				goto phase2
-			}
-		}
-	}
-
-phase2:
-	// Phase 2: playback is active — wait for normal exit.
-	err := <-done
-	close(ipcDone)
-	return buf.String(), exitCodeOf(err), true, true, ps.snapshot()
-}
-
-// startPipeWithStartupCheck runs curl piped into mpv with the same two-phase
-// startup/readiness contract as startPlayerWithStartupCheck. Returns both
-// processes' stderr for error reporting; err is only set when a process
-// could not be started at all.
-func startPipeWithStartupCheck(curlArgs, mpvArgs []string, socketPath string) (mpvStderr string, curlStderr string, exitCode int, launched bool, quickExit bool, stats PlaybackResult, err error) {
-	os.Remove(socketPath)
-
-	p1 := exec.Command("curl", curlArgs...)
-	p2 := exec.Command("mpv", mpvArgs...)
-
-	stdout, err := p1.StdoutPipe()
-	if err != nil {
-		return "", "", 1, false, false, PlaybackResult{}, err
-	}
-	curlBuf := &bytes.Buffer{}
-	p1.Stderr = curlBuf
-	p2.Stdin = stdout
-	p2.Stdout = io.Discard
-	mpvBuf := &bytes.Buffer{}
-	p2.Stderr = mpvBuf
-
-	if err := p1.Start(); err != nil {
-		return "", "", 1, false, false, PlaybackResult{}, err
-	}
-	if err := p2.Start(); err != nil {
-		killAndWait(p1)
-		return "", curlBuf.String(), 1, false, false, PlaybackResult{}, err
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		err := p2.Wait()
-		killAndWait(p1)
-		done <- err
-	}()
-
-	select {
-	case waitErr := <-done:
-		return mpvBuf.String(), curlBuf.String(), exitCodeOf(waitErr), false, false, PlaybackResult{}, nil
-	case <-time.After(mpvStartupTimeout):
-		ipcDone := make(chan struct{})
-		client := NewIPCClient(socketPath)
-		ps := newPlaybackStats()
-		go ipcPoller(context.Background(), client, ps, ipcDone)
-
-		phaseStart := time.Now()
-		pipeReadinessTimeout := time.After(mpvReadinessTimeout)
-		pipeTick := time.NewTicker(500 * time.Millisecond)
-		defer pipeTick.Stop()
-
-	pipeCheck:
-		for {
-			select {
-			case waitErr := <-done:
-				close(ipcDone)
-				return mpvBuf.String(), curlBuf.String(), exitCodeOf(waitErr),
-					true, time.Since(phaseStart) < mpvQuickExitThreshold, ps.snapshot(), nil
-
-			case <-pipeReadinessTimeout:
-				_ = p2.Process.Kill()
-				<-done
-				close(ipcDone)
-				return mpvBuf.String(), curlBuf.String(), 1, true, false, ps.snapshot(), nil
-
-			case <-pipeTick.C:
-				if ps.playing() {
-					break pipeCheck
+			if stats.playing() {
+				err := <-done
+				return launchResult{
+					mpvStderr: stderr.String(),
+					exitCode:  exitCodeOf(err),
+					launched:  true,
+					quickExit: true,
 				}
 			}
 		}
+	}
+}
 
-		waitErr := <-done
+func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err error) {
+	_ = os.Remove(check.socketPath)
+
+	curl := exec.Command("curl", check.curlArgs...)
+	mpv := exec.Command("mpv", check.mpvArgs...)
+	stdout, err := curl.StdoutPipe()
+	if err != nil {
+		return launchResult{exitCode: 1}, err
+	}
+	curlStderr := &bytes.Buffer{}
+	curl.Stderr = curlStderr
+	mpv.Stdin = stdout
+	mpv.Stdout = io.Discard
+	mpvStderr := &bytes.Buffer{}
+	mpv.Stderr = mpvStderr
+
+	if err := curl.Start(); err != nil {
+		return launchResult{exitCode: 1}, err
+	}
+	if err := mpv.Start(); err != nil {
+		killAndWait(curl)
+		return launchResult{curlStderr: curlStderr.String(), exitCode: 1}, err
+	}
+
+	curlDone := make(chan error, 1)
+	mpvDone := make(chan error, 1)
+	go func() { curlDone <- curl.Wait() }()
+	go func() { mpvDone <- mpv.Wait() }()
+
+	ipcDone := make(chan struct{})
+	var ipcWG sync.WaitGroup
+	client := NewIPCClient(check.socketPath)
+	stats := newPlaybackStats()
+	ipcWG.Add(1)
+	go func() {
+		defer ipcWG.Done()
+		ipcPoller(context.Background(), client, stats, ipcDone)
+	}()
+	defer func() {
 		close(ipcDone)
-		return mpvBuf.String(), curlBuf.String(), exitCodeOf(waitErr), true, true, ps.snapshot(), nil
+		ipcWG.Wait()
+		result.playback = stats.snapshot()
+	}()
+
+	phaseStart := time.Now()
+	readinessTimer := time.NewTimer(mpvReadinessTimeout)
+	defer readinessTimer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case mpvErr := <-mpvDone:
+			curlErr := waitForCurlExit(curl, curlDone)
+			return launchResult{
+				mpvStderr:  mpvStderr.String(),
+				curlStderr: curlStderr.String(),
+				exitCode:   exitCodeOf(mpvErr),
+				launched:   true,
+				quickExit:  time.Since(phaseStart) < mpvQuickExitThreshold,
+				curlFailed: exitCodeOf(curlErr) != 0 && !stats.playing(),
+			}, nil
+		case curlErr := <-curlDone:
+			curlDone = nil
+			if exitCodeOf(curlErr) == 0 {
+				continue
+			}
+			_ = mpv.Process.Kill()
+			mpvErr := <-mpvDone
+			return launchResult{
+				mpvStderr:  mpvStderr.String(),
+				curlStderr: curlStderr.String(),
+				exitCode:   exitCodeOf(mpvErr),
+				launched:   true,
+				curlFailed: true,
+			}, nil
+		case <-readinessTimer.C:
+			_ = mpv.Process.Kill()
+			<-mpvDone
+			if curlDone != nil {
+				_ = curl.Process.Kill()
+				<-curlDone
+			}
+			return launchResult{
+				mpvStderr:  mpvStderr.String(),
+				curlStderr: curlStderr.String(),
+				exitCode:   1,
+				launched:   true,
+			}, nil
+		case <-ticker.C:
+			if !stats.playing() {
+				continue
+			}
+			mpvErr := <-mpvDone
+			curlErr := waitForCurlExit(curl, curlDone)
+			return launchResult{
+				mpvStderr:  mpvStderr.String(),
+				curlStderr: curlStderr.String(),
+				exitCode:   exitCodeOf(mpvErr),
+				launched:   true,
+				quickExit:  true,
+				curlFailed: exitCodeOf(curlErr) != 0 && !stats.playing(),
+			}, nil
+		}
+	}
+}
+
+func waitForCurlExit(cmd *exec.Cmd, done <-chan error) error {
+	if done == nil {
+		return nil
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(500 * time.Millisecond):
+		_ = cmd.Process.Kill()
+		return <-done
 	}
 }
 

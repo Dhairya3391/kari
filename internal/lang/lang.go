@@ -3,10 +3,10 @@
 // so it can be imported by internal/subtitles and internal/service without
 // creating an import cycle between them.
 //
-// Real provider responses are messy: VidKing's own subtitle list for the
-// same title has been observed mixing clean codes ("en", "fr") with full
-// English names ("English", "French"), a nonstandard code ("in_id" for
-// Indonesian), region variants ("zh-cn", "zh-tw"), and even a typo
+// Real provider responses are messy: upstream subtitle lists for the
+// same title have been observed mixing clean codes ("en", "fr") with full
+// English names ("English", "French"), nonstandard codes ("in_id" for
+// Indonesian), region variants ("zh-cn", "zh-tw"), and typos
 // ("Protuguese (BR)") — all in one response. Normalize exists to fold all
 // of that down to one canonical code so language-preference matching and
 // display both work regardless of which form a given provider used.
@@ -87,7 +87,7 @@ var aliases = map[string]string{
 	"portuguese":      "pt",
 	"por":             "pt",
 	"portuguese (br)": "pt",
-	"protuguese (br)": "pt", // yes, really — seen verbatim from VidKing
+	"protuguese (br)": "pt", // upstream subtitle typo
 	"pt-br":           "pt",
 	"brazilian":       "pt",
 	"russian":         "ru",
@@ -123,7 +123,7 @@ var aliases = map[string]string{
 	"vie":             "vi",
 	"indonesian":      "id",
 	"ind":             "id",
-	"in_id":           "id", // VidKing's nonstandard Indonesian code
+	"in_id":           "id", // nonstandard Indonesian code variant
 	"ukrainian":       "uk",
 	"ukr":             "uk",
 	"greek":           "el",

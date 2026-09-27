@@ -3,8 +3,11 @@ package util
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"time"
 )
 
 // AtomicWriteFile writes data to a temp file in the same directory as path
@@ -41,4 +44,58 @@ func OpenBrowser(url string) error {
 	default:
 		return exec.Command("xdg-open", url).Start()
 	}
+}
+
+// PruneDirToSize deletes the oldest files in a flat cache directory
+// until its total size fits maxBytes, returning the removed count. A
+// missing directory is not an error (nothing cached yet) and
+// subdirectories are never touched. Callers run this once at startup so
+// image caches stay bounded across sessions without slowing down exit.
+func PruneDirToSize(dir string, maxBytes int64) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	type fileStat struct {
+		path string
+		size int64
+		mod  time.Time
+	}
+	var files []fileStat
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fileStat{path: filepath.Join(dir, e.Name()), size: info.Size(), mod: info.ModTime()})
+		total += info.Size()
+	}
+	slices.SortFunc(files, func(a, b fileStat) int {
+		if a.mod.Before(b.mod) {
+			return -1
+		}
+		if a.mod.After(b.mod) {
+			return 1
+		}
+		return 0
+	})
+	removed := 0
+	for _, f := range files {
+		if total <= maxBytes {
+			break
+		}
+		if err := os.Remove(f.path); err != nil {
+			continue
+		}
+		total -= f.size
+		removed++
+	}
+	return removed, nil
 }

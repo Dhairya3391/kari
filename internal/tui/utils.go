@@ -1,16 +1,21 @@
 package tui
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"kari/internal/history"
+	"kari/internal/provider"
+	"kari/internal/termimg"
 )
 
 const (
-	maxContentWidth         = 118
+	// maxContentWidth is declared in column.go alongside ComputeDims so the
+	// frame layout and legacy list sizing always agree.
 	narrowTerminalThreshold = 90
 )
 
@@ -38,23 +43,9 @@ func (m *modelImpl) computeLayoutDims() layoutDims {
 func (m *modelImpl) bodyHeight() int {
 	// Stable layout height: header (1), rule (1), body spacer (1), bottom spacer (1),
 	// status/loading reserved slot (2), and footer (1) = 7 rows.
-	// Kept constant so loading states and status banners never resize lists or shift screens.
+	// Kept constant so loading states and status banners never resize lists or shift
 	height := m.height - 7
 	return max(1, height)
-}
-
-func scrollLines(content string, offset, height int, hint string) (string, int) {
-	lines := strings.Split(content, "\n")
-	if len(lines) <= height {
-		return content, 0
-	}
-
-	visibleHeight := max(1, height-1)
-	maxOffset := max(0, len(lines)-visibleHeight)
-	offset = min(max(0, offset), maxOffset)
-	end := min(len(lines), offset+visibleHeight)
-	indicator := mutedStyle.Render(fmt.Sprintf("%s · %d–%d of %d", hint, offset+1, end, len(lines)))
-	return strings.Join(append(lines[offset:end], indicator), "\n"), offset
 }
 
 func (m *modelImpl) scrollBody(delta int) {
@@ -71,6 +62,7 @@ func (m *modelImpl) resizeLists() {
 	seriesW := max(20, searchLeftWidth(dims.bodyW)-4)
 	m.seriesList.SetSize(seriesW, seriesH)
 	m.episodeList.SetSize(w, episodeH)
+	m.chapterList.SetSize(w, episodeH)
 	m.historyList.SetSize(w, historyH)
 
 	inputW := max(15, dims.contentW-12)
@@ -127,6 +119,10 @@ func (m *modelImpl) clearStatusAfter(d time.Duration) tea.Cmd {
 	})
 }
 
+func (m *modelImpl) setToast(msg string, ttype ToastType) {
+	m.activeToast = NewToast(msg, ttype, 3*time.Second)
+}
+
 func (m *modelImpl) pushView(next viewState) {
 	if m.activeView == next {
 		return
@@ -151,17 +147,101 @@ func (m *modelImpl) goBackOne() bool {
 	if m.activeView == viewPreview {
 		m.clearPreviewPoster()
 	}
+	if m.activeView == viewReader {
+		m.readerOpID = m.newOpID()
+		m.readerRender = make(map[int]string)
+	}
 	prev := m.backStack[len(m.backStack)-1]
 	m.backStack = m.backStack[:len(m.backStack)-1]
 	m.activeView = prev
+	if m.activeView == viewSearch {
+		m.playOpID = 0
+		m.resolveOpID = 0
+		m.subtitleOpID = 0
+		m.loading = false
+		m.loadingText = ""
+	}
 	return true
+}
+
+// currentResumePosition returns the saved playback position for the
+// episode currently in Preview, formatted mm:ss; empty when none.
+func (m *modelImpl) currentResumePosition() string {
+	if m.historyStore == nil || m.resolved == nil {
+		return ""
+	}
+	entry, ok := m.historyStore.Get(history.EntryKey{
+		Title:     m.resolved.SeriesTitle,
+		Mode:      string(m.appMode),
+		MediaType: m.resolved.MediaType,
+		Season:    m.resolved.SeasonNumber,
+		Episode:   m.resolved.EpisodeNumber,
+	})
+	if !ok || entry.PositionSecs <= 0 || entry.Complete {
+		return ""
+	}
+	return formatTimeMMSS(entry.PositionSecs)
+}
+
+// hasResumePosition reports whether the episode in Preview has a
+// unfinished resume point, which gates the restart key in the footer.
+func (m *modelImpl) hasResumePosition() bool {
+	return m.currentResumePosition() != ""
+}
+
+// toggleAnimeAudio flips the preferred anime track (sub/dub) and re-runs
+// the episode listing so the selection takes effect. Non-anime modes have
+// nothing to toggle.
+func (m *modelImpl) toggleAnimeAudio() (tea.Model, tea.Cmd) {
+	if m.appMode != provider.ModeAnime {
+		m.setStatus(statusWarn, "Sub/dub toggle applies to anime only")
+		return m, nil
+	}
+	if strings.EqualFold(m.audioMode, provider.AudioDub) {
+		m.audioMode = provider.AudioSub
+	} else {
+		m.audioMode = provider.AudioDub
+	}
+	m.saveSettings()
+	m.setToast("audio track: "+m.audioMode, ToastInfo)
+
+	if m.selectedSeries == nil {
+		return m, nil
+	}
+
+	// If on Preview screen, reload streams for current episode with new audio track.
+	// The previous track's resolved state is fully cleared first: merging
+	// the fresh resolve into stale Playback would leave the old audio's
+	// rows in the list.
+	if m.activeView == viewPreview && m.selectedEpisode != nil {
+		m.selectedEpisode.Audio = m.audioMode
+		m.loading = true
+		m.loadingText = "Reloading streams (" + m.audioMode + ")..."
+		m.resolved = nil
+		m.rawSubtitles = nil
+		m.manualPlaybackSelected = false
+		m.resolveAttempts = 0
+		m.preferredRepairAttempts = 0
+		m.rankedSources = nil
+		m.previewSelectedIndex = 0
+		m.subtitleResolverUsed = ""
+		m.subtitleLangUsed = ""
+		m.subtitleSourceUsed = ""
+		m.beginProviderWait(m.appMode)
+		opID := m.newOpID()
+		m.resolveOpID = opID
+		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode, nil, nil))
+	}
+
+	m.loading = true
+	m.loadingText = "Reloading episodes..."
+	opID := m.newOpID()
+	m.episodesOpID = opID
+	return m, tea.Batch(m.spinner.Tick, m.episodesCmd(opID, *m.selectedSeries))
 }
 
 func (m *modelImpl) nextEpisodeIndex() (int, bool) {
 	if m.selectedSeries == nil || len(m.episodeResults) == 0 {
-		return 0, false
-	}
-	if m.episodeIndex < 0 {
 		return 0, false
 	}
 	idx := m.episodeIndex + 1
@@ -169,11 +249,6 @@ func (m *modelImpl) nextEpisodeIndex() (int, bool) {
 		return 0, false
 	}
 	return idx, true
-}
-
-func (m *modelImpl) canPlayNextEpisode() bool {
-	_, ok := m.nextEpisodeIndex()
-	return ok
 }
 
 func (m *modelImpl) newOpID() int {
@@ -202,76 +277,174 @@ func shorten(text string, maxWidth int) string {
 	return string(r[:cut]) + "..."
 }
 
-func sideBySide(left, right string, totalWidth int) string {
-	gap := totalWidth - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
+func searchLeftWidth(contentW int) int {
+	if contentW <= narrowTerminalThreshold {
+		return contentW
 	}
-	return left + strings.Repeat(" ", gap) + right
+	return contentW * 65 / 100
 }
 
-func modeBadge(mode string) string {
-	return renderBadge(mode)
+// anilistIDFor extracts the AniList catalog id for an anime result:
+// anime providers already key their catalogs by it, so persisting it on
+// history entries lets tracker sync match by id instead of title.
+// Anything else (other modes, non-numeric ids) reports zero.
+func anilistIDFor(mode provider.ContentType, series *provider.SearchResult) int {
+	if mode != provider.ModeAnime || series == nil {
+		return 0
+	}
+	id, err := strconv.Atoi(strings.TrimSpace(series.ID))
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
 }
 
-func wrapWithEllipsis(text string, width, maxLines int) string {
-	lines := wrapText(text, width)
-	if len(lines) <= maxLines {
-		return strings.Join(lines, "\n")
-	}
+// posterPlaceholderWidth reserves the poster column so the header never
+// collapses while artwork loads or when none exists.
+const posterPlaceholderWidth = 30
 
-	lines = lines[:maxLines]
-	last := lines[maxLines-1]
-	for lipgloss.Width(last)+3 > width && last != "" {
-		last = strings.TrimRight(last[:len(last)-1], " ")
+func posterBlock(rendered string, unavailable bool, protocol termimg.Protocol, imageID uint32, imagesEnabled bool) string {
+	if imagesEnabled && rendered != "" {
+		return rendered
 	}
-	lines[maxLines-1] = last + "..."
-	return strings.Join(lines, "\n")
-}
-
-func wrapText(text string, width int) []string {
-	words := strings.Fields(text)
-	if len(words) == 0 {
-		return nil
-	}
-
-	lines := make([]string, 0, len(words)/8+1)
-	cur := words[0]
-	for _, word := range words[1:] {
-		candidate := cur + " " + word
-		if lipgloss.Width(candidate) > width {
-			lines = append(lines, cur)
-			cur = word
-			continue
+	if imagesEnabled {
+		// Reserve the column with explicit feedback instead of
+		// collapsing the header: loading artwork vs confirmed absent.
+		// The slot cleanup still runs first so a stale placement from
+		// the previous title never lingers behind the placeholder.
+		if unavailable {
+			return protocol.Cleanup(imageID) + posterPlaceholder("no image found")
 		}
-		cur = candidate
+		return protocol.Cleanup(imageID) + posterPlaceholder("loading image…")
 	}
-	return append(lines, cur)
+	return protocol.Cleanup(imageID)
 }
 
-// wrapEntries flows already-rendered entries (may contain ANSI styling)
-// into lines no wider than width, joining same-line entries with gap —
-// the same word-wrap shape as wrapText, but for a list of discrete chips
-// instead of a paragraph of words.
-func wrapEntries(entries []string, width int, gap string) []string {
-	if len(entries) == 0 {
-		return nil
-	}
-	gapWidth := lipgloss.Width(gap)
-
-	var lines []string
-	cur := entries[0]
-	curWidth := lipgloss.Width(cur)
-	for _, e := range entries[1:] {
-		w := lipgloss.Width(e)
-		if curWidth+gapWidth+w > width {
-			lines = append(lines, cur)
-			cur = e
-			curWidth = w
-			continue
+// posterPlaceholder renders a fixed-width dim stand-in keeping the
+// poster column stable across loading → loaded → absent states.
+// scrubTerminalResponses strips stray Kitty graphics-protocol responses
+// (e.g. `_Gi=1;OK\`) that some terminals emit asynchronously after an
+// image transmit: they arrive on stdin as ordinary runes and a focused
+// text input would otherwise eat them as typed text. The `i=<id>` key
+// requirement keeps human typing safe.
+func scrubTerminalResponses(s string) string {
+	var b strings.Builder
+	for len(s) > 0 {
+		i := strings.Index(s, "_G")
+		if i < 0 {
+			b.WriteString(s)
+			break
 		}
-		cur += gap + e
-		curWidth += gapWidth + w
+		b.WriteString(s[:i])
+		rest := s[i:]
+		end := 2
+		for end < len(rest) && end < 64 && rest[end] != '\\' {
+			end++
+		}
+		if end < len(rest) && rest[end] == '\\' {
+			end++
+		}
+		token := rest[:end]
+		if !strings.Contains(token, "i=") {
+			b.WriteString(token)
+		}
+		s = rest[end:]
 	}
-	return append(lines, cur)
+	return b.String()
+}
+
+func posterPlaceholder(text string) string {
+	dim := lipgloss.NewStyle().Faint(true)
+	padded := text + strings.Repeat(" ", max(0, posterPlaceholderWidth-lipgloss.Width(text)))
+	return dim.Render(padded)
+}
+
+// languageEnabled reports whether an audio language is enabled: a nil
+// map, an absent key, or an explicit true all mean enabled; only an
+// explicit false disables. (Committed-code scheme: the filter records
+// overrides, never a full set.)
+func (m *modelImpl) languageEnabled(lang string) bool {
+	if m.languageFilter == nil {
+		return true
+	}
+	enabled, ok := m.languageFilter[lang]
+	if !ok {
+		return true
+	}
+	return enabled
+}
+
+// hasEnabledLanguage guards the loaded filter against a degenerate
+// "everything disabled" state. It deliberately checks the full movies/TV
+// language pool — not the active mode's slice — because at startup the
+// active mode may be one with no audio languages at all (anime), where
+// checking locally would wrongly conclude every language was disabled and
+// wipe the user's saved filter.
+func (m *modelImpl) hasEnabledLanguage() bool {
+	for _, l := range m.registry.AudioLanguages(provider.ModeMovies, provider.ModeTV) {
+		if m.languageEnabled(l.Code) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *modelImpl) currentSeasonEpisodes() ([]provider.Episode, []int) {
+	if len(m.episodeResults) == 0 {
+		return nil, nil
+	}
+	maxSeason := 1
+	for _, ep := range m.episodeResults {
+		if ep.Season > maxSeason {
+			maxSeason = ep.Season
+		}
+	}
+	var eps []provider.Episode
+	var indices []int
+	if maxSeason <= 1 {
+		indices = make([]int, len(m.episodeResults))
+		for i := range indices {
+			indices[i] = i
+		}
+		eps = m.episodeResults
+	} else {
+		targetSeason := m.activeSeason + 1
+		for origIdx, ep := range m.episodeResults {
+			if ep.Season == targetSeason {
+				eps = append(eps, ep)
+				indices = append(indices, origIdx)
+			}
+		}
+		if len(eps) == 0 {
+			for origIdx, ep := range m.episodeResults {
+				if ep.Season == m.activeSeason {
+					eps = append(eps, ep)
+					indices = append(indices, origIdx)
+				}
+			}
+		}
+		if len(eps) == 0 {
+			indices = make([]int, len(m.episodeResults))
+			for i := range indices {
+				indices[i] = i
+			}
+			eps = m.episodeResults
+		}
+	}
+	// Text filter shares the screens helper with the renderer so the
+	// cursor index always addresses the same rows on screen.
+	return FilterEpisodesByText(eps, indices, m.episodeFilter)
+}
+
+// clampEpisodeIndex keeps the cursor inside the visible (season- and
+// text-filtered) list.
+func (m *modelImpl) clampEpisodeIndex() {
+	eps, _ := m.currentSeasonEpisodes()
+	if m.seasonEpisodeIndex < 0 || len(eps) == 0 {
+		m.seasonEpisodeIndex = 0
+		return
+	}
+	if m.seasonEpisodeIndex >= len(eps) {
+		m.seasonEpisodeIndex = len(eps) - 1
+	}
 }

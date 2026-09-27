@@ -29,7 +29,9 @@ type playbackStats struct {
 	loaded bool
 }
 
-func newPlaybackStats() *playbackStats { return &playbackStats{} }
+func newPlaybackStats() *playbackStats {
+	return &playbackStats{}
+}
 
 func (s *playbackStats) update(pos, dur float64, loaded bool) {
 	s.mu.Lock()
@@ -46,6 +48,9 @@ func (s *playbackStats) update(pos, dur float64, loaded bool) {
 	}
 }
 
+// (mpv.go, !android build); the android target genuinely excludes it.
+//
+//lint:ignore U1000 snapshot is used by the desktop mpv backend
 func (s *playbackStats) snapshot() PlaybackResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -90,8 +95,12 @@ func (c *IPCClient) Connect(timeout time.Duration) error {
 	return nil
 }
 
-// GetProperty issues a get_property command and decodes the "data" field.
-func (c *IPCClient) GetProperty(property string) (interface{}, error) {
+// GetProperty issues a get_property command and decodes its data field.
+func (c *IPCClient) GetProperty(property string) (any, error) {
+	return c.command("get_property", property)
+}
+
+func (c *IPCClient) command(args ...any) (any, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -101,74 +110,42 @@ func (c *IPCClient) GetProperty(property string) (interface{}, error) {
 
 	c.reqID++
 	reqID := c.reqID
-
-	req := map[string]interface{}{
-		"command":    []interface{}{"get_property", property},
+	data, err := json.Marshal(map[string]any{
+		"command":    args,
 		"request_id": reqID,
-	}
-	data, err := json.Marshal(req)
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	c.conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if err := c.conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		return nil, err
+	}
+	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
 	if _, err := c.conn.Write(append(data, '\n')); err != nil {
 		return nil, err
 	}
 
-	// Keep reading lines until we find the response for our request_id
 	for c.scanner.Scan() {
-		var resp map[string]interface{}
-		if err := json.Unmarshal(c.scanner.Bytes(), &resp); err != nil {
-			continue // Skip malformed lines
+		var response map[string]any
+		if err := json.Unmarshal(c.scanner.Bytes(), &response); err != nil {
+			continue
 		}
-
-		// Check if this is the response we are waiting for
-		if idVal, ok := resp["request_id"].(float64); ok && int(idVal) == reqID {
-			if errStr, ok := resp["error"].(string); ok && errStr != "success" {
-				_ = c.conn.SetDeadline(time.Time{})
-				return nil, fmt.Errorf("mpv error: %s", errStr)
-			}
-			// Clear the deadline so a stale one doesn't trip a later call.
-			_ = c.conn.SetDeadline(time.Time{})
-			return resp["data"], nil
+		id, ok := response["request_id"].(float64)
+		if !ok || int(id) != reqID {
+			continue
 		}
-		// If it's not our request_id (e.g., it's an event or old response), we just loop and scan again
+		if errText, ok := response["error"].(string); ok && errText != "success" {
+			return nil, fmt.Errorf("mpv error: %s", errText)
+		}
+		return response["data"], nil
 	}
 
-	// The scanner is exhausted (EOF, deadline, or an oversized line). The
-	// connection may still be usable, so clear the deadline and install a
-	// fresh scanner so subsequent requests can recover instead of failing
-	// forever. Responses are matched by request_id, so a dropped line here
-	// self-heals on the next request.
-	if err := c.scanner.Err(); err != nil {
-		_ = c.conn.SetDeadline(time.Time{})
-		c.scanner = newIPCSerializer(c.conn)
+	err = c.scanner.Err()
+	c.scanner = newIPCSerializer(c.conn)
+	if err != nil {
 		return nil, err
 	}
 	return nil, fmt.Errorf("no response from mpv")
-}
-
-// SendCommand sends a command array to mpv without waiting for a request_id response.
-func (c *IPCClient) SendCommand(command ...any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.conn == nil || c.closed {
-		return fmt.Errorf("ipc client not connected")
-	}
-
-	req := map[string]any{
-		"command": command,
-	}
-	data, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	_ = c.conn.SetDeadline(time.Now().Add(3 * time.Second))
-	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
-	_, err = c.conn.Write(append(data, '\n'))
-	return err
 }
 
 // Close releases the connection; safe when already closed. It deliberately

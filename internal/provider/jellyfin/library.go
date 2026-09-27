@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
 
+	"kari/internal/httpclient"
 	"kari/internal/logging"
 	"kari/internal/provider"
 )
@@ -53,17 +54,21 @@ func (c *Client) fetchLibrary(ctx context.Context) ([]provider.SearchResult, err
 	if err != nil {
 		return nil, fmt.Errorf("jellyfin fetch library: %w", err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
 		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: u}
 	}
 
-	var ir itemsResult
-	if err := json.NewDecoder(resp.Body).Decode(&ir); err != nil {
-		return nil, fmt.Errorf("jellyfin fetch library: decode response: %w", err)
+	body, err := httpclient.ReadCapped(resp)
+	if err != nil {
+		return nil, fmt.Errorf("jellyfin fetch library: read body: %w", err)
 	}
 
+	var ir itemsResult
+	if err := json.Unmarshal(body, &ir); err != nil {
+		return nil, fmt.Errorf("jellyfin fetch library: decode response: %w", err)
+	}
 	results := make([]provider.SearchResult, 0, len(ir.Items))
 	for _, it := range ir.Items {
 		mediaType := ""
@@ -116,11 +121,11 @@ func rankLibrary(library []provider.SearchResult, query string) []provider.Searc
 		matched = append(matched, scored{result: r, score: s})
 	}
 
-	sort.SliceStable(matched, func(i, j int) bool {
-		if matched[i].score != matched[j].score {
-			return matched[i].score < matched[j].score
+	slices.SortStableFunc(matched, func(a, b scored) int {
+		if a.score != b.score {
+			return a.score - b.score
 		}
-		return matched[i].result.Title < matched[j].result.Title
+		return strings.Compare(a.result.Title, b.result.Title)
 	})
 
 	if len(matched) > maxSearchResults {

@@ -3,6 +3,7 @@
 package player
 
 func registerPlayers(r *Registry) {
-	r.Register(&MPVPlayer{})
-	r.Register(&MXPlayer{})
+	launcher := newAndroidLauncher()
+	r.Register(&MPVPlayer{launcher: launcher})
+	r.Register(&MXPlayer{launcher: launcher})
 }

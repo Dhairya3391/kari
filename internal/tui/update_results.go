@@ -1,14 +1,17 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"errors"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/history"
@@ -93,23 +96,26 @@ func (m *modelImpl) onSearchDone(msg searchDoneMsg) (tea.Model, tea.Cmd) {
 			m.clearSearchPoster()
 			m.setStatus(statusWarn, fmt.Sprintf("No results found for %q — press Tab to switch categories", msg.usedQuery))
 			m.queryInput.Focus()
-			return m, nil
+			return m, textinput.Blink
 		}
 		logging.Error("onSearchDone failed", "opID", msg.opID, "err", msg.err)
 		m.setStatus(statusError, cleanErrorForUI(msg.err))
 		m.queryInput.Focus()
-		return m, nil
+		return m, textinput.Blink
 	}
 
 	logging.Info("onSearchDone success", "opID", msg.opID, "results_count", len(msg.results), "used_query", msg.usedQuery)
 	m.allSeriesResults = msg.results
 	m.usedQuery = msg.usedQuery
 	m.seriesResults = msg.results
+	// A fresh result list drops any stale / text filter.
+	m.resultsFilter = ""
+	m.resultsFiltering = false
 	m.seriesList.SetItems(seriesToItems(m.seriesResults))
 	if len(m.seriesResults) == 0 {
 		m.setStatus(statusWarn, fmt.Sprintf("No results found for %q — press Tab to switch categories", msg.usedQuery))
 		m.queryInput.Focus()
-		return m, nil
+		return m, textinput.Blink
 	}
 	if m.searchIndex >= 0 && m.searchIndex < len(m.seriesResults) {
 		m.seriesList.Select(m.searchIndex)
@@ -128,6 +134,15 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
 	m.loadingText = ""
 	if msg.err != nil {
+		if m.appMode == provider.ModeAnime && strings.EqualFold(strings.TrimSpace(m.audioMode), provider.AudioDub) && errors.Is(msg.err, provider.ErrNoEpisodes) {
+			m.episodeResults = nil
+			m.episodeList.SetItems(nil)
+			if m.selectedEpisode == nil {
+				m.pushView(viewEpisodes)
+			}
+			m.setStatus(statusWarn, "No dub episodes are available yet — press a for sub")
+			return m, nil
+		}
 		logging.Error("onEpisodesDone failed", "opID", msg.opID, "err", msg.err)
 		m.setStatus(statusError, "Episodes load failed: "+cleanErrorForUI(msg.err))
 		return m, nil
@@ -197,21 +212,150 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-
 	if m.episodeIndex < 0 {
 		m.episodeIndex = targetIdx
 	}
 
-	if m.episodeIndex >= 0 && m.episodeIndex < len(m.episodeResults) {
-		m.episodeList.Select(m.episodeIndex)
+	// If opening a series fresh (targetIdx == 0), start on Season 1 (index 0)
+	if targetIdx == 0 {
+		m.activeSeason = 0
+		m.episodeIndex = 0
+	} else if m.episodeIndex >= 0 && m.episodeIndex < len(m.episodeResults) {
+		ep := m.episodeResults[m.episodeIndex]
+		if ep.Season > 0 {
+			m.activeSeason = ep.Season - 1
+		} else {
+			m.activeSeason = 0
+		}
 	} else {
-		m.episodeList.Select(targetIdx)
+		m.activeSeason = 0
+	}
+	// A fresh episode list drops any stale text filter.
+	m.episodeFilter = ""
+	m.episodeFiltering = false
+	_, origIndices := m.currentSeasonEpisodes()
+	m.seasonEpisodeIndex = 0
+	for i, origIdx := range origIndices {
+		if origIdx == m.episodeIndex {
+			m.seasonEpisodeIndex = i
+			break
+		}
 	}
 
 	if m.selectedEpisode == nil {
 		m.pushView(viewEpisodes)
 	}
-	m.setStatus(statusInfo, "")
+	if m.appMode == provider.ModeAnime && strings.EqualFold(strings.TrimSpace(m.audioMode), provider.AudioDub) && len(msg.results) == 0 {
+		m.setStatus(statusWarn, "No dub episodes are available yet — press a for sub")
+	} else {
+		m.setStatus(statusInfo, "")
+	}
+	return m, m.maybeFetchEpisodeTitles()
+}
+
+// placeholderEpisodeRE matches provider placeholder titles ("Episode 12",
+// "EP 3", "Ep. 5") that carry no real episode name.
+var placeholderEpisodeRE = regexp.MustCompile(`(?i)^\s*(?:ep|episode|eps|e)\.?\s*\d+\s*$`)
+
+// isPlaceholderEpisodeTitle reports whether an episode title is empty or
+// a bare "Episode N" placeholder rather than a real name.
+func isPlaceholderEpisodeTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	return t == "" || placeholderEpisodeRE.MatchString(t)
+}
+
+// maybeFetchEpisodeTitles starts a best-effort AniList lookup for real
+// episode titles when the anime provider only sent placeholders. It
+// returns nil unless there is something to enrich: anime mode, a numeric
+// (AniList) series id, and at least one placeholder title.
+func (m *modelImpl) maybeFetchEpisodeTitles() tea.Cmd {
+	if m.appMode != provider.ModeAnime || m.posterClient == nil || m.selectedSeries == nil {
+		return nil
+	}
+	anilistID, err := strconv.Atoi(strings.TrimSpace(m.selectedSeries.ID))
+	if err != nil || anilistID <= 0 {
+		return nil
+	}
+	needed := make(map[int]struct{})
+	for i, ep := range m.episodeResults {
+		if !isPlaceholderEpisodeTitle(ep.Title) {
+			continue
+		}
+		num := ep.Episode
+		if num <= 0 {
+			num = i + 1
+		}
+		needed[num] = struct{}{}
+	}
+	if len(needed) == 0 {
+		return nil
+	}
+	opID := m.newOpID()
+	m.episodeTitlesOpID = opID
+	client := m.posterClient
+	seriesTitle := m.selectedSeries.Title
+	seriesYear, _ := strconv.Atoi(strings.TrimSpace(m.selectedSeries.Year))
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.appCtx, 20*time.Second)
+		defer cancel()
+		titles, err := client.FetchEpisodeTitles(ctx, anilistID)
+		if err != nil {
+			tuiLog.Debug("anilist episode titles fetch failed", "anilist_id", anilistID, "err", err)
+		}
+		// AniList's streamingEpisodes only name the episodes it has licensed
+		// (e.g. the first 26 of Naruto's 220), so backfill the still-missing
+		// rows from TMDB keyed by absolute episode number. AniList wins on
+		// conflicts.
+		missing := false
+		for num := range needed {
+			if _, ok := titles[num]; !ok {
+				missing = true
+				break
+			}
+		}
+		if missing {
+			tmdbTitles, tmdbErr := client.FetchEpisodeTitlesTMDB(ctx, seriesTitle, seriesYear)
+			if tmdbErr != nil {
+				tuiLog.Debug("tmdb episode titles fetch failed", "title", seriesTitle, "err", tmdbErr)
+			}
+			for num, title := range tmdbTitles {
+				if _, ok := titles[num]; ok {
+					continue
+				}
+				if titles == nil {
+					titles = make(map[int]string)
+				}
+				titles[num] = title
+			}
+		}
+		return episodeTitlesMsg{titles: titles, opID: opID}
+	}
+}
+
+// onEpisodeTitles patches placeholder episode titles with the real names
+// looked up on AniList. Provider-sent real titles are never overwritten;
+// entries AniList has no name for keep their placeholder.
+func (m *modelImpl) onEpisodeTitles(msg episodeTitlesMsg) (tea.Model, tea.Cmd) {
+	if msg.opID != m.episodeTitlesOpID || len(msg.titles) == 0 {
+		return m, nil
+	}
+	patched := false
+	for i, ep := range m.episodeResults {
+		if !isPlaceholderEpisodeTitle(ep.Title) {
+			continue
+		}
+		num := ep.Episode
+		if num <= 0 {
+			num = i + 1
+		}
+		if title, ok := msg.titles[num]; ok && strings.TrimSpace(title) != "" {
+			m.episodeResults[i].Title = title
+			patched = true
+		}
+	}
+	if patched {
+		m.refreshEpisodeList()
+	}
 	return m, nil
 }
 
@@ -237,13 +381,16 @@ func (m *modelImpl) onHistoryContinueEpisodes(msg historyContinueEpisodesMsg) (t
 		mediaType = m.selectedSeries.MediaType
 	}
 	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle, m.appMode, mediaType, m.selectedEpisodes))
+	titleCmd := m.maybeFetchEpisodeTitles()
 
 	if idx, ok := nextEpisodeAfterEntry(msg.results, msg.group.FarthestComplete); ok {
-		return m.startEpisodeResolution(idx, false)
+		mdl, cmd := m.startEpisodeResolution(idx, false)
+		return mdl, tea.Batch(cmd, titleCmd)
 	}
 	if idx, ok := episodeIndexForEntry(msg.results, msg.group.ContinueEntry); ok {
 		m.setStatus(statusWarn, "No next episode found, opening last watched")
-		return m.startEpisodeResolution(idx, false)
+		mdl, cmd := m.startEpisodeResolution(idx, false)
+		return mdl, tea.Batch(cmd, titleCmd)
 	}
 	if m.selectedEpisode == nil {
 		m.pushView(viewEpisodes)
@@ -252,30 +399,99 @@ func (m *modelImpl) onHistoryContinueEpisodes(msg historyContinueEpisodesMsg) (t
 	return m, nil
 }
 
+func (m *modelImpl) handleUnavailableAudio() *modelImpl {
+	if m.selectedEpisode == nil {
+		m.setStatus(statusWarn, "The selected audio track is unavailable — choose another episode")
+		return m
+	}
+
+	audio := strings.ToLower(strings.TrimSpace(m.selectedEpisode.Audio))
+	if audio == "" {
+		audio = "audio"
+	}
+	message := fmt.Sprintf("No %s track for Episode %d", audio, m.selectedEpisode.Episode)
+	if m.appMode == provider.ModeAnime {
+		alternate := provider.AudioSub
+		if audio == provider.AudioSub {
+			alternate = provider.AudioDub
+		}
+		message += " — press a to switch to " + alternate
+	}
+	m.setStatus(statusWarn, message)
+	m.setToast(message, ToastInfo)
+	return m
+}
+
 func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.resolveOpID {
 		tuiLog.Debug("stale resolve ignored", "got", msg.opID, "want", m.resolveOpID)
 		return m, nil
 	}
 	m.resolveOpID = 0
+	m.endProviderWait()
 	if msg.err != nil {
 		if m.playOpID == 0 {
+			// Verified-missing track (e.g. unreleased dub): retrying
+			// cannot help, so drop the episode instead of looping.
+			if m.resolved == nil && errors.Is(msg.err, provider.ErrAudioUnavailable) {
+				m.loading = false
+				m.loadingText = ""
+				m.autoPlayAfterResolve = false
+				return m.handleUnavailableAudio(), nil
+			}
+			// No sources at all: retry the whole resolve automatically,
+			// bounded by maxResolveAttempts, so a flaky provider doesn't
+			// force a manual retry. Partial results stay playable and are
+			// never retried over.
+			if m.resolved == nil && m.selectedSeries != nil && m.selectedEpisode != nil && m.resolveAttempts+1 < maxResolveAttempts {
+				m.resolveAttempts++
+				m.loading = true
+				m.loadingText = fmt.Sprintf("Retrying streams (%d/%d)...", m.resolveAttempts+1, maxResolveAttempts)
+				m.beginProviderWait(m.appMode)
+				opID := m.newOpID()
+				m.resolveOpID = opID
+				return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode, nil, nil))
+			}
 			m.loading = false
 			m.loadingText = ""
 			m.autoPlayAfterResolve = false
-			m.pendingAutoPlay = false
 			if m.resolved == nil {
 				logging.Error("resolve failed", "provider", selectedSeriesProvider(m.selectedSeries), "series", selectedSeriesTitle(m.selectedSeries), "episode", selectedEpisodeTitle(m.selectedEpisode), "err", msg.err)
-				m.setStatus(statusError, cleanErrorForUI(msg.err))
+				statusMsg := cleanErrorForUI(msg.err)
+				if (m.appMode == provider.ModeLive || (m.selectedSeries != nil && m.selectedSeries.Type == provider.ModeLive)) && errors.Is(msg.err, provider.ErrNoSources) {
+					if m.selectedSeries != nil && m.selectedSeries.Year != "" && m.selectedSeries.Year != "24/7" && m.selectedSeries.Year != "Live" {
+						statusMsg = "Stream not live yet — scheduled for " + m.selectedSeries.Year
+					} else {
+						statusMsg = "Stream is not live yet — check back closer to match time"
+					}
+				}
+				m.setStatus(statusError, statusMsg)
 			}
 		}
 		return m, nil
 	}
+	m.resolveAttempts = 0
 	m.mergeResolved(msg.resolved)
 
 	// If playback is already active, don't re-trigger playback or override player status
 	if m.playOpID != 0 {
 		return m, nil
+	}
+
+	// Partial success with a preferred provider down (movy-first): one
+	// quiet background repair so the favorite doesn't need a manual R.
+	// Bounded to one attempt per pick; the merge dedupes anything the
+	// retry re-delivers.
+	if m.preferredRepairAttempts < 1 && m.preferredRepairNeeded() {
+		m.preferredRepairAttempts++
+		m.loading = true
+		m.loadingText = "Retrying preferred provider…"
+		exclude := m.retryExclude()
+		retry := m.mediaService.LastFailures()
+		m.beginRetryWait(m.appMode, exclude)
+		opID := m.newOpID()
+		m.resolveOpID = opID
+		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode, exclude, retry))
 	}
 
 	// All providers have now reported in, so this is the first point where
@@ -286,34 +502,23 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	return mdl, tea.Batch(cmd, subCmd)
 }
 
+// onSubtitleDone attaches the fetched track to the resolved media. Playback
+// never waits for this: sources alone start play, and the subtitle joins the
+// next launch (or this one if the fetch beats the player handshake).
 func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.subtitleOpID {
 		return m, nil
 	}
 	m.subtitleOpID = 0
-	if msg.err == nil && m.resolved != nil {
-		if m.subtitleLanguage == "off" || (m.disableAnimeSubtitles && m.resolved.MediaType == provider.MediaTypeAnime) {
-			m.resolved.Subtitles = nil
-		} else if len(msg.tracks) > 0 {
-			m.resolved.Subtitles = msg.tracks
+	if m.resolved != nil {
+		m.resolved.SelectedSubtitle = nil
+		if msg.err == nil && strings.TrimSpace(msg.track.Path) != "" {
+			track := msg.track
+			m.resolved.SelectedSubtitle = &track
 		}
 	}
-	if m.pendingManualPlay {
-		m.pendingManualPlay = false
-		m.loading = true
-		opID := m.newOpID()
-		m.playOpID = opID
-		if m.pendingPlayFromStart {
-			m.pendingPlayFromStart = false
-			m.loadingText = "Starting from beginning..."
-			return m, tea.Batch(m.spinner.Tick, m.playCmdWithStartTime(opID, 0), m.playStartedTimeoutCmd(opID))
-		}
-		m.loadingText = "Opening player..."
-		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
-	}
-	if m.pendingAutoPlay {
-		m.pendingAutoPlay = false
-		return m.finalizeResolved()
+	if msg.err != nil {
+		tuiLog.Debug("subtitle unavailable; playing without", "err", msg.err)
 	}
 	return m, nil
 }
@@ -326,14 +531,6 @@ func (m *modelImpl) playStartedTimeoutCmd(opID int) tea.Cmd {
 
 func (m *modelImpl) finalizeResolved() (tea.Model, tea.Cmd) {
 	if m.autoPlayAfterResolve {
-		if m.subtitleOpID != 0 {
-			m.pendingAutoPlay = true
-			m.loading = true
-			m.loadingText = "Downloading subtitles..."
-			m.pushView(viewPreview)
-			m.setStatus(statusInfo, "")
-			return m, m.spinner.Tick
-		}
 		if len(m.orderedPlaybackSources()) == 0 {
 			m.autoPlayAfterResolve = false
 			m.loading = false
@@ -347,6 +544,7 @@ func (m *modelImpl) finalizeResolved() (tea.Model, tea.Cmd) {
 		m.loadingText = "Opening player..."
 		opID := m.newOpID()
 		m.playOpID = opID
+		m.pushPlayingView()
 		return m, tea.Batch(m.spinner.Tick, m.playCmd(opID), m.playStartedTimeoutCmd(opID))
 	}
 	m.loading = false
@@ -384,35 +582,26 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 
 	wasNil := m.resolved == nil
 	m.mergeResolved(msg.resolved)
+	m.refreshProviderWait()
 	m.pushView(viewPreview)
 	if len(m.orderedPlaybackSources()) > 0 && !m.autoPlayAfterResolve {
 		m.loading = false
 		m.loadingText = ""
 	}
 
-	subCmd := m.triggerSubtitleSync()
-
-	var finalizeCmd tea.Cmd
-	if m.autoPlayAfterResolve && len(m.orderedPlaybackSources()) > 0 {
-		var mdl tea.Model
-		mdl, finalizeCmd = m.finalizeResolved()
-		m = mdl.(*modelImpl)
-	}
-
 	if wasNil {
-		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails(), subCmd, finalizeCmd)
+		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails())
 	}
 
-	return m, tea.Batch(m.resolveSubscription(), subCmd, finalizeCmd)
-}
-
-func hasDownloadedSubtitles(tracks []model.SubtitleTrack) bool {
-	for _, t := range tracks {
-		if t.Path != "" {
-			return true
-		}
+	// Progressive snapshots can carry the TMDBID after the first one;
+	// retry the details fetch once it is known so movies don't stay
+	// blank. Guarded to the TMDB path so anime/movies without an ID
+	// don't spam the AniList fallback on every snapshot.
+	if m.previewOverview == "" && msg.resolved.TMDBID != 0 {
+		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewDetails())
 	}
-	return false
+
+	return m, m.resolveSubscription()
 }
 
 func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
@@ -433,21 +622,43 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 		}
 		m.rawSubtitles = append([]model.SubtitleTrack{}, resolved.Subtitles...)
 		m.selectedPlayback = 0
-		m.ensurePlaybackSelection()
+		m.refreshRanking()
 		m.applyResumeFromHistory(m.resolved)
 		return
 	}
 	// Update playback sources directly from the aggregated snapshot.
-	// resolved.Playback is already sorted by MediaService with VidKing on top.
+	// resolved.Playback is already sorted by MediaService with Movy.sx on top.
 	var selectedURL string
 	if src, ok := m.selectedPlaybackSource(); ok {
 		selectedURL = src.URL
 	}
-
-	m.resolved.Playback = append([]provider.MediaSource{}, resolved.Playback...)
+	// Merge playback sources, deduplicating so retried or progressively
+	// reporting providers add to existing sources instead of clobbering them.
+	seenSources := make(map[string]struct{}, len(m.resolved.Playback)+len(resolved.Playback))
+	for _, p := range m.resolved.Playback {
+		key := p.TransportIdentity()
+		if key != "" {
+			seenSources[key] = struct{}{}
+		}
+	}
+	for _, p := range resolved.Playback {
+		key := p.TransportIdentity()
+		if key != "" {
+			if _, ok := seenSources[key]; !ok {
+				m.resolved.Playback = append(m.resolved.Playback, p)
+				seenSources[key] = struct{}{}
+			}
+		}
+	}
+	// Progressive snapshots may carry the TMDBID after the first one;
+	// pick it up so the details/poster retry below queries TMDB and not
+	// the AniList fallback.
+	if m.resolved.TMDBID == 0 && resolved.TMDBID != 0 {
+		m.resolved.TMDBID = resolved.TMDBID
+	}
 
 	// If user manually switched sources with Tab, restore that specific source URL.
-	// Otherwise default to the top-ranked source (index 0, e.g. VidKing).
+	// Otherwise default to the top-ranked source (index 0, e.g. Movy.sx).
 	if m.manualPlaybackSelected {
 		newSelected := 0
 		if selectedURL != "" {
@@ -464,35 +675,45 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 	}
 	// Accumulate raw subtitles from all provider updates
 	seenSub := make(map[string]struct{})
-	for _, s := range m.rawSubtitles {
-		seenSub[s.URL] = struct{}{}
+	for _, subtitle := range m.rawSubtitles {
+		seenSub[subtitleCandidateIdentity(subtitle)] = struct{}{}
 	}
-	for _, s := range resolved.Subtitles {
-		if s.URL != "" {
-			if _, ok := seenSub[s.URL]; !ok {
-				m.rawSubtitles = append(m.rawSubtitles, s)
-				seenSub[s.URL] = struct{}{}
-			}
+	for _, subtitle := range resolved.Subtitles {
+		if subtitle.URL == "" {
+			continue
 		}
+		key := subtitleCandidateIdentity(subtitle)
+		if _, ok := seenSub[key]; ok {
+			continue
+		}
+		m.rawSubtitles = append(m.rawSubtitles, subtitle)
+		seenSub[key] = struct{}{}
 	}
 
-	// Only replace subtitles from resolve phase if we don't already have downloaded ones
-	if len(resolved.Subtitles) > 0 && !hasDownloadedSubtitles(m.resolved.Subtitles) {
+	if len(resolved.Subtitles) > 0 {
 		m.resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
 	}
-	m.ensurePlaybackSelection()
+	m.refreshRanking()
+}
+
+func subtitleCandidateIdentity(track model.SubtitleTrack) string {
+	return strings.Join([]string{
+		strings.TrimSpace(track.URL),
+		strings.TrimSpace(track.SourceID),
+		strings.TrimSpace(track.SourceURL),
+		strings.TrimSpace(track.Referer),
+	}, "\x00")
 }
 
 func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
-	m.loading = false
-	m.loadingText = ""
-	m.autoPlayAfterResolve = false
-
 	if msg.opID != m.playOpID {
 		tuiLog.Warn("play result opID mismatch", "got", msg.opID, "want", m.playOpID)
 		return m, nil
 	}
 	m.playOpID = 0
+	m.loading = false
+	m.loadingText = ""
+	m.autoPlayAfterResolve = false
 
 	var needsConfirm *player.NeedsCompletionConfirmError
 	isConfirmErr := errors.As(msg.err, &needsConfirm)
@@ -539,6 +760,7 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 			Mode:      string(m.appMode),
 			MediaType: m.resolved.MediaType,
 			TMDBID:    m.resolved.TMDBID,
+			AniListID: anilistIDFor(m.appMode, m.selectedSeries),
 			AudioMode: audioMode,
 			Language:  lang,
 		}
@@ -568,7 +790,7 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 
 	if isConfirmErr {
 		m.confirmCompletion = true
-		logging.Info("playback finished on Android, needs confirmation")
+		logging.Info("playback finished on external player, needs confirmation")
 	} else {
 		logging.Info("playback finished", "opID", msg.opID, "provider", msg.provider, "result", msg.result)
 		m.setStatus(statusSuccess, "Playback finished")
@@ -597,37 +819,24 @@ func (m *modelImpl) onDownloadProgress(msg downloadProgressMsg) (tea.Model, tea.
 	m.downloadSpeed = msg.speed
 	m.downloadDownloaded = msg.downloaded
 	m.downloadETA = msg.eta
-	m.loadingText = downloadLoadingText(m.downloadProgress, m.downloadTotalSize, m.downloadSpeed, m.downloadDownloaded, m.downloadETA)
 	return m, m.downloadSubscription()
-}
-
-func downloadLoadingText(progress float64, totalSize, speed, downloaded, eta string) string {
-	if progress < 0 {
-		return "Downloading..."
-	}
-	if totalSize != "" && speed != "" && downloaded != "" {
-		text := fmt.Sprintf("Downloading %.1f%% — %s / %s at %s", progress, downloaded, totalSize, speed)
-		if eta != "" {
-			text += fmt.Sprintf(", ETA %s", eta)
-		}
-		return text
-	}
-	if progress >= 100 && totalSize != "" {
-		return fmt.Sprintf("Downloaded %s", totalSize)
-	}
-	return fmt.Sprintf("Downloading... %.1f%%", progress)
 }
 
 func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.downloadOpID {
 		return m, nil
 	}
-	m.loading = false
-	m.loadingText = ""
-
-	statusMsg := "Download complete"
+	// A user-initiated pause cancels the context. Keep the progress readout
+	// and partial files so resume continues from the checkpoint.
+	if errors.Is(msg.err, context.Canceled) {
+		logging.Info("download paused", "opID", msg.opID)
+		m.cancelDownload = nil
+		m.downloadOpID = 0
+		return m, nil
+	}
+	statusMsg := "download complete"
 	if m.downloadTotalSize != "" {
-		statusMsg = fmt.Sprintf("Downloaded %s", m.downloadTotalSize)
+		statusMsg = fmt.Sprintf("downloaded %s", m.downloadTotalSize)
 	}
 
 	m.downloadProgress = 0
@@ -640,13 +849,14 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		logging.Error("download failed", "opID", msg.opID, "err", msg.err)
 		errMsg := fmt.Sprintf("Download failed: %v", msg.err)
-		if errors.Is(msg.err, exec.ErrNotFound) || strings.Contains(msg.err.Error(), "executable file not found") {
+		if errors.Is(msg.err, exec.ErrNotFound) {
 			errMsg = "Download failed: yt-dlp is not installed"
 		}
 		return m, m.setStatusTimed(statusError, errMsg)
 	}
 
-	return m, m.setStatusTimed(statusSuccess, statusMsg)
+	m.setToast(statusMsg, ToastSuccess)
+	return m, nil
 }
 
 func (m *modelImpl) downloadSubscription() tea.Cmd {

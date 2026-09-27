@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -81,7 +82,7 @@ func Load() (*Config, error) {
 		cfg.PenguAuthToken = DefaultPenguAuthToken
 	}
 	if cfg.DownloadDir == "" {
-		cfg.DownloadDir = "./downloads"
+		cfg.DownloadDir = defaultDownloadDir()
 	}
 
 	if envKey := strings.TrimSpace(os.Getenv("TMDB_API_KEY")); envKey != "" {
@@ -96,6 +97,14 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func defaultDownloadDir() string {
+	home, err := os.UserHomeDir()
+	if err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Join(home, "Downloads")
+	}
+	return filepath.Join(".", "downloads")
 }
 
 // firstEnv returns the first non-empty value among the given environment

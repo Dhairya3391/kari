@@ -2,6 +2,11 @@ package provider
 
 import (
 	"context"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
 	"kari/internal/config"
 	"kari/internal/tmdb"
 )
@@ -16,6 +21,11 @@ const (
 	ModeTV       ContentType = "tv"
 	ModeCartoon  ContentType = "cartoon"
 	ModeJellyfin ContentType = "jellyfin"
+	// ModeManga is the in-terminal manga/comic reading mode, served by
+	// providers implementing MangaSource.
+	ModeManga ContentType = "manga"
+	// ModeLive is the live sports & TV streaming mode.
+	ModeLive ContentType = "live"
 )
 
 // Mode declares a provider's support for one content mode and its priority
@@ -32,12 +42,21 @@ const (
 	MediaTypeTV      = "tv"
 	MediaTypeAnime   = "anime"
 	MediaTypeCartoon = "cartoon"
+	MediaTypeManga   = "manga"
+	MediaTypeLive    = "live"
 )
 
 // Audio-track vocabulary for Episode.Audio and the sub/dub selection feature.
 const (
 	AudioSub = "sub"
 	AudioDub = "dub"
+)
+
+// Subtitle-kind vocabulary for anime MediaSource.SubType values, declaring
+// how subtitles reach the picture. Providers that don't know leave it blank.
+const (
+	SubTypeHard = "hard"
+	SubTypeSoft = "soft"
 )
 
 // Stream container/protocol vocabulary for MediaSource.Type. Players and
@@ -63,6 +82,27 @@ type SearchResult struct {
 	Year      string
 	MediaType string
 	TMDBID    int
+	// CoverURL is stamped by the provider itself at search time when the
+	// upstream catalog ships artwork directly (manga covers from
+	// WeebCentral). Empty for providers whose artwork resolves through
+	// the poster package instead (TMDB/AniList).
+	CoverURL string
+	// CoverReferer is the Referer sent with direct CoverURL downloads
+	// when the image host enforces hotlink protection. Stamped alongside
+	// CoverURL so the generic poster package never hardcodes a
+	// provider-specific referer.
+	CoverReferer string
+	// Overview and Genres are stamped by the provider at search time when
+	// the catalog ships them (WeebCentral descriptions/tags), so detail
+	// screens render without extra requests.
+	Overview string
+	Genres   []string
+
+	// Live TV / Sports scheduling fields. Populated only by live providers;
+	// zero for all other modes so callers can check `Live || !StartsAt.IsZero()`.
+	Live     bool      // true: stream is airing right now
+	StartsAt time.Time // zero: no schedule known; non-zero: local start time
+	Group    string    // live league / category / channel type
 }
 
 // Episode is one playable unit of a series. For movies, providers may
@@ -85,6 +125,8 @@ type Episode struct {
 type SubtitleOption struct {
 	URL      string
 	Language string
+	Default  bool
+	Referer  string
 }
 
 // MediaSource is one playable stream. Providers fill everything except
@@ -99,11 +141,135 @@ type MediaSource struct {
 	UserAgent    string
 	CookieHeader string
 	Language     string
-	ExtraArgs    []string
+	// SubType marks the anime subtitle kind the upstream declares for this
+	// stream: "hard" (burned in), "soft" (toggleable), or "" unknown.
+	// Non-anime sources leave it blank; subtitle delivery is independent.
+	SubType   string
+	ExtraArgs []string
 	// SuppressOrigin stops the player layer from deriving an Origin header
 	// from Referer. Some CDNs reject any Origin (or reject a full-path one);
 	// providers that validate Referer only should set this.
 	SuppressOrigin bool
+}
+
+// TransportIdentity returns the canonical identity used to deduplicate a
+// playable source without collapsing request variants that need different
+// headers, language selection, or player options.
+func (s MediaSource) TransportIdentity() string {
+	rawURL := strings.TrimSuffix(strings.TrimSpace(s.URL), "/")
+	if rawURL == "" {
+		return ""
+	}
+	return strings.Join([]string{
+		rawURL,
+		strings.TrimSpace(s.Referer),
+		strings.TrimSpace(s.UserAgent),
+		strings.TrimSpace(s.CookieHeader),
+		strings.TrimSpace(s.Language),
+		strconv.FormatBool(s.SuppressOrigin),
+		strings.Join(s.ExtraArgs, "\x00"),
+	}, "\x00")
+}
+
+// IsDirectURL reports whether raw is a direct remote stream address: an
+// http(s) URL with a non-local host and no proxy path. mpv plays sources
+// itself, so anything needing a helper server (localhost, /proxy/ paths)
+// is rejected — providers must return CDN addresses.
+func IsDirectURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" || strings.HasSuffix(host, ".local") {
+		return false
+	}
+	if strings.Contains(strings.ToLower(u.Path), "/proxy/") {
+		return false
+	}
+	return true
+}
+
+// FilterDirectSources drops any source whose URL is not directly playable
+// by mpv (see IsDirectURL), preserving order.
+func FilterDirectSources(sources []MediaSource) []MediaSource {
+	kept := sources[:0]
+	for _, s := range sources {
+		if IsDirectURL(s.URL) {
+			kept = append(kept, s)
+		}
+	}
+	return kept
+}
+
+// MangaChapter is one readable chapter of a manga/comic title. Number
+// stays a string because chapters are fractional ("12.5"), prefixed, or
+// unnumbered (oneshots) — an int cannot represent the catalog.
+type MangaChapter struct {
+	// ID is the provider-specific handle passed back into FetchPages.
+	ID string
+	// Provider names the producing provider, stamped by MangaService so
+	// the TUI can fetch pages without retaining extra state.
+	Provider string
+	Number   string
+	Volume   string
+	Title    string
+	Language string
+	Group    string
+}
+
+// MangaPage is one page image of a chapter.
+type MangaPage struct {
+	URL string
+	// Referer/UserAgent are sent with the image request when the image
+	// host requires them (WeebCentral's CDN needs its site as Referer).
+	Referer   string
+	UserAgent string
+	Width     int
+	Height    int
+	// FallbackURL is tried when URL fails with 404/5xx.
+	FallbackURL string
+}
+
+// DisplayLabel renders the chapter as users expect to see it:
+// "Ch 12.5 — Title [Group]", with a trailing "[pt-br]" tag when the
+// translation is not English (English rows stay untagged).
+func (c MangaChapter) DisplayLabel() string {
+	var b strings.Builder
+	if c.Number != "" {
+		b.WriteString("Ch ")
+		b.WriteString(c.Number)
+	} else {
+		b.WriteString("Oneshot")
+	}
+	if c.Title != "" {
+		b.WriteString(" — ")
+		b.WriteString(c.Title)
+	}
+	if c.Group != "" {
+		b.WriteString(" [")
+		b.WriteString(c.Group)
+		b.WriteString("]")
+	}
+	if c.Language != "" && c.Language != "en" {
+		b.WriteString(" [")
+		b.WriteString(c.Language)
+		b.WriteString("]")
+	}
+	return b.String()
+}
+
+// MangaSource is implemented by providers serving readable manga/comics:
+// chapter listings plus page-image URLs. The embedded Provider contract
+// still applies (Search must work); FetchEpisodes/ResolveSource are
+// inapplicable to paged media and return sentinel errors.
+type MangaSource interface {
+	Provider
+	FetchChapters(ctx context.Context, series SearchResult) ([]MangaChapter, error)
+	FetchPages(ctx context.Context, chapter MangaChapter) ([]MangaPage, error)
 }
 
 // Provider is the core contract every media integration implements:
@@ -114,6 +280,12 @@ type Provider interface {
 	Search(ctx context.Context, query string, mode ContentType) ([]SearchResult, error)
 	FetchEpisodes(ctx context.Context, series SearchResult) ([]Episode, error)
 	ResolveSource(ctx context.Context, mediaID string, episode Episode) ([]MediaSource, error)
+}
+
+// EpisodeAvailabilitySource lists only episodes whose requested audio track
+// is known to be available from the provider.
+type EpisodeAvailabilitySource interface {
+	FetchAvailableEpisodes(ctx context.Context, series SearchResult) ([]Episode, error)
 }
 
 // AudioLanguage is a display-ready audio-track language a provider can tag
@@ -181,6 +353,10 @@ type Descriptor struct {
 type Deps struct {
 	Config  *config.Config
 	KeyPool *tmdb.KeyPool
+	// LanguageFilter mirrors the user's audio-language settings (see
+	// internal/settings LanguageFilter): nil or missing keys mean enabled.
+	// Providers use it to drop foreign dubbed audio at resolve time.
+	LanguageFilter map[string]bool
 }
 
 // StreamingProvider is implemented by providers that deliver sources

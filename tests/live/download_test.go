@@ -38,7 +38,7 @@ func TestDownloadFetchesRealMedia(t *testing.T) {
 	}
 	pick := results[0]
 
-	resolved, err := svc.Resolve(ctx, provider.ModeMovies, pick, provider.Episode{}, nil)
+	resolved, err := svc.Resolve(ctx, provider.ModeMovies, pick, provider.Episode{}, nil, service.ResolveOptions{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

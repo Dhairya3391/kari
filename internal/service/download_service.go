@@ -33,6 +33,11 @@ func NewDownloadService(downloadDir string, dl downloader.Downloader, mediaServi
 	}
 }
 
+// OutputDir returns the configured base download directory.
+func (s *DownloadService) OutputDir() string {
+	return s.downloadDir
+}
+
 func sanitizePathName(name string) string {
 	cleaned := strings.Map(func(r rune) rune {
 		switch r {
@@ -158,6 +163,25 @@ func (s *DownloadService) BatchDownload(
 	languages map[string]bool,
 	onProgress func(current, total int, epTitle string, dp downloader.DownloadProgress),
 ) []BatchDownloadResult {
+	return s.BatchDownloadWithActive(ctx, series, episodes, mode, qualityMode, languages, nil, onProgress)
+}
+
+// BatchDownloadWithActive is BatchDownload plus onActive, which fires when
+// each episode's output location is known — before its download starts — so
+// callers can cancel or clean up exactly the files being written.
+func (s *DownloadService) BatchDownloadWithActive(
+	ctx context.Context,
+	series provider.SearchResult,
+	episodes []provider.Episode,
+	mode provider.ContentType,
+	qualityMode int,
+	languages map[string]bool,
+	onActive func(outputDir, title string),
+	onProgress func(current, total int, epTitle string, dp downloader.DownloadProgress),
+) []BatchDownloadResult {
+	// Each episode still resolves and downloads in order, so per-file
+	// parallel connections (aria2c splits / yt-dlp fragments) remain the
+	// speed lever.
 	results := make([]BatchDownloadResult, len(episodes))
 
 	for i, ep := range episodes {
@@ -172,21 +196,34 @@ func (s *DownloadService) BatchDownload(
 		batchLog.Debug("batch episode starting", "current", current, "total", len(episodes), "episode", epTitle)
 		onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 0})
 
-		resolved, err := s.mediaService.Resolve(ctx, mode, series, ep, nil)
+		resolved, err := s.mediaService.Resolve(ctx, mode, series, ep, nil, ResolveOptions{})
 		if err != nil {
 			onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 			results[i].Episode = ep
 			results[i].Err = fmt.Errorf("resolve %s: %w", epTitle, err)
 			continue
 		}
-		resolved.Playback = FilterPlaybackSources(resolved.Playback, qualityMode, languages)
+		filtered := FilterPlaybackSources(resolved.Playback, qualityMode, languages)
+		if len(filtered) > 0 {
+			resolved.Playback = filtered
+		} else {
+			// If no source matches requested quality tier, fall back to language-filtered or any available sources
+			langOnly := FilterPlaybackSources(resolved.Playback, 0, languages)
+			if len(langOnly) > 0 {
+				resolved.Playback = langOnly
+			}
+		}
 		if len(resolved.Playback) == 0 {
 			onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 			results[i].Episode = ep
-			results[i].Err = fmt.Errorf("filter %s: no playback source matches the current filters", epTitle)
+			results[i].Err = fmt.Errorf("filter %s: no playback source available", epTitle)
 			continue
 		}
 
+		if onActive != nil {
+			outputDir, title := s.OrganizedPath(resolved)
+			onActive(outputDir, title)
+		}
 		if err := s.Download(ctx, resolved, func(dp downloader.DownloadProgress) {
 			onProgress(current, len(episodes), epTitle, dp)
 		}); err != nil {

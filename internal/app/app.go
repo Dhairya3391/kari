@@ -3,28 +3,34 @@ package app
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbletea"
-
 	"kari/internal/animeskip"
 	"kari/internal/aniskip"
 	"kari/internal/config"
+	"kari/internal/introdb"
 	"kari/internal/downloader"
 	"kari/internal/history"
 	"kari/internal/httpclient"
 	"kari/internal/logging"
+	"kari/internal/manga"
 	"kari/internal/player"
 	"kari/internal/poster"
 	"kari/internal/provider/defaults"
+	"kari/internal/skipdb"
 	"kari/internal/scrobble"
 	"kari/internal/service"
 	"kari/internal/settings"
+	"kari/internal/subtitles"
 	"kari/internal/tmdb"
 	"kari/internal/tui"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muesli/termenv"
 )
 
 // Version and Commit are set at build time via -ldflags (see build.sh),
@@ -78,24 +84,39 @@ func Run() error {
 	if err != nil {
 		home = os.Getenv("HOME")
 	}
-	histPath := filepath.Join(home, ".config", "kari", "history.json")
+	configDir := filepath.Join(home, ".config", "kari")
+	migrateConfigDir(configDir)
+
+	histPath := filepath.Join(configDir, "history.json")
 	historyStore, historyErr := history.NewStore(histPath)
 	if historyErr != nil {
 		logging.Error("history store init failed; continuing without history", "err", historyErr)
 	}
 
 	keyPool := tmdb.NewKeyPool(cfg.TMDBAPIKeys)
-	aniskipClient := aniskip.NewClient(httpclient.NewWithTimeout(10 * time.Second))
-	animeskipClient, err := animeskip.NewClient(httpclient.NewWithTimeout(10*time.Second), cfg.AnimeSkipClientID)
+	skipHTTP := httpclient.NewWithTimeout(10 * time.Second)
+	aniskipClient := aniskip.NewClient(skipHTTP)
+	animeskipClient, err := animeskip.NewClient(skipHTTP, cfg.AnimeSkipClientID)
 	if err != nil {
 		logging.Warn("anime-skip client init failed; continuing without anime-skip", "err", err)
 		animeskipClient = nil
+	}
+	skipdbClient := skipdb.NewClient(skipHTTP, config.DefaultSkipDBAPIKey)
+	introdbClient := introdb.NewClient(skipHTTP, config.DefaultIntroDBAPIKey)
+	skipClients := player.SkipClients{
+		AniSkip:   aniskipClient,
+		AnimeSkip: animeskipClient,
+		SkipDB:    skipdbClient,
+		IntroDB:   introdbClient,
+		TMDB:      keyPool,
+		HTTP:      skipHTTP,
 	}
 
 	skipSettings := player.SkipSettings{
 		Provider: "hybrid",
 	}
-	if savedSettings := settings.Load(); savedSettings != nil {
+	savedSettings := settings.Load()
+	if savedSettings != nil {
 		if savedSettings.SkipProvider != "" {
 			skipSettings.Provider = savedSettings.SkipProvider
 		}
@@ -105,12 +126,20 @@ func Run() error {
 		skipSettings.SkipPreview = savedSettings.SkipPreview
 	}
 
-	registry, err := defaults.NewDefaultRegistry(keyPool, cfg)
+	// Audio-language filter for providers (nil = everything enabled).
+	var langFilter map[string]bool
+	if savedSettings != nil {
+		langFilter = savedSettings.LanguageFilter
+	}
+
+	registry, err := defaults.NewDefaultRegistry(keyPool, cfg, langFilter)
 	if err != nil {
 		return err
 	}
 	mediaService := service.NewMediaService(registry)
-	players := player.NewRegistry(cfg.PreferredPlayer, aniskipClient, animeskipClient, skipSettings)
+	mangaService := service.NewMangaService(registry)
+	mangaClient := manga.NewClient()
+	players := player.NewRegistry(cfg.PreferredPlayer, skipClients, skipSettings)
 	downloadService := service.NewDownloadService(cfg.DownloadDir, downloader.NewYTDLPDownloader(), mediaService)
 	subtitleService := service.NewSubtitleService(cfg)
 
@@ -118,7 +147,23 @@ func Run() error {
 	anilistClient := scrobble.NewAniListClient(cfg.AniListClientID, cfg.AniListClientSecret)
 	posterClient := poster.NewClient(keyPool)
 
-	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, Version)
+	// Bound on-disk caches so repeat sessions don't grow them without limit;
+	// eviction is oldest-first and failures only log.
+	if err := manga.PruneDiskCache(); err != nil {
+		logging.Debug("manga page cache prune failed", "err", err)
+	}
+	if err := poster.PruneDiskCache(); err != nil {
+		logging.Debug("poster cache prune failed", "err", err)
+	}
+	if err := subtitles.PruneCacheDir(7 * 24 * time.Hour); err != nil {
+		logging.Debug("subtitle cache prune failed", "err", err)
+	}
+
+	bg := detectTerminalBackground()
+	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, mangaService, mangaClient, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, Version)
+	if setter, ok := m.(interface{ SetBaseBackgroundColor(color.RGBA) }); ok {
+		setter.SetBaseBackgroundColor(bg)
+	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err = p.Run()
 	if err != nil {
@@ -128,4 +173,28 @@ func Run() error {
 		historyStore.Close()
 	}
 	return err
+}
+
+func detectTerminalBackground() color.RGBA {
+	darkFallback := tui.HexToRGBA("#0B0D10")
+	lightFallback := tui.HexToRGBA("#FAFAFA")
+
+	ch := make(chan termenv.Color, 1)
+	go func() {
+		c := termenv.BackgroundColor()
+		ch <- c
+	}()
+
+	select {
+	case c := <-ch:
+		if rgb, ok := c.(termenv.RGBColor); ok && string(rgb) != "" {
+			return tui.HexToRGBA(string(rgb))
+		}
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	if termenv.HasDarkBackground() {
+		return darkFallback
+	}
+	return lightFallback
 }

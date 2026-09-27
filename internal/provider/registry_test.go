@@ -230,19 +230,23 @@ func TestRegistryDisplayNameFallsBackToName(t *testing.T) {
 	}
 }
 
-func TestAllModesSortedAndUnique(t *testing.T) {
+// TestAllModesCanonicalAndUnique covers AllModes returning each registered
+// mode once in canonical tab order (not alphabetical): anime before movies
+// before tv, with live after tv per the UI spec tab strip.
+func TestAllModesCanonicalAndUnique(t *testing.T) {
 	r := &Registry{}
 	r.Register(&fakeProvider{name: "a", modes: []Mode{{Name: ModeTV}, {Name: ModeAnime}}})
 	r.Register(&fakeProvider{name: "b", modes: []Mode{{Name: ModeAnime}, {Name: ModeMovies}}})
+	r.Register(&fakeProvider{name: "c", modes: []Mode{{Name: ModeLive}}})
 
 	got := r.AllModes()
-	want := []ContentType{ModeAnime, ModeMovies, ModeTV}
+	want := []ContentType{ModeAnime, ModeMovies, ModeTV, ModeLive}
 	if len(got) != len(want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("modes not sorted unique: %v", got)
+			t.Fatalf("modes not canonical unique: got %v want %v", got, want)
 		}
 	}
 }

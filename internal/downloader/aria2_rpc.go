@@ -95,6 +95,11 @@ func (d *Aria2Downloader) Download(
 		"-x16", "-s16", "-k1M",
 		"--file-allocation=none",
 		"--console-log-level=warn",
+		// Frequent control-file checkpoints so a pause/cancel loses at
+		// most ~15s of progress; the .aria2 file is the resume anchor.
+		"--auto-save-interval=15",
+		"--max-tries=8",
+		"--retry-wait=2",
 	}
 	ariaLog.Debug("daemon starting", "port", port)
 
@@ -121,13 +126,16 @@ func (d *Aria2Downloader) Download(
 
 	headers := sourceHeaders(source)
 
-	// Build aria2c options.
+	// Build aria2c options. A present .aria2 control file makes the re-added
+	// URI resume from its checkpoint; --continue covers partial files whose
+	// control file was lost (server must support range requests).
 	aria2Opts := map[string]any{
 		"max-connection-per-server": "16",
 		"split":                     "16",
 		"min-split-size":            "1M",
 		"allow-overwrite":           "true",
 		"auto-file-renaming":        "false",
+		"continue":                  "true",
 	}
 	if outputDir != "" {
 		aria2Opts["dir"] = outputDir

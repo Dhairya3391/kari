@@ -6,8 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"kari/internal/animeskip"
-	"kari/internal/aniskip"
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/provider"
@@ -29,11 +27,10 @@ func (c *cachedPlayer) Available() bool {
 
 // Registry holds available players and picks between them by preference.
 type Registry struct {
-	players         []Player
-	preferred       string
-	aniskipClient   *aniskip.Client
-	animeskipClient *animeskip.Client
-	skipSettings    SkipSettings
+	players      []Player
+	preferred    string
+	skipClients  SkipClients
+	skipSettings SkipSettings
 }
 
 // Register adds a player implementation.
@@ -42,8 +39,8 @@ func (r *Registry) Register(p Player) {
 }
 
 // PlayWithSources tries sources in order against the preferred player,
-// falling back to others when unavailable. A NeedsCompletionConfirmError
-// from any source counts as launched-successfully.
+// falling back to others when unavailable. Players that cannot observe
+// completion return NeedsCompletionConfirmError after a successful launch.
 func (r *Registry) PlayWithSources(sources []provider.MediaSource, media model.ResolvedMedia, preferred string) (PlaybackResult, error) {
 	playerLog.Debug("playback starting", "media", media.DisplayTitle(), "preferredPlayer", preferred, "sources", len(sources))
 
@@ -65,7 +62,7 @@ func (r *Registry) PlayWithSources(sources []provider.MediaSource, media model.R
 			var needsConfirm *NeedsCompletionConfirmError
 			if errors.As(err, &needsConfirm) {
 				playerLog.Info("playback launched", "player", p.Name())
-				return result, nil
+				return result, err
 			}
 			playerLog.Warn("player failed; falling back", "player", p.Name(), "err", err)
 			lastErr = err
@@ -96,7 +93,7 @@ func (r *Registry) AvailablePlayers() []string {
 func (r *Registry) DefaultPlayer() string {
 	envPlayer := playerName(r.preferred)
 	for _, p := range r.players {
-		if p.Name() == envPlayer {
+		if p.Name() == envPlayer && p.Available() {
 			return p.Name()
 		}
 	}
@@ -160,12 +157,11 @@ func (r *Registry) SetSkipSettings(s SkipSettings) {
 
 // NewRegistry constructs and populates the platform's player set with the
 // user's preference applied.
-func NewRegistry(preferred string, aniskipClient *aniskip.Client, animeskipClient *animeskip.Client, skipSettings SkipSettings) *Registry {
+func NewRegistry(preferred string, clients SkipClients, skipSettings SkipSettings) *Registry {
 	r := &Registry{
-		preferred:       preferred,
-		aniskipClient:   aniskipClient,
-		animeskipClient: animeskipClient,
-		skipSettings:    skipSettings,
+		preferred:    preferred,
+		skipClients:  clients,
+		skipSettings: skipSettings,
 	}
 	registerPlayers(r)
 	return r

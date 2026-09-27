@@ -3,16 +3,18 @@ package model
 import "kari/internal/provider"
 
 // SubtitleTrack is one subtitle offering attached to resolved media. Tracks
-// arrive from providers or subtitle services as URL references; Path is
-// filled in once a track has been downloaded to disk.
+// arrive from providers as URL references; Path is filled in once a track has
+// been validated and downloaded to disk.
 type SubtitleTrack struct {
-	Label    string
-	Language string
-	Path     string
-	URL      string
-	Referer  string
-	Default  bool
-	Resolver string
+	Label     string
+	Language  string
+	Path      string
+	URL       string
+	Referer   string
+	SourceURL string
+	SourceID  string
+	Default   bool
+	Resolver  string
 }
 
 // ResolvedMedia aggregates every playback source and subtitle track
@@ -35,5 +37,8 @@ type ResolvedMedia struct {
 	// MediaService aggregation.
 	Playback  []provider.MediaSource
 	Subtitles []SubtitleTrack
-	StartTime float64
+	// SelectedSubtitle is the single validated local track passed to playback.
+	// Subtitles remains the unselected provider candidate list.
+	SelectedSubtitle *SubtitleTrack
+	StartTime        float64
 }
