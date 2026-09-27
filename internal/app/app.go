@@ -160,7 +160,7 @@ func Run() error {
 	}
 
 	bg := detectTerminalBackground()
-	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, mangaService, mangaClient, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, Version)
+	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, mangaService, mangaClient, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, Version, Commit)
 	if setter, ok := m.(interface{ SetBaseBackgroundColor(color.RGBA) }); ok {
 		setter.SetBaseBackgroundColor(bg)
 	}

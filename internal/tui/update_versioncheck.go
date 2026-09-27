@@ -10,6 +10,7 @@ import (
 
 type updateCheckMsg struct {
 	latestVersion string
+	latestCommit  string
 	err           error
 }
 
@@ -24,7 +25,14 @@ func (m *modelImpl) checkForUpdateCmd() tea.Cmd {
 		if err != nil {
 			return updateCheckMsg{err: err}
 		}
-		return updateCheckMsg{latestVersion: release.Version()}
+		var latestCommit string
+		if selfupdate.CompareVersions(m.appVersion, release.TagName) == 0 {
+			latestCommit, _ = release.CommitSHA()
+		}
+		return updateCheckMsg{
+			latestVersion: release.TagName,
+			latestCommit:  latestCommit,
+		}
 	}
 }
 
@@ -33,7 +41,7 @@ func (m *modelImpl) onUpdateCheck(msg updateCheckMsg) (tea.Model, tea.Cmd) {
 		tuiLog.Warn("version check failed", "err", msg.err)
 		return m, nil
 	}
-	if !selfupdate.IsNewer(m.appVersion, msg.latestVersion) {
+	if !selfupdate.ShouldUpdate(m.appVersion, m.appCommit, msg.latestVersion, msg.latestCommit) {
 		return m, nil
 	}
 	// Don't stomp on a status the user is actively reading (an error,
@@ -42,5 +50,5 @@ func (m *modelImpl) onUpdateCheck(msg updateCheckMsg) (tea.Model, tea.Cmd) {
 	if m.statusText != "" {
 		return m, nil
 	}
-	return m, m.setStatusTimed(statusInfo, fmt.Sprintf("Update available: v%s (run `kari -u` to update)", msg.latestVersion))
+	return m, m.setStatusTimed(statusInfo, fmt.Sprintf("Update available: %s (run `kari -u` to update)", msg.latestVersion))
 }

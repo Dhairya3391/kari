@@ -132,7 +132,7 @@ func TestNewModelRestoresSettingsAfterRestart(t *testing.T) {
 	reg.Register(&fakeProviderForSwitch{name: "movie_p", modes: []provider.Mode{{Name: provider.ModeMovies}}})
 
 	players := player.NewRegistry("", player.SkipClients{}, player.SkipSettings{})
-	mdl := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0")
+	mdl := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0", "")
 	m, ok := mdl.(*modelImpl)
 	if !ok {
 		t.Fatal("expected *modelImpl")
@@ -201,7 +201,7 @@ func TestModeReorderPersistsAcrossRestart(t *testing.T) {
 	reg.Register(&fakeProviderForSwitch{name: "cartoon_p", modes: []provider.Mode{{Name: provider.ModeCartoon}}})
 
 	players := player.NewRegistry("", player.SkipClients{}, player.SkipSettings{})
-	restartedMdl := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0")
+	restartedMdl := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0", "")
 	restarted, ok := restartedMdl.(*modelImpl)
 	if !ok {
 		t.Fatal("expected *modelImpl")

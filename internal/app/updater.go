@@ -7,7 +7,6 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -38,9 +37,16 @@ func update(quiet bool) error {
 		return nil
 	}
 
-	latestVersion := latest.Version()
-	currentVersion := strings.TrimSuffix(Version, "-dirty")
-	if latestVersion == currentVersion {
+	latestVersion := latest.TagName
+	var latestCommit string
+	if selfupdate.CompareVersions(Version, latestVersion) == 0 {
+		latestCommit, err = latest.CommitSHA()
+		if err != nil {
+			updateLog.Debug("failed to fetch release commit sha", "err", err)
+		}
+	}
+
+	if !selfupdate.ShouldUpdate(Version, Commit, latestVersion, latestCommit) {
 		if !quiet {
 			fmt.Printf("Kari is already up to date (version %s).\n", Version)
 		}
@@ -48,7 +54,11 @@ func update(quiet bool) error {
 	}
 
 	if !quiet {
-		fmt.Printf("Updating Kari from %s to %s...\n", Version, latestVersion)
+		if selfupdate.CompareVersions(Version, latestVersion) == 0 && Commit != "" && latestCommit != "" {
+			fmt.Printf("Updating Kari from %s (%s) to %s (%s)...\n", Version, selfupdate.ShortSHA(Commit), latestVersion, selfupdate.ShortSHA(latestCommit))
+		} else {
+			fmt.Printf("Updating Kari from %s to %s...\n", Version, latestVersion)
+		}
 	} else {
 		updateLog.Info("new version found", "latest", latestVersion, "current", Version)
 	}

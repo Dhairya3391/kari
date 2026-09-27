@@ -273,7 +273,7 @@ type modelImpl struct {
 	players         *player.Registry
 	appCtx          context.Context
 	appVersion      string
-
+	appCommit       string
 	width  int
 	height int
 

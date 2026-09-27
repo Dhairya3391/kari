@@ -34,7 +34,7 @@ var tuiLog = logging.With("component", "tui")
 // NewModel wires every dependency into the TUI root model. This signature
 // is intentionally explicit: all components arrive pre-constructed from
 // app.Run, so nothing inside tui constructs I/O collaborators.
-func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, mangaService *service.MangaService, mangaClient *manga.Client, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, appVersion string) tea.Model {
+func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, mangaService *service.MangaService, mangaClient *manga.Client, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, appVersion string, appCommit string) tea.Model {
 	// Loaded up front (rather than where settings used to be applied,
 	// further down) so the accent color is in effect before any of the
 	// list delegates or the download bar below are built — those cache
@@ -179,6 +179,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		anilistClient:   anilistClient,
 		appCtx:          ctx,
 		appVersion:      appVersion,
+		appCommit:       appCommit,
 		activeView:      viewSearch,
 		queryInput:      ti,
 		authInput:       ai,
