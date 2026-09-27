@@ -12,7 +12,6 @@ import (
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
-	"kari/internal/logging"
 )
 
 // SkipTimes holds interval boundaries (in seconds) for each skippable zone.
@@ -28,7 +27,6 @@ type SkipTimes struct {
 	PreviewEnd   float64
 }
 
-var introdbLog = logging.With("component", "introdb")
 
 // Client queries the IntroDB API (https://introdb.app) for crowdsourced
 // intro, recap, outro, and post-credits timestamps by IMDb ID.

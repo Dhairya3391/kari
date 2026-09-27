@@ -720,14 +720,6 @@ func containsSource(sources []provider.MediaSource, candidate provider.MediaSour
 	return false
 }
 
-// normalizeSourceURL folds cosmetic URL differences (surrounding space,
-// one trailing slash) so the same stream reported twice counts as one.
-// The query string is significant (signed tokens) and always compared.
-func normalizeSourceURL(u string) string {
-	u = strings.TrimSpace(u)
-	u = strings.TrimSuffix(u, "/")
-	return u
-}
 
 func firstPlaybackURL(playback []provider.MediaSource) string {
 	if len(playback) == 0 {
