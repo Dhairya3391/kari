@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -85,19 +86,43 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.anilistAuthURL != "" {
 			if msg.String() == "enter" {
-				code := m.authInput.Value()
+				code := strings.TrimSpace(m.authInput.Value())
+				if code == "" {
+					return m, m.setStatusTimed(statusWarn, "Please paste the token or code")
+				}
 				m.anilistAuthURL = ""
 				m.authInput.Blur()
 				m.loading = true
-				m.loadingText = "Exchanging code..."
+				m.loadingText = "Exchanging AniList token..."
 				return m, func() tea.Msg {
 					err := m.anilistClient.ExchangeCode(m.appCtx, code)
-					return authDoneMsg{err: err}
+					return authDoneMsg{service: "AniList", err: err}
 				}
+			}
+			if msg.String() == "esc" {
+				m.anilistAuthURL = ""
+				m.authInput.Blur()
+				m.clearStatus()
+				return m, nil
 			}
 			var cmd tea.Cmd
 			m.authInput, cmd = m.authInput.Update(msg)
 			return m, cmd
+		}
+
+		if m.traktAuthActive {
+			if msg.String() == "esc" {
+				m.traktAuthActive = false
+				m.traktUserCode = ""
+				m.traktVerifyURL = ""
+				m.traktDeviceCode = ""
+				if m.traktCancel != nil {
+					m.traktCancel()
+					m.traktCancel = nil
+				}
+				m.clearStatus()
+				return m, nil
+			}
 		}
 		// 3. Category & Row Navigation
 		switch msg.String() {
@@ -331,7 +356,10 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 	}
 }
 
-type authDoneMsg struct{ err error }
+type authDoneMsg struct {
+	service string
+	err     error
+}
 
 // historyImportMsg carries the result of a one-way tracker import
 // (AniList/Trakt watched lists into the local history store). Quiet
@@ -359,7 +387,7 @@ func (m *modelImpl) startTraktAuth() (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		userCode, verificationURL, deviceCode, interval, expiresIn, err := m.traktClient.StartDeviceAuth(m.appCtx)
 		if err != nil {
-			return authDoneMsg{err: err}
+			return authDoneMsg{service: "Trakt", err: err}
 		}
 		return traktCodeMsg{
 			userCode:        userCode,
@@ -369,6 +397,60 @@ func (m *modelImpl) startTraktAuth() (tea.Model, tea.Cmd) {
 			expiresIn:       expiresIn,
 		}
 	}
+}
+
+func (m *modelImpl) onTraktCode(msg traktCodeMsg) (tea.Model, tea.Cmd) {
+	m.loading = false
+	m.loadingText = ""
+	m.traktAuthActive = true
+	m.traktUserCode = msg.userCode
+	m.traktVerifyURL = msg.verificationURL
+	m.traktDeviceCode = msg.deviceCode
+	_ = util.OpenBrowser(msg.verificationURL)
+	statusCmd := m.setStatusTimed(statusInfo, fmt.Sprintf("Enter code %s at %s", msg.userCode, msg.verificationURL))
+	parentCtx := m.appCtx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
+	m.traktCancel = cancel
+	pollCmd := m.pollTraktAuthCmd(ctx, msg.deviceCode, msg.interval, msg.expiresIn)
+	return m, tea.Batch(statusCmd, pollCmd)
+}
+
+func (m *modelImpl) pollTraktAuthCmd(ctx context.Context, deviceCode string, interval, expiresIn int) tea.Cmd {
+	return func() tea.Msg {
+		err := m.traktClient.PollDeviceAuth(ctx, deviceCode, interval, expiresIn)
+		return authDoneMsg{service: "Trakt", err: err}
+	}
+}
+
+func (m *modelImpl) onAuthDone(msg authDoneMsg) (tea.Model, tea.Cmd) {
+	m.loading = false
+	m.loadingText = ""
+	switch msg.service {
+	case "Trakt":
+		m.traktAuthActive = false
+		m.traktUserCode = ""
+		m.traktVerifyURL = ""
+		m.traktDeviceCode = ""
+		if m.traktCancel != nil {
+			m.traktCancel()
+			m.traktCancel = nil
+		}
+	case "AniList":
+		m.anilistAuthURL = ""
+		m.authInput.Blur()
+	}
+	if msg.err != nil {
+		if errors.Is(msg.err, context.Canceled) {
+			return m, nil
+		}
+		return m, m.setStatusTimed(statusError, fmt.Sprintf("%s auth failed: %s", msg.service, cleanErrorForUI(msg.err)))
+	}
+	m.saveSettings()
+	m.setToast(fmt.Sprintf("%s connected", msg.service), ToastSuccess)
+	return m, m.setStatusTimed(statusSuccess, fmt.Sprintf("%s connected successfully", msg.service))
 }
 
 // startHistoryImport fetches the focused tracker's watched list and

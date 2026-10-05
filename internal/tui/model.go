@@ -446,6 +446,12 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case historyImportMsg:
 		mdl, cmd := m.onHistoryImport(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)
+	case traktCodeMsg:
+		mdl, cmd := m.onTraktCode(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case authDoneMsg:
+		mdl, cmd := m.onAuthDone(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
 	case historyContinueEpisodesMsg:
 		mdl, cmd := m.onHistoryContinueEpisodes(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)

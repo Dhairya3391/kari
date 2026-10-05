@@ -34,6 +34,11 @@ func NormalizeSpace(s string) string {
 // OpenBrowser opens url in the platform's default browser. The command is
 // started detached; failure to open is reported but never retried.
 func OpenBrowser(url string) error {
+	if b := os.Getenv("BROWSER"); b != "" {
+		if err := exec.Command(b, url).Start(); err == nil {
+			return nil
+		}
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.Command("open", url).Start()
@@ -42,6 +47,11 @@ func OpenBrowser(url string) error {
 	case "android":
 		return exec.Command("am", "start", "-a", "android.intent.action.VIEW", "-d", url).Start()
 	default:
+		if _, err := exec.LookPath("wslview"); err == nil {
+			if err := exec.Command("wslview", url).Start(); err == nil {
+				return nil
+			}
+		}
 		return exec.Command("xdg-open", url).Start()
 	}
 }

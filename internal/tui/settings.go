@@ -72,12 +72,18 @@ type SettingsData struct {
 	DefaultModeName string
 	ModesRows       []ModeRow
 	// Accounts values
-	AniListConnected bool
-	TraktConnected   bool
-	StartupSync      bool
-	TraktWaitingCode string
-	LoadingText      string
-	SpinnerFrame     string
+	AniListConnected  bool
+	AniListAuthActive bool
+	AniListAuthURL    string
+	AuthInputView     string
+	TraktConnected    bool
+	TraktAuthActive   bool
+	TraktUserCode     string
+	TraktVerifyURL    string
+	StartupSync       bool
+	TraktWaitingCode  string
+	LoadingText       string
+	SpinnerFrame      string
 	// Interface values
 	PosterArtwork bool   // on / off
 	AccentName    string // "Auto (per mode)", "Purple", etc.
@@ -194,7 +200,21 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 	case CategoryAccounts:
 		// 0: AniList, 1: Trakt, 2: Startup sync.
 		rows = append(rows, renderAccountRow("AniList", data.AniListConnected, data.FocusedRowIndex == 0, width, st))
+		if data.AniListAuthActive {
+			rows = append(rows, "")
+			rows = append(rows, "    "+st.Bold.Render("AniList Authorization Token / Code:"))
+			rows = append(rows, "    "+data.AuthInputView)
+			rows = append(rows, "    "+st.Dim.Render("Paste code and press Enter · Esc to cancel"))
+			rows = append(rows, "")
+		}
 		rows = append(rows, renderAccountRow("Trakt", data.TraktConnected, data.FocusedRowIndex == 1, width, st))
+		if data.TraktAuthActive {
+			rows = append(rows, "")
+			rows = append(rows, "    "+st.Bold.Render("Trakt Device Code: ")+st.Ok.Render(data.TraktUserCode))
+			rows = append(rows, "    "+st.Dim.Render("Visit ")+st.Bold.Render(data.TraktVerifyURL)+st.Dim.Render(" and enter code"))
+			rows = append(rows, "    "+st.Dim.Render("Waiting for authorization... · Esc to cancel"))
+			rows = append(rows, "")
+		}
 		rows = append(rows, renderAccountSettingRow("Startup sync", boolOnOff(data.StartupSync), data.FocusedRowIndex == 2, width, st))
 		switch data.FocusedRowIndex {
 		case 0:

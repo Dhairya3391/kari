@@ -308,13 +308,11 @@ func Run(t *testing.T, s Spec) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
-		for i := 0; i < 4; i++ {
-			before := runtime.NumGoroutine()
+		// Warm up the transport connection pool so idle persistent connection
+		// goroutines (readLoop/writeLoop) stabilize before baseline measurement.
+		for range 4 {
 			round()
 			settle()
-			if runtime.NumGoroutine() <= before {
-				break
-			}
 		}
 		before := runtime.NumGoroutine()
 		round()

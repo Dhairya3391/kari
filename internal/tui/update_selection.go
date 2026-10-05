@@ -663,6 +663,18 @@ func (m *modelImpl) exitInputMode() bool {
 			m.clearStatus()
 			return true
 		}
+		if m.traktAuthActive {
+			m.traktAuthActive = false
+			m.traktUserCode = ""
+			m.traktVerifyURL = ""
+			m.traktDeviceCode = ""
+			if m.traktCancel != nil {
+				m.traktCancel()
+				m.traktCancel = nil
+			}
+			m.clearStatus()
+			return true
+		}
 	}
 	return false
 }

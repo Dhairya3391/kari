@@ -376,6 +376,11 @@ type modelImpl struct {
 	confirmClearHistory     bool
 	anilistAuthURL          string
 	authInput               textinput.Model
+	traktAuthActive         bool
+	traktUserCode           string
+	traktVerifyURL          string
+	traktDeviceCode         string
+	traktCancel             context.CancelFunc
 	startupSync             bool
 	settingsIndex           int
 	searchCache             *util.BoundedCache[searchCacheEntry]
