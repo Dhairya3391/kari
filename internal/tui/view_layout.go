@@ -133,7 +133,12 @@ func (m *modelImpl) searchPosterVisible() bool {
 }
 
 func (m *modelImpl) previewPosterVisible() bool {
-	return m.activeView == viewPreview && !m.showHelp && m.resolved != nil && m.imagesEnabled && m.previewPoster != ""
+	// No resolved check: retries nil out m.resolved while re-resolving
+	// the same episode, and the nil window emitted a Kitty delete for
+	// a still-valid poster every frame (blank art after refresh). The
+	// poster belongs to the selected series/episode, which retries
+	// never change; title switches already clear the slot explicitly.
+	return m.activeView == viewPreview && !m.showHelp && m.imagesEnabled && m.previewPoster != ""
 }
 
 func (m *modelImpl) historyPosterVisible() bool {
@@ -220,7 +225,7 @@ func (m *modelImpl) renderMainView() string {
 		loadingLine := st.Current.Render(sp) + " " + st.Dim.Render(text)
 		statusRows = append(statusRows, lipgloss.PlaceHorizontal(dims.ContentWidth, lipgloss.Center, loadingLine))
 	}
-	if text := strings.TrimSpace(m.statusText); text != "" {
+	if text := strings.TrimSpace(m.statusText); text != "" && (m.statusExpiresAt.IsZero() || time.Now().Before(m.statusExpiresAt)) {
 		statusStyle := st.Dim
 		switch m.statusType {
 		case statusError:
@@ -551,12 +556,11 @@ func (m *modelImpl) collectEpisodesData(width, height int, accent lipgloss.Adapt
 		seriesTitle = m.selectedSeries.Title
 	}
 
-	// Compute season count
-	maxSeason := 1
-	for _, ep := range m.episodeResults {
-		if ep.Season > maxSeason {
-			maxSeason = ep.Season
-		}
+	// Compute season count from distinct seasons in the episode list
+	seasons := distinctSeasonNumbers(m.episodeResults)
+	seasonCount := len(seasons)
+	if seasonCount <= 0 {
+		seasonCount = 1
 	}
 
 	seriesYear := ""
@@ -590,7 +594,7 @@ func (m *modelImpl) collectEpisodesData(width, height int, accent lipgloss.Adapt
 			return history.BuildEpisodeIndex(m.historyStore.All(), seriesTitle)
 		}(),
 		SelectedIndex:        m.seasonEpisodeIndex,
-		SeasonCount:          maxSeason,
+		SeasonCount:          seasonCount,
 		ActiveSeason:         m.activeSeason,
 		SelectMode:           m.selectMode,
 		SelectedIDs:          m.selectedEpisodes,
@@ -742,9 +746,13 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 	}
 
 	backends := make(map[string]string, len(m.rankedSources))
+	providers := make(map[string]string, len(m.rankedSources))
 	for _, scored := range m.rankedSources {
 		src := scored.Source
 		backends[src.Resolver+"\x00"+src.Quality] = sourceBackendName(src, m.registry.DisplayName)
+		if _, ok := providers[src.Resolver]; !ok {
+			providers[src.Resolver] = m.registry.DisplayName(src.Resolver)
+		}
 	}
 	return PreviewData{
 		SeriesTitle:      seriesTitle,
@@ -761,6 +769,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		Sources:          sources,
 		RankedSources:    m.rankedSources,
 		BackendName:      backends,
+		ProviderName:     providers,
 		SelectedIndex:    m.previewSelectedIndex,
 		PlayerName:       m.selectedPlayerName(),
 		Autoplay:         m.autoplay,
@@ -782,13 +791,16 @@ func detectSubtitleType(src provider.MediaSource, resolved *model.ResolvedMedia,
 	if mode != provider.ModeAnime {
 		return ""
 	}
-	if len(src.Subtitles) > 0 {
-		return "soft subs"
-	}
+	// A declared subtitle kind wins over heuristics: a hard-subtitled
+	// stream stays "hard subs" even when the pool also lists
+	// downloadable sidecar tracks.
 	switch strings.ToLower(strings.TrimSpace(src.SubType)) {
 	case provider.SubTypeHard:
 		return "hard subs"
 	case provider.SubTypeSoft:
+		return "soft subs"
+	}
+	if len(src.Subtitles) > 0 {
 		return "soft subs"
 	}
 	if (resolved != nil && len(resolved.Subtitles) > 0) || len(rawSubtitles) > 0 {

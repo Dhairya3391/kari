@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/model"
+	"kari/internal/player"
 	"kari/internal/provider"
 	"kari/internal/ranking"
 	"kari/internal/service"
@@ -115,6 +116,44 @@ func TestRetryExcludeSkipsWinnersOnly(t *testing.T) {
 	got := m.retryExclude()
 	if len(got) != 1 || got[0] != "pengu" {
 		t.Errorf("retryExclude = %v, want [pengu]", got)
+	}
+}
+
+// pruneResolvedToResolvers keeps excluded winners' rows, drops rows for
+// providers about to be re-queried, and nils the resolve on full refresh.
+func TestPruneResolvedToResolvers(t *testing.T) {
+	mk := func() *modelImpl {
+		m := rankingTestModel()
+		m.resolved = &model.ResolvedMedia{SeriesTitle: "T", Playback: []provider.MediaSource{
+			{URL: "https://cdn.example.com/a.m3u8", Resolver: "anikoto"},
+			{URL: "https://cdn.example.com/b.m3u8", Resolver: "miruro"},
+		}, Subtitles: []model.SubtitleTrack{
+			{URL: "https://cdn.example.com/a.vtt", Resolver: "anikoto"},
+			{URL: "https://cdn.example.com/b.vtt", Resolver: "miruro"},
+		}}
+		return m
+	}
+
+	m := mk()
+	m.pruneResolvedToResolvers([]string{"anikoto"})
+	if m.resolved == nil || len(m.resolved.Playback) != 1 || m.resolved.Playback[0].Resolver != "anikoto" {
+		t.Fatalf("winners must be kept: %+v", m.resolved)
+	}
+	if len(m.resolved.Subtitles) != 1 || m.resolved.Subtitles[0].Resolver != "anikoto" {
+		t.Fatalf("winner subtitles must be kept: %+v", m.resolved.Subtitles)
+	}
+
+	m = mk()
+	m.pruneResolvedToResolvers(nil)
+	if m.resolved != nil {
+		t.Fatalf("full refresh must nil the resolve: %+v", m.resolved)
+	}
+
+	m = mk()
+	m.resolved = nil
+	m.pruneResolvedToResolvers([]string{"anikoto"})
+	if m.resolved != nil {
+		t.Error("nil resolve must stay nil")
 	}
 }
 
@@ -446,5 +485,36 @@ func TestSourceBackendName(t *testing.T) {
 	}
 	if got := sourceBackendName(provider.MediaSource{}, nil); got != "—" {
 		t.Errorf("empty source backend = %q, want —", got)
+	}
+}
+
+// TestPlayingStatusStaysWhilePlaying pins that "Playing in progress..."
+// never expires on its own: it lasts until playDoneMsg replaces it with
+// the finished/failed status (which keeps the normal threshold).
+func TestPlayingStatusStaysWhilePlaying(t *testing.T) {
+	m := readySourceModel()
+	m.width = 100
+	m.height = 24
+	m.activeView = viewPreview
+	m.playOpID = 10
+	m.loading = true
+
+	mdl, _ := m.Update(playStartedMsg{opID: 10})
+	m2 := mdl.(*modelImpl)
+
+	if m2.statusText != "Playing in progress..." {
+		t.Fatalf("statusText = %q, want playing status", m2.statusText)
+	}
+	if !m2.statusExpiresAt.IsZero() {
+		t.Fatal("playing status must not expire while the player runs")
+	}
+
+	mdl2, _ := m2.Update(playDoneMsg{opID: 10, result: player.PlaybackResult{Completed: true}})
+	m3 := mdl2.(*modelImpl)
+	if m3.statusText != "Playback finished" {
+		t.Fatalf("statusText = %q, want finished status", m3.statusText)
+	}
+	if m3.statusExpiresAt.IsZero() {
+		t.Fatal("finished status must keep the normal expiry")
 	}
 }

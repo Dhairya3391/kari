@@ -350,8 +350,8 @@ func (m *modelImpl) Init() tea.Cmd {
 		m.searchOpID = opID
 		cmds = append(cmds, m.searchCmd(opID, m.searchQuery))
 	}
-	if m.statusType == statusWarn && m.statusText != "" {
-		cmds = append(cmds, m.clearStatusAfter(statusClearDuration(statusWarn)))
+	if m.statusText != "" {
+		cmds = append(cmds, m.clearStatusAfter(statusClearDuration(m.statusType)))
 	}
 	cmds = append(cmds, m.checkForUpdateCmd())
 	// Pull tracker state into local history on startup if enabled.
@@ -366,6 +366,27 @@ func (m *modelImpl) Init() tea.Cmd {
 type historyLoadedMsg struct{}
 
 func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	prevStatusID := m.statusID
+	prevView := m.activeView
+	prevMode := m.appMode
+
+	mdl, cmd := m.updateMessage(msg)
+
+	if updated, ok := mdl.(*modelImpl); ok {
+		if updated.activeView != prevView || updated.appMode != prevMode {
+			if updated.statusID == prevStatusID {
+				updated.clearStatus()
+			}
+		}
+		if updated.statusID != prevStatusID && updated.statusText != "" {
+			cmd = tea.Batch(cmd, updated.clearStatusAfter(statusClearDuration(updated.statusType)))
+		}
+	}
+
+	return mdl, cmd
+}
+
+func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var spinnerCmd tea.Cmd
 	// Keep the spinner animating while providers stream sources in
 	// progressively: loading flips false on the first partial results, but
@@ -476,19 +497,20 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loading = false
 			m.loadingText = ""
 			m.setStatus(statusInfo, "Playing in progress...")
+			m.statusExpiresAt = time.Time{}
 		}
 		return m, spinnerCmd
 	case resetConfirmQuitMsg:
 		m.confirmQuit = false
-		m.setStatus(statusInfo, "")
+		m.clearStatus()
 		return m, spinnerCmd
 	case resetConfirmStopMsg:
 		m.confirmStop = false
-		m.setStatus(statusInfo, "")
+		m.clearStatus()
 		return m, spinnerCmd
 	case resetStatusMsg:
 		if m.statusID == msg.id {
-			m.setStatus(statusInfo, "")
+			m.clearStatus()
 		}
 		return m, spinnerCmd
 	case posterLoadedMsg:

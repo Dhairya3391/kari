@@ -38,9 +38,13 @@ type PreviewData struct {
 	// the [4KHDHub] tag behind Pengu). Missing entries render the raw
 	// resolver so the table never blanks.
 	BackendName map[string]string
-	Width       int
-	Height      int
-	Accent      lipgloss.AdaptiveColor
+	// ProviderName maps a source Resolver to its user-facing provider
+	// name (e.g. Miruro for miruro). Missing entries render the raw
+	// resolver.
+	ProviderName map[string]string
+	Width        int
+	Height       int
+	Accent       lipgloss.AdaptiveColor
 	// Mode drives the audio column: anime audio is a sub/dub track choice
 	// shown in the header, so the per-source column renders for other
 	// modes only.
@@ -210,8 +214,9 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 	showAudio := data.Mode != provider.ModeAnime
 	cursorH := "  "
 	qualityH := fmt.Sprintf("%-12s", "quality")
-	providerH := fmt.Sprintf("%-20s", "provider")
-	headerRow := fmt.Sprintf("%s%s  %s", cursorH, st.Dim.Render(qualityH), st.Dim.Render(providerH))
+	providerH := fmt.Sprintf("%-14s", "provider")
+	sourceH := fmt.Sprintf("%-18s", "source")
+	headerRow := fmt.Sprintf("%s%s  %s  %s", cursorH, st.Dim.Render(qualityH), st.Dim.Render(providerH), st.Dim.Render(sourceH))
 	if showAudio {
 		headerRow += "  " + st.Dim.Render(fmt.Sprintf("%-10s", "audio"))
 	}
@@ -240,32 +245,40 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 		quality := formatSourceQuality(src.Quality)
 		qualityStr := fmt.Sprintf("%-12s", truncate(quality, 12))
 
-		// The provider column names the backend actually serving the
-		// stream (e.g. 4KHDHub behind Pengu), never the bare
-		// aggregator — identical qualities from one resolver would
-		// otherwise render as indistinguishable rows.
+		// The provider column names the integration serving the
+		// stream; the source column names the backend behind it so
+		// identical qualities from different backends stay
+		// distinguishable.
 		providerName := src.Resolver
-		if data.BackendName != nil {
-			if name, ok := data.BackendName[src.Resolver+"\x00"+src.Quality]; ok && name != "" {
+		if data.ProviderName != nil {
+			if name, ok := data.ProviderName[src.Resolver]; ok && name != "" {
 				providerName = name
 			}
 		}
 		if providerName == "" {
 			providerName = "—"
 		}
-		providerStr := st.Dim.Render(fmt.Sprintf("%-20s", truncate(providerName, 20)))
+		providerStr := st.Dim.Render(fmt.Sprintf("%-14s", truncate(providerName, 14)))
 
-		row := fmt.Sprintf("%s%s  %s", cursor, qualityStr, providerStr)
+		sourceName := "—"
+		if data.BackendName != nil {
+			if name, ok := data.BackendName[src.Resolver+"\x00"+src.Quality]; ok && name != "" {
+				sourceName = name
+			}
+		}
+		sourceStr := st.Dim.Render(fmt.Sprintf("%-18s", truncate(sourceName, 18)))
+
+		row := fmt.Sprintf("%s%s  %s  %s", cursor, qualityStr, providerStr, sourceStr)
 		if showAudio {
 			audioStr := fmt.Sprintf("%-10s", truncate(formatSourceAudio(src), 10))
 			if isFocused {
-				row = fmt.Sprintf("%s%s  %s  %s", cursor,
-					st.Current.Render(qualityStr), providerStr, st.Current.Render(audioStr))
+				row = fmt.Sprintf("%s%s  %s  %s  %s", cursor,
+					st.Current.Render(qualityStr), providerStr, sourceStr, st.Current.Render(audioStr))
 			} else {
 				row += "  " + st.Dim.Render(audioStr)
 			}
 		} else if isFocused {
-			row = fmt.Sprintf("%s%s  %s", cursor, st.Current.Render(qualityStr), providerStr)
+			row = fmt.Sprintf("%s%s  %s  %s", cursor, st.Current.Render(qualityStr), providerStr, sourceStr)
 		}
 		rows = append(rows, row)
 	}

@@ -50,8 +50,36 @@ func (m *modelImpl) rankAndSelectSources() {
 		Now:                   time.Now(),
 	}
 
-	m.rankedSources = preferredFirst(m.appMode, ranking.RankSources(sources, crit))
+	m.rankedSources = hardsubFirst(m.appMode, m.qualityMode, !m.disableAnimeSubtitles,
+		preferredFirst(m.appMode, ranking.RankSources(sources, crit)))
 	m.previewSelectedIndex = 0
+}
+
+// hardsubFirst stable-partitions hard-subtitled anime rows above the rest,
+// preserving the ranked order inside each group. Burned-in subs need no
+// subtitle plumbing and cannot desync, so they are the default pick —
+// ahead of even preferred-resolver softsubs. It applies only when anime
+// subtitles are enabled (a forced track would defeat an explicit off)
+// and never in size-first quality modes (Lowest/Data Saver), where the
+// user asked for small files. Challenged-host rows never join the top
+// group: they stay last, always.
+func hardsubFirst(mode provider.ContentType, qualityMode int, subsEnabled bool, sources []ranking.ScoredSource) []ranking.ScoredSource {
+	if mode != provider.ModeAnime || !subsEnabled {
+		return sources
+	}
+	if qualityMode != qualityAll && qualityMode != qualityHighest {
+		return sources
+	}
+	var top, rest []ranking.ScoredSource
+	for _, s := range sources {
+		if strings.EqualFold(strings.TrimSpace(s.Source.SubType), provider.SubTypeHard) &&
+			!provider.ChallengedHost(s.Source.URL) {
+			top = append(top, s)
+		} else {
+			rest = append(rest, s)
+		}
+	}
+	return append(top, rest...)
 }
 
 // preferredFirst stable-partitions rows from the routes-table preferred
@@ -60,7 +88,8 @@ func (m *modelImpl) rankAndSelectSources() {
 // on the top pick, including when preferred rows arrive in a later
 // progressive snapshot (refreshRanking re-runs this every merge, so the
 // list updates dynamically and a cursor sitting on the top row tracks
-// the new pick).
+// the new pick). Challenged-host rows never join the top group even when
+// their resolver is preferred: they stay last, always.
 func preferredFirst(mode provider.ContentType, sources []ranking.ScoredSource) []ranking.ScoredSource {
 	preferred := provider.PreferredResolvers(mode)
 	if len(preferred) == 0 {
@@ -69,10 +98,12 @@ func preferredFirst(mode provider.ContentType, sources []ranking.ScoredSource) [
 	var top, rest []ranking.ScoredSource
 	for _, s := range sources {
 		matched := false
-		for _, name := range preferred {
-			if strings.EqualFold(s.Source.Resolver, name) {
-				matched = true
-				break
+		if !provider.ChallengedHost(s.Source.URL) {
+			for _, name := range preferred {
+				if strings.EqualFold(s.Source.Resolver, name) {
+					matched = true
+					break
+				}
 			}
 		}
 		if matched {

@@ -18,6 +18,7 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.startSearchFromInput()
 			case "esc":
 				m.queryInput.Blur()
+				m.clearStatus()
 				return m, nil
 			}
 		}
@@ -150,6 +151,7 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resultsFilter = ""
 			m.resultsFiltering = false
 			m.clearSearchPoster()
+			m.clearStatus()
 			return m, nil
 		case keyMsg.String() == "up" || keyMsg.String() == "k":
 			m.seriesList.CursorUp()
@@ -267,8 +269,9 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "R":
 		// Retry stream resolution for failed providers. Providers that
 		// already delivered are skipped — only the failed ones are
-		// asked again. With no failures this is a full refresh (fresh
-		// signed URLs).
+		// asked again — and their rows are kept, so a retry only ever
+		// adds rows, never drops a working source. With no failures
+		// this is a full refresh (fresh signed URLs).
 		if m.selectedSeries != nil && m.selectedEpisode != nil {
 			if m.resolveOpID != 0 || m.playOpID != 0 {
 				m.setStatus(statusInfo, "Please wait for the current operation")
@@ -280,7 +283,7 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				retry = m.mediaService.LastFailures()
 			}
 			m.invalidateSubtitleSync()
-			m.resolved = nil
+			m.pruneResolvedToResolvers(exclude)
 			m.rawSubtitles = nil
 			m.rankedSources = nil
 			m.previewSelectedIndex = 0

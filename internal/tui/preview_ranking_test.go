@@ -202,3 +202,44 @@ func TestMergeResolvedQualitySettingOrdersNotHides(t *testing.T) {
 		t.Errorf("highest-available 720p must be the only row, got %+v", m.rankedSources)
 	}
 }
+
+// Hard-subtitled anime rows lead the table even below higher-quality
+// softsubs: burned-in subs need no plumbing and cannot desync. Challenged
+// hosts never join the lead, and size-first modes keep their semantics.
+func TestHardsubFirstLeadsAnimeTable(t *testing.T) {
+	mk := func(url, quality, subType string) ranking.ScoredSource {
+		return ranking.ScoredSource{Source: provider.MediaSource{URL: url, Quality: quality, SubType: subType, Resolver: "miruro"}}
+	}
+	soft1080 := mk("https://cdn.example.com/soft.m3u8", "1080p", provider.SubTypeSoft)
+	hard720 := mk("https://cdn.example.com/hard.m3u8", "720p", provider.SubTypeHard)
+	challengedHard := mk("https://vault-01.uwucdn.top/stream/01/uwu.m3u8", "1080p", provider.SubTypeHard)
+
+	got := hardsubFirst(provider.ModeAnime, qualityAll, true, []ranking.ScoredSource{soft1080, hard720, challengedHard})
+	if len(got) != 3 || got[0].Source.URL != hard720.Source.URL {
+		t.Fatalf("hardsub must lead, got %v", urls(got))
+	}
+	if got[2].Source.URL != challengedHard.Source.URL {
+		t.Fatalf("challenged hardsub must stay last, got %v", urls(got))
+	}
+
+	// Subtitles off: no hardsub lift.
+	if got := hardsubFirst(provider.ModeAnime, qualityAll, false, []ranking.ScoredSource{soft1080, hard720}); got[0].Source.URL != soft1080.Source.URL {
+		t.Fatalf("subs-off must keep ranked order, got %v", urls(got))
+	}
+	// Lowest mode: size-first semantics win.
+	if got := hardsubFirst(provider.ModeAnime, qualityLowest, true, []ranking.ScoredSource{soft1080, hard720}); got[0].Source.URL != soft1080.Source.URL {
+		t.Fatalf("lowest mode must keep ranked order, got %v", urls(got))
+	}
+	// Non-anime: untouched.
+	if got := hardsubFirst(provider.ModeMovies, qualityAll, true, []ranking.ScoredSource{soft1080, hard720}); got[0].Source.URL != soft1080.Source.URL {
+		t.Fatalf("movies must keep ranked order, got %v", urls(got))
+	}
+}
+
+func urls(s []ranking.ScoredSource) []string {
+	out := make([]string, 0, len(s))
+	for _, v := range s {
+		out = append(out, v.Source.URL)
+	}
+	return out
+}

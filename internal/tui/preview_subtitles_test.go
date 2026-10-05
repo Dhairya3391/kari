@@ -39,6 +39,15 @@ func TestDetectSubtitleType(t *testing.T) {
 			want: "hard subs",
 		},
 		{
+			name: "verified hard subtype survives attached sidecar tracks",
+			src: provider.MediaSource{
+				SubType:   provider.SubTypeHard,
+				Subtitles: []provider.SubtitleOption{{URL: "https://cdn.example.com/sub.vtt", Language: "en"}},
+			},
+			mode: provider.ModeAnime,
+			want: "hard subs",
+		},
+		{
 			name: "explicit soft subtype",
 			src:  provider.MediaSource{SubType: provider.SubTypeSoft},
 			mode: provider.ModeAnime,

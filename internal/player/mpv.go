@@ -160,6 +160,21 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		"--input-ipc-server=" + socketPath,
 		hwdecOptionArg(),
 	}
+	// The pipe carries only the playlist bytes: mpv still fetches every
+	// segment itself, so it needs the same transport identity as the
+	// direct path (header-gated CDNs answer 403 without Referer/Origin
+	// on segment requests too).
+	if strings.TrimSpace(source.UserAgent) != "" {
+		pipeMpvArgs = append(pipeMpvArgs, "--user-agent="+source.UserAgent)
+	}
+	if strings.TrimSpace(source.Referer) != "" {
+		pipeMpvArgs = append(pipeMpvArgs, "--referrer="+source.Referer)
+		if !source.SuppressOrigin {
+			if origin := originFromReferer(strings.TrimSpace(source.Referer)); origin != "" {
+				pipeMpvArgs = append(pipeMpvArgs, "--http-header-fields=Origin: "+origin)
+			}
+		}
+	}
 
 	if media.StartTime > 5 {
 		pipeMpvArgs = append(pipeMpvArgs, fmt.Sprintf("--start=%d", int(media.StartTime)))

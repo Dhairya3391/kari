@@ -604,6 +604,40 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 	return m, m.resolveSubscription()
 }
 
+// pruneResolvedToResolvers drops resolved rows for providers about to be
+// re-queried, keeping rows from excluded (already-delivered) providers so
+// a retry only adds sources, never removes a working one. An empty keep
+// set is a full refresh: everything is dropped, matching a nil resolve.
+func (m *modelImpl) pruneResolvedToResolvers(keep []string) {
+	if m.resolved == nil {
+		return
+	}
+	if len(keep) == 0 {
+		m.resolved = nil
+		return
+	}
+	keepSet := make(map[string]struct{}, len(keep))
+	for _, name := range keep {
+		if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
+			keepSet[name] = struct{}{}
+		}
+	}
+	kept := m.resolved.Playback[:0]
+	for _, src := range m.resolved.Playback {
+		if _, ok := keepSet[strings.ToLower(strings.TrimSpace(src.Resolver))]; ok {
+			kept = append(kept, src)
+		}
+	}
+	m.resolved.Playback = kept
+	subs := m.resolved.Subtitles[:0]
+	for _, sub := range m.resolved.Subtitles {
+		if _, ok := keepSet[strings.ToLower(strings.TrimSpace(sub.Resolver))]; ok {
+			subs = append(subs, sub)
+		}
+	}
+	m.resolved.Subtitles = subs
+}
+
 func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 	if m.resolved == nil {
 		m.resolved = &model.ResolvedMedia{

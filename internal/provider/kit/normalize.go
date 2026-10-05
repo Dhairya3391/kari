@@ -177,6 +177,7 @@ func LocalStartsAt(t time.Time) time.Time {
 	}
 	return t.Local()
 }
+
 var (
 	reSeasonWord = regexp.MustCompile(`(?i)\b(?:season|s)\s*(\d+)\b`)
 	reNthSeason  = regexp.MustCompile(`(?i)\b(\d+)(?:st|nd|rd|th)\s*season\b`)
@@ -219,6 +220,7 @@ func StripSeason(s string) string {
 	s = reRomanFour.ReplaceAllString(s, "")
 	return strings.TrimSpace(s)
 }
+
 // CanonicalTitle folds a title to bare alphanumerics with canonical season format
 // for comparison, so punctuation, spacing, and season representations match cleanly.
 func CanonicalTitle(s string) string {

@@ -504,7 +504,6 @@ func slugify(s string) string {
 	return strings.TrimRight(b.String(), "-")
 }
 
-
 // searchQueryVariants returns search query variations for an anime title.
 // Sequences with "Season 2" or "2nd Season" generate variants like "Title 2"
 // and "Title" to avoid keyword noise from the word "Season".
