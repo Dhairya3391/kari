@@ -25,6 +25,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 	if m.showHelp {
 		if msg.String() == "?" || msg.String() == "esc" {
 			m.showHelp = false
+			m.clearStatus()
 			return nil, true
 		}
 		switch msg.String() {
@@ -185,7 +186,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.activeView = viewSearch
 		m.backStack = nil
 		m.loading = false
-		m.setStatus(statusInfo, "")
+		m.clearStatus()
 		return nil, true
 	case msg.String() == "ctrl+p":
 		if m.queryInput.Focused() {
@@ -198,6 +199,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.saveSettings()
 		return nil, true
 	case key.Matches(msg, m.keys.Back):
+		m.clearStatus()
 		if m.clearActiveFilter() {
 			return nil, true
 		}
@@ -349,6 +351,7 @@ func (m *modelImpl) switchToMode(target provider.ContentType) tea.Cmd {
 		return nil
 	}
 
+	m.clearStatus()
 	oldMode := m.appMode
 	m.appMode = target
 	m.updateQueryPlaceholder()

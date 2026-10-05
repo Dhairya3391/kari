@@ -124,6 +124,7 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.startBatchDownload()
 			case keyMsg.String() == "esc":
 				m.selectMode = false
+				m.clearStatus()
 				return m, nil
 			}
 		} else {
@@ -184,13 +185,8 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case keyMsg.String() == "]":
-				maxSeason := 1
-				for _, ep := range m.episodeResults {
-					if ep.Season > maxSeason {
-						maxSeason = ep.Season
-					}
-				}
-				if m.activeSeason < maxSeason-1 {
+				seasons := distinctSeasonNumbers(m.episodeResults)
+				if m.activeSeason < len(seasons)-1 {
 					m.activeSeason++
 					m.seasonEpisodeIndex = 0
 				}

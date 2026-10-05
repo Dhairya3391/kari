@@ -49,8 +49,10 @@ func anikotoHeaders(referer string) http.Header {
 }
 
 var (
-	reWatchMainID = regexp.MustCompile(`id="watch-main"[^>]*data-id="(\d+)"`)
-	reDataID      = regexp.MustCompile(`data-id="(\d+)"`)
+	reWatchMainID  = regexp.MustCompile(`id="watch-main"[^>]*data-id="(\d+)"`)
+	reDataID       = regexp.MustCompile(`data-id="(\d+)"`)
+	reHeadingTitle = regexp.MustCompile(`(?i)<h1[^>]*>(.*?)</h1>`)
+	rePageTitle    = regexp.MustCompile(`(?i)<title>(.*?)</title>`)
 )
 
 // anikotoCandidate is one search hit: site slug, display name, and the
@@ -84,7 +86,6 @@ func (c *Client) resolveAnilistToAnikoto(ctx context.Context, anilistID string) 
 			return entry.animeID, entry.slug, nil
 		}
 	}
-
 	// Fetch title candidates from AniList to build search queries.
 	idInt, err := strconv.Atoi(anilistID)
 	if err != nil {
@@ -121,10 +122,54 @@ func (c *Client) resolveAnilistToAnikoto(ctx context.Context, anilistID string) 
 	if len(queryTitles) > 3 {
 		queryTitles = queryTitles[:3]
 	}
-	for _, title := range queryTitles {
-		hits, err := c.searchAnikotoHTML(ctx, title)
+
+	// 1. Probe direct watch page for slugs derived from titles.
+	for _, s := range slugCandidates(titles) {
+		if seenSlugs[s] {
+			continue
+		}
+		seenSlugs[s] = true
+		if cand, ok := c.fetchCandidateFromWatchPage(ctx, s); ok {
+			candidates = append(candidates, cand)
+			if scoreCandidate(cand.name, titles) == 1000 {
+				foundID := cand.animeID
+				entry := anikotoIDEntry{animeID: foundID, slug: cand.slug, cachedAt: time.Now()}
+				idCache.Store(anilistID, entry)
+				return foundID, cand.slug, nil
+			}
+		}
+	}
+
+	// 2. Generate clean search queries.
+	var queryKeywords []string
+	seenKeywords := make(map[string]bool)
+	for _, t := range queryTitles {
+		for _, q := range searchQueryVariants(t) {
+			cleanQ := cleanQueryKeyword(q)
+			if cleanQ != "" && !seenKeywords[strings.ToLower(cleanQ)] {
+				seenKeywords[strings.ToLower(cleanQ)] = true
+				queryKeywords = append(queryKeywords, cleanQ)
+			}
+		}
+	}
+
+	// 3. HTML search with query keywords (terminates early on strong match).
+	bestScore := 0
+	var best anikotoCandidate
+	for _, cand := range candidates {
+		if s := scoreCandidate(cand.name, titles); s > bestScore {
+			bestScore = s
+			best = cand
+		}
+	}
+
+	for _, kw := range queryKeywords {
+		if bestScore >= 600 {
+			break
+		}
+		hits, err := c.searchAnikotoHTML(ctx, kw)
 		if err != nil {
-			logging.Debug("anikoto HTML search failed", "title", title, "err", err)
+			logging.Debug("anikoto HTML search failed", "keyword", kw, "err", err)
 			continue
 		}
 		for _, h := range hits {
@@ -133,13 +178,22 @@ func (c *Client) resolveAnilistToAnikoto(ctx context.Context, anilistID string) 
 			}
 			seenSlugs[h.slug] = true
 			candidates = append(candidates, h)
+			if s := scoreCandidate(h.name, titles); s > bestScore {
+				bestScore = s
+				best = h
+			}
 		}
 	}
-	if len(candidates) == 0 {
-		for _, title := range queryTitles {
-			hits, err := c.searchAnikotoAJAX(ctx, title)
+
+	// 4. AJAX search fallback if no match found.
+	if bestScore <= 0 {
+		for _, kw := range queryKeywords {
+			if bestScore >= 600 {
+				break
+			}
+			hits, err := c.searchAnikotoAJAX(ctx, kw)
 			if err != nil {
-				logging.Debug("anikoto AJAX search failed", "title", title, "err", err)
+				logging.Debug("anikoto AJAX search failed", "keyword", kw, "err", err)
 				continue
 			}
 			for _, h := range hits {
@@ -148,26 +202,16 @@ func (c *Client) resolveAnilistToAnikoto(ctx context.Context, anilistID string) 
 				}
 				seenSlugs[h.slug] = true
 				candidates = append(candidates, h)
-			}
-			if len(candidates) > 0 {
-				break
+				if s := scoreCandidate(h.name, titles); s > bestScore {
+					bestScore = s
+					best = h
+				}
 			}
 		}
 	}
-	if len(candidates) == 0 {
-		return "", "", fmt.Errorf("anikoto: no match found for anilist ID %s", anilistID)
+	if bestScore <= 0 {
+		return "", "", fmt.Errorf("anikoto: no candidate matched title for anilist ID %s", anilistID)
 	}
-
-	best := candidates[0]
-	bestScore := -1
-	for _, cand := range candidates {
-		if s := scoreCandidate(cand.name, titles); s > bestScore {
-			bestScore = s
-			best = cand
-		}
-	}
-
-	// The data-tip anime ID avoids a watch-page fetch; otherwise resolve it.
 	foundID := best.animeID
 	if foundID == "" {
 		foundID = c.fetchAnimeIDFromWatchPage(ctx, best.slug)
@@ -178,13 +222,25 @@ func (c *Client) resolveAnilistToAnikoto(ctx context.Context, anilistID string) 
 }
 
 // scoreCandidate ranks a display name against every known title: exact
-// matches win outright, then prefix, then containment.
+// matches win outright, then prefix, then containment. Candidates with
+// mismatched season numbers score 0 to prevent cross-season false matches.
 func scoreCandidate(name string, titles []string) int {
-	normName := normalizeTitle(name)
+	normName := kit.CanonicalTitle(name)
+	candSeason := kit.ParseSeason(name)
 	best := 0
 	for _, t := range titles {
-		normT := normalizeTitle(t)
+		normT := kit.CanonicalTitle(t)
 		if normT == "" {
+			continue
+		}
+		tSeason := kit.ParseSeason(t)
+
+		// If target specifies a season number > 1, candidate must match it.
+		if tSeason > 1 && candSeason != tSeason {
+			continue
+		}
+		// If candidate specifies a season number > 1, target must match it.
+		if candSeason > 1 && tSeason != candSeason {
 			continue
 		}
 		switch {
@@ -192,6 +248,10 @@ func scoreCandidate(name string, titles []string) int {
 			return 1000
 		case strings.HasPrefix(normName, normT):
 			if s := 600 - (len(normName) - len(normT)); s > best {
+				best = s
+			}
+		case strings.HasPrefix(normT, normName):
+			if s := 500 - (len(normT) - len(normName)); s > best {
 				best = s
 			}
 		case strings.Contains(normName, normT):
@@ -344,16 +404,137 @@ func (c *Client) fetchAnimeIDFromWatchPage(ctx context.Context, slug string) str
 	return ""
 }
 
-// normalizeTitle folds a title to bare alphanumerics for comparison, so
-// punctuation and spacing variants still match.
-func normalizeTitle(s string) string {
+// fetchCandidateFromWatchPage fetches the anikoto watch page for the given slug,
+// returning the candidate with its internal animeID and display title if valid.
+func (c *Client) fetchCandidateFromWatchPage(ctx context.Context, slug string) (anikotoCandidate, bool) {
+	u := c.siteBase + "/watch/" + slug
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return anikotoCandidate{}, false
+	}
+	for k, vs := range anikotoHeaders(c.siteBase + "/") {
+		req.Header[k] = vs
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return anikotoCandidate{}, false
+	}
+	body, err := httpclient.ReadCapped(resp)
+	_ = resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return anikotoCandidate{}, false
+	}
+
+	var animeID string
+	if m := reWatchMainID.FindSubmatch(body); len(m) >= 2 {
+		animeID = string(m[1])
+	} else if m := reDataID.FindSubmatch(body); len(m) >= 2 {
+		animeID = string(m[1])
+	}
+	if animeID == "" {
+		return anikotoCandidate{}, false
+	}
+
+	title := slug
+	if m := reHeadingTitle.FindSubmatch(body); len(m) >= 2 {
+		title = cleanTitle(string(m[1]))
+	} else if m := rePageTitle.FindSubmatch(body); len(m) >= 2 {
+		title = cleanTitle(string(m[1]))
+	}
+
+	return anikotoCandidate{
+		slug:    slug,
+		name:    title,
+		animeID: animeID,
+	}, true
+}
+
+// slugCandidates generates potential anikoto URL slugs from media titles.
+func slugCandidates(titles []string) []string {
+	var slugs []string
+	seen := make(map[string]bool)
+
+	add := func(s string) {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		slugs = append(slugs, s)
+	}
+
+	for _, t := range titles {
+		baseSlug := slugify(t)
+		add(baseSlug)
+
+		if strings.Contains(baseSlug, "-2nd-season") {
+			add(strings.ReplaceAll(baseSlug, "-2nd-season", "-season-2"))
+		}
+		if strings.Contains(baseSlug, "-season-2") {
+			add(strings.ReplaceAll(baseSlug, "-season-2", "-2nd-season"))
+		}
+		if strings.Contains(baseSlug, "-3rd-season") {
+			add(strings.ReplaceAll(baseSlug, "-3rd-season", "-season-3"))
+		}
+		if strings.Contains(baseSlug, "-season-3") {
+			add(strings.ReplaceAll(baseSlug, "-season-3", "-3rd-season"))
+		}
+		if strings.Contains(baseSlug, "-4th-season") {
+			add(strings.ReplaceAll(baseSlug, "-4th-season", "-season-4"))
+		}
+		if strings.Contains(baseSlug, "-season-4") {
+			add(strings.ReplaceAll(baseSlug, "-season-4", "-4th-season"))
+		}
+	}
+	return slugs
+}
+
+func slugify(s string) string {
 	var b strings.Builder
+	lastDash := false
 	for _, r := range strings.ToLower(s) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			b.WriteRune(r)
+			lastDash = false
+		} else if !lastDash && b.Len() > 0 {
+			b.WriteRune('-')
+			lastDash = true
 		}
 	}
-	return b.String()
+	return strings.TrimRight(b.String(), "-")
+}
+
+
+// searchQueryVariants returns search query variations for an anime title.
+// Sequences with "Season 2" or "2nd Season" generate variants like "Title 2"
+// and "Title" to avoid keyword noise from the word "Season".
+func searchQueryVariants(title string) []string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil
+	}
+	var variants []string
+	seen := make(map[string]bool)
+
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s != "" && !seen[strings.ToLower(s)] {
+			seen[strings.ToLower(s)] = true
+			variants = append(variants, s)
+		}
+	}
+
+	add(title)
+
+	if season := kit.ParseSeason(title); season > 1 {
+		base := kit.StripSeason(title)
+		if base != "" {
+			add(fmt.Sprintf("%s %d", base, season))
+			add(base)
+		}
+	}
+
+	return variants
 }
 
 // cleanTitle strips tags, unescapes entities, and collapses whitespace.
@@ -387,7 +568,10 @@ var (
 // fetchEpisodesDirect fetches the episode list directly from anikoto's AJAX
 // endpoint, returning episodes whose IDs embed the data-ids attribute needed
 // for server resolution (see ResolveSource).
-func (c *Client) fetchEpisodesDirect(ctx context.Context, animeID, anilistID string) ([]provider.Episode, error) {
+func (c *Client) fetchEpisodesDirect(ctx context.Context, animeID, anilistID string, season int) ([]provider.Episode, error) {
+	if season <= 0 {
+		season = 1
+	}
 	watchRef := c.siteBase + "/watch/"
 	u := c.siteBase + "/ajax/episode/list/" + animeID
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -469,7 +653,7 @@ func (c *Client) fetchEpisodesDirect(ctx context.Context, animeID, anilistID str
 				Title:   epTitle,
 				ID:      fmt.Sprintf("watch/anikoto/%s/sub/%d|%s", anilistID, numInt, dataIDs),
 				Episode: numInt,
-				Season:  1,
+				Season:  season,
 				Audio:   "sub",
 			})
 		}
@@ -478,7 +662,7 @@ func (c *Client) fetchEpisodesDirect(ctx context.Context, animeID, anilistID str
 				Title:   epTitle,
 				ID:      fmt.Sprintf("watch/anikoto/%s/dub/%d|%s", anilistID, numInt, dataIDs),
 				Episode: numInt,
-				Season:  1,
+				Season:  season,
 				Audio:   "dub",
 			})
 		}
@@ -738,7 +922,7 @@ func (c *Client) resolveDirectStreams(ctx context.Context, anilistID, category s
 			return nil, fmt.Errorf("anikoto direct: no animeID for anilist ID %s", anilistID)
 		}
 
-		episodes, err := c.fetchEpisodesDirect(ctx, animeID, anilistID)
+		episodes, err := c.fetchEpisodesDirect(ctx, animeID, anilistID, 1)
 		if err != nil {
 			return nil, fmt.Errorf("anikoto direct: fetch episodes: %w", err)
 		}

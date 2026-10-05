@@ -33,6 +33,7 @@ func (m *modelImpl) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "n", "N", "esc":
 				m.confirmDelete = false
 				m.confirmClearHistory = false
+				m.clearStatus()
 				return m, nil
 			}
 			return m, nil

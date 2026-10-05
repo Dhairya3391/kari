@@ -190,7 +190,8 @@ func FilterEpisodesByText(episodes []provider.Episode, idxs []int, query string)
 
 // filterToSeason returns the episodes for the active season and their original indices.
 func filterToSeason(episodes []provider.Episode, seasonCount, activeSeason int) ([]provider.Episode, []int) {
-	if seasonCount <= 1 {
+	seasons := distinctSeasonNumbers(episodes)
+	if len(seasons) <= 1 {
 		idxs := make([]int, len(episodes))
 		for i := range idxs {
 			idxs[i] = i
@@ -198,11 +199,22 @@ func filterToSeason(episodes []provider.Episode, seasonCount, activeSeason int) 
 		return episodes, idxs
 	}
 
-	target := activeSeason + 1
+	if activeSeason < 0 {
+		activeSeason = 0
+	}
+	if activeSeason >= len(seasons) {
+		activeSeason = len(seasons) - 1
+	}
+	target := seasons[activeSeason]
+
 	var filtered []provider.Episode
 	var idxs []int
 	for i, ep := range episodes {
-		if ep.Season == target {
+		s := ep.Season
+		if s <= 0 {
+			s = 1
+		}
+		if s == target {
 			filtered = append(filtered, ep)
 			idxs = append(idxs, i)
 		}
@@ -211,18 +223,6 @@ func filterToSeason(episodes []provider.Episode, seasonCount, activeSeason int) 
 		return filtered, idxs
 	}
 
-	// Fallback: try the activeSeason number directly
-	for i, ep := range episodes {
-		if ep.Season == activeSeason {
-			filtered = append(filtered, ep)
-			idxs = append(idxs, i)
-		}
-	}
-	if len(filtered) > 0 {
-		return filtered, idxs
-	}
-
-	// Last resort: return all
 	allIdxs := make([]int, len(episodes))
 	for i := range allIdxs {
 		allIdxs[i] = i

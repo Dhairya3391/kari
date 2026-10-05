@@ -65,6 +65,31 @@ func TestFetchEpisodeTitlesTMDB(t *testing.T) {
 	}
 }
 
+func TestFetchEpisodeTitlesTMDBSeasonSpecific(t *testing.T) {
+	srv := newTMDBEpisodeServer(t)
+	client := &Client{
+		http:     srv.Client(),
+		keyPool:  tmdb.NewKeyPool([]string{"test-key"}),
+		tmdbBase: srv.URL,
+	}
+
+	// Season 2 requested: must return Season 2 episodes starting at 1 ("Fourth", "Fifth"),
+	// NOT Season 1 episodes concatenated.
+	titles, err := client.FetchEpisodeTitlesTMDB(context.Background(), "Naruto Season 2", 2004)
+	if err != nil {
+		t.Fatalf("FetchEpisodeTitlesTMDB failed: %v", err)
+	}
+	want := map[int]string{1: "Fourth", 2: "Fifth"}
+	if len(titles) != len(want) {
+		t.Fatalf("titles = %v, want %v", titles, want)
+	}
+	for num, title := range want {
+		if titles[num] != title {
+			t.Errorf("titles[%d] = %q, want %q", num, titles[num], title)
+		}
+	}
+}
+
 // Shows whose seasons already carry absolute numbers (Naruto, One Piece)
 // must not have the running offset added on top, which would shift every
 // season after the first onto the wrong titles.

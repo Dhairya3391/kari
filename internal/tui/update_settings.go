@@ -60,6 +60,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter", "esc":
 				m.audioPickerOpen = false
 				m.saveSettings()
+				m.clearStatus()
 				return m, nil
 			}
 		}

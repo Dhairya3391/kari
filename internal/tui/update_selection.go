@@ -591,12 +591,12 @@ func (m *modelImpl) clearActiveFilter() bool {
 			m.resultsFiltering = false
 			m.resultsFilter = ""
 			m.refilterSeriesList()
-			m.setStatus(statusInfo, "")
+			m.clearStatus()
 			return true
 		}
 		if m.seriesList.SettingFilter() || m.seriesList.IsFiltered() || strings.TrimSpace(m.seriesList.FilterValue()) != "" {
 			m.seriesList.ResetFilter()
-			m.setStatus(statusInfo, "")
+			m.clearStatus()
 			return true
 		}
 	case viewEpisodes:
@@ -604,18 +604,18 @@ func (m *modelImpl) clearActiveFilter() bool {
 			m.episodeFiltering = false
 			m.episodeFilter = ""
 			m.clampEpisodeIndex()
-			m.setStatus(statusInfo, "")
+			m.clearStatus()
 			return true
 		}
 		if m.episodeList.SettingFilter() || m.episodeList.IsFiltered() || strings.TrimSpace(m.episodeList.FilterValue()) != "" {
 			m.episodeList.ResetFilter()
-			m.setStatus(statusInfo, "")
+			m.clearStatus()
 			return true
 		}
 	case viewChapters:
 		if m.chapterList.SettingFilter() || m.chapterList.IsFiltered() || strings.TrimSpace(m.chapterList.FilterValue()) != "" {
 			m.chapterList.ResetFilter()
-			m.setStatus(statusInfo, "")
+			m.clearStatus()
 			return true
 		}
 	}
@@ -625,16 +625,18 @@ func (m *modelImpl) clearActiveFilter() bool {
 func (m *modelImpl) exitInputMode() bool {
 	if m.activeView == viewSearch && m.queryInput.Focused() {
 		m.queryInput.Blur()
-		m.setStatus(statusInfo, "")
+		m.clearStatus()
 		return true
 	}
 	if m.activeView == viewEpisodes && m.selectMode {
 		m.selectMode = false
+		m.clearStatus()
 		return true
 	}
 	if m.activeView == viewHistory && (m.confirmDelete || m.confirmClearHistory) {
 		m.confirmDelete = false
 		m.confirmClearHistory = false
+		m.clearStatus()
 		return true
 	}
 	// Settings-screen text inputs (custom accent hex, AniList auth code)
@@ -646,16 +648,19 @@ func (m *modelImpl) exitInputMode() bool {
 		if m.audioPickerOpen {
 			m.audioPickerOpen = false
 			m.saveSettings()
+			m.clearStatus()
 			return true
 		}
 		if m.editingAccentHex {
 			m.editingAccentHex = false
 			m.hexInput.Blur()
+			m.clearStatus()
 			return true
 		}
 		if m.anilistAuthURL != "" {
 			m.anilistAuthURL = ""
 			m.authInput.Blur()
+			m.clearStatus()
 			return true
 		}
 	}

@@ -104,9 +104,13 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 // FetchAvailableEpisodes lists only tracks backed by AniLight watch embeds.
 func (c *Client) FetchAvailableEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	mediaID := series.ID
+	seasonNum := kit.ParseSeason(series.Title)
+	if seasonNum <= 0 {
+		seasonNum = 1
+	}
 	if slug, err := c.resolveSlug(ctx, mediaID); err == nil && slug != "" {
 		if watch, wErr := c.fetchWatchData(ctx, slug); wErr == nil && watch != nil {
-			if eps := episodesFromWatch(mediaID, watch); len(eps) > 0 {
+			if eps := episodesFromWatch(mediaID, watch, seasonNum); len(eps) > 0 {
 				return eps, nil
 			}
 		}
@@ -139,6 +143,10 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 	if count < 1 {
 		count = 1
 	}
+	seasonNum := kit.ParseSeason(series.Title)
+	if seasonNum <= 0 {
+		seasonNum = 1
+	}
 	eps := make([]provider.Episode, 0, count*2)
 	for i := 1; i <= count; i++ {
 		epTitle := fmt.Sprintf("Episode %d", i)
@@ -147,14 +155,14 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 				Title:   epTitle,
 				ID:      fmt.Sprintf("watch/anilight/%s/sub/%d", mediaID, i),
 				Episode: i,
-				Season:  1,
+				Season:  seasonNum,
 				Audio:   "sub",
 			},
 			provider.Episode{
 				Title:   epTitle,
 				ID:      fmt.Sprintf("watch/anilight/%s/dub/%d", mediaID, i),
 				Episode: i,
-				Season:  1,
+				Season:  seasonNum,
 				Audio:   "dub",
 			},
 		)
@@ -166,7 +174,10 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 // episodesFromWatch converts AniLight watch episodes into sub/dub entries.
 // An audio track is emitted only when the episode carries an embed URL for
 // it, so mpv never receives a track the backend cannot serve.
-func episodesFromWatch(mediaID string, watch *anilightWatchResp) []provider.Episode {
+func episodesFromWatch(mediaID string, watch *anilightWatchResp, season int) []provider.Episode {
+	if season <= 0 {
+		season = 1
+	}
 	eps := make([]provider.Episode, 0, len(watch.Episodes)*2)
 	for _, e := range watch.Episodes {
 		if e.Number <= 0 {
@@ -181,7 +192,7 @@ func episodesFromWatch(mediaID string, watch *anilightWatchResp) []provider.Epis
 				Title:   title,
 				ID:      fmt.Sprintf("watch/anilight/%s/sub/%d", mediaID, e.Number),
 				Episode: e.Number,
-				Season:  1,
+				Season:  season,
 				Audio:   "sub",
 			})
 		}
@@ -190,7 +201,7 @@ func episodesFromWatch(mediaID string, watch *anilightWatchResp) []provider.Epis
 				Title:   title,
 				ID:      fmt.Sprintf("watch/anilight/%s/dub/%d", mediaID, e.Number),
 				Episode: e.Number,
-				Season:  1,
+				Season:  season,
 				Audio:   "dub",
 			})
 		}

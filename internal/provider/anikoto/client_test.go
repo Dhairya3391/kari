@@ -271,3 +271,79 @@ func TestAnikotoResolveSourceInvalid(t *testing.T) {
 		t.Error("empty episode must error")
 	}
 }
+
+func TestBlackCloverSeason2Resolution(t *testing.T) {
+	c, err := NewClient()
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	animeID, slug, err := c.resolveAnilistToAnikoto(context.Background(), "195604")
+	if err != nil {
+		t.Fatalf("resolveAnilistToAnikoto(195604) failed: %v", err)
+	}
+	if animeID != "8839" {
+		t.Errorf("animeID = %q, want 8839", animeID)
+	}
+	if slug != "black-clover-season-2" {
+		t.Errorf("slug = %q, want black-clover-season-2", slug)
+	}
+}
+
+func TestSlugCandidates(t *testing.T) {
+	candidates := slugCandidates([]string{"Black Clover Season 2", "Black Clover 2nd Season"})
+	foundSeason2 := false
+	found2ndSeason := false
+	for _, s := range candidates {
+		if s == "black-clover-season-2" {
+			foundSeason2 = true
+		}
+		if s == "black-clover-2nd-season" {
+			found2ndSeason = true
+		}
+	}
+	if !foundSeason2 || !found2ndSeason {
+		t.Errorf("slugCandidates missing expected slugs: %v", candidates)
+	}
+}
+
+func TestScoreCandidateSeasonSeparation(t *testing.T) {
+	targetS2 := []string{"Black Clover Season 2", "Black Clover 2nd Season"}
+	targetS1 := []string{"Black Clover"}
+
+	// Season 2 target must match Season 2 candidate with 1000 (exact)
+	if score := scoreCandidate("Black Clover Season 2", targetS2); score != 1000 {
+		t.Errorf("score for 'Black Clover Season 2' against S2 = %d, want 1000", score)
+	}
+	if score := scoreCandidate("Black Clover 2nd Season", targetS2); score != 1000 {
+		t.Errorf("score for 'Black Clover 2nd Season' against S2 = %d, want 1000", score)
+	}
+
+	// Season 2 target MUST NOT match Season 1 candidate
+	if score := scoreCandidate("Black Clover", targetS2); score != 0 {
+		t.Errorf("score for 'Black Clover' against S2 = %d, want 0", score)
+	}
+
+	// Season 1 target MUST match Season 1 candidate with 1000 (exact)
+	if score := scoreCandidate("Black Clover", targetS1); score != 1000 {
+		t.Errorf("score for 'Black Clover' against S1 = %d, want 1000", score)
+	}
+
+	// Season 1 target MUST NOT match Season 2 candidate
+	if score := scoreCandidate("Black Clover Season 2", targetS1); score != 0 {
+		t.Errorf("score for 'Black Clover Season 2' against S1 = %d, want 0", score)
+	}
+}
+
+func TestSearchQueryVariants(t *testing.T) {
+	variants := searchQueryVariants("Black Clover Season 2")
+	want := []string{"Black Clover Season 2", "Black Clover 2", "Black Clover"}
+	if len(variants) != len(want) {
+		t.Fatalf("variants = %v, want %v", variants, want)
+	}
+	for i, w := range want {
+		if variants[i] != w {
+			t.Errorf("variant[%d] = %q, want %q", i, variants[i], w)
+		}
+	}
+}

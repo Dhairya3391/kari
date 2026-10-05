@@ -113,7 +113,11 @@ func (c *Client) FetchAvailableEpisodes(ctx context.Context, series provider.Sea
 	if animeID == "" {
 		return nil, fmt.Errorf("anikoto episodes: no anime ID for %q: %w", slug, provider.ErrNoEpisodes)
 	}
-	eps, err := c.fetchEpisodesDirect(ctx, animeID, mediaID)
+	seasonNum := kit.ParseSeason(series.Title)
+	if seasonNum <= 0 {
+		seasonNum = 1
+	}
+	eps, err := c.fetchEpisodesDirect(ctx, animeID, mediaID, seasonNum)
 	if err != nil {
 		return nil, fmt.Errorf("anikoto episodes: %w", err)
 	}

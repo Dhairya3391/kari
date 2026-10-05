@@ -172,3 +172,72 @@ func TestRenderEpisodesScreen_FilterNarrowsRows(t *testing.T) {
 		t.Errorf("matching row must render, got:\n%s", out)
 	}
 }
+func TestDistinctSeasonNumbersSingleSeason(t *testing.T) {
+	// A series like Black Clover Season 2 where all episodes have Season: 2
+	eps := []provider.Episode{
+		{Season: 2, Episode: 1, Title: "The Battle Begins"},
+		{Season: 2, Episode: 2, Title: "Episode 2"},
+	}
+
+	seasons := distinctSeasonNumbers(eps)
+	if len(seasons) != 1 || seasons[0] != 2 {
+		t.Fatalf("seasons = %v, want [2]", seasons)
+	}
+
+	// Filter to season should return all episodes with 0-based indices
+	filtered, idxs := filterToSeason(eps, len(seasons), 0)
+	if len(filtered) != 2 || len(idxs) != 2 {
+		t.Fatalf("filtered = %v, idxs = %v", filtered, idxs)
+	}
+
+	// Render season tabs must be empty for 1 distinct season
+	tabStrip := RenderSeasonTabs(len(seasons), 0, ResolveAccent(model.KindAnime, "Auto"), 80)
+	if tabStrip != "" {
+		t.Fatalf("expected empty season tab strip for 1 season, got:\n%s", tabStrip)
+	}
+
+	// RenderEpisodesScreen must not render season tabs and must render episode numbers like 01
+	data := EpisodesData{
+		SeriesTitle:   "Black Clover Season 2",
+		Episodes:      eps,
+		SelectedIndex: 0,
+		SeasonCount:   len(seasons),
+		ActiveSeason:  0,
+		Width:         70,
+		Height:        20,
+		Accent:        ResolveAccent(model.KindAnime, "Auto"),
+	}
+	out := RenderEpisodesScreen(data)
+	if strings.Contains(out, "season   1") || strings.Contains(out, "season   2") {
+		t.Fatalf("must not render season tabs when show has 1 distinct season:\n%s", out)
+	}
+	if !strings.Contains(out, "01  The Battle Begins") {
+		t.Fatalf("expected '01  The Battle Begins', got:\n%s", out)
+	}
+}
+
+func TestDistinctSeasonNumbersMultiSeason(t *testing.T) {
+	// A multi-season series like Breaking Bad where episodes span Season 1 and 2
+	eps := []provider.Episode{
+		{Season: 1, Episode: 1, Title: "Pilot"},
+		{Season: 1, Episode: 2, Title: "Cat's in the Bag..."},
+		{Season: 2, Episode: 1, Title: "Seven Thirty-Seven"},
+	}
+
+	seasons := distinctSeasonNumbers(eps)
+	if len(seasons) != 2 || seasons[0] != 1 || seasons[1] != 2 {
+		t.Fatalf("seasons = %v, want [1 2]", seasons)
+	}
+
+	// Filter to Season 1
+	filtered1, idxs1 := filterToSeason(eps, len(seasons), 0)
+	if len(filtered1) != 2 || idxs1[0] != 0 || idxs1[1] != 1 {
+		t.Fatalf("filtered1 = %v, idxs1 = %v", filtered1, idxs1)
+	}
+
+	// Filter to Season 2
+	filtered2, idxs2 := filterToSeason(eps, len(seasons), 1)
+	if len(filtered2) != 1 || idxs2[0] != 2 || filtered2[0].Title != "Seven Thirty-Seven" {
+		t.Fatalf("filtered2 = %v, idxs2 = %v", filtered2, idxs2)
+	}
+}

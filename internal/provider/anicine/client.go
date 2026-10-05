@@ -162,6 +162,10 @@ func (c *Client) fetchAnimeEpisodes(ctx context.Context, series provider.SearchR
 	if count < 1 {
 		count = 1
 	}
+	seasonNum := kit.ParseSeason(series.Title)
+	if seasonNum <= 0 {
+		seasonNum = 1
+	}
 	eps := make([]provider.Episode, 0, count*2)
 	for i := 1; i <= count; i++ {
 		epTitle := fmt.Sprintf("Episode %d", i)
@@ -170,14 +174,14 @@ func (c *Client) fetchAnimeEpisodes(ctx context.Context, series provider.SearchR
 				Title:   epTitle,
 				ID:      fmt.Sprintf("watch/anicine/%s/sub/%d", mediaID, i),
 				Episode: i,
-				Season:  1,
+				Season:  seasonNum,
 				Audio:   "sub",
 			},
 			provider.Episode{
 				Title:   epTitle,
 				ID:      fmt.Sprintf("watch/anicine/%s/dub/%d", mediaID, i),
 				Episode: i,
-				Season:  1,
+				Season:  seasonNum,
 				Audio:   "dub",
 			},
 		)

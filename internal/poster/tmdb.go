@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"kari/internal/config"
+	"kari/internal/provider/kit"
 )
 
 type tmdbDetails struct {
@@ -164,6 +165,27 @@ func (c *Client) FetchEpisodeTitlesTMDB(ctx context.Context, title string, year 
 		return nil, err
 	}
 
+	// If the title requests a specific season (e.g. "Season 2"), and TMDB's show
+	// has that season, return only that season's episodes starting at 1.
+	if reqSeason := kit.ParseSeason(title); reqSeason > 1 {
+		for _, season := range show.Seasons {
+			if season.SeasonNumber == reqSeason {
+				var sr tmdbSeasonResponse
+				if err := c.tmdbGet(ctx, fmt.Sprintf("/tv/%d/season/%d", tvID, reqSeason), nil, &sr); err != nil {
+					return nil, err
+				}
+				out := make(map[int]string)
+				for _, ep := range sr.Episodes {
+					if ep.EpisodeNumber > 0 && strings.TrimSpace(ep.Name) != "" {
+						out[ep.EpisodeNumber] = ep.Name
+					}
+				}
+				if len(out) > 0 {
+					return out, nil
+				}
+			}
+		}
+	}
 	// Fetch episodes first: the numbering scheme isn't known until we can
 	// compare a season's first episode number against 1.
 	type seasonData struct {

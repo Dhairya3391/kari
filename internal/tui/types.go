@@ -311,6 +311,7 @@ type modelImpl struct {
 	statusText             string
 	statusType             statusLevel
 	statusID               int
+	statusExpiresAt        time.Time
 	showHelp               bool
 	bodyScroll             int
 	helpScroll             int

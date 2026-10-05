@@ -4,7 +4,9 @@
 package kit
 
 import (
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -174,4 +176,64 @@ func LocalStartsAt(t time.Time) time.Time {
 		return t
 	}
 	return t.Local()
+}
+var (
+	reSeasonWord = regexp.MustCompile(`(?i)\b(?:season|s)\s*(\d+)\b`)
+	reNthSeason  = regexp.MustCompile(`(?i)\b(\d+)(?:st|nd|rd|th)\s*season\b`)
+	reRomanTwo   = regexp.MustCompile(`(?i)\bii\b`)
+	reRomanThree = regexp.MustCompile(`(?i)\biii\b`)
+	reRomanFour  = regexp.MustCompile(`(?i)\biv\b`)
+)
+
+// ParseSeason extracts a season number from a title string (e.g. "Season 2" -> 2, "2nd Season" -> 2, "II" -> 2).
+// Returns 0 when no season indicator is found.
+func ParseSeason(s string) int {
+	if m := reSeasonWord.FindStringSubmatch(s); len(m) >= 2 {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			return n
+		}
+	}
+	if m := reNthSeason.FindStringSubmatch(s); len(m) >= 2 {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			return n
+		}
+	}
+	if reRomanTwo.MatchString(s) {
+		return 2
+	}
+	if reRomanThree.MatchString(s) {
+		return 3
+	}
+	if reRomanFour.MatchString(s) {
+		return 4
+	}
+	return 0
+}
+
+// StripSeason removes season markers from a title string to leave the base series name.
+func StripSeason(s string) string {
+	s = reSeasonWord.ReplaceAllString(s, "")
+	s = reNthSeason.ReplaceAllString(s, "")
+	s = reRomanTwo.ReplaceAllString(s, "")
+	s = reRomanThree.ReplaceAllString(s, "")
+	s = reRomanFour.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
+}
+// CanonicalTitle folds a title to bare alphanumerics with canonical season format
+// for comparison, so punctuation, spacing, and season representations match cleanly.
+func CanonicalTitle(s string) string {
+	s = strings.ToLower(s)
+	s = reNthSeason.ReplaceAllString(s, "season $1")
+	s = reSeasonWord.ReplaceAllString(s, "season $1")
+	s = reRomanTwo.ReplaceAllString(s, "season 2")
+	s = reRomanThree.ReplaceAllString(s, "season 3")
+	s = reRomanFour.ReplaceAllString(s, "season 4")
+
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
