@@ -7,8 +7,8 @@ import (
 	"kari/internal/provider/anicine"
 	"kari/internal/provider/anikoto"
 	"kari/internal/provider/anilight"
-	"kari/internal/provider/anistream"
 	"kari/internal/provider/jellyfin"
+	"kari/internal/provider/miruro"
 	"kari/internal/provider/moovie"
 	"kari/internal/provider/movysx"
 	"kari/internal/provider/pengu"
@@ -46,9 +46,9 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
-		ID: "anistream",
+		ID: "miruro",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return anistream.NewClient()
+			return miruro.NewClient()
 		},
 	},
 	{

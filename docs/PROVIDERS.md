@@ -13,7 +13,7 @@
 ## 0. Registration (single source today)
 
 - `internal/provider/defaults/defaults.go` is the only registration
-  list: `anicine, movysx, anikoto, anilight, anistream, moovie, weebcentral, pengu, jellyfin`.
+  list: `anicine, movysx, anikoto, anilight, miruro, moovie, weebcentral, pengu, jellyfin`.
 - `jellyfin.When` gates on `JellyfinURL && JellyfinAPIKey`
   (`defaults.go:60-62`); factory failure skips with log, never fatal
   (`defaults.go:80-84`).
@@ -24,7 +24,7 @@ Declared modes/priorities:
 
 | mode | providers (priority) | evidence |
 | --- | --- | --- |
-| anime | anicine P1, anikoto P2, anistream P2, anilight P3 | `anicine`, `anikoto`, `anistream`, `anilight` `client.go` `Modes()` |
+| anime | anicine P1, anikoto P2, miruro P2, anilight P3 | `anicine`, `anikoto`, `miruro`, `anilight` `client.go` `Modes()` |
 | movies/tv/cartoon | anicine P1, movysx P2, pengu P2, moovie P2 | `anicine`, `movysx`, `pengu`, `moovie` `client.go` `Modes()` |
 | live | pengu P1 only | `pengu/client.go:162` |
 | manga | weebcentral P1 only | `weebcentral/client.go:48-50` |

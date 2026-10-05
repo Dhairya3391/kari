@@ -50,6 +50,13 @@ const (
 	// WeebCentralReferer satisfies the image CDN's hotlink protection
 	// on chapter page downloads.
 	WeebCentralReferer = "https://weebcentral.com/"
+
+	// MiruroBase is the Miruro anime site (SvelteKit, no public API):
+	// search, episode listings, and per-episode streams all come from
+	// its __data.json endpoints. Shapes were verified live; the
+	// barelystarted host is the current deployment while miruro.tv
+	// rotates domains.
+	MiruroBase = "https://barelystarted.miruro.tv"
 )
 
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var

@@ -77,7 +77,7 @@ func defaultRoutes() map[ContentType][]Route {
 	anime := []Route{
 		{Provider: "anicine", Search: StrategyMerge, Sources: StrategyFallback},
 		{Provider: "anikoto", Search: StrategyMerge, Sources: StrategyFallback},
-		{Provider: "anistream", Search: StrategyMerge, Sources: StrategyFallback},
+		{Provider: "miruro", Search: StrategyMerge, Sources: StrategyFallback},
 		{Provider: "anilight", Search: StrategyMerge, Sources: StrategyFallback},
 	}
 	movies := []Route{

@@ -29,7 +29,7 @@ func TestBoostRankPreferredBackends(t *testing.T) {
 // silently fall back to defaults.
 func TestRoutesCoverKnownProviders(t *testing.T) {
 	known := map[ContentType][]string{
-		ModeAnime:    {"anicine", "anikoto", "anistream", "anilight"},
+		ModeAnime:    {"anicine", "anikoto", "miruro", "anilight"},
 		ModeMovies:   {"anicine", "movysx", "pengu", "moovie"},
 		ModeTV:       {"anicine", "movysx", "pengu", "moovie"},
 		ModeCartoon:  {"anicine", "movysx", "pengu", "moovie"},
