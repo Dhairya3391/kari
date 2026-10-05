@@ -91,6 +91,9 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 	// an empty query browses the whole library.
 	library, err := c.getLibrary(ctx)
 	if err != nil {
+		if strings.TrimSpace(query) == "" {
+			return nil, err
+		}
 		jellyLog.Debug("library fetch failed; falling back to server search", "err", err)
 		return c.searchHints(ctx, query)
 	}

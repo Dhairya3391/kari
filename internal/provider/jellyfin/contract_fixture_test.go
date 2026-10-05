@@ -81,15 +81,18 @@ func TestAuthRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	// Library fetch fails (401) so search falls back to hints, which
-	// also 401s: the typed HTTP error must surface.
-	_, err = client.Search(context.Background(), "boys", provider.ModeJellyfin)
-	if err == nil {
-		t.Fatal("want an error for 401, got nil")
-	}
-	var httpErr *provider.HTTPError
-	if ok := errors.As(err, &httpErr); !ok || httpErr.Code != http.StatusUnauthorized {
-		t.Errorf("want typed 401, got %v", err)
+	// Library fetch fails (401) so search falls back to hints for non-empty queries,
+	// which also 401s; for empty queries it returns the library fetch error directly.
+	// Both must surface the typed HTTP error, never masking as "empty query".
+	for _, query := range []string{"boys", ""} {
+		_, err = client.Search(context.Background(), query, provider.ModeJellyfin)
+		if err == nil {
+			t.Fatalf("query %q: want an error for 401, got nil", query)
+		}
+		var httpErr *provider.HTTPError
+		if ok := errors.As(err, &httpErr); !ok || httpErr.Code != http.StatusUnauthorized {
+			t.Errorf("query %q: want typed 401, got %v", query, err)
+		}
 	}
 }
 
