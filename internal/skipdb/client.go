@@ -27,7 +27,6 @@ type SkipTimes struct {
 	PreviewEnd   float64
 }
 
-
 // Client queries the SkipDB open API (https://skipdb.tv) for crowdsourced
 // intro, recap, outro, and preview timestamps by IMDb ID.
 type Client struct {

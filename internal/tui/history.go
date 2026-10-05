@@ -197,9 +197,9 @@ func renderHistoryRow(g history.Group, index int, isFocused bool, data HistoryDa
 	}
 
 	titleTrunc := truncate(title, titleW)
-	titlePadded := titleTrunc + strings.Repeat(" ", max(1, titleW-lipgloss.Width(titleTrunc)))
+	titlePadded := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 	if isFocused {
-		titlePadded = st.Bold.Render(titleTrunc) + strings.Repeat(" ", max(1, titleW-lipgloss.Width(titleTrunc)))
+		titlePadded = st.Bold.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 	}
 
 	kindStr := st.Dim.Render(fmt.Sprintf("%-7s", truncate(kind, 7)))

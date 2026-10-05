@@ -133,7 +133,7 @@ func (m *modelImpl) searchPosterVisible() bool {
 }
 
 func (m *modelImpl) previewPosterVisible() bool {
-	return m.activeView == viewPreview && !m.showHelp && !m.confirmCompletion && m.resolved != nil && m.imagesEnabled && m.previewPoster != ""
+	return m.activeView == viewPreview && !m.showHelp && m.resolved != nil && m.imagesEnabled && m.previewPoster != ""
 }
 
 func (m *modelImpl) historyPosterVisible() bool {
@@ -1016,10 +1016,15 @@ func (m *modelImpl) collectDownloadsData(width, height int, accent lipgloss.Adap
 				Queued:  true,
 			})
 		}
-	} else if (m.cancelDownload != nil || m.downloadOpID != 0) && !m.batchInProgress {
+	} else if (m.cancelDownload != nil || m.downloadOpID != 0 || (m.downloadPaused && m.pendingDownload != nil)) && !m.batchInProgress {
 		title := "Download"
 		if m.downloadTitle != "" {
 			title = m.downloadTitle
+		} else if m.pendingDownload != nil {
+			title = m.pendingDownload.Episode.Title
+			if title == "" {
+				title = m.pendingDownload.Series.Title
+			}
 		} else if m.resolved != nil && m.resolved.SeriesTitle != "" {
 			title = m.resolved.DisplayTitle()
 		}

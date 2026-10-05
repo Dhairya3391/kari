@@ -716,9 +716,7 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 	m.autoPlayAfterResolve = false
 
 	var needsConfirm *player.NeedsCompletionConfirmError
-	isConfirmErr := errors.As(msg.err, &needsConfirm)
-
-	if msg.err != nil && !isConfirmErr {
+	if msg.err != nil && !errors.As(msg.err, &needsConfirm) {
 		logging.Error("playback failed", "opID", msg.opID, "provider", msg.provider, "err", msg.err)
 		m.setStatus(statusError, "Playback failed: "+cleanErrorForUI(msg.err))
 		m.autoplay = false
@@ -788,13 +786,8 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if isConfirmErr {
-		m.confirmCompletion = true
-		logging.Info("playback finished on external player, needs confirmation")
-	} else {
-		logging.Info("playback finished", "opID", msg.opID, "provider", msg.provider, "result", msg.result)
-		m.setStatus(statusSuccess, "Playback finished")
-	}
+	logging.Info("playback finished", "opID", msg.opID, "provider", msg.provider, "result", msg.result)
+	m.setStatus(statusSuccess, "Playback finished")
 
 	m.activeView = viewPreview
 
@@ -852,9 +845,19 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 		if errors.Is(msg.err, exec.ErrNotFound) {
 			errMsg = "Download failed: yt-dlp is not installed"
 		}
+		if m.pendingDownload != nil {
+			m.downloadPaused = true
+		}
 		return m, m.setStatusTimed(statusError, errMsg)
 	}
 
+	if m.downloadService != nil {
+		if err := m.downloadService.ClearPendingJob(); err != nil {
+			tuiLog.Warn("clear pending download failed", "err", err)
+		}
+	}
+	m.pendingDownload = nil
+	m.downloadPaused = false
 	m.setToast(statusMsg, ToastSuccess)
 	return m, nil
 }

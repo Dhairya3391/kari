@@ -415,6 +415,62 @@ func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd 
 	}
 }
 
+func (m *modelImpl) resumePendingDownloadCmd(opID int, job service.DownloadJob) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithCancel(m.appCtx)
+		meta := model.ResolvedMedia{
+			SeriesTitle: job.Series.Title, EpisodeTitle: job.Episode.Title,
+			MediaType: job.Series.MediaType, Year: job.Series.Year,
+			TMDBID: job.Series.TMDBID, SeasonNumber: job.Episode.Season,
+			EpisodeNumber: job.Episode.Episode,
+		}
+		outputDir, title := m.downloadService.OrganizedPath(meta)
+		go func() {
+			defer cancel()
+			if job.SearchOnResume {
+				results, _, _, err := m.mediaService.Search(ctx, job.Mode, job.Series.Title)
+				if err == nil {
+					wanted := strings.ToLower(strings.Join(strings.Fields(job.Series.Title), " "))
+					matched := false
+					for _, result := range results {
+						if strings.ToLower(strings.Join(strings.Fields(result.Title), " ")) == wanted {
+							job.Series = result
+							job.SearchOnResume = false
+							matched = true
+							_ = m.downloadService.SavePendingJob(job)
+							break
+						}
+					}
+					if !matched {
+						err = fmt.Errorf("could not find an exact provider match for %q", job.Series.Title)
+					}
+				}
+				if err != nil {
+					select {
+					case m.downloadChan <- downloadDoneMsg{opID: opID, err: err}:
+					case <-ctx.Done():
+					}
+					return
+				}
+			}
+			resolved, err := m.mediaService.Resolve(ctx, job.Mode, job.Series, job.Episode, nil, service.ResolveOptions{})
+			if err == nil {
+				err = m.downloadService.Download(ctx, resolved, func(dp downloader.DownloadProgress) {
+					select {
+					case m.downloadChan <- downloadProgressMsg{opID: opID, progress: dp.Percent, totalSize: dp.TotalSize, speed: dp.Speed, downloaded: dp.Downloaded, eta: dp.ETA}:
+					default:
+					}
+				})
+			}
+			select {
+			case m.downloadChan <- downloadDoneMsg{opID: opID, err: err}:
+			case <-ctx.Done():
+			}
+		}()
+		return downloadStartedMsg{opID: opID, cancel: cancel, outputDir: outputDir, title: title}
+	}
+}
+
 func selectedSeriesTitle(series *provider.SearchResult) string {
 	if series == nil {
 		return ""
@@ -579,11 +635,6 @@ func (m *modelImpl) exitInputMode() bool {
 	if m.activeView == viewHistory && (m.confirmDelete || m.confirmClearHistory) {
 		m.confirmDelete = false
 		m.confirmClearHistory = false
-		return true
-	}
-	if m.confirmCompletion {
-		m.confirmCompletion = false
-		m.setStatus(statusInfo, "")
 		return true
 	}
 	// Settings-screen text inputs (custom accent hex, AniList auth code)

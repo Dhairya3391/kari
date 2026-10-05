@@ -27,7 +27,6 @@ type SkipTimes struct {
 	PreviewEnd   float64
 }
 
-
 // Client queries the IntroDB API (https://introdb.app) for crowdsourced
 // intro, recap, outro, and post-credits timestamps by IMDb ID.
 type Client struct {

@@ -223,7 +223,16 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		posterCache: util.NewBoundedCache[string](30),
 	}
 	model.selectedPlayer = model.defaultPlayerIndex()
-	model.updateQueryPlaceholder()
+	if downloadService != nil {
+		job, err := downloadService.PendingJob()
+		if err != nil {
+			tuiLog.Warn("load pending download failed", "err", err)
+		} else if job != nil {
+			model.pendingDownload = job
+			model.downloadPaused = true
+			model.appMode = job.Mode
+		}
+	}
 	if s := savedSettings; s != nil {
 		if s.QualityMode >= qualityAll && s.QualityMode <= qualityLowest {
 			model.qualityMode = s.QualityMode
@@ -315,6 +324,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			}
 		}
 	}
+	model.updateQueryPlaceholder()
 	for i, code := range lang.SubtitleOptions {
 		if code == model.subtitleLanguage {
 			model.subtitleLanguageIndex = i

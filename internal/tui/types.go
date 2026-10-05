@@ -274,8 +274,8 @@ type modelImpl struct {
 	appCtx          context.Context
 	appVersion      string
 	appCommit       string
-	width  int
-	height int
+	width           int
+	height          int
 
 	activeView viewState
 
@@ -373,7 +373,6 @@ type modelImpl struct {
 	confirmStop             bool
 	confirmDelete           bool
 	confirmClearHistory     bool
-	confirmCompletion       bool
 	anilistAuthURL          string
 	authInput               textinput.Model
 	startupSync             bool
@@ -411,6 +410,7 @@ type modelImpl struct {
 	batchActiveTitle string
 	downloadPaused   bool
 	singleResolved   *model.ResolvedMedia
+	pendingDownload  *service.DownloadJob
 
 	posterClient             *poster.Client
 	imgProtocol              termimg.Protocol

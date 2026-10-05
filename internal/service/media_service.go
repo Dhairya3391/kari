@@ -720,7 +720,6 @@ func containsSource(sources []provider.MediaSource, candidate provider.MediaSour
 	return false
 }
 
-
 func firstPlaybackURL(playback []provider.MediaSource) string {
 	if len(playback) == 0 {
 		return ""

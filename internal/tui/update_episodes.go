@@ -252,6 +252,14 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			} else {
+				if m.pendingDownload != nil && m.downloadService != nil && m.mediaService != nil {
+					job := *m.pendingDownload
+					m.downloadPaused = false
+					m.activeDownloads = nil
+					m.downloadOpID = m.newOpID()
+					m.setToast("resolving interrupted download", ToastInfo)
+					return m, m.resumePendingDownloadCmd(m.downloadOpID, job)
+				}
 				// Resume: re-run the same sources. aria2c picks up the
 				// .aria2 checkpoint, yt-dlp continues from .part files.
 				m.downloadPaused = false
@@ -338,6 +346,11 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.downloadSpeed = ""
 				m.downloadETA = ""
 				m.singleResolved = nil
+				m.pendingDownload = nil
+				m.downloadPaused = false
+				if m.downloadService != nil {
+					_ = m.downloadService.ClearPendingJob()
+				}
 				m.setToast("download cancelled", ToastInfo)
 				return m, nil
 			} else if m.downloadsIndex >= len(data.Active) && len(data.Done) > 0 {
@@ -385,6 +398,10 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.downloadSpeed = ""
 			m.downloadETA = ""
 			m.singleResolved = nil
+			m.pendingDownload = nil
+			if m.downloadService != nil {
+				_ = m.downloadService.ClearPendingJob()
+			}
 			m.setToast("all downloads cancelled", ToastInfo)
 			return m, nil
 		case "esc":

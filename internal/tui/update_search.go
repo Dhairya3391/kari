@@ -2,13 +2,12 @@ package tui
 
 import (
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"kari/internal/history"
+	"kari/internal/service"
 )
 
 func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -203,78 +202,6 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.confirmCompletion {
-		switch keyMsg.String() {
-		case "y", "Y":
-			if m.historyStore != nil && m.resolved != nil {
-				audioMode := m.audioMode
-				if m.selectedEpisode != nil && m.selectedEpisode.Audio != "" {
-					audioMode = m.selectedEpisode.Audio
-				}
-				lang := ""
-				if src, ok := m.selectedPlaybackSource(); ok && src.Language != "" {
-					lang = src.Language
-				} else if m.prevSourceLanguage != "" {
-					lang = m.prevSourceLanguage
-				}
-
-				entry := history.Entry{
-					Key: history.EntryKey{
-						Title:     m.resolved.SeriesTitle,
-						Mode:      string(m.appMode),
-						MediaType: m.resolved.MediaType,
-						Season:    m.resolved.SeasonNumber,
-						Episode:   m.resolved.EpisodeNumber,
-					},
-					Title:        m.resolved.SeriesTitle,
-					EpisodeTitle: m.resolved.EpisodeTitle,
-					Season:       m.resolved.SeasonNumber,
-					Episode:      m.resolved.EpisodeNumber,
-					WatchedAt:    time.Now(),
-					PositionSecs: 1, // Set to 1 to satisfy >85% if duration 1
-					DurationSecs: 1,
-					Complete:     true,
-
-					// Metadata
-					Mode:      string(m.appMode),
-					MediaType: m.resolved.MediaType,
-					TMDBID:    m.resolved.TMDBID,
-					AniListID: anilistIDFor(m.appMode, m.selectedSeries),
-					AudioMode: audioMode,
-					Language:  lang,
-				}
-				_ = m.historyStore.Upsert(entry)
-				m.applyResumeFromHistory(m.resolved)
-
-				// Refresh episode list markers
-				if len(m.episodeResults) > 0 {
-					seriesTitle, mediaType := "", ""
-					if m.selectedSeries != nil {
-						seriesTitle = m.selectedSeries.Title
-						mediaType = m.selectedSeries.MediaType
-					}
-					m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.appMode, mediaType, m.selectedEpisodes))
-				}
-
-				if updated, ok := m.historyStore.Get(entry.Key); ok {
-					m.triggerScrobble(updated)
-				} else {
-					m.triggerScrobble(entry)
-				}
-			}
-			m.confirmCompletion = false
-			return m, m.setStatusTimed(statusSuccess, "Marked as complete")
-		case "n", "N":
-			m.confirmCompletion = false
-			return m, nil
-		case "esc":
-			m.confirmCompletion = false
-			m.setStatus(statusInfo, "")
-			return m, nil
-		}
-		return m, nil
-	}
-
 	switch keyMsg.String() {
 	case "enter":
 		// Playback starts once the first source is in — subtitles are
@@ -436,6 +363,14 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		resolved := *m.resolved
 		resolved.Playback = m.orderedPlaybackSources()
 		m.singleResolved = &resolved
+		if m.downloadService != nil && m.selectedSeries != nil && m.selectedEpisode != nil {
+			job := service.DownloadJob{Series: *m.selectedSeries, Episode: *m.selectedEpisode, Mode: m.appMode}
+			if err := m.downloadService.SavePendingJob(job); err != nil {
+				tuiLog.Warn("save pending download failed", "err", err)
+			} else {
+				m.pendingDownload = &job
+			}
+		}
 		m.downloadPaused = false
 		m.setToast("episode queued for download", ToastSuccess)
 		return m, m.downloadCmd(opID, resolved)
