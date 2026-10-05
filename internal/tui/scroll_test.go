@@ -243,6 +243,62 @@ func TestHistoryScrollWithCursor(t *testing.T) {
 		t.Errorf("head rows must scroll away:\n%s", out)
 	}
 }
+func TestApplyWindowNeverExceedsHeight(t *testing.T) {
+	st := NewStyles(ResolveAccent(model.KindAnime, "Auto"))
+	rows := make([]string, 50)
+	for i := range rows {
+		rows[i] = fmt.Sprintf("row %02d", i)
+	}
+
+	for height := 6; height <= 30; height++ {
+		for headerReserve := 0; headerReserve <= 4; headerReserve++ {
+			avail := max(3, height-headerReserve)
+			for cursor := range rows {
+				out := applyWindow(rows, cursor, height, headerReserve, st)
+				if len(out) > avail {
+					t.Fatalf("height=%d reserve=%d cursor=%d: len(out)=%d exceeds avail=%d", height, headerReserve, cursor, len(out), avail)
+				}
+			}
+		}
+	}
+}
+
+func TestHistoryScreenFitsBodyHeight(t *testing.T) {
+	var groups []history.Group
+	now := time.Now()
+	for i := 1; i <= 55; i++ {
+		entry := history.Entry{
+			Title:     fmt.Sprintf("Title %02d", i),
+			Mode:      "anime",
+			MediaType: "anime",
+			WatchedAt: now.Add(-time.Duration(i) * time.Hour),
+		}
+		groups = append(groups, history.Group{
+			Title:         entry.Title,
+			Mode:          "anime",
+			ContinueEntry: entry,
+		})
+	}
+
+	data := HistoryData{
+		ActiveTab:     HistoryTabContinue,
+		ContinueCount: 55,
+		Groups:        groups,
+		SelectedIndex: 25,
+		Width:         100,
+		Height:        24,
+		Accent:        ResolveAccent(model.KindAnime, "Auto"),
+	}
+
+	out := RenderHistoryScreen(data)
+	lines := strings.Split(out, "\n")
+	if len(lines) > data.Height {
+		t.Fatalf("rendered history lines=%d exceeds data.Height=%d", len(lines), data.Height)
+	}
+	if !strings.Contains(out, "↑") || !strings.Contains(out, "↓") {
+		t.Fatalf("expected both scroll hints in middle of 55 items, got:\n%s", out)
+	}
+}
 
 // Narrow screens stay centered on wide terminals: centerBlock adds a left
 // gutter around the whole block without touching inner alignment, and

@@ -15,8 +15,8 @@ import (
 // window over total rows: the single scroll rule shared by windowRows,
 // the episodes list, and the preview source table.
 func windowStart(total, cursorPos, visible int) int {
-	if visible < 3 {
-		visible = 3
+	if visible < 1 {
+		visible = 1
 	}
 	if total <= visible {
 		return 0
@@ -48,8 +48,8 @@ func windowStart(total, cursorPos, visible int) int {
 // list (the old pin-to-bottom rule scrolled on every move, worst in live
 // mode where group headers eat the small viewport).
 func windowRows(rows []string, cursorPos, visible int) (out []string, above, below int) {
-	if visible < 3 {
-		visible = 3
+	if visible < 1 {
+		visible = 1
 	}
 	if len(rows) <= visible {
 		return rows, 0, 0
@@ -80,8 +80,26 @@ func windowHint(n int, up bool, st Styles) string {
 // applyWindow slices rows to the viewport and wraps them with scroll
 // markers. headerReserve is the lines already used above the list.
 func applyWindow(rows []string, cursorPos, height, headerReserve int, st Styles) []string {
-	visible := max(5, height-headerReserve)
+	avail := height - headerReserve
+	if avail < 3 {
+		avail = 3
+	}
+	if len(rows) <= avail {
+		return rows
+	}
+
+	// When clipped, reserve vertical space for scroll hints so the total
+	// line count (hints + visible rows) never exceeds available height.
+	// Try 2 hints first (middle of list).
+	visible := max(1, avail-2)
 	win, above, below := windowRows(rows, cursorPos, visible)
+
+	// If only one hint is needed (at head or tail), we can fit one more row.
+	if (above == 0 && below > 0) || (below == 0 && above > 0) {
+		visible = max(1, avail-1)
+		win, above, below = windowRows(rows, cursorPos, visible)
+	}
+
 	var out []string
 	if h := windowHint(above, true, st); h != "" {
 		out = append(out, h)

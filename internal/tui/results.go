@@ -166,11 +166,11 @@ func renderResultsTable(data ResultsData, width, height int, st Styles) string {
 		rows = append(rows, row)
 	}
 
-	// 4 lines reserved above the table ("› query", count, "" + margin),
+	// 3 lines reserved above the table ("› query", count, ""),
 	// plus 2 more while the / filter prompt is shown.
-	reserve := 4
+	reserve := 3
 	if data.Filtering || strings.TrimSpace(data.FilterQuery) != "" {
-		reserve = 6
+		reserve = 5
 	}
 	return strings.Join(applyWindow(rows, data.SelectedIndex, height, reserve, st), "\n")
 }
