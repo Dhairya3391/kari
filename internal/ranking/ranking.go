@@ -34,14 +34,15 @@ type Criteria struct {
 
 // ScoredSource wraps a MediaSource with its calculated ranking score and original index.
 type ScoredSource struct {
-	Source        provider.MediaSource
-	OriginalIndex int
-	AudioScore    int
-	SubtitleScore int
-	QualityScore  float64
-	SubTypeScore  int
-	StickyScore   int
-	HealthScore   int
+	Source         provider.MediaSource
+	OriginalIndex  int
+	TransportScore int
+	AudioScore     int
+	SubtitleScore  int
+	QualityScore   float64
+	SubTypeScore   int
+	StickyScore    int
+	HealthScore    int
 }
 
 var (
@@ -197,20 +198,22 @@ func RankSources(sources []provider.MediaSource, crit Criteria) []ScoredSource {
 	scored := make([]ScoredSource, len(sources))
 	for i, src := range sources {
 		scored[i] = ScoredSource{
-			Source:        src,
-			OriginalIndex: i,
-			AudioScore:    scoreAudio(src, crit),
-			SubtitleScore: scoreSubtitles(src, crit),
-			QualityScore:  scoreQuality(src, crit.QualityMode),
-			SubTypeScore:  scoreSubType(src, crit.Mode),
-			StickyScore:   scoreSticky(src, crit.StickyProvider),
-			HealthScore:   scoreHealth(src, crit.FailedProviders, now),
+			Source:         src,
+			OriginalIndex:  i,
+			TransportScore: scoreTransport(src),
+			AudioScore:     scoreAudio(src, crit),
+			SubtitleScore:  scoreSubtitles(src, crit),
+			QualityScore:   scoreQuality(src, crit.QualityMode),
+			SubTypeScore:   scoreSubType(src, crit.Mode),
+			StickyScore:    scoreSticky(src, crit.StickyProvider),
+			HealthScore:    scoreHealth(src, crit.FailedProviders, now),
 		}
 	}
 
 	// Sort stably using the hierarchy from spec §5 plus the subtitle-kind
 	// stage: hardsubs read without any subtitle plumbing, so they sort
 	// ahead of softsubs at equal quality; unknown stays neutral.
+	// 0. Transport (challenged hosts last, always)
 	// 1. Health
 	// 2. Audio match
 	// 3. Subtitle availability
@@ -226,6 +229,10 @@ func RankSources(sources []provider.MediaSource, crit Criteria) []ScoredSource {
 }
 
 func compareScored(a, b ScoredSource) int {
+	// Challenged transport always loses, before every other signal.
+	if a.TransportScore != b.TransportScore {
+		return a.TransportScore - b.TransportScore
+	}
 	// Health demotion
 	if a.HealthScore != b.HealthScore {
 		return a.HealthScore - b.HealthScore
@@ -261,6 +268,13 @@ func compareScored(a, b ScoredSource) int {
 
 	// 6. Stable tiebreak: earlier index in original slice wins
 	return b.OriginalIndex - a.OriginalIndex
+}
+
+func scoreTransport(src provider.MediaSource) int {
+	if provider.ChallengedHost(src.URL) {
+		return -1
+	}
+	return 0
 }
 
 func scoreAudio(src provider.MediaSource, crit Criteria) int {

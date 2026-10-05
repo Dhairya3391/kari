@@ -40,3 +40,25 @@ func TestFilterDirectSources(t *testing.T) {
 		t.Errorf("FilterDirectSources = %+v, want first and third kept", got)
 	}
 }
+
+func TestChallengedHost(t *testing.T) {
+	if !ChallengedHost("https://vault-01.uwucdn.top/stream/01/uwu.m3u8") {
+		t.Error("uwucdn host must be challenged")
+	}
+	if !ChallengedHost("https://vault-99.owocdn.top/stream/99/uwu.m3u8") {
+		t.Error("owocdn mirror host must be challenged")
+	}
+	if !ChallengedHost("https://uwucdn.top/stream/01/uwu.m3u8") {
+		t.Error("bare challenged domain must match")
+	}
+	for _, u := range []string{
+		"https://fetch.nexabloom.top/anime/a/b/master.m3u8",
+		"https://cdn.example.com/a.m3u8",
+		"",
+		"not a url \x7f",
+	} {
+		if ChallengedHost(u) {
+			t.Errorf("ChallengedHost(%q) = true, want false", u)
+		}
+	}
+}

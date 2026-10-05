@@ -88,6 +88,7 @@ var aliases = map[string]string{
 	"por":             "pt",
 	"portuguese (br)": "pt",
 	"protuguese (br)": "pt", // upstream subtitle typo
+	"protuguese":      "pt", // same typo without the region tag
 	"pt-br":           "pt",
 	"brazilian":       "pt",
 	"russian":         "ru",
@@ -242,9 +243,18 @@ var nativeAliases = map[string]string{
 // canonical codes above, so tags representing the same language compare
 // equal regardless of which form a given provider used — English names,
 // 2/3-letter codes, typos, regional variants, and native-script spellings.
+// Trailing parenthetical annotations name the track source, not the
+// language ("english (cr english)", "English (US)"), so they are dropped
+// before matching; without this such tracks compare equal to nothing.
 // Unrecognized tags are returned lowercased and trimmed, unchanged otherwise.
 func Normalize(raw string) string {
 	code := strings.ToLower(strings.TrimSpace(raw))
+	if code == "" {
+		return ""
+	}
+	if i := strings.Index(code, "("); i >= 0 {
+		code = strings.TrimSpace(code[:i])
+	}
 	if code == "" {
 		return ""
 	}

@@ -17,14 +17,16 @@ func TestNormalizeFoldsNativeScripts(t *testing.T) {
 		{"ગુજરાતી", "gu"},
 		{"اردو", "ur"},
 		{"日本語", "ja"},
-		{"Hindi", "hi"},           // English name form
-		{"hin", "hi"},             // 3-letter code
-		{"EN", "en"},              // case folding
-		{"zh-cn", "zh"},           // regional variant
-		{"Protuguese (BR)", "pt"}, // typo form, verbatim
-		{"may", "ms"},             // ISO 639-2/B Malay code
-		{"disabled", "off"},       // subtitle off alias
-		{"none", "off"},           // subtitle off alias
+		{"Hindi", "hi"},                // English name form
+		{"hin", "hi"},                  // 3-letter code
+		{"EN", "en"},                   // case folding
+		{"zh-cn", "zh"},                // regional variant
+		{"Protuguese (BR)", "pt"},      // typo form, verbatim
+		{"english (cr english)", "en"}, // source annotation, stripped
+		{"English (US)", "en"},         // region annotation, stripped
+		{"may", "ms"},                  // ISO 639-2/B Malay code
+		{"disabled", "off"},            // subtitle off alias
+		{"none", "off"},                // subtitle off alias
 	}
 	for _, tt := range tests {
 		if got := Normalize(tt.raw); got != tt.want {

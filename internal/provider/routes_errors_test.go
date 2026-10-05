@@ -98,8 +98,8 @@ func TestRoutesTableCoversAllModes(t *testing.T) {
 			if r.searchTimeout() > 8*time.Second {
 				t.Errorf("mode %q provider %q search timeout %v exceeds 8s", m, r.Provider, r.searchTimeout())
 			}
-			if r.sourceTimeout() > 12*time.Second {
-				t.Errorf("mode %q provider %q source timeout %v exceeds 12s", m, r.Provider, r.sourceTimeout())
+			if r.sourceTimeout() > DefaultSourceTimeout {
+				t.Errorf("mode %q provider %q source timeout %v exceeds default", m, r.Provider, r.sourceTimeout())
 			}
 		}
 	}

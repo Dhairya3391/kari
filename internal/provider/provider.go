@@ -205,6 +205,33 @@ func FilterDirectSources(sources []MediaSource) []MediaSource {
 	return kept
 }
 
+// challengedHosts serve video but persistently challenge non-browser
+// clients: browsers and curl pass while mpv gets HTTP 403 bot challenges
+// on playlists and segments alike (verified across fresh signed URLs;
+// UA/Referer/Origin/Accept variations change nothing — it keys on the
+// TLS fingerprint, which no client flag can alter). Their rows stay
+// listed as fallback and manual picks, but every ranking sorts them
+// below playable-now sources so playback never waits out their failures
+// first.
+var challengedHosts = []string{"uwucdn.top", "owocdn.top"}
+
+// ChallengedHost reports whether rawURL is served by a challenged host.
+// Unparsable URLs fail open (false): an unknown shape must never sink a
+// playable source.
+func ChallengedHost(rawURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, bad := range challengedHosts {
+		if host == bad || strings.HasSuffix(host, "."+bad) {
+			return true
+		}
+	}
+	return false
+}
+
 // MangaChapter is one readable chapter of a manga/comic title. Number
 // stays a string because chapters are fractional ("12.5"), prefixed, or
 // unnumbered (oneshots) — an int cannot represent the catalog.

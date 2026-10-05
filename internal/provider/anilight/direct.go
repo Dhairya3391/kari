@@ -53,13 +53,20 @@ func (c *Client) resolveDirectStreams(ctx context.Context, anilistID string, cat
 	// 2. Fetch watch data for slug
 	watchData, err := c.fetchWatchData(ctx, slug)
 	if err == nil && watchData.ID > 0 {
-		// Try fetching direct sources from api.anilight.live/api/sources
+		// Collect sources from every backend instead of stopping at
+		// the first success: backends rotate health run to run, and
+		// first-success returns made rows (e.g. Megaplay) vanish
+		// between refreshes. The aggregator dedupes exact doubles.
 		provs := []string{"mello", "ryu", "vid", "l"}
+		var all []provider.MediaSource
 		for _, p := range provs {
 			srcs, sErr := c.fetchSourcesForProvider(ctx, watchData.ID, episodeNum, category, p)
-			if sErr == nil && len(srcs) > 0 {
-				return srcs, nil
+			if sErr == nil {
+				all = append(all, srcs...)
 			}
+		}
+		if len(all) > 0 {
+			return all, nil
 		}
 
 		// Also check if embed_url is present for direct Megaplay resolution

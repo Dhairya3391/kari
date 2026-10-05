@@ -179,6 +179,32 @@ func TestRankSources_HealthDemotion(t *testing.T) {
 	}
 }
 
+// Challenged-host rows sort below every playable-now source, even at a
+// higher labeled quality: playback must never wait out their bot
+// challenges first.
+func TestRankSources_ChallengedHostAlwaysLast(t *testing.T) {
+	sources := []provider.MediaSource{
+		{URL: "https://vault-01.uwucdn.top/stream/01/uwu.m3u8", Resolver: "miruro", Quality: "1080p (animepahe)"},
+		{URL: "https://cdn.example.com/low.m3u8", Resolver: "miruro", Quality: "360p"},
+		{URL: "https://fetch.nexabloom.top/a/b/master.m3u8", Resolver: "anikoto", Quality: "Auto (Vidstream-2)"},
+	}
+
+	crit := Criteria{
+		Mode:        provider.ModeAnime,
+		QualityMode: QualityHighest,
+	}
+
+	ranked := RankSources(sources, crit)
+	if len(ranked) != 3 {
+		t.Fatalf("ranked = %d, want 3", len(ranked))
+	}
+	last := ranked[2].Source.URL
+	if last != "https://vault-01.uwucdn.top/stream/01/uwu.m3u8" {
+		t.Errorf("challenged host must rank last, got order %q, %q, %q",
+			ranked[0].Source.URL, ranked[1].Source.URL, ranked[2].Source.URL)
+	}
+}
+
 func TestRankSources_StableTiebreak(t *testing.T) {
 	sources := []provider.MediaSource{
 		{URL: "s1", Resolver: "P1", Quality: "1080p"},

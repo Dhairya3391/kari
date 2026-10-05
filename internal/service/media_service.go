@@ -435,8 +435,8 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			if r, ok := routeByName[p.Name()]; ok && r.SourceTimeout > 0 && r.SourceTimeout < timeout {
 				timeout = r.SourceTimeout
 			}
-			if timeout > 12*time.Second {
-				timeout = 12 * time.Second
+			if timeout > provider.DefaultSourceTimeout {
+				timeout = provider.DefaultSourceTimeout
 			}
 			pCtx, pCancel := context.WithTimeout(ctx, timeout)
 			defer pCancel()
@@ -489,7 +489,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 
 			// standard providers return one slice. Both feed the same
 			// aggregation path. Provider calls use the per-provider
-			// deadline (at most 12s) derived from the overall context.
+			// deadline (DefaultSourceTimeout) derived from the overall context.
 			var updates <-chan []provider.MediaSource
 			if sp, ok := p.(provider.StreamingProvider); ok {
 				ch := make(chan []provider.MediaSource, 4)
@@ -537,6 +537,13 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 						for range updates {
 						}
 					}()
+					// A provider cut by its own deadline (not the overall
+					// one) failed to deliver in time: record it so the
+					// retry list and footer offer R for it, instead of
+					// vanishing silently while the countdown moves on.
+					if ctx.Err() == nil {
+						recordFailure(fmt.Errorf("%s: source deadline exceeded: %w", p.Name(), provider.ErrTimeout))
+					}
 					break streamLoop
 				}
 			}
@@ -680,12 +687,17 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 	}
 }
 
-// sort orders sources by the routes-table preference for the mode first
-// (e.g. Anikoto Vidstream-2 for anime, Movy.sx for movies/tv/cartoon),
-// then by highest quality first, breaking ties by provider priority so
-// earlier-registered providers surface before fallbacks.
+// sort orders sources by transport first (challenged hosts last, always),
+// then the routes-table preference for the mode (e.g. Anikoto Vidstream-2
+// for anime, Movy.sx for movies/tv/cartoon), then by highest quality
+// first, breaking ties by provider priority so earlier-registered
+// providers surface before fallbacks.
 func (a *sourceAggregator) sort() {
 	slices.SortStableFunc(a.sources, func(si, sj provider.MediaSource) int {
+		ci, cj := challengedRank(si), challengedRank(sj)
+		if ci != cj {
+			return ci - cj
+		}
 		ri := provider.BoostRank(a.mode, si.Resolver, si.Quality)
 		rj := provider.BoostRank(a.mode, sj.Resolver, sj.Quality)
 		if (ri >= 0) != (rj >= 0) {
@@ -705,6 +717,16 @@ func (a *sourceAggregator) sort() {
 		}
 		return a.priority[si.Resolver] - a.priority[sj.Resolver]
 	})
+}
+
+// challengedRank orders challenged-host sources below every playable-now
+// source, mirroring the ranking package so the aggregate, Preview, and
+// playback agree on what plays first.
+func challengedRank(s provider.MediaSource) int {
+	if provider.ChallengedHost(s.URL) {
+		return 1
+	}
+	return 0
 }
 
 func containsSource(sources []provider.MediaSource, candidate provider.MediaSource) bool {

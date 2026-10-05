@@ -197,3 +197,49 @@ func TestAniLightResolveDubUnavailable(t *testing.T) {
 		t.Errorf("dub resolve for missing dub embed must return ErrAudioUnavailable, got %v", err)
 	}
 }
+
+// TestAniLightAggregatesAllBackends pins that resolution collects every
+// healthy backend instead of stopping at the first: backend health rotates
+// run to run, and first-success returns made rows vanish on refresh.
+func TestAniLightAggregatesAllBackends(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/anime/check-exists", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"exists":true,"slug":"solo-leveling"}`)
+	})
+	mux.HandleFunc("/watch/solo-leveling", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"id":155,"episodes":[{"number":1,"title":"One","embed_url":{"sub":"https://embed.example.com/s"}}]}`)
+	})
+	mux.HandleFunc("/sources", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		pid := r.URL.Query().Get("providerId")
+		if pid == "ryu" {
+			http.Error(w, "backend down", http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, `{"sources":[{"url":"https://cdn.example.com/%s.m3u8","quality":"1080p"}],"tracks":[]}`, pid)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := newTestClient(t, srv)
+
+	ep := provider.Episode{Episode: 1, Audio: "sub", ID: "watch/anilight/151807/sub/1"}
+	sources, err := c.ResolveSource(context.Background(), "151807", ep)
+	if err != nil {
+		t.Fatalf("ResolveSource: %v", err)
+	}
+	// mello, vid, l deliver; ryu fails. All three must be present.
+	if len(sources) != 3 {
+		t.Fatalf("sources = %d, want 3 (one per healthy backend)", len(sources))
+	}
+	seen := make(map[string]bool)
+	for _, s := range sources {
+		seen[s.URL] = true
+	}
+	for _, pid := range []string{"mello", "vid", "l"} {
+		if !seen["https://cdn.example.com/"+pid+".m3u8"] {
+			t.Errorf("backend %q missing from sources: %v", pid, sources)
+		}
+	}
+}

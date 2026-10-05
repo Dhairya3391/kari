@@ -25,8 +25,13 @@ const (
 // delays results beyond its per-provider deadline plus the overall
 // context deadline enforced by the service.
 const (
-	DefaultSearchTimeout  = 8 * time.Second
-	DefaultSourceTimeout  = 12 * time.Second
+	DefaultSearchTimeout = 8 * time.Second
+	// DefaultSourceTimeout bounds one provider's resolve. Cold anime
+	// providers legitimately need this long (multi-hop slug resolution
+	// plus encrypted-embed decryption runs ~16s); fast providers stream
+	// their rows progressively long before it, and the overall context
+	// still caps the whole fan-out.
+	DefaultSourceTimeout  = 20 * time.Second
 	DefaultSearchOverall  = 12 * time.Second
 	DefaultSourcesOverall = 45 * time.Second
 
