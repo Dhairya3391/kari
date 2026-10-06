@@ -292,7 +292,6 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.downloadQuality = (m.downloadQuality + delta + 5) % 5
 		case 3: // Autoplay next episode
 			m.autoplay = !m.autoplay
-			m.autoPlayAfterResolve = m.autoplay
 		}
 
 	case CategoryLanguages:

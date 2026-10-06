@@ -61,6 +61,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.preferredRepairAttempts = 0
 		m.clearPreviewPoster()
 		m.beginProviderWait(m.appMode)
+		m.autoPlayAfterResolve = false
 		opID := m.newOpID()
 		m.resolveOpID = opID
 		m.pushView(viewPreview)

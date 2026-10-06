@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -253,5 +254,91 @@ func TestPlaybackStatusRendersAboveFooter(t *testing.T) {
 	out := m.renderMainView()
 	if !strings.Contains(out, "Playback finished") {
 		t.Fatalf("playback status missing from main view:\n%s", out)
+	}
+}
+
+func TestAutoPlayAfterResolveWaitsForSubtitles(t *testing.T) {
+	m := readySourceModel()
+	m.subtitleService = service.NewSubtitleService(&config.Config{})
+	m.rawSubtitles = []model.SubtitleTrack{{
+		URL:      "https://cdn.example.com/en.vtt",
+		Language: "en",
+		Resolver: "movysx",
+	}}
+	m.subtitleLanguage = "en"
+	m.autoPlayAfterResolve = true
+	m.resolveOpID = 5
+
+	resolved := model.ResolvedMedia{
+		SeriesTitle: "The Boys",
+		Playback:    m.resolved.Playback,
+		Subtitles:   m.rawSubtitles,
+	}
+
+	mdl, cmd := m.onResolveDone(resolveDoneMsg{opID: 5, resolved: resolved})
+	m = mdl.(*modelImpl)
+	if cmd == nil {
+		t.Fatal("expected subtitle fetch command")
+	}
+	if m.playOpID != 0 {
+		t.Fatalf("playback must wait for subtitle fetch, got playOpID = %d", m.playOpID)
+	}
+	if m.subtitleOpID == 0 {
+		t.Fatal("expected subtitleOpID to be set for in-flight fetch")
+	}
+	if !m.loading || m.loadingText != "Loading subtitles..." {
+		t.Fatalf("loading = %v, loadingText = %q; want loading subtitles", m.loading, m.loadingText)
+	}
+
+	track := model.SubtitleTrack{Path: "/tmp/subs/en.vtt", Language: "en", Resolver: "movysx"}
+	mdl, playCmd := m.onSubtitleDone(subtitleDoneMsg{opID: m.subtitleOpID, track: track})
+	m = mdl.(*modelImpl)
+	if playCmd == nil {
+		t.Fatal("expected play command after subtitle arrives")
+	}
+	if m.playOpID == 0 {
+		t.Fatal("playback must start once subtitle arrives")
+	}
+	if m.resolved.SelectedSubtitle == nil || m.resolved.SelectedSubtitle.Path != "/tmp/subs/en.vtt" {
+		t.Fatalf("selected subtitle = %+v, want /tmp/subs/en.vtt", m.resolved.SelectedSubtitle)
+	}
+}
+
+func TestAutoPlayAfterResolveLaunchesImmediatelyWhenNoSubtitles(t *testing.T) {
+	m := readySourceModel()
+	m.subtitleLanguage = "off"
+	m.autoPlayAfterResolve = true
+	m.resolveOpID = 5
+
+	resolved := model.ResolvedMedia{
+		SeriesTitle: "The Boys",
+		Playback:    m.resolved.Playback,
+	}
+
+	mdl, cmd := m.onResolveDone(resolveDoneMsg{opID: 5, resolved: resolved})
+	m = mdl.(*modelImpl)
+	if cmd == nil {
+		t.Fatal("expected play command")
+	}
+	if m.playOpID == 0 {
+		t.Fatal("playback should start immediately when subtitles are off")
+	}
+}
+
+func TestAutoPlayAfterResolveLaunchesOnSubtitleError(t *testing.T) {
+	m := readySourceModel()
+	m.autoPlayAfterResolve = true
+	m.subtitleOpID = 7
+
+	mdl, cmd := m.onSubtitleDone(subtitleDoneMsg{opID: 7, err: errors.New("network error")})
+	m = mdl.(*modelImpl)
+	if cmd == nil {
+		t.Fatal("expected play command after subtitle error")
+	}
+	if m.playOpID == 0 {
+		t.Fatal("playback must start even if subtitle fetch fails")
+	}
+	if m.resolved.SelectedSubtitle != nil {
+		t.Fatalf("expected nil SelectedSubtitle on error, got %+v", m.resolved.SelectedSubtitle)
 	}
 }

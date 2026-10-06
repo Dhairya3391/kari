@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -98,6 +99,35 @@ func (c *IPCClient) Connect(timeout time.Duration) error {
 // GetProperty issues a get_property command and decodes its data field.
 func (c *IPCClient) GetProperty(property string) (any, error) {
 	return c.command("get_property", property)
+}
+
+// AddSubtitle sends a sub-add command over IPC to load and select an external
+// subtitle track in the running player without restarting playback.
+func (c *IPCClient) AddSubtitle(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	path = strings.ReplaceAll(path, `\`, `/`)
+	_, err := c.command("sub-add", path, "select")
+	return err
+}
+
+// HotAddSubtitle connects to the active MPV/IINA IPC socket and side-loads
+// the given subtitle file so that late-arriving subtitles appear without
+// interrupting playback.
+func HotAddSubtitle(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	socketPath := DefaultMPVSocketPath()
+	client := NewIPCClient(socketPath)
+	if err := client.Connect(500 * time.Millisecond); err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.AddSubtitle(path)
 }
 
 func (c *IPCClient) command(args ...any) (any, error) {

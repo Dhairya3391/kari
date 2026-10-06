@@ -498,13 +498,19 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	// every provider's subtitles are actually known — fetch now rather than
 	// on the first (possibly incomplete) progress update.
 	subCmd := m.triggerSubtitleSync()
+	if m.autoPlayAfterResolve && subCmd != nil {
+		m.loading = true
+		m.loadingText = "Loading subtitles..."
+		return m, tea.Batch(m.spinner.Tick, subCmd)
+	}
 	mdl, cmd := m.finalizeResolved()
 	return mdl, tea.Batch(cmd, subCmd)
 }
 
-// onSubtitleDone attaches the fetched track to the resolved media. Playback
-// never waits for this: sources alone start play, and the subtitle joins the
-// next launch (or this one if the fetch beats the player handshake).
+// onSubtitleDone attaches the fetched track to the resolved media. When
+// autoPlayAfterResolve is set, playback begins once this completes so soft
+// subtitles are guaranteed to be passed to the player; if playback was
+// already launched manually, the track is hot-added to the running instance.
 func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.subtitleOpID {
 		return m, nil
@@ -519,6 +525,17 @@ func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.err != nil {
 		tuiLog.Debug("subtitle unavailable; playing without", "err", msg.err)
+	}
+	if m.autoPlayAfterResolve {
+		return m.finalizeResolved()
+	}
+	if m.playOpID != 0 && msg.err == nil && strings.TrimSpace(msg.track.Path) != "" {
+		path := msg.track.Path
+		go func() {
+			if err := player.HotAddSubtitle(path); err != nil {
+				tuiLog.Debug("failed to hot-add subtitle to active player", "err", err)
+			}
+		}()
 	}
 	return m, nil
 }

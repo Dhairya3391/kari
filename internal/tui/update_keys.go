@@ -214,6 +214,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			m.resolveOpID = 0
 			m.playOpID = 0
 			m.subtitleOpID = 0
+			m.autoPlayAfterResolve = false
 		}
 		return nil, true
 	case msg.String() == "?":

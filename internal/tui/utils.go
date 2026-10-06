@@ -174,6 +174,7 @@ func (m *modelImpl) goBackOne() bool {
 		m.playOpID = 0
 		m.resolveOpID = 0
 		m.subtitleOpID = 0
+		m.autoPlayAfterResolve = false
 		m.loading = false
 		m.loadingText = ""
 	}
