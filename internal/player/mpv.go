@@ -150,6 +150,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		"--msg-level=all=error",
 		"--vo=gpu-next,gpu",
 		"--gpu-context=auto",
+		"--focus-on=open",
 		"--cache=yes",
 		"--demuxer-seekable-cache=yes",
 		"--demuxer-max-bytes=150M",
@@ -160,7 +161,6 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		"--input-ipc-server=" + socketPath,
 		hwdecOptionArg(),
 	}
-	// The pipe carries only the playlist bytes: mpv still fetches every
 	// segment itself, so it needs the same transport identity as the
 	// direct path (header-gated CDNs answer 403 without Referer/Origin
 	// on segment requests too).
@@ -188,7 +188,6 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	if runtime.GOOS == "windows" {
 		pipeMpvArgs = append(pipeMpvArgs, "--terminal=no")
 	}
-	pipeMpvArgs = append(pipeMpvArgs, "-")
 
 	curlArgs := buildCurlArgs(source.URL, headers)
 	pipe, pipeErr := startPipeWithStartupCheck(pipeStartupCheck{
@@ -232,6 +231,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 		"--msg-level=all=warn",
 		"--vo=gpu-next,gpu",
 		"--gpu-context=auto",
+		"--focus-on=open",
 		hwdecOptionArg(),
 		"--network-timeout=15",
 		"--cache=yes",
