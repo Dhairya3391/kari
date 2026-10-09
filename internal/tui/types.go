@@ -339,6 +339,7 @@ type modelImpl struct {
 	nextOpID        int
 
 	searchOpID           int
+	searchQueryCancel    context.CancelFunc
 	episodesOpID         int
 	episodeTitlesOpID    int
 	historyImportOpID    int
@@ -424,17 +425,19 @@ type modelImpl struct {
 	posterCache              *util.BoundedCache[string]
 	searchPoster             string
 	searchPosterOpID         int
+	searchPosterCancel       context.CancelFunc
 	searchPosterUnavailable  bool
 	previewPoster            string
 	previewPosterOpID        int
+	previewPosterCancel      context.CancelFunc
 	previewPosterUnavailable bool
 	previewOverview          string
 	previewGenres            []string
 	previewRating            string
 	historyPoster            string
 	historyPosterOpID        int
+	historyPosterCancel      context.CancelFunc
 	historyPosterUnavailable bool
-	// historyGroups mirrors the history list rows so selection resolves
 	// back to a group without re-aggregating the store.
 	historyGroups []history.Group
 

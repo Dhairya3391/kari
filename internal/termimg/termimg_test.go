@@ -318,3 +318,31 @@ func TestCleanupTransmitFree(t *testing.T) {
 		t.Errorf("Cleanup must not transmit image data: %q", out)
 	}
 }
+
+func BenchmarkToPaletted(b *testing.B) {
+	img := image.NewRGBA(image.Rect(0, 0, 1920, 1080))
+	for y := 0; y < 1080; y++ {
+		for x := 0; x < 1920; x++ {
+			img.SetRGBA(x, y, color.RGBA{uint8(x % 256), uint8(y % 256), 128, 255})
+		}
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		_ = toPaletted(img)
+	}
+}
+
+func BenchmarkAutocontrastPage(b *testing.B) {
+	img := image.NewRGBA(image.Rect(0, 0, 1920, 1080))
+	for y := 0; y < 1080; y++ {
+		for x := 0; x < 1920; x++ {
+			img.SetRGBA(x, y, color.RGBA{uint8(50 + x%150), uint8(50 + y%150), 128, 255})
+		}
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		_ = autocontrastPage(img)
+	}
+}

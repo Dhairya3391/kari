@@ -487,3 +487,74 @@ func TestAggregatorSortPrioritizesVidstream2Anikoto(t *testing.T) {
 		t.Errorf("sources[0] = %+v, want anikoto Vidstream-2", agg.sources[0])
 	}
 }
+
+type countingProvider struct {
+	stubProvider
+	searchCount   int
+	episodesCount int
+	episodes      []provider.Episode
+}
+
+func (c *countingProvider) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
+	c.searchCount++
+	return c.results, c.err
+}
+
+func (c *countingProvider) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
+	c.episodesCount++
+	return c.episodes, nil
+}
+
+func TestMediaServiceSearchAndEpisodesCaching(t *testing.T) {
+	p := &countingProvider{
+		stubProvider: stubProvider{
+			name: "counter",
+			mode: provider.ModeMovies,
+			results: []provider.SearchResult{
+				{Title: "Film A", ID: "100", Provider: "counter", MediaType: provider.MediaTypeMovie},
+			},
+		},
+		episodes: []provider.Episode{
+			{Title: "Episode 1", ID: "ep1", Episode: 1},
+		},
+	}
+
+	svc := NewMediaService(newTestRegistry(p))
+
+	// 1. First search touches provider
+	res1, _, _, err := svc.Search(context.Background(), provider.ModeMovies, "Film A")
+	if err != nil || len(res1) != 1 {
+		t.Fatalf("first search failed: %v", err)
+	}
+	if p.searchCount != 1 {
+		t.Fatalf("expected searchCount=1, got %d", p.searchCount)
+	}
+
+	// 2. Second search for same query hits cache
+	res2, _, _, err := svc.Search(context.Background(), provider.ModeMovies, "film a")
+	if err != nil || len(res2) != 1 {
+		t.Fatalf("second search failed: %v", err)
+	}
+	if p.searchCount != 1 {
+		t.Fatalf("expected searchCount=1 on cache hit, got %d", p.searchCount)
+	}
+
+	// 3. First episode fetch touches provider
+	series := res1[0]
+	eps1, err := svc.FetchEpisodes(context.Background(), provider.ModeMovies, series, "")
+	if err != nil || len(eps1) != 1 {
+		t.Fatalf("first episodes fetch failed: %v", err)
+	}
+	if p.episodesCount != 1 {
+		t.Fatalf("expected episodesCount=1, got %d", p.episodesCount)
+	}
+
+	// 4. Second episode fetch hits cache
+	eps2, err := svc.FetchEpisodes(context.Background(), provider.ModeMovies, series, "")
+	if err != nil || len(eps2) != 1 {
+		t.Fatalf("second episodes fetch failed: %v", err)
+	}
+	if p.episodesCount != 1 {
+		t.Fatalf("expected episodesCount=1 on cache hit, got %d", p.episodesCount)
+	}
+}

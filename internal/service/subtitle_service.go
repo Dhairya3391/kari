@@ -296,7 +296,9 @@ func (s *SubtitleService) downloadProviderCandidates(
 	candidates []model.SubtitleTrack,
 	attempted map[string]struct{},
 ) (model.SubtitleTrack, error) {
+	var toProbe []model.SubtitleTrack
 	var failures []error
+
 	for _, track := range candidates {
 		if len(attempted) >= subtitleProviderCandidateLimit {
 			break
@@ -316,15 +318,61 @@ func (s *SubtitleService) downloadProviderCandidates(
 			failures = append(failures, errors.New("subtitle candidate has no URL"))
 			continue
 		}
+		toProbe = append(toProbe, track)
+		if len(toProbe) >= 3 {
+			break
+		}
+	}
 
+	if len(toProbe) == 0 {
+		if len(failures) == 0 {
+			return model.SubtitleTrack{}, nil
+		}
+		return model.SubtitleTrack{}, errors.Join(failures...)
+	}
+
+	if len(toProbe) == 1 {
 		downloadCtx, cancel := context.WithTimeout(ctx, subtitleProviderDownloadTimeout)
-		downloaded, err := s.downloadProviderSubtitle(downloadCtx, media, track)
-		cancel()
+		defer cancel()
+		downloaded, err := s.downloadProviderSubtitle(downloadCtx, media, toProbe[0])
 		if err == nil {
 			return downloaded, nil
 		}
 		failures = append(failures, err)
+		return model.SubtitleTrack{}, errors.Join(failures...)
 	}
+
+	type subResult struct {
+		track model.SubtitleTrack
+		err   error
+	}
+
+	downloadCtx, cancel := context.WithTimeout(ctx, subtitleProviderDownloadTimeout)
+	defer cancel()
+
+	ch := make(chan subResult, len(toProbe))
+	for _, track := range toProbe {
+		track := track
+		go func() {
+			downloaded, err := s.downloadProviderSubtitle(downloadCtx, media, track)
+			ch <- subResult{track: downloaded, err: err}
+		}()
+	}
+
+	for range toProbe {
+		select {
+		case res := <-ch:
+			if res.err == nil && usableCachedTrack(res.track) {
+				return res.track, nil
+			}
+			if res.err != nil {
+				failures = append(failures, res.err)
+			}
+		case <-downloadCtx.Done():
+			failures = append(failures, downloadCtx.Err())
+		}
+	}
+
 	if len(failures) == 0 {
 		return model.SubtitleTrack{}, nil
 	}

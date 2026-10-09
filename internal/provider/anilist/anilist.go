@@ -10,11 +10,25 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/provider"
+	"kari/internal/util"
 )
+
+var (
+	sharedAniListCache = util.NewBoundedCache[anilistSearchEntry](200)
+	sharedAniListSF    singleflight.Group
+)
+
+type anilistSearchEntry struct {
+	results  []provider.SearchResult
+	cachedAt time.Time
+}
 
 // Title holds the multiple localised name variants AniList exposes for a
 // single media entry. At least one field is non-empty for any real entry.
@@ -82,13 +96,46 @@ func Search(ctx context.Context, hc *http.Client, query string) ([]provider.Sear
 // production path always uses config.AniListAPIBase; the parameter exists
 // so offline tests can serve canned GraphQL payloads.
 func SearchWithEndpoint(ctx context.Context, hc *http.Client, query, endpoint string) ([]provider.SearchResult, error) {
+	normalizedQ := strings.TrimSpace(query)
+	if normalizedQ == "" {
+		return nil, fmt.Errorf("empty query")
+	}
+
+	cacheKey := fmt.Sprintf("%s:%s", endpoint, strings.ToLower(normalizedQ))
+	if entry, ok := sharedAniListCache.Get(cacheKey); ok && time.Since(entry.cachedAt) < 10*time.Minute {
+		return entry.results, nil
+	}
+
+	res, err, _ := sharedAniListSF.Do(cacheKey, func() (any, error) {
+		if entry, ok := sharedAniListCache.Get(cacheKey); ok && time.Since(entry.cachedAt) < 10*time.Minute {
+			return entry.results, nil
+		}
+
+		out, fetchErr := searchDirect(ctx, hc, normalizedQ, endpoint)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		if len(out) > 0 {
+			sharedAniListCache.Set(cacheKey, anilistSearchEntry{
+				results:  out,
+				cachedAt: time.Now(),
+			})
+		}
+		return out, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res.([]provider.SearchResult), nil
+}
+
+func searchDirect(ctx context.Context, hc *http.Client, query, endpoint string) ([]provider.SearchResult, error) {
 	const gql = `query($search:String){Page(page:1,perPage:20){media(search:$search,type:ANIME,sort:SEARCH_MATCH){id title{romaji english userPreferred native} seasonYear format}}}`
 
 	body, err := gqlPost(ctx, hc, endpoint, gql, map[string]any{"search": query})
 	if err != nil {
 		return nil, err
 	}
-
 	var parsed struct {
 		Data struct {
 			Page struct {

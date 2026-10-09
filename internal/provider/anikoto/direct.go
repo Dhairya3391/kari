@@ -49,10 +49,13 @@ func anikotoHeaders(referer string) http.Header {
 }
 
 var (
-	reWatchMainID  = regexp.MustCompile(`id="watch-main"[^>]*data-id="(\d+)"`)
-	reDataID       = regexp.MustCompile(`data-id="(\d+)"`)
-	reHeadingTitle = regexp.MustCompile(`(?i)<h1[^>]*>(.*?)</h1>`)
-	rePageTitle    = regexp.MustCompile(`(?i)<title>(.*?)</title>`)
+	reWatchMainID     = regexp.MustCompile(`id="watch-main"[^>]*data-id="(\d+)"`)
+	reDataID          = regexp.MustCompile(`data-id="(\d+)"`)
+	reHeadingTitle    = regexp.MustCompile(`(?i)<h1[^>]*>(.*?)</h1>`)
+	rePageTitle       = regexp.MustCompile(`(?i)<title>(.*?)</title>`)
+	rePosterCandidate = regexp.MustCompile(`(?s)<div class="ani poster tip"[^>]*data-tip="(\d+)"[^>]*>.*?<a href="(?:https?://[^"/]+)?/watch/([^"/]+)(?:/ep-\d+)?"[^>]*>.*?alt="([^"]+)"`)
+	reAjaxCandidate   = regexp.MustCompile(`(?s)href="(?:https?://[^"/]+)?/watch/([^"/]+)(?:/ep-\d+)?"[^>]*>.*?<div class="name d-title"[^>]*>(.*?)</div>`)
+	reEmbedFileAlt    = regexp.MustCompile(`File\s+(\d+)\s+-`)
 )
 
 // anikotoCandidate is one search hit: site slug, display name, and the
@@ -63,18 +66,6 @@ type anikotoCandidate struct {
 	animeID string
 }
 
-// posterPattern matches one search-result poster block, capturing the
-// data-tip anime ID, the watch slug (bare or with an /ep-N suffix), and
-// the poster's alt title. Host is injected per request so tests can serve
-// fixtures from httptest servers.
-func posterPattern(host string) *regexp.Regexp {
-	return regexp.MustCompile(`(?s)<div class="ani poster tip"[^>]*data-tip="(\d+)"[^>]*>.*?<a href="` + host + `/watch/([^"/]+)(?:/ep-\d+)?"[^>]*>.*?alt="([^"]+)"`)
-}
-
-// ajaxPattern matches one autocomplete hit: watch slug plus display name.
-func ajaxPattern(host string) *regexp.Regexp {
-	return regexp.MustCompile(`(?s)href="` + host + `/watch/([^"/]+)(?:/ep-\d+)?"[^>]*>.*?<div class="name d-title"[^>]*>(.*?)</div>`)
-}
 
 // resolveAnilistToAnikoto maps an AniList ID to anikoto's internal animeID and slug.
 // Results are cached for directCacheTTL seconds to avoid redundant scrapes.
@@ -305,7 +296,7 @@ func (c *Client) searchAnikotoHTML(ctx context.Context, title string) ([]anikoto
 	}
 
 	var out []anikotoCandidate
-	for _, m := range posterPattern(regexp.QuoteMeta(c.siteBase)).FindAllStringSubmatch(string(body), -1) {
+	for _, m := range rePosterCandidate.FindAllStringSubmatch(string(body), -1) {
 		if len(m) < 4 {
 			continue
 		}
@@ -360,7 +351,7 @@ func (c *Client) searchAnikotoAJAX(ctx context.Context, title string) ([]anikoto
 	}
 
 	var out []anikotoCandidate
-	for _, m := range ajaxPattern(regexp.QuoteMeta(c.siteBase)).FindAllStringSubmatch(ajaxResp.Result.HTML, -1) {
+	for _, m := range reAjaxCandidate.FindAllStringSubmatch(ajaxResp.Result.HTML, -1) {
 		if len(m) < 3 {
 			continue
 		}
@@ -824,8 +815,7 @@ func (c *Client) resolveServerStream(ctx context.Context, linkID, watchReferer, 
 		fileID = string(m[1])
 	}
 	if fileID == "" {
-		reFile := regexp.MustCompile(`File\s+(\d+)\s+-`)
-		if m := reFile.FindSubmatch(embedBody); len(m) >= 2 {
+		if m := reEmbedFileAlt.FindSubmatch(embedBody); len(m) >= 2 {
 			fileID = string(m[1])
 		}
 	}

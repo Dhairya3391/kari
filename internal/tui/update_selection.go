@@ -195,6 +195,17 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, series, *m.selectedEpisode, nil, nil), m.prefetchPreviewPoster())
 }
 func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
+	if m.searchQueryCancel != nil {
+		m.searchQueryCancel()
+		m.searchQueryCancel = nil
+	}
+	parent := m.appCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	searchCtx, cancel := context.WithCancel(parent)
+	m.searchQueryCancel = cancel
+
 	mode := m.appMode
 	cacheable := !m.modeFeatures().NoCachedSearches
 	return func() tea.Msg {
@@ -207,7 +218,7 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 		}
 
 		logging.Debug("search start", "mode", mode, "query", query)
-		results, usedQuery, warnings, err := m.mediaService.Search(m.appCtx, mode, query)
+		results, usedQuery, warnings, err := m.mediaService.Search(searchCtx, mode, query)
 		if err == nil && cacheable {
 			m.searchCache.Set(cacheKey, searchCacheEntry{
 				results:   results,

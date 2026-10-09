@@ -15,9 +15,30 @@ import (
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/provider/kit"
+	"kari/internal/util"
 
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 )
+
+const (
+	searchCacheTTL   = 5 * time.Minute
+	searchCacheMax   = 100
+	episodesCacheTTL = 15 * time.Minute
+	episodesCacheMax = 200
+)
+
+type searchCacheEntry struct {
+	results  []provider.SearchResult
+	query    string
+	warnings []string
+	cachedAt time.Time
+}
+
+type episodesCacheEntry struct {
+	episodes []provider.Episode
+	cachedAt time.Time
+}
 
 // log scopes every line from this package/component.
 var mediaLog = logging.With("component", "service.media")
@@ -32,11 +53,20 @@ type MediaService struct {
 
 	lastMu       sync.Mutex
 	lastFailures []string
+
+	searchCache   *util.BoundedCache[searchCacheEntry]
+	episodesCache *util.BoundedCache[episodesCacheEntry]
+	sf            singleflight.Group
 }
 
 // NewMediaService constructs a MediaService.
 func NewMediaService(registry *provider.Registry) *MediaService {
-	return &MediaService{registry: registry, health: &provider.Health{}}
+	return &MediaService{
+		registry:      registry,
+		health:        &provider.Health{},
+		searchCache:   util.NewBoundedCache[searchCacheEntry](searchCacheMax),
+		episodesCache: util.NewBoundedCache[episodesCacheEntry](episodesCacheMax),
+	}
 }
 
 func (s *MediaService) episodeAvailabilitySources(mode provider.ContentType, series provider.SearchResult) []provider.EpisodeAvailabilitySource {
@@ -87,6 +117,13 @@ func (s *MediaService) setLastFailures(names []string) {
 // per-provider failures become warnings rather than errors; partial
 // results are returned together with the failed-provider list.
 func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, query string) ([]provider.SearchResult, string, []string, error) {
+	cacheKey := fmt.Sprintf("%s:%s", mode, strings.ToLower(strings.TrimSpace(query)))
+	if s.searchCache != nil {
+		if entry, ok := s.searchCache.Get(cacheKey); ok && time.Since(entry.cachedAt) < searchCacheTTL {
+			return entry.results, entry.query, entry.warnings, nil
+		}
+	}
+
 	providers := s.registry.ProvidersForMode(mode)
 	if len(providers) == 0 {
 		return nil, query, nil, fmt.Errorf("no providers available for mode %q", mode)
@@ -144,7 +181,7 @@ collectResults:
 			resultsMap[res.provider] = res
 			if res.err == nil && len(res.results) > 0 && !gotValidResults {
 				gotValidResults = true
-				// Once at least one provider succeeds with results, give other providers up to 1.5s grace period
+				// Once at least one provider succeeds with results, allow remaining providers 1.5s to finish
 				graceTimer = time.NewTimer(1500 * time.Millisecond)
 				defer graceTimer.Stop()
 				graceCh = graceTimer.C
@@ -157,7 +194,6 @@ collectResults:
 			break collectResults
 		}
 	}
-
 	var (
 		allResults []provider.SearchResult
 		warnings   []string
@@ -207,6 +243,14 @@ collectResults:
 		return nil, query, warnings, provider.ErrNoResults
 	}
 
+	if s.searchCache != nil && len(allResults) > 0 {
+		s.searchCache.Set(cacheKey, searchCacheEntry{
+			results:  allResults,
+			query:    query,
+			warnings: warnings,
+			cachedAt: time.Now(),
+		})
+	}
 	return allResults, query, warnings, nil
 }
 
@@ -232,6 +276,38 @@ func providerSearchTimeout(providerCount int, route provider.Route, hasRoute boo
 // provider. Anime audio availability is sourced from providers that expose
 // per-track data, so synthetic dub rows are never returned.
 func (s *MediaService) FetchEpisodes(ctx context.Context, mode provider.ContentType, series provider.SearchResult, audioMode string) ([]provider.Episode, error) {
+	cacheKey := fmt.Sprintf("%s:%s:%s:%s", mode, series.Provider, series.ID, audioMode)
+	if s.episodesCache != nil {
+		if entry, ok := s.episodesCache.Get(cacheKey); ok && time.Since(entry.cachedAt) < episodesCacheTTL {
+			return entry.episodes, nil
+		}
+	}
+
+	res, err, _ := s.sf.Do(cacheKey, func() (any, error) {
+		if s.episodesCache != nil {
+			if entry, ok := s.episodesCache.Get(cacheKey); ok && time.Since(entry.cachedAt) < episodesCacheTTL {
+				return entry.episodes, nil
+			}
+		}
+		eps, fetchErr := s.fetchEpisodesUncached(ctx, mode, series, audioMode)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		if s.episodesCache != nil && len(eps) > 0 {
+			s.episodesCache.Set(cacheKey, episodesCacheEntry{
+				episodes: eps,
+				cachedAt: time.Now(),
+			})
+		}
+		return eps, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res.([]provider.Episode), nil
+}
+
+func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.ContentType, series provider.SearchResult, audioMode string) ([]provider.Episode, error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 

@@ -436,10 +436,6 @@ func getSkipArgs(
 	}
 
 	isMovie := media.MediaType == "movie" || (media.SeasonNumber == 0 && media.EpisodeNumber == 0 && media.MediaType != "tv" && media.MediaType != "anime")
-
-	// 2. Resolve IMDb ID
-	imdbID := resolveIMDbID(ctx, media, clients.TMDB, clients.HTTP)
-
 	times := combinedSkipTimes{
 		OpStart: -1, OpEnd: -1,
 		EdStart: -1, EdEnd: -1,
@@ -449,6 +445,7 @@ func getSkipArgs(
 
 	var (
 		g          errgroup.Group
+		imdbID     string
 		askipTimes *animeskip.SkipTimes
 		aniskipRes *aniskip.SkipTimes
 		skipdbRes  *skipdb.SkipTimes
@@ -499,32 +496,43 @@ func getSkipArgs(
 		})
 	}
 
-	// SkipDB
-	if (providerMode == "hybrid" || providerMode == "skipdb") && clients.SkipDB != nil && imdbID != "" {
+	// SkipDB & IntroDB (requires IMDb ID)
+	needIMDb := (providerMode == "hybrid" || providerMode == "skipdb" || providerMode == "introdb") &&
+		(clients.SkipDB != nil || clients.IntroDB != nil)
+	if needIMDb {
 		g.Go(func() error {
-			t, err := clients.SkipDB.GetSegments(ctx, imdbID, media.SeasonNumber, media.EpisodeNumber, isMovie)
-			if err != nil {
-				skipLog.Debug("skipdb lookup error", "err", err)
-			} else {
-				skipdbRes = t
+			id := resolveIMDbID(ctx, media, clients.TMDB, clients.HTTP)
+			if id == "" {
+				return nil
 			}
+			imdbID = id
+			var subG errgroup.Group
+			if (providerMode == "hybrid" || providerMode == "skipdb") && clients.SkipDB != nil {
+				subG.Go(func() error {
+					t, err := clients.SkipDB.GetSegments(ctx, imdbID, media.SeasonNumber, media.EpisodeNumber, isMovie)
+					if err != nil {
+						skipLog.Debug("skipdb lookup error", "err", err)
+					} else {
+						skipdbRes = t
+					}
+					return nil
+				})
+			}
+			if (providerMode == "hybrid" || providerMode == "introdb") && clients.IntroDB != nil {
+				subG.Go(func() error {
+					t, err := clients.IntroDB.GetSegments(ctx, imdbID, media.SeasonNumber, media.EpisodeNumber, isMovie)
+					if err != nil {
+						skipLog.Debug("introdb lookup error", "err", err)
+					} else {
+						introdbRes = t
+					}
+					return nil
+				})
+			}
+			_ = subG.Wait()
 			return nil
 		})
 	}
-
-	// IntroDB
-	if (providerMode == "hybrid" || providerMode == "introdb") && clients.IntroDB != nil && imdbID != "" {
-		g.Go(func() error {
-			t, err := clients.IntroDB.GetSegments(ctx, imdbID, media.SeasonNumber, media.EpisodeNumber, isMovie)
-			if err != nil {
-				skipLog.Debug("introdb lookup error", "err", err)
-			} else {
-				introdbRes = t
-			}
-			return nil
-		})
-	}
-
 	_ = g.Wait()
 
 	isAnime := media.MediaType == "anime" || anilistID > 0

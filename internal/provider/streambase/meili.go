@@ -6,10 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/provider"
+	"kari/internal/util"
 )
 
 // Result is one raw hit from the meilisearch TMDB index.
@@ -31,6 +36,16 @@ type Response struct {
 	Results        []Result `json:"results"`
 }
 
+var (
+	sharedMeiliCache = util.NewBoundedCache[meiliCacheEntry](200)
+	sharedMeiliSF    singleflight.Group
+)
+
+type meiliCacheEntry struct {
+	results  []provider.SearchResult
+	cachedAt time.Time
+}
+
 // Client queries the shared TMDB search index used by TMDB-keyed providers.
 type Client struct {
 	httpClient *http.Client
@@ -42,7 +57,6 @@ func NewClient() *Client {
 		httpClient: httpclient.NewWithUserAgent(config.DesktopUserAgent),
 	}
 }
-
 // NewClientWithHTTPClient constructs the search client over a custom
 // HTTP client (offline tests serve canned index payloads).
 func NewClientWithHTTPClient(hc *http.Client) *Client {
@@ -66,15 +80,44 @@ func (c *Client) SearchWithMode(ctx context.Context, query string, mode provider
 // SearchWithEndpoint performs the raw query against one endpoint and maps
 // hits to provider results keyed by TMDB id.
 func (c *Client) SearchWithEndpoint(ctx context.Context, query string, endpoint string) ([]provider.SearchResult, error) {
-	if query == "" {
+	normalizedQ := strings.TrimSpace(query)
+	if normalizedQ == "" {
 		return nil, fmt.Errorf("empty query")
 	}
 
+	cacheKey := fmt.Sprintf("%s:%s", endpoint, strings.ToLower(normalizedQ))
+	if entry, ok := sharedMeiliCache.Get(cacheKey); ok && time.Since(entry.cachedAt) < 10*time.Minute {
+		return entry.results, nil
+	}
+
+	res, err, _ := sharedMeiliSF.Do(cacheKey, func() (any, error) {
+		if entry, ok := sharedMeiliCache.Get(cacheKey); ok && time.Since(entry.cachedAt) < 10*time.Minute {
+			return entry.results, nil
+		}
+
+		out, fetchErr := c.searchDirect(ctx, normalizedQ, endpoint)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		if len(out) > 0 {
+			sharedMeiliCache.Set(cacheKey, meiliCacheEntry{
+				results:  out,
+				cachedAt: time.Now(),
+			})
+		}
+		return out, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res.([]provider.SearchResult), nil
+}
+
+func (c *Client) searchDirect(ctx context.Context, query string, endpoint string) ([]provider.SearchResult, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", config.SearchAPIBase+endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-
 	q := req.URL.Query()
 	q.Set("q", query)
 	q.Set("limit", "30")

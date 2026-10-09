@@ -60,7 +60,10 @@ var (
 )
 
 func ParseResolution(raw string) int {
-	stripped := reBracketTag.ReplaceAllString(raw, "")
+	stripped := raw
+	if strings.IndexByte(raw, '[') >= 0 {
+		stripped = reBracketTag.ReplaceAllString(raw, "")
+	}
 	lower := strings.ToLower(strings.TrimSpace(stripped))
 	if lower == "" || lower == "unknown" || lower == "—" {
 		return 0

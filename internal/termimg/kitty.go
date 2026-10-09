@@ -90,7 +90,8 @@ func renderKitty(img image.Image, cellW, cellH int, imageID uint32, termCols, te
 		small = resizeBox(img, pxW, pxH)
 	}
 	var pngBuf bytes.Buffer
-	if err := png.Encode(&pngBuf, small); err != nil {
+	enc := png.Encoder{CompressionLevel: png.BestSpeed}
+	if err := enc.Encode(&pngBuf, small); err != nil {
 		return "", fmt.Errorf("termimg: png encode failed: %w", err)
 	}
 	b64 := base64.StdEncoding.EncodeToString(pngBuf.Bytes())

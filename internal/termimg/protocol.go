@@ -101,17 +101,19 @@ func Detect() Protocol {
 	if override, ok := parseOverride(os.Getenv(protocolOverrideEnv)); ok {
 		return override
 	}
-	// Kitty first: WezTerm and Ghostty report Kitty capability and
-	// render Kitty transmits natively — verified live on Ghostty,
-	// where the iTerm2 inline path shows nothing at all. Slot cleanup
-	// goes through explicit delete-by-id sequences (see kitty.go).
-	if rasterm.IsKittyCapable() {
+	term := strings.ToLower(strings.TrimSpace(os.Getenv("TERM")))
+	termProgram := strings.ToLower(strings.TrimSpace(os.Getenv("TERM_PROGRAM")))
+
+	// Kitty first: Kitty, Ghostty, WezTerm report Kitty capability
+	if rasterm.IsKittyCapable() || strings.Contains(termProgram, "ghostty") || strings.Contains(term, "ghostty") || strings.Contains(term, "kitty") {
 		return ProtocolKitty
 	}
-	if rasterm.IsItermCapable() {
+	// iTerm2 inline images protocol (iTerm2, WezTerm, Rio, Mintty)
+	if rasterm.IsItermCapable() || strings.Contains(termProgram, "iterm") || strings.Contains(termProgram, "wezterm") || strings.Contains(termProgram, "rio") || strings.Contains(termProgram, "mintty") {
 		return ProtocolIterm
 	}
-	if sixelEnvHint() {
+	// Sixel (Windows Terminal, Foot, mlterm, Konsole, Contour, DOMTerm, yaft)
+	if isSixelCapable() {
 		return ProtocolSixel
 	}
 	if lipgloss.ColorProfile() == termenv.TrueColor {
@@ -138,6 +140,14 @@ func parseOverride(raw string) (Protocol, bool) {
 	}
 }
 
+func isSixelCapable() bool {
+	if sixelEnvHint() {
+		return true
+	}
+	capable, err := rasterm.IsSixelCapable()
+	return err == nil && capable
+}
+
 // sixelEnvHint reports whether the environment looks like a Sixel-capable
 // terminal that neither the Kitty nor the iTerm2 check already claimed.
 // Only terminals with reliable built-in Sixel qualify (mlterm, foot).
@@ -147,7 +157,25 @@ func parseOverride(raw string) (Protocol, bool) {
 // always render. Real sixel-xterm users force KARI_IMG_PROTOCOL=sixel.
 func sixelEnvHint() bool {
 	term := strings.ToLower(strings.TrimSpace(os.Getenv("TERM")))
-	for _, hint := range []string{"mlterm", "foot", "sixel"} {
+	termProgram := strings.ToLower(strings.TrimSpace(os.Getenv("TERM_PROGRAM")))
+
+	if os.Getenv("WT_SESSION") != "" || termProgram == "windows.terminal" {
+		return true
+	}
+	if os.Getenv("KONSOLE_VERSION") != "" || strings.Contains(termProgram, "konsole") {
+		return true
+	}
+	if os.Getenv("CONTOUR_VERSION") != "" || strings.Contains(termProgram, "contour") || strings.Contains(term, "contour") {
+		return true
+	}
+	if os.Getenv("DOMTERM") != "" || strings.Contains(termProgram, "domterm") {
+		return true
+	}
+	if strings.Contains(term, "yaft") {
+		return true
+	}
+
+	for _, hint := range []string{"mlterm", "foot", "sixel", "contour", "xterm-ghostty"} {
 		if strings.Contains(term, hint) {
 			return true
 		}

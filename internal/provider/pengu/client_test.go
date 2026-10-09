@@ -68,13 +68,15 @@ func TestBuildConfigSegment(t *testing.T) {
 	}
 	// These backends play via Kari's header handling (verified with live
 	// mpv probes), so they stay enabled.
-	for _, key := range []string{"source_moviebox", "source_miruro", "source_anikoto", "source_2peckle", "source_vidlink", "source_moviesdrives", "source_4khdhub", "source_vegamovies", "source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy", "source_kisskh", "source_hdhub4u"} {
+	for _, key := range []string{"source_moviebox", "source_miruro", "source_anikoto", "source_2peckle", "source_4khdhub", "source_vegamovies", "source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy", "source_kisskh", "source_hdhub4u"} {
 		if parsed[key] != "on" {
 			t.Errorf("%s = %v, want on", key, parsed[key])
 		}
 	}
-	if parsed["source_arctic"] != "off" {
-		t.Errorf("source_arctic = %v, want off", parsed["source_arctic"])
+	for _, key := range []string{"source_vidlink", "source_moviesdrives", "source_arctic"} {
+		if parsed[key] != "off" {
+			t.Errorf("%s = %v, want off", key, parsed[key])
+		}
 	}
 	for _, key := range []string{"source_hdghartv", "source_atlantic"} {
 		if _, ok := parsed[key]; ok {
@@ -514,7 +516,11 @@ func TestSearchLiveReturnsPartialWhenCatalogStalls(t *testing.T) {
 // into local time instead of dropping to zero (which hid every timed
 // event from the schedule).
 func TestParseLiveStart(t *testing.T) {
-	got := parseLiveStart("2026-09-21 21:00 GMT+5:30")
+	// RFC3339 in released field wins with high precision
+	if got := parseLiveStart("Oct 9, 13:00", "2026-10-09T07:30:00.000Z"); got.IsZero() || !got.UTC().Equal(time.Date(2026, 10, 9, 7, 30, 0, 0, time.UTC)) {
+		t.Errorf("RFC3339 released parse = %v, want 2026-10-09 07:30 UTC", got.UTC())
+	}
+	got := parseLiveStart("2026-09-21 21:00 GMT+5:30", "")
 	if got.IsZero() {
 		t.Fatal("GMT-offset releaseInfo must parse")
 	}
@@ -523,13 +529,13 @@ func TestParseLiveStart(t *testing.T) {
 	if !got.UTC().Equal(want) {
 		t.Errorf("parse = %v, want %v", got.UTC(), want)
 	}
-	if got := parseLiveStart("2026-09-20 10:00"); got.IsZero() {
+	if got := parseLiveStart("2026-09-20 10:00", ""); got.IsZero() {
 		t.Error("bare datetime must parse")
 	}
-	if got := parseLiveStart("24/7"); !got.IsZero() {
+	if got := parseLiveStart("24/7", ""); !got.IsZero() {
 		t.Errorf("channel marker must stay zero, got %v", got)
 	}
-	if got := parseLiveStart(""); !got.IsZero() {
+	if got := parseLiveStart("", ""); !got.IsZero() {
 		t.Errorf("blank must stay zero, got %v", got)
 	}
 }

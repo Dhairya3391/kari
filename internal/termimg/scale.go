@@ -125,13 +125,43 @@ func autocontrastPage(img image.Image) image.Image {
 	const buckets = 64
 	var hist [buckets]int
 	total := 0
-	// Strided sampling: enough statistics at a fraction of the cost.
-	for y := b.Min.Y; y < b.Max.Y; y += 4 {
-		for x := b.Min.X; x < b.Max.X; x += 4 {
-			r, g, bl, _ := img.At(x, y).RGBA()
-			lum := (19595*uint32(r>>8) + 38470*uint32(g>>8) + 7471*uint32(bl>>8)) >> 16
-			hist[lum*buckets/256]++
-			total++
+
+	switch im := img.(type) {
+	case *image.RGBA:
+		for y := b.Min.Y; y < b.Max.Y; y += 4 {
+			rowOff := (y - im.Rect.Min.Y) * im.Stride
+			for x := b.Min.X; x < b.Max.X; x += 4 {
+				pixOff := rowOff + (x-im.Rect.Min.X)*4
+				r := uint32(im.Pix[pixOff+0])
+				g := uint32(im.Pix[pixOff+1])
+				bl := uint32(im.Pix[pixOff+2])
+				lum := (19595*r + 38470*g + 7471*bl) >> 16
+				hist[lum*buckets/256]++
+				total++
+			}
+		}
+	case *image.NRGBA:
+		for y := b.Min.Y; y < b.Max.Y; y += 4 {
+			rowOff := (y - im.Rect.Min.Y) * im.Stride
+			for x := b.Min.X; x < b.Max.X; x += 4 {
+				pixOff := rowOff + (x-im.Rect.Min.X)*4
+				r := uint32(im.Pix[pixOff+0])
+				g := uint32(im.Pix[pixOff+1])
+				bl := uint32(im.Pix[pixOff+2])
+				lum := (19595*r + 38470*g + 7471*bl) >> 16
+				hist[lum*buckets/256]++
+				total++
+			}
+		}
+	default:
+		// Strided sampling: enough statistics at a fraction of the cost.
+		for y := b.Min.Y; y < b.Max.Y; y += 4 {
+			for x := b.Min.X; x < b.Max.X; x += 4 {
+				r, g, bl, _ := img.At(x, y).RGBA()
+				lum := (19595*uint32(r>>8) + 38470*uint32(g>>8) + 7471*uint32(bl>>8)) >> 16
+				hist[lum*buckets/256]++
+				total++
+			}
 		}
 	}
 	if total == 0 {
@@ -162,15 +192,53 @@ func autocontrastPage(img image.Image) image.Image {
 	hiF := float64(hi+1) * 256 / buckets
 	gain := 255 / (hiF - loF)
 	out := image.NewRGBA(image.Rect(0, 0, sw, sh))
-	for y := 0; y < sh; y++ {
-		for x := 0; x < sw; x++ {
-			r, g, bl, a := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
-			// Per-channel linear stretch: manga pages are near-gray,
-			// so this equals a luminance gain without hue shifts.
-			out.Pix[(y*sw+x)*4+0] = clamp8((float64(r>>8) - loF) * gain)
-			out.Pix[(y*sw+x)*4+1] = clamp8((float64(g>>8) - loF) * gain)
-			out.Pix[(y*sw+x)*4+2] = clamp8((float64(bl>>8) - loF) * gain)
-			out.Pix[(y*sw+x)*4+3] = uint8(a >> 8)
+
+	switch im := img.(type) {
+	case *image.RGBA:
+		for y := range sh {
+			srcRowOff := (b.Min.Y + y - im.Rect.Min.Y) * im.Stride
+			dstRowOff := y * out.Stride
+			for x := range sw {
+				srcPixOff := srcRowOff + (b.Min.X+x-im.Rect.Min.X)*4
+				dstPixOff := dstRowOff + x*4
+				r := float64(im.Pix[srcPixOff+0])
+				g := float64(im.Pix[srcPixOff+1])
+				bl := float64(im.Pix[srcPixOff+2])
+				a := im.Pix[srcPixOff+3]
+				out.Pix[dstPixOff+0] = clamp8((r - loF) * gain)
+				out.Pix[dstPixOff+1] = clamp8((g - loF) * gain)
+				out.Pix[dstPixOff+2] = clamp8((bl - loF) * gain)
+				out.Pix[dstPixOff+3] = a
+			}
+		}
+	case *image.NRGBA:
+		for y := range sh {
+			srcRowOff := (b.Min.Y + y - im.Rect.Min.Y) * im.Stride
+			dstRowOff := y * out.Stride
+			for x := range sw {
+				srcPixOff := srcRowOff + (b.Min.X+x-im.Rect.Min.X)*4
+				dstPixOff := dstRowOff + x*4
+				r := float64(im.Pix[srcPixOff+0])
+				g := float64(im.Pix[srcPixOff+1])
+				bl := float64(im.Pix[srcPixOff+2])
+				a := im.Pix[srcPixOff+3]
+				out.Pix[dstPixOff+0] = clamp8((r - loF) * gain)
+				out.Pix[dstPixOff+1] = clamp8((g - loF) * gain)
+				out.Pix[dstPixOff+2] = clamp8((bl - loF) * gain)
+				out.Pix[dstPixOff+3] = a
+			}
+		}
+	default:
+		for y := range sh {
+			for x := range sw {
+				r, g, bl, a := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
+				// Per-channel linear stretch: manga pages are near-gray,
+				// so this equals a luminance gain without hue shifts.
+				out.Pix[(y*sw+x)*4+0] = clamp8((float64(r>>8) - loF) * gain)
+				out.Pix[(y*sw+x)*4+1] = clamp8((float64(g>>8) - loF) * gain)
+				out.Pix[(y*sw+x)*4+2] = clamp8((float64(bl>>8) - loF) * gain)
+				out.Pix[(y*sw+x)*4+3] = uint8(a >> 8)
+			}
 		}
 	}
 	return out
@@ -223,79 +291,109 @@ func toPaletted(img image.Image) *image.Paletted {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
 	out := image.NewPaletted(b, sixelPalette)
-	// Float working buffers carry the diffused error; alpha is ignored
-	// (Sixel has no transparency — sources composite on black below).
-	bufR := make([]float64, w*h)
-	bufG := make([]float64, w*h)
-	bufB := make([]float64, w*h)
-
-	switch im := img.(type) {
-	case *image.RGBA:
-		for y := range h {
-			rowOff := (b.Min.Y + y - im.Rect.Min.Y) * im.Stride
-			for x := range w {
-				pixOff := rowOff + (b.Min.X+x-im.Rect.Min.X)*4
-				bufR[y*w+x] = float64(im.Pix[pixOff+0])
-				bufG[y*w+x] = float64(im.Pix[pixOff+1])
-				bufB[y*w+x] = float64(im.Pix[pixOff+2])
-			}
-		}
-	case *image.NRGBA:
-		for y := range h {
-			rowOff := (b.Min.Y + y - im.Rect.Min.Y) * im.Stride
-			for x := range w {
-				pixOff := rowOff + (b.Min.X+x-im.Rect.Min.X)*4
-				bufR[y*w+x] = float64(im.Pix[pixOff+0])
-				bufG[y*w+x] = float64(im.Pix[pixOff+1])
-				bufB[y*w+x] = float64(im.Pix[pixOff+2])
-			}
-		}
-	default:
-		for y := range h {
-			for x := range w {
-				r, g, bl, _ := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
-				bufR[y*w+x] = float64(r >> 8)
-				bufG[y*w+x] = float64(g >> 8)
-				bufB[y*w+x] = float64(bl >> 8)
-			}
-		}
+	if w <= 0 || h <= 0 {
+		return out
 	}
+
+	// 2-row rolling error buffers for R, G, B channels.
+	// Floyd-Steinberg error diffusion only spreads to (x+1, y), (x-1, y+1), (x, y+1), (x+1, y+1),
+	// meaning error never propagates beyond row y+1.
+	var errCurr [3][]float64
+	var errNext [3][]float64
+	for c := range 3 {
+		errCurr[c] = make([]float64, w)
+		errNext[c] = make([]float64, w)
+	}
+
+	rgba, isRGBA := img.(*image.RGBA)
+	nrgba, isNRGBA := img.(*image.NRGBA)
 
 	for y := range h {
 		leftToRight := y%2 == 0
+		srcY := b.Min.Y + y
+
+		var rowOff int
+		if isRGBA {
+			rowOff = (srcY - rgba.Rect.Min.Y) * rgba.Stride
+		} else if isNRGBA {
+			rowOff = (srcY - nrgba.Rect.Min.Y) * nrgba.Stride
+		}
+
 		for i := range w {
 			x := i
 			if !leftToRight {
 				x = w - 1 - i
 			}
-			idx := y*w + x
-			oldR, oldG, oldB := bufR[idx], bufG[idx], bufB[idx]
+
+			var r, g, bl float64
+			if isRGBA {
+				pixOff := rowOff + (b.Min.X+x-rgba.Rect.Min.X)*4
+				r = float64(rgba.Pix[pixOff+0])
+				g = float64(rgba.Pix[pixOff+1])
+				bl = float64(rgba.Pix[pixOff+2])
+			} else if isNRGBA {
+				pixOff := rowOff + (b.Min.X+x-nrgba.Rect.Min.X)*4
+				r = float64(nrgba.Pix[pixOff+0])
+				g = float64(nrgba.Pix[pixOff+1])
+				bl = float64(nrgba.Pix[pixOff+2])
+			} else {
+				cr, cg, cb, _ := img.At(b.Min.X+x, srcY).RGBA()
+				r = float64(cr >> 8)
+				g = float64(cg >> 8)
+				bl = float64(cb >> 8)
+			}
+
+			oldR := r + errCurr[0][x]
+			oldG := g + errCurr[1][x]
+			oldB := bl + errCurr[2][x]
+
 			pal := nearestSixelIndex(clampU8(oldR), clampU8(oldG), clampU8(oldB))
-			out.SetColorIndex(b.Min.X+x, b.Min.Y+y, pal)
+			out.SetColorIndex(b.Min.X+x, srcY, pal)
+
 			pr := float64(sixelPaletteRGB[pal][0])
 			pg := float64(sixelPaletteRGB[pal][1])
 			pb := float64(sixelPaletteRGB[pal][2])
+
 			errR := oldR - pr
 			errG := oldG - pg
 			errB := oldB - pb
-			// Floyd–Steinberg weights, mirrored on right-to-left rows.
+
 			dx1 := 1
 			if !leftToRight {
 				dx1 = -1
 			}
-			spread := func(nx, ny int, factor float64) {
-				if nx < 0 || nx >= w || ny < 0 || ny >= h {
-					return
-				}
-				n := ny*w + nx
-				bufR[n] += errR * factor
-				bufG[n] += errG * factor
-				bufB[n] += errB * factor
+
+			// Same row (x+dx1)
+			if nx := x + dx1; nx >= 0 && nx < w {
+				errCurr[0][nx] += errR * (7.0 / 16)
+				errCurr[1][nx] += errG * (7.0 / 16)
+				errCurr[2][nx] += errB * (7.0 / 16)
 			}
-			spread(x+dx1, y, 7.0/16)
-			spread(x-dx1, y+1, 3.0/16)
-			spread(x, y+1, 5.0/16)
-			spread(x+dx1, y+1, 1.0/16)
+
+			// Next row (y+1)
+			if y+1 < h {
+				if nx := x - dx1; nx >= 0 && nx < w {
+					errNext[0][nx] += errR * (3.0 / 16)
+					errNext[1][nx] += errG * (3.0 / 16)
+					errNext[2][nx] += errB * (3.0 / 16)
+				}
+				errNext[0][x] += errR * (5.0 / 16)
+				errNext[1][x] += errG * (5.0 / 16)
+				errNext[2][x] += errB * (5.0 / 16)
+				if nx := x + dx1; nx >= 0 && nx < w {
+					errNext[0][nx] += errR * (1.0 / 16)
+					errNext[1][nx] += errG * (1.0 / 16)
+					errNext[2][nx] += errB * (1.0 / 16)
+				}
+			}
+		}
+
+		// Swap rolling row buffers and reset next row for upcoming scanline
+		errCurr, errNext = errNext, errCurr
+		for c := range 3 {
+			for x := range w {
+				errNext[c][x] = 0
+			}
 		}
 	}
 	return out

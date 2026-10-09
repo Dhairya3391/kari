@@ -234,6 +234,8 @@ func (m *modelImpl) renderMainView() string {
 			statusStyle = st.Current
 		}
 		statusRows = append(statusRows, lipgloss.PlaceHorizontal(dims.ContentWidth, lipgloss.Center, statusStyle.Render(text)))
+	} else if m.playOpID != 0 && !m.loading {
+		statusRows = append(statusRows, lipgloss.PlaceHorizontal(dims.ContentWidth, lipgloss.Center, st.Current.Render("▶ Now Playing")))
 	}
 	if m.activeToast != nil && !m.activeToast.IsExpired(time.Now()) {
 		statusRows = append(statusRows, m.activeToast.Render(accent))
@@ -456,6 +458,7 @@ func (m *modelImpl) activeIntegrationStatus() *IntegrationStatus {
 
 	return &IntegrationStatus{
 		PlayerName:       playerName,
+		Playing:          m.playOpID != 0,
 		TrackerName:      trackerName,
 		TrackerConnected: trackerConnected,
 	}

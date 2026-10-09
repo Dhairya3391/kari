@@ -628,7 +628,7 @@ func liveResult(catalogID string, m penguCatalogMeta, title string, genres []str
 		CoverURL:  m.Poster,
 		Overview:  cleanEmojis(m.Description),
 		Genres:    genres,
-		StartsAt:  parseLiveStart(m.ReleaseInfo),
+		StartsAt:  parseLiveStart(m.ReleaseInfo, m.Released),
 	}
 	switch catalogID {
 	case "pp-live-channels":
@@ -651,7 +651,14 @@ var reLiveTZ = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?)(?
 // time; zero when it carries no parseable schedule ("24/7" channels,
 // blanks). A GMT offset suffix is honored so a 21:00 GMT+5:30 event
 // sorts into Today/Tomorrow correctly instead of vanishing.
-func parseLiveStart(releaseInfo string) time.Time {
+func parseLiveStart(releaseInfo, released string) time.Time {
+	if rel := strings.TrimSpace(released); rel != "" {
+		for _, layout := range []string{time.RFC3339, time.RFC3339Nano} {
+			if t, err := time.Parse(layout, rel); err == nil {
+				return t.In(time.Local)
+			}
+		}
+	}
 	info := strings.TrimSpace(cleanEmojis(releaseInfo))
 	for _, layout := range []string{"2006-01-02 15:04", "2006-01-02 15:04:05", time.RFC3339} {
 		if t, err := time.ParseInLocation(layout, info, time.Local); err == nil {
@@ -734,10 +741,10 @@ func buildConfigSegment(token string) (string, error) {
 		"source_4khdhub":      "on",
 		"source_moviebox":     "on",
 		"source_vegamovies":   "on",
-		"source_moviesdrives": "on",
+		"source_moviesdrives": "off",
 		"source_vaplayer":     "on",
 		"source_miruro":       "on",
-		"source_vidlink":      "on",
+		"source_vidlink":      "off",
 		"source_vidfast":      "on",
 		"source_cinefreak":    "on",
 		"source_cinejoy":      "on",

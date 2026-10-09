@@ -12,9 +12,9 @@ type KeyBinding struct {
 	Action string
 }
 
-// IntegrationStatus describes the current player and account tracker status.
 type IntegrationStatus struct {
 	PlayerName       string
+	Playing          bool
 	TrackerName      string
 	TrackerConnected bool
 }
@@ -40,7 +40,12 @@ func RenderFooter(bindings []KeyBinding, status *IntegrationStatus, accent lipgl
 	if status != nil && (status.PlayerName != "" || status.TrackerName != "") {
 		var parts []string
 		if status.PlayerName != "" {
-			parts = append(parts, strings.ToLower(status.PlayerName))
+			playerPart := strings.ToLower(status.PlayerName)
+			if status.Playing {
+				dot := st.Ok.Render("●")
+				playerPart = playerPart + " " + dot
+			}
+			parts = append(parts, playerPart)
 		}
 		if status.TrackerName != "" {
 			dot := st.Dim.Render("○")
@@ -51,7 +56,6 @@ func RenderFooter(bindings []KeyBinding, status *IntegrationStatus, accent lipgl
 		}
 		rightContent = st.Dim.Render(strings.Join(parts, " · "))
 	}
-
 	leftW := lipgloss.Width(leftContent)
 	rightW := lipgloss.Width(rightContent)
 

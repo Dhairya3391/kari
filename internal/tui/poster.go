@@ -41,6 +41,10 @@ const (
 // even though it no longer corresponds to anything on screen. Bumping the
 // opID also discards any fetch still in flight for the old results.
 func (m *modelImpl) clearSearchPoster() {
+	if m.searchPosterCancel != nil {
+		m.searchPosterCancel()
+		m.searchPosterCancel = nil
+	}
 	m.searchPosterOpID++
 	m.searchPoster = ""
 	m.searchPosterUnavailable = false
@@ -62,6 +66,10 @@ func (m *modelImpl) triggerSearchPoster(idx int) tea.Cmd {
 // overview/genres) from whatever was resolved before doesn't keep showing
 // while the new one loads (or if the new one never gets one).
 func (m *modelImpl) clearPreviewPoster() {
+	if m.previewPosterCancel != nil {
+		m.previewPosterCancel()
+		m.previewPosterCancel = nil
+	}
 	m.previewPosterOpID++
 	m.previewPoster = ""
 	m.previewPosterUnavailable = false
@@ -120,6 +128,10 @@ func (m *modelImpl) triggerPreviewPoster() tea.Cmd {
 // title's poster lingers next to the new selection. Bumping the opID
 // also discards any fetch still in flight for the old row.
 func (m *modelImpl) clearHistoryPoster() {
+	if m.historyPosterCancel != nil {
+		m.historyPosterCancel()
+		m.historyPosterCancel = nil
+	}
 	m.historyPosterOpID++
 	m.historyPoster = ""
 	m.historyPosterUnavailable = false
@@ -189,15 +201,29 @@ func (m *modelImpl) fetchPosterCmd(slot posterSlot, opID int, tmdbID int, mediaT
 			return posterLoadedMsg{slot: slot, opID: opID, rendered: cached}
 		}
 	}
-
 	// Capture the live terminal size for real cell measurement: encoding
 	// at the 8x16 fallback size and letting the terminal upscale is what
 	// made every poster render soft.
 	termCols, termRows := m.width, m.height
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.appCtx, posterFetchTimeout)
-		defer cancel()
+	appCtx := m.appCtx
+	if appCtx == nil {
+		appCtx = context.Background()
+	}
+	var parentCtx context.Context
+	switch slot {
+	case posterSlotSearch:
+		parentCtx, m.searchPosterCancel = context.WithCancel(appCtx)
+	case posterSlotPreview:
+		parentCtx, m.previewPosterCancel = context.WithCancel(appCtx)
+	case posterSlotHistory:
+		parentCtx, m.historyPosterCancel = context.WithCancel(appCtx)
+	default:
+		parentCtx = appCtx
+	}
 
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parentCtx, posterFetchTimeout)
+		defer cancel()
 		var img image.Image
 		var err error
 		if coverURL != "" {

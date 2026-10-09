@@ -20,8 +20,8 @@ const (
 	defaultTimeout = 15 * time.Second
 	defaultRetries = 2
 	// maxPerHost caps concurrent requests to one host so provider fan-out
-	// stays polite: 4 in flight per host, the rest wait on context.
-	maxPerHost = 4
+	// stays polite: 16 in flight per host, the rest wait on context.
+	maxPerHost = 16
 	// MaxBodyBytes caps JSON/HTML response bodies (8 MB). Media downloads
 	// never flow through the capped helpers.
 	MaxBodyBytes = 8 << 20
@@ -76,8 +76,9 @@ func newClient(timeout time.Duration) *http.Client {
 	// streaming providers' parallel multi-quality resolves) — with only 2
 	// idle connections kept warm, a burst beyond that forces extra TCP+TLS
 	// handshakes instead of reusing connections.
-	transport.MaxIdleConns = 100
-	transport.MaxIdleConnsPerHost = 16
+	transport.ForceAttemptHTTP2 = true
+	transport.MaxIdleConns = 200
+	transport.MaxIdleConnsPerHost = 32
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.TLSHandshakeTimeout = 10 * time.Second
 	transport.ExpectContinueTimeout = time.Second
@@ -205,18 +206,48 @@ func newResilientDialer() *net.Dialer {
 		PreferGo:     true,
 		StrictErrors: false,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 4 * time.Second}
-			var lastErr error
-			// A UDP dial only creates a local socket; it does not prove that
-			// a resolver is reachable. Prefer TCP so a successful connection
-			// reflects a reachable DNS server on networks that drop UDP/53.
+			type dialResult struct {
+				conn net.Conn
+				err  error
+			}
+			raceCtx, raceCancel := context.WithCancel(ctx)
+			defer raceCancel()
+
+			total := len(publicDNSServers) * 2
+			ch := make(chan dialResult, total)
 			for _, proto := range []string{"tcp", "udp"} {
 				for _, server := range publicDNSServers {
-					conn, err := d.DialContext(ctx, proto, server)
-					if err == nil {
-						return conn, nil
+					proto, server := proto, server
+					go func() {
+						d := net.Dialer{Timeout: 4 * time.Second}
+						conn, err := d.DialContext(raceCtx, proto, server)
+						if err == nil {
+							select {
+							case ch <- dialResult{conn: conn}:
+							default:
+								conn.Close()
+							}
+							return
+						}
+						select {
+						case ch <- dialResult{err: err}:
+						case <-raceCtx.Done():
+						}
+					}()
+				}
+			}
+
+			var lastErr error
+			for range total {
+				select {
+				case res := <-ch:
+					if res.conn != nil {
+						raceCancel()
+						return res.conn, nil
 					}
-					lastErr = err
+					lastErr = res.err
+				case <-ctx.Done():
+					return nil, ctx.Err()
 				}
 			}
 			return nil, fmt.Errorf("public dns lookup failed: %w", lastErr)

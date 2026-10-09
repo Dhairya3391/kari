@@ -35,22 +35,16 @@ var Update = flag.Bool("update", false, "re-record provider fixtures from live u
 // maxFixtureBody trims large HTML payloads in fixtures.
 const maxFixtureBody = 256 * 1024
 
-// redactQueryKeys are query parameters replaced with [redacted].
-var redactQueryKeys = []string{"key", "api_key", "apikey", "token", "auth", "session", "sig", "sign"}
-
 var (
-	reIP   = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
-	reIPv6 = regexp.MustCompile(`\b(?:[0-9a-fA-F]{0,4}:){3,}[0-9a-fA-F:.]+\b`)
+	reIP           = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	reIPv6         = regexp.MustCompile(`\b(?:[0-9a-fA-F]{0,4}:){3,}[0-9a-fA-F:.]+\b`)
+	reRedactParams = regexp.MustCompile(`(?i)([?&](?:key|api_key|apikey|token|auth|session|sig|sign)=)[^&]*`)
 )
 
 // RedactURL strips credential query parameters, keeping the domain and
 // path so fixtures stay debuggable without leaking secrets.
 func RedactURL(raw string) string {
-	for _, k := range redactQueryKeys {
-		re := regexp.MustCompile(`(?i)([?&]` + k + `=)[^&]*`)
-		raw = re.ReplaceAllString(raw, `${1}[redacted]`)
-	}
-	return raw
+	return reRedactParams.ReplaceAllString(raw, `${1}[redacted]`)
 }
 
 // RedactBody scrubs IPs and over-long payloads from recorded bodies.

@@ -108,13 +108,12 @@ type Group struct {
 
 // BuildGroups aggregates flat entries into display groups, newest-first.
 func BuildGroups(entries []Entry) []Group {
-	groupsByKey := make(map[string]*Group)
-	order := make([]string, 0, len(entries))
+	groupsByKey := make(map[GroupKey]*Group, len(entries))
+	order := make([]GroupKey, 0, len(entries))
 
 	for _, entry := range entries {
 		key := groupKeyForEntry(entry)
-		keyStr := key.String()
-		group, ok := groupsByKey[keyStr]
+		group, ok := groupsByKey[key]
 		if !ok {
 			group = &Group{
 				Key:        key,
@@ -123,8 +122,8 @@ func BuildGroups(entries []Entry) []Group {
 				MediaType:  entry.MediaType,
 				LastPlayed: entry,
 			}
-			groupsByKey[keyStr] = group
-			order = append(order, keyStr)
+			groupsByKey[key] = group
+			order = append(order, key)
 		}
 
 		group.Entries = append(group.Entries, entry)

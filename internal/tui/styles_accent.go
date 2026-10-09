@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -32,9 +33,28 @@ type Styles struct {
 	// Form & Values
 	EditableValue lipgloss.Style
 }
+var (
+	stylesMu    sync.RWMutex
+	stylesCache = make(map[lipgloss.AdaptiveColor]Styles)
+)
 
-// NewStyles constructs a Styles bundle using the specified accent token.
+// NewStyles constructs or retrieves a cached Styles bundle using the specified accent token.
 func NewStyles(accent lipgloss.AdaptiveColor) Styles {
+	stylesMu.RLock()
+	st, ok := stylesCache[accent]
+	stylesMu.RUnlock()
+	if ok {
+		return st
+	}
+
+	st = buildStyles(accent)
+	stylesMu.Lock()
+	stylesCache[accent] = st
+	stylesMu.Unlock()
+	return st
+}
+
+func buildStyles(accent lipgloss.AdaptiveColor) Styles {
 	return Styles{
 		Accent: accent,
 
@@ -81,11 +101,10 @@ func NewStyles(accent lipgloss.AdaptiveColor) Styles {
 			Foreground(accent),
 	}
 }
-
 // RenderUnderline generates the horizontal underline string '─────' of given width in accent color.
 func RenderUnderline(width int, accent lipgloss.AdaptiveColor) string {
 	if width <= 0 {
 		return ""
 	}
-	return lipgloss.NewStyle().Foreground(accent).Render(strings.Repeat("─", width))
+	return NewStyles(accent).Underline.Render(strings.Repeat("─", width))
 }
