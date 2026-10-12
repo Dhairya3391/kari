@@ -12,6 +12,7 @@ import (
 	"kari/internal/config"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/util"
 )
 
 func TestSubtitleServiceDisabled(t *testing.T) {
@@ -97,7 +98,7 @@ func TestSubtitleServiceBoundsFailedProviderCandidates(t *testing.T) {
 
 func TestSubtitleServiceFallsBackToWorkingProviderTrack(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/en.vtt" {
+		if r.URL.Path == "/es.vtt" {
 			http.NotFound(w, r)
 			return
 		}
@@ -110,15 +111,39 @@ func TestSubtitleServiceFallsBackToWorkingProviderTrack(t *testing.T) {
 	track, err := svc.Fetch(context.Background(), model.ResolvedMedia{
 		SeriesTitle: "Alternate provider subtitle",
 		Subtitles: []model.SubtitleTrack{
+			{URL: srv.URL + "/es.vtt", Language: "es", Resolver: "movysx"},
 			{URL: srv.URL + "/en.vtt", Language: "en", Resolver: "movysx"},
-			{URL: srv.URL + "/id.vtt", Language: "id", Resolver: "movysx"},
 		},
-	}, "en", "movysx")
+	}, "es", "movysx")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if track.Path == "" || track.Language != "id" {
-		t.Fatalf("fallback track = %+v", track)
+	if track.Path == "" || track.Language != "en" {
+		t.Fatalf("fallback track = %+v, want en", track)
+	}
+}
+
+func TestSubtitleServiceRejectsUnrequestedForeignLanguageWhenEnglishRequested(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/en.vtt" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nestonian text\n"))
+	}))
+	defer srv.Close()
+
+	svc := NewSubtitleService(&config.Config{})
+	svc.httpClient = srv.Client()
+	track, err := svc.Fetch(context.Background(), model.ResolvedMedia{
+		SeriesTitle: "No English Subtitle",
+		Subtitles: []model.SubtitleTrack{
+			{URL: srv.URL + "/en.vtt", Language: "en", Resolver: "movysx"},
+			{URL: srv.URL + "/et.vtt", Language: "et", Resolver: "movysx"},
+		},
+	}, "en", "movysx")
+	if err == nil && track.Path != "" {
+		t.Fatalf("expected error or no track, got unrequested foreign track: %+v", track)
 	}
 }
 
@@ -261,5 +286,44 @@ func TestSubtitleServiceRedownloadsStalePath(t *testing.T) {
 	}
 	if requests.Load() != 1 {
 		t.Fatalf("requests = %d, want 1", requests.Load())
+	}
+}
+
+func TestSubtitleServiceReusesCachedFileForSameURL(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nreused\n"))
+	}))
+	defer server.Close()
+
+	svc := NewSubtitleService(&config.Config{})
+	svc.httpClient = server.Client()
+
+	media := model.ResolvedMedia{
+		SeriesTitle: "Deduplication Test",
+		Subtitles: []model.SubtitleTrack{
+			{URL: server.URL + "/sub.vtt", Language: "en", Resolver: "movysx"},
+		},
+	}
+
+	t1, err := svc.Fetch(context.Background(), media, "en", "movysx")
+	if err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+
+	// Reset in-memory cache to force downloadProviderSubtitle call
+	svc.cache = util.NewBoundedCache[model.SubtitleTrack](10)
+
+	t2, err := svc.Fetch(context.Background(), media, "en", "movysx")
+	if err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+
+	if t1.Path != t2.Path {
+		t.Errorf("paths differ: %q vs %q", t1.Path, t2.Path)
+	}
+	if requests.Load() != 1 {
+		t.Errorf("expected 1 network request due to disk cache reuse, got %d", requests.Load())
 	}
 }

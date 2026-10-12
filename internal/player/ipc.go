@@ -25,9 +25,11 @@ type IPCClient struct {
 // ipcPoller goroutine and read by the caller once playback ends. Without a
 // lock, the final snapshot could race with the poller's last update.
 type playbackStats struct {
-	mu     sync.Mutex
-	result PlaybackResult
-	loaded bool
+	mu           sync.Mutex
+	result       PlaybackResult
+	loaded       bool
+	shortWarning bool
+	shortDur     float64
 }
 
 func newPlaybackStats() *playbackStats {
@@ -48,6 +50,18 @@ func (s *playbackStats) update(pos, dur float64, loaded bool) {
 		s.result.Completed = false
 	}
 }
+func (s *playbackStats) setShortWarning(dur float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shortWarning = true
+	s.shortDur = dur
+}
+
+func (s *playbackStats) isShortWarning() (bool, float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shortWarning, s.shortDur
+}
 
 // (mpv.go, !android build); the android target genuinely excludes it.
 //
@@ -61,6 +75,9 @@ func (s *playbackStats) snapshot() PlaybackResult {
 func (s *playbackStats) playing() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.shortWarning {
+		return false
+	}
 	return s.loaded || s.result.DurationSecs > 0 || s.result.FinalPositionSecs > 0
 }
 

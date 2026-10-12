@@ -205,6 +205,36 @@ func TestRankSources_ChallengedHostAlwaysLast(t *testing.T) {
 	}
 }
 
+// Demoted backends sort below playable-now rows even at higher labeled
+// quality, but above challenged hosts: playback tries working mirrors
+// before audit-dead ones without losing them as fallback.
+func TestRankSources_DemotedBackendsLastAmongPlayable(t *testing.T) {
+	sources := []provider.MediaSource{
+		{URL: "https://cdn.example.com/dead.m3u8", Resolver: "pengu", Quality: "4K [MovieBox]"},
+		{URL: "https://cdn.example.com/live.m3u8", Resolver: "pengu", Quality: "360p [VidFast]"},
+		{URL: "https://vault-01.uwucdn.top/stream/01/uwu.m3u8", Resolver: "pengu", Quality: "1080p"},
+	}
+
+	crit := Criteria{
+		Mode:        provider.ModeMovies,
+		QualityMode: QualityHighest,
+	}
+
+	ranked := RankSources(sources, crit)
+	if len(ranked) != 3 {
+		t.Fatalf("ranked = %d, want 3", len(ranked))
+	}
+	if ranked[0].Source.URL != "https://cdn.example.com/live.m3u8" {
+		t.Errorf("playable row must win, got %q", ranked[0].Source.URL)
+	}
+	if ranked[1].Source.URL != "https://cdn.example.com/dead.m3u8" {
+		t.Errorf("demoted row must beat challenged host, got %q", ranked[1].Source.URL)
+	}
+	if ranked[2].Source.URL != "https://vault-01.uwucdn.top/stream/01/uwu.m3u8" {
+		t.Errorf("challenged host must rank last, got %q", ranked[2].Source.URL)
+	}
+}
+
 func TestRankSources_StableTiebreak(t *testing.T) {
 	sources := []provider.MediaSource{
 		{URL: "s1", Resolver: "P1", Quality: "1080p"},

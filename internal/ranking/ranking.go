@@ -43,6 +43,7 @@ type ScoredSource struct {
 	SubTypeScore   int
 	StickyScore    int
 	HealthScore    int
+	DemoteScore    int
 }
 
 var (
@@ -210,6 +211,7 @@ func RankSources(sources []provider.MediaSource, crit Criteria) []ScoredSource {
 			SubTypeScore:   scoreSubType(src, crit.Mode),
 			StickyScore:    scoreSticky(src, crit.StickyProvider),
 			HealthScore:    scoreHealth(src, crit.FailedProviders, now),
+			DemoteScore:    scoreDemote(src, crit.Mode),
 		}
 	}
 
@@ -218,12 +220,13 @@ func RankSources(sources []provider.MediaSource, crit Criteria) []ScoredSource {
 	// ahead of softsubs at equal quality; unknown stays neutral.
 	// 0. Transport (challenged hosts last, always)
 	// 1. Health
-	// 2. Audio match
-	// 3. Subtitle availability
-	// 4. Quality
-	// 5. Subtitle kind (hardsub first)
-	// 6. Sticky provider
-	// 7. Original provider order (stable tiebreak)
+	// 2. Backend demotion (audit-dead mirrors last among playable)
+	// 3. Audio match
+	// 4. Subtitle availability
+	// 5. Quality
+	// 6. Subtitle kind (hardsub first)
+	// 7. Sticky provider
+	// 8. Original provider order (stable tiebreak)
 	slices.SortFunc(scored, func(a, b ScoredSource) int {
 		return compareScored(b, a)
 	})
@@ -239,6 +242,10 @@ func compareScored(a, b ScoredSource) int {
 	// Health demotion
 	if a.HealthScore != b.HealthScore {
 		return a.HealthScore - b.HealthScore
+	}
+	// Audit-dead backends lose to playable-now sources.
+	if a.DemoteScore != b.DemoteScore {
+		return a.DemoteScore - b.DemoteScore
 	}
 
 	// 1. Audio match
@@ -415,6 +422,17 @@ func scoreHealth(src provider.MediaSource, failed map[string]time.Time, now time
 		if now.Sub(lastFail) < 10*time.Minute {
 			return -100 // Demote unhealthy provider
 		}
+	}
+	return 0
+}
+
+// scoreDemote sinks rows from backends the live mpv audit found
+// consistently unplayable (see provider.DemoteRank). Healthy rows score
+// 0; demoted rows score below every other playable-now signal but above
+// provider-health failures.
+func scoreDemote(src provider.MediaSource, mode provider.ContentType) int {
+	if provider.DemoteRank(mode, src.Resolver, src.Quality) >= 0 {
+		return -50
 	}
 	return 0
 }

@@ -494,11 +494,12 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode, exclude, retry))
 	}
 
-	// All providers have now reported in, so this is the first point where
-	// every provider's subtitles are actually known — fetch now rather than
-	// on the first (possibly incomplete) progress update.
+	// The subtitle fetch started on the first progress snapshot, so by
+	// now it is usually done: only wait when a fresh fetch just started
+	// or one is still in flight, keeping the soft-subtitle guarantee
+	// for players without hot-add.
 	subCmd := m.triggerSubtitleSync()
-	if m.autoPlayAfterResolve && subCmd != nil {
+	if m.autoPlayAfterResolve && (subCmd != nil || m.subtitleOpID != 0) {
 		m.loading = true
 		m.loadingText = "Loading subtitles..."
 		return m, tea.Batch(m.spinner.Tick, subCmd)
@@ -606,8 +607,13 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 		m.loadingText = ""
 	}
 
+	// Start the subtitle fetch on progress snapshots instead of waiting
+	// for every provider: the first batch already carries usable tracks,
+	// and the trigger re-fires only when the target changes or the pool
+	// grows with nothing secured yet.
+	subCmd := m.triggerSubtitleSync()
 	if wasNil {
-		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails())
+		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails(), subCmd)
 	}
 
 	// Progressive snapshots can carry the TMDBID after the first one;
@@ -615,10 +621,10 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 	// blank. Guarded to the TMDB path so anime/movies without an ID
 	// don't spam the AniList fallback on every snapshot.
 	if m.previewOverview == "" && msg.resolved.TMDBID != 0 {
-		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewDetails())
+		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewDetails(), subCmd)
 	}
 
-	return m, m.resolveSubscription()
+	return m, tea.Batch(m.resolveSubscription(), subCmd)
 }
 
 // pruneResolvedToResolvers drops resolved rows for providers about to be
@@ -748,12 +754,16 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 }
 
 func subtitleCandidateIdentity(track model.SubtitleTrack) string {
-	return strings.Join([]string{
-		strings.TrimSpace(track.URL),
-		strings.TrimSpace(track.SourceID),
-		strings.TrimSpace(track.SourceURL),
-		strings.TrimSpace(track.Referer),
-	}, "\x00")
+	u := strings.TrimSpace(track.URL)
+	if u != "" {
+		return strings.Join([]string{
+			u,
+			strings.TrimSpace(track.SourceID),
+			strings.TrimSpace(track.SourceURL),
+			strings.TrimSpace(track.Referer),
+		}, "\x00")
+	}
+	return strings.TrimSpace(track.Path)
 }
 
 func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {

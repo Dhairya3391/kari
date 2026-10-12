@@ -2,12 +2,11 @@
 // API (https://pengu.uk). PenguPlay is an aggregator that queries multiple
 // streaming backends (4KHDHub, MovieBox, VegaMovies, VAPlayer, Miruro,
 // VidFast, CineFreak, Cinejoy, KissKH, HDHub4u, Anikoto, 2Peckle, Arctic,
-// Atlantic, VixSrc) and returns direct and HLS streams. VidLink and
-// MoviesDrives stay disabled because live mpv probes show VidLink's upstream
-// answering 428/429 and MoviesDrives returning no playable streams, and
-// Movy.sx is omitted because Kari handles it independently. Atlantic and
-// VixSrc carry no config key upstream (always-on backends); Arctic does and
-// is enabled below so its streams flow automatically once upstream recovers.
+// Atlantic, VixSrc, Vidy, ToonWorld4All, Reanime, PlayFy, MoviesDrives) and
+// returns direct and HLS streams. Reanime serves anime, ToonWorld4All serves
+// cartoons and general media, Vidy, MoviesDrives, and 4KHDHub serve movies
+// and TV shows, and live-sports serves live catalogs. VidLink and Arctic stay
+// disabled because VidLink returns 428 errors and Arctic currently serves no streams.
 package pengu
 
 import (
@@ -43,7 +42,7 @@ const penguUA = config.DesktopUserAgent
 
 var (
 	reResolution = regexp.MustCompile(`(?i)\b(4k|2160p|1440p|1080p|720p|480p|360p)\b`)
-	reSourceTag  = regexp.MustCompile(`(?i)\b(4khdhub|moviebox|vegamovies|moviesdrives|miruro|cinefreak|vaplayer|vidlink|vidfast|cinejoy|hdghartv|kisskh|hdhub4u|atlantic|anikoto|2peckle|debridscloud|5clover|daddylive|binged|streamedpk|cdnlive|timstreams|arctic|vixsrc)\b`)
+	reSourceTag  = regexp.MustCompile(`(?i)\b(4khdhub|moviebox|vegamovies|moviesdrives|miruro|cinefreak|vaplayer|vidlink|vidfast|cinejoy|hdghartv|kisskh|hdhub4u|atlantic|anikoto|2peckle|debridscloud|5clover|daddylive|binged|streamedpk|cdnlive|timstreams|arctic|vixsrc|vidy|toonworld4all|toonworld|reanime|playfy)\b`)
 	reAudioLang  = regexp.MustCompile(`(?i)(?:audio|language|languages):\s*([a-zA-Z, /]+)`)
 	// reDubSubMarker matches MovieBox-style audio markers in filenames:
 	// "{lang}dubaudio" (dubbed audio) vs "{lang}subaudio" (original audio
@@ -78,6 +77,7 @@ type Client struct {
 	httpClient    *http.Client
 	authToken     string
 	configSegment string
+	segAnime      string
 	// langFilter mirrors the user's audio-language settings (see
 	// internal/settings LanguageFilter): nil or missing keys mean enabled.
 	// It filters foreign dubbed audio at resolve time; original-audio and
@@ -153,11 +153,16 @@ func NewClientWithLanguageFilter(keyPool *tmdb.KeyPool, authToken string, langFi
 	if err != nil {
 		return nil, err
 	}
+	segAnime, err := buildAnimeConfigSegment(token)
+	if err != nil {
+		return nil, err
+	}
 	return &Client{
 		base:          base,
 		httpClient:    httpclient.NewWithUserAgent(penguUA),
 		authToken:     token,
 		configSegment: segment,
+		segAnime:      segAnime,
 		langFilter:    langFilter,
 	}, nil
 }
@@ -289,11 +294,12 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		stremioID = fmt.Sprintf("tmdb:%d:%d:%d", tmdbID, episode.Season, episode.Episode)
 	}
 
-	return c.resolveStreams(ctx, mediaType, stremioID, tmdbID)
+	isAnime := episode.Audio != "" || strings.HasPrefix(episode.ID, "watch/") || strings.HasPrefix(mediaID, "anilist:")
+	return c.resolveStreams(ctx, mediaType, stremioID, tmdbID, isAnime)
 }
 
 func (c *Client) resolveLiveSource(ctx context.Context, stremioID string) ([]provider.MediaSource, error) {
-	resp, err := c.fetchPenguStreams(ctx, provider.MediaTypeTV, stremioID)
+	resp, err := c.fetchPenguStreams(ctx, provider.MediaTypeTV, stremioID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -323,8 +329,8 @@ func (c *Client) resolveLiveSource(ctx context.Context, stremioID string) ([]pro
 	return sources, nil
 }
 
-func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string, tmdbID int) ([]provider.MediaSource, error) {
-	resp, err := c.fetchPenguStreams(ctx, mediaType, stremioID)
+func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string, tmdbID int, isAnime bool) ([]provider.MediaSource, error) {
+	resp, err := c.fetchPenguStreams(ctx, mediaType, stremioID, isAnime)
 	if err != nil {
 		return nil, err
 	}
@@ -722,48 +728,78 @@ func isAuthPrompt(streams []penguStreamItem) bool {
 		strings.Contains(strings.ToLower(s.Description), "authentication is missing")
 }
 
-// buildConfigSegment compiles the functional multi-provider configuration into a
-// compact raw-deflated base64url segment expected by PenguPlay.
+// buildConfigSegment compiles the default (movies/TV) multi-provider
+// configuration into a compact raw-deflated base64url segment expected by PenguPlay.
 // Movy.sx is deliberately omitted because Kari manages Movy.sx independently.
-// The key set tracks the upstream manifest (v1.4.0, re-checked 2026-09-21):
-// Arctic is enabled even though upstream status reports it DOWN — a dead
-// source costs nothing (verified: enabling it changes nothing in live
-// responses) and its streams flow automatically once upstream recovers.
-// source_111477 stays off (probed: yields no playable streams) and
-// source_live-vault stays off (unverified for Kari's live path). Every other
-// backend below was verified with live mpv playback probes on 2026-09-20:
-// MovieBox, Miruro, Anikoto and 2Peckle play with Kari's header handling so
-// they stay enabled, while VidLink (upstream answers 428/429 even on fresh
-// URLs) and MoviesDrives (zero playable streams across movies and series)
-// stay off.
+// Anime-focused backends (reanime, anikoto, miruro) stay off here; anime
+// requests use buildAnimeConfigSegment instead.
 func buildConfigSegment(token string) (string, error) {
 	cfg := map[string]any{
-		"source_4khdhub":      "on",
-		"source_moviebox":     "on",
-		"source_vegamovies":   "on",
-		"source_moviesdrives": "off",
-		"source_vaplayer":     "on",
-		"source_miruro":       "on",
-		"source_vidlink":      "off",
-		"source_vidfast":      "on",
-		"source_cinefreak":    "on",
-		"source_cinejoy":      "on",
-		"source_kisskh":       "on",
-		"source_hdhub4u":      "on",
-		"source_anikoto":      "on",
-		"source_2peckle":      "on",
-		"source_arctic":       "off",
-		"source_live-sports":  "on",
-		"res_2160":            "on",
-		"res_1080":            "on",
-		"res_720":             "on",
-		"res_480":             "on",
-		"res_360":             "on",
+		"source_4khdhub":       "on",
+		"source_moviebox":      "on",
+		"source_vegamovies":    "on",
+		"source_moviesdrives":  "on",
+		"source_vaplayer":      "on",
+		"source_miruro":        "off",
+		"source_vidlink":       "off",
+		"source_vidfast":       "on",
+		"source_cinefreak":     "on",
+		"source_cinejoy":       "on",
+		"source_kisskh":        "on",
+		"source_hdhub4u":       "on",
+		"source_anikoto":       "off",
+		"source_2peckle":       "on",
+		"source_vidy":          "on",
+		"source_toonworld4all": "on",
+		"source_reanime":       "off",
+		"source_arctic":        "off",
+		"source_live-sports":   "on",
+		"res_2160":             "on",
+		"res_1080":             "on",
+		"res_720":              "on",
+		"res_480":              "on",
+		"res_360":              "on",
 	}
 	if token != "" {
 		cfg["auth_token"] = token
 	}
+	return encodeConfig(cfg)
+}
 
+func buildAnimeConfigSegment(token string) (string, error) {
+	cfg := map[string]any{
+		"source_reanime":       "on",
+		"source_anikoto":       "on",
+		"source_miruro":        "on",
+		"source_kisskh":        "on",
+		"source_2peckle":       "on",
+		"source_moviebox":      "on",
+		"source_4khdhub":       "off",
+		"source_vegamovies":    "off",
+		"source_moviesdrives":  "off",
+		"source_vaplayer":      "off",
+		"source_vidlink":       "off",
+		"source_vidfast":       "off",
+		"source_cinefreak":     "off",
+		"source_cinejoy":       "off",
+		"source_hdhub4u":       "off",
+		"source_vidy":          "off",
+		"source_toonworld4all": "off",
+		"source_arctic":        "off",
+		"source_live-sports":   "off",
+		"res_2160":             "on",
+		"res_1080":             "on",
+		"res_720":              "on",
+		"res_480":              "on",
+		"res_360":              "on",
+	}
+	if token != "" {
+		cfg["auth_token"] = token
+	}
+	return encodeConfig(cfg)
+}
+
+func encodeConfig(cfg map[string]any) (string, error) {
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return "", fmt.Errorf("pengu marshal config: %w", err)
@@ -785,8 +821,8 @@ func buildConfigSegment(token string) (string, error) {
 }
 
 // fetchPenguStreams issues the Stremio stream request against the Pengu endpoint.
-func (c *Client) fetchPenguStreams(ctx context.Context, mediaType, stremioID string) (*penguResponse, error) {
-	pgLog.Debug("fetch start", "mediaType", mediaType, "id", stremioID)
+func (c *Client) fetchPenguStreams(ctx context.Context, mediaType, stremioID string, isAnime bool) (*penguResponse, error) {
+	pgLog.Debug("fetch start", "mediaType", mediaType, "id", stremioID, "isAnime", isAnime)
 
 	stremioType := "movie"
 	if strings.HasPrefix(stremioID, "pp-live:") || mediaType == provider.MediaTypeLive {
@@ -794,7 +830,11 @@ func (c *Client) fetchPenguStreams(ctx context.Context, mediaType, stremioID str
 	} else if mediaType == provider.MediaTypeTV {
 		stremioType = "series"
 	}
-	url := fmt.Sprintf("%s/%s/stream/%s/%s.json", penguAPIBase, c.configSegment, stremioType, stremioID)
+	segment := c.configSegment
+	if isAnime && c.segAnime != "" {
+		segment = c.segAnime
+	}
+	url := fmt.Sprintf("%s/%s/stream/%s/%s.json", penguAPIBase, segment, stremioType, stremioID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("pengu request: %w", err)
@@ -804,7 +844,7 @@ func (c *Client) fetchPenguStreams(ctx context.Context, mediaType, stremioID str
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("pengu do request: %w", redactRequestError(err, c.configSegment))
+		return nil, fmt.Errorf("pengu do request: %w", redactRequestError(err, segment))
 	}
 	defer resp.Body.Close()
 
@@ -877,6 +917,8 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 	audioLangDisplay := ""
 	if audioLang != "" && audioLang != "en" {
 		audioLangDisplay = lang.Name(audioLang)
+	} else if strings.Contains(strings.ToLower(stream.Name), "dub") || strings.Contains(strings.ToLower(stream.Description), "dub") {
+		audioLangDisplay = "Dub"
 	}
 
 	quality := res
@@ -984,11 +1026,14 @@ func canonProviderName(token string) string {
 		"Miruro", "CineFreak", "VAPlayer", "VidLink",
 		"VidFast", "Cinejoy", "HDGharTV", "KissKH", "HDHub4u", "Atlantic",
 		"Anikoto", "2Peckle", "DebridsCloud", "5Clover", "DaddyLive", "Binged", "StreamedPK", "CDNLIVE", "TimStreams",
-		"Arctic", "VixSrc",
+		"Arctic", "VixSrc", "Vidy", "ToonWorld4All", "Reanime", "PlayFy",
 	} {
 		if strings.EqualFold(canon, token) {
 			return canon
 		}
+	}
+	if strings.EqualFold(token, "toonworld") {
+		return "ToonWorld4All"
 	}
 	return strings.ToUpper(token)
 }

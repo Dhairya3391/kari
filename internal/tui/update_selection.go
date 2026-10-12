@@ -292,15 +292,18 @@ func (m *modelImpl) invalidateSubtitleSync() {
 	m.subtitleResolverUsed = ""
 	m.subtitleLangUsed = ""
 	m.subtitleSourceUsed = ""
+	m.subtitlePoolSize = 0
 	if m.resolved != nil {
 		m.resolved.SelectedSubtitle = nil
 	}
 }
 
-// triggerSubtitleSync fetches subtitles in the background whenever the
-// selected source, its URL, or the preferred language changed. The fetch
-// never gates playback: play starts from sources alone and the track
-// attaches when it arrives (onSubtitleDone).
+// triggerSubtitleSync fetches subtitles in the background, starting on
+// the first resolve progress snapshot rather than waiting for every
+// provider: play starts from sources alone and the track attaches when
+// it arrives (onSubtitleDone). A grown subtitle pool re-triggers the
+// fetch while nothing usable came out of the earlier partial pool yet,
+// so late provider tracks still get tried.
 func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
 	if m.resolved == nil {
 		return nil
@@ -319,7 +322,8 @@ func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
 
 	targetChanged := src.Resolver != m.subtitleResolverUsed ||
 		m.subtitleLanguage != m.subtitleLangUsed ||
-		src.URL != m.subtitleSourceUsed
+		src.URL != m.subtitleSourceUsed ||
+		(len(m.rawSubtitles) > m.subtitlePoolSize && m.subtitleOpID == 0 && m.resolved.SelectedSubtitle == nil)
 	if !targetChanged {
 		return nil
 	}
@@ -329,6 +333,7 @@ func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
 	m.subtitleResolverUsed = src.Resolver
 	m.subtitleLangUsed = m.subtitleLanguage
 	m.subtitleSourceUsed = src.URL
+	m.subtitlePoolSize = len(m.rawSubtitles)
 	opID := m.newOpID()
 	m.subtitleOpID = opID
 	mediaForFetch := *m.resolved

@@ -86,10 +86,11 @@ func defaultRoutes() map[ContentType][]Route {
 		{Provider: "anilight", Search: StrategyMerge, Sources: StrategyFallback},
 	}
 	movies := []Route{
-		{Provider: "anicine", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "movysx", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "pengu", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "moovie", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "atlantic", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "cinecat", Search: StrategyMerge, Sources: StrategyRace},
 	}
 	return map[ContentType][]Route{
 		ModeAnime:   anime,
@@ -167,10 +168,48 @@ func sourceBoosts(mode ContentType) []sourceBoost {
 	}
 }
 
+// sourceDemotes lists per-mode backends that the live mpv full-source
+// audit (tests/live/pengu_audit_test.go, 2026-10-13) found consistently
+// unplayable across titles: MovieBox played 2/64 streams and Cinejoy
+// 4/22 across Inception, Breaking Bad, and SpongeBob, while sibling
+// backends on the same titles played. Demoted rows stay listed as
+// fallback and manual picks, but sort below playable-now sources so
+// playback never waits out their failures first. Re-audit before
+// extending this list: mirror health shifts, and small samples prove
+// nothing (2Peckle and VidFast were mixed, so they stay unranked).
+func sourceDemotes(mode ContentType) []sourceBoost {
+	switch mode {
+	case ModeMovies, ModeTV, ModeCartoon:
+		return []sourceBoost{
+			{Resolver: "pengu", QualityContains: "moviebox"},
+			{Resolver: "pengu", QualityContains: "cinejoy"},
+		}
+	default:
+		return nil
+	}
+}
+
 // BoostRank returns the preference index of resolver/quality for mode,
 // or -1 when the source matches no boost. Lower ranks sort first.
 func BoostRank(mode ContentType, resolver, quality string) int {
 	for i, b := range sourceBoosts(mode) {
+		if !strings.EqualFold(resolver, b.Resolver) {
+			continue
+		}
+		if b.QualityContains != "" && !strings.Contains(strings.ToLower(quality), strings.ToLower(b.QualityContains)) {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+// DemoteRank returns the demotion index of resolver/quality for mode, or
+// -1 when the source matches no demote entry. Demoted rows sort below
+// playable-now sources but above challenged-host ones; lower ranks sort
+// first among demoted rows.
+func DemoteRank(mode ContentType, resolver, quality string) int {
+	for i, b := range sourceDemotes(mode) {
 		if !strings.EqualFold(resolver, b.Resolver) {
 			continue
 		}

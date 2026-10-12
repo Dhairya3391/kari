@@ -284,6 +284,7 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 		"--newline",
 		"--progress-template", "download:KARI_PROGRESS:%(progress._percent_str)s|FRAG:%(progress.fragment_index)s/%(progress.fragment_count)s|TOTAL:%(progress._total_bytes_str)s|TOTAL_EST:%(progress._total_bytes_estimate_str)s|SPEED:%(progress._speed_str)s|ETA:%(progress._eta_str)s|DOWNLOADED:%(progress._downloaded_bytes_str)s",
 		"--progress-delta", "0.5",
+		"--match-filters", "!is_live & duration >? 60",
 	}
 
 	if ua := strings.TrimSpace(source.UserAgent); ua != "" {

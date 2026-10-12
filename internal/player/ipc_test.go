@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 )
+
 func TestPlaybackStats_LoadedState(t *testing.T) {
 	ps := newPlaybackStats()
 

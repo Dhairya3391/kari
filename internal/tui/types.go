@@ -358,59 +358,63 @@ type modelImpl struct {
 	subtitleResolverUsed    string
 	subtitleLangUsed        string
 	subtitleSourceUsed      string
-	rawSubtitles            []model.SubtitleTrack
-	playOpID                int
-	downloadOpID            int
-	downloadProgress        float64
-	downloadTotalSize       string
-	downloadSpeed           string
-	downloadDownloaded      string
-	downloadETA             string
-	downloadChan            chan tea.Msg
-	resolveChan             chan tea.Msg
-	cancelDownload          context.CancelFunc
-	downloadTitle           string
-	downloadOutputDir       string
-	confirmQuit             bool
-	confirmStop             bool
-	confirmDelete           bool
-	confirmClearHistory     bool
-	anilistAuthURL          string
-	authInput               textinput.Model
-	traktAuthActive         bool
-	traktUserCode           string
-	traktVerifyURL          string
-	traktDeviceCode         string
-	traktCancel             context.CancelFunc
-	startupSync             bool
-	settingsIndex           int
-	searchCache             *util.BoundedCache[searchCacheEntry]
-	audioMode               string
-	qualityMode             int
-	downloadQuality         int
-	languageFilter          map[string]bool
-	subtitleLanguage        string
-	subtitleLanguageIndex   int
-	disableAnimeSubtitles   bool
-	accentIndex             int
-	customAccentHex         string
-	editingAccentHex        bool
-	hexInput                textinput.Model
-	skipProvider            string
-	autoSkipIntro           bool
-	autoSkipEnding          bool
-	skipRecap               bool
-	skipPreview             bool
-	selectedEpisodes        map[int]struct{}
-	batchInProgress         bool
-	batchCurrent            int
-	batchTotal              int
-	batchEpisodeProgress    float64
-	batchCancel             context.CancelFunc
-	batchChan               chan tea.Msg
-	batchEpisodes           []provider.Episode
-	batchSeries             provider.SearchResult
-	batchMode               provider.ContentType
+	// subtitlePoolSize is len(rawSubtitles) at the last subtitle fetch:
+	// a grown pool re-triggers the fetch when the earlier (partial)
+	// pool produced nothing usable yet.
+	subtitlePoolSize      int
+	rawSubtitles          []model.SubtitleTrack
+	playOpID              int
+	downloadOpID          int
+	downloadProgress      float64
+	downloadTotalSize     string
+	downloadSpeed         string
+	downloadDownloaded    string
+	downloadETA           string
+	downloadChan          chan tea.Msg
+	resolveChan           chan tea.Msg
+	cancelDownload        context.CancelFunc
+	downloadTitle         string
+	downloadOutputDir     string
+	confirmQuit           bool
+	confirmStop           bool
+	confirmDelete         bool
+	confirmClearHistory   bool
+	anilistAuthURL        string
+	authInput             textinput.Model
+	traktAuthActive       bool
+	traktUserCode         string
+	traktVerifyURL        string
+	traktDeviceCode       string
+	traktCancel           context.CancelFunc
+	startupSync           bool
+	settingsIndex         int
+	searchCache           *util.BoundedCache[searchCacheEntry]
+	audioMode             string
+	qualityMode           int
+	downloadQuality       int
+	languageFilter        map[string]bool
+	subtitleLanguage      string
+	subtitleLanguageIndex int
+	disableAnimeSubtitles bool
+	accentIndex           int
+	customAccentHex       string
+	editingAccentHex      bool
+	hexInput              textinput.Model
+	skipProvider          string
+	autoSkipIntro         bool
+	autoSkipEnding        bool
+	skipRecap             bool
+	skipPreview           bool
+	selectedEpisodes      map[int]struct{}
+	batchInProgress       bool
+	batchCurrent          int
+	batchTotal            int
+	batchEpisodeProgress  float64
+	batchCancel           context.CancelFunc
+	batchChan             chan tea.Msg
+	batchEpisodes         []provider.Episode
+	batchSeries           provider.SearchResult
+	batchMode             provider.ContentType
 	// batchActiveDir/Title locate the episode being written right now so
 	// x (cancel single) removes exactly its partial files.
 	batchActiveDir   string

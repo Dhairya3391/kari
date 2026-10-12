@@ -204,6 +204,146 @@ func TestTriggerSubtitleSyncMaterializesProviderURL(t *testing.T) {
 	}
 }
 
+func TestTriggerSubtitleSyncRefetchesOnGrownPoolAfterFailure(t *testing.T) {
+	m := readySourceModel()
+	m.subtitleService = service.NewSubtitleService(&config.Config{})
+	m.rawSubtitles = []model.SubtitleTrack{{
+		URL:      "https://cdn.example.com/en.vtt",
+		Language: "en",
+		Resolver: "movysx",
+	}}
+	m.resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
+	m.subtitleLanguage = "en"
+	// Simulate a completed first fetch against a one-track pool that
+	// found nothing: markers set, pool recorded, no track, op idle.
+	if cmd := m.triggerSubtitleSync(); cmd == nil {
+		t.Fatal("first fetch must start")
+	}
+	m.subtitleOpID = 0
+	m.resolved.SelectedSubtitle = nil
+	// A later snapshot grows the pool: fetch again for the new tracks.
+	m.rawSubtitles = append(m.rawSubtitles, model.SubtitleTrack{
+		URL:      "https://cdn.example.com/en2.vtt",
+		Language: "en",
+		Resolver: "pengu",
+	})
+	if cmd := m.triggerSubtitleSync(); cmd == nil {
+		t.Fatal("grown pool with no secured track must refetch")
+	}
+}
+
+func TestTriggerSubtitleSyncKeepsSecuredTrackOnPoolGrowth(t *testing.T) {
+	m := readySourceModel()
+	m.subtitleService = service.NewSubtitleService(&config.Config{})
+	m.rawSubtitles = []model.SubtitleTrack{{
+		URL:      "https://cdn.example.com/en.vtt",
+		Language: "en",
+		Resolver: "movysx",
+	}}
+	m.resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
+	m.subtitleLanguage = "en"
+	if cmd := m.triggerSubtitleSync(); cmd == nil {
+		t.Fatal("first fetch must start")
+	}
+	// The fetch secured a track; later arrivals must not displace it.
+	m.subtitleOpID = 0
+	m.resolved.SelectedSubtitle = &model.SubtitleTrack{Path: "/tmp/en.srt", Language: "en"}
+	m.rawSubtitles = append(m.rawSubtitles, model.SubtitleTrack{
+		URL:      "https://cdn.example.com/en2.vtt",
+		Language: "en",
+		Resolver: "pengu",
+	})
+	if cmd := m.triggerSubtitleSync(); cmd != nil {
+		t.Fatal("secured track must survive pool growth")
+	}
+}
+
+func TestTriggerSubtitleSyncSkipsWhileFetchInFlight(t *testing.T) {
+	m := readySourceModel()
+	m.subtitleService = service.NewSubtitleService(&config.Config{})
+	m.rawSubtitles = []model.SubtitleTrack{{
+		URL:      "https://cdn.example.com/en.vtt",
+		Language: "en",
+		Resolver: "movysx",
+	}}
+	m.resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
+	m.subtitleLanguage = "en"
+	if cmd := m.triggerSubtitleSync(); cmd == nil {
+		t.Fatal("first fetch must start")
+	}
+	// Pool grows while the first fetch is still in flight: wait for it
+	// instead of stacking a second fetch.
+	m.rawSubtitles = append(m.rawSubtitles, model.SubtitleTrack{
+		URL:      "https://cdn.example.com/en2.vtt",
+		Language: "en",
+		Resolver: "pengu",
+	})
+	if cmd := m.triggerSubtitleSync(); cmd != nil {
+		t.Fatal("in-flight fetch must not be duplicated")
+	}
+}
+
+func TestAutoPlayAfterResolveSkipsWaitWhenSubtitlesReady(t *testing.T) {
+	m := readySourceModel()
+	m.subtitleService = service.NewSubtitleService(&config.Config{})
+	m.rawSubtitles = []model.SubtitleTrack{{
+		URL:      "https://cdn.example.com/en.vtt",
+		Language: "en",
+		Resolver: "movysx",
+	}}
+	m.resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
+	m.subtitleLanguage = "en"
+	m.autoPlayAfterResolve = true
+	m.resolveOpID = 5
+	// Simulate the early fetch having completed before resolve-done:
+	// markers match, pool recorded, track secured.
+	if cmd := m.triggerSubtitleSync(); cmd == nil {
+		t.Fatal("first fetch must start")
+	}
+	m.subtitleOpID = 0
+	m.resolved.SelectedSubtitle = &model.SubtitleTrack{Path: "/tmp/en.srt", Language: "en"}
+
+	resolved := model.ResolvedMedia{
+		SeriesTitle: "The Boys",
+		Playback:    m.resolved.Playback,
+		Subtitles:   m.rawSubtitles,
+	}
+	mdl, _ := m.onResolveDone(resolveDoneMsg{opID: 5, resolved: resolved})
+	m = mdl.(*modelImpl)
+	if m.playOpID == 0 {
+		t.Fatal("playback must start at once when subtitles are already ready")
+	}
+	if m.loadingText == "Loading subtitles..." {
+		t.Fatal("ready subtitles must not show the subtitles gate")
+	}
+}
+
+func TestResolveProgressStartsSubtitleFetch(t *testing.T) {
+	m := readySourceModel()
+	m.subtitleService = service.NewSubtitleService(&config.Config{})
+	m.subtitleLanguage = "en"
+	m.resolved = nil
+	m.rawSubtitles = nil
+	m.resolveOpID = 5
+
+	snapshot := model.ResolvedMedia{
+		SeriesTitle: "The Boys",
+		Playback: []provider.MediaSource{
+			{URL: "https://cdn.example.com/x.m3u8", Quality: "1080p", Resolver: "movysx"},
+		},
+		Subtitles: []model.SubtitleTrack{{
+			URL:      "https://cdn.example.com/en.vtt",
+			Language: "en",
+			Resolver: "movysx",
+		}},
+	}
+	mdl, _ := m.onResolveProgress(resolveProgressMsg{opID: 5, resolved: snapshot})
+	m = mdl.(*modelImpl)
+	if m.subtitleOpID == 0 {
+		t.Fatal("first progress snapshot must start the subtitle fetch")
+	}
+}
+
 func TestSubtitlesOffClearsSelectedTrack(t *testing.T) {
 	m := readySourceModel()
 	m.subtitleLanguage = "off"

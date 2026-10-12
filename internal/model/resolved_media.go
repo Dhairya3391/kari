@@ -54,6 +54,11 @@ func (r ResolvedMedia) SubtitlePath() string {
 	return strings.TrimSpace(r.SelectedSubtitle.Path)
 }
 
+// IsLive reports whether the media item is a real-time broadcast stream.
+func (r ResolvedMedia) IsLive() bool {
+	return r.Live || strings.EqualFold(strings.TrimSpace(r.MediaType), provider.MediaTypeLive)
+}
+
 // IsEpisodeBased reports whether the given media type is episodic content
 // (anime, TV, cartoons) as opposed to a one-shot movie. It is the canonical
 // predicate for episode-driven behavior such as autoplay-next.

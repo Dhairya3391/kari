@@ -4,6 +4,7 @@ package player
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -369,5 +370,60 @@ func TestMPVLoadsSelectedLocalSubtitle(t *testing.T) {
 
 	if _, err := playSingleSource(source, media, nil); err != nil {
 		t.Fatalf("playSingleSource: %v", err)
+	}
+}
+
+func TestIsShortWarningVideo(t *testing.T) {
+	tests := []struct {
+		name   string
+		dur    float64
+		url    string
+		isLive bool
+		want   bool
+	}{
+		{"45s cloudflare warning video", 45.0, "https://cdn.example.com/stream.m3u8", false, true},
+		{"exactly 60s warning clip", 60.0, "https://cdn.example.com/stream.m3u8", false, true},
+		{"61s stream", 61.0, "https://cdn.example.com/stream.m3u8", false, false},
+		{"real 24-minute episode", 1440.0, "https://cdn.example.com/stream.m3u8", false, false},
+		{"real movie (2 hours)", 7200.0, "https://cdn.example.com/stream.m3u8", false, false},
+		{"live stream with short buffer", 45.0, "https://cdn.example.com/live.m3u8", true, false},
+		{"synthetic test source", 1.0, "av://lavfi:testsrc", false, false},
+		{"empty or zero duration", 0.0, "https://cdn.example.com/stream.m3u8", false, false},
+		{"negative duration", -1.0, "https://cdn.example.com/stream.m3u8", false, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isShortWarningVideo(tc.dur, tc.url, tc.isLive)
+			if got != tc.want {
+				t.Errorf("isShortWarningVideo(%.1f, %q, %v) = %v, want %v", tc.dur, tc.url, tc.isLive, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAttemptSourcesSkipsShortWarningVideo(t *testing.T) {
+	sources := []provider.MediaSource{
+		{URL: "https://bad.example.com/45s.m3u8", Quality: "1080p Bad"},
+		{URL: "https://good.example.com/real.m3u8", Quality: "1080p Good"},
+	}
+
+	tried := []string{}
+	res, err := attemptSources("mpv", sources, func(src provider.MediaSource) (PlaybackResult, error) {
+		tried = append(tried, src.URL)
+		if src.URL == "https://bad.example.com/45s.m3u8" {
+			return PlaybackResult{}, fmt.Errorf("source rejected: stream is a short placeholder/warning video (45.0s <= 60s)")
+		}
+		return PlaybackResult{DurationSecs: 1440, FinalPositionSecs: 1400}, nil
+	})
+
+	if err != nil {
+		t.Fatalf("attemptSources failed: %v", err)
+	}
+	if len(tried) != 2 {
+		t.Fatalf("expected 2 tried sources, got %d", len(tried))
+	}
+	if res.DurationSecs != 1440 {
+		t.Errorf("expected good source result (1440s), got %.1f", res.DurationSecs)
 	}
 }

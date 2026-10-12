@@ -168,7 +168,7 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		rows = append(rows, renderSettingRow("Intro", formatVal(boolAskAuto(data.AutoSkipIntro), data.FocusedRowIndex == 3, st), data.FocusedRowIndex == 3, width, st))
 		rows = append(rows, renderSettingRow("Outro", formatVal(boolAskAuto(data.AutoSkipEnding), data.FocusedRowIndex == 4, st), data.FocusedRowIndex == 4, width, st))
 		rows = append(rows, renderSettingRow("Recap", formatVal(boolAskAuto(data.AutoSkipRecap), data.FocusedRowIndex == 5, st), data.FocusedRowIndex == 5, width, st))
-		rows = append(rows, renderSettingRow("Preview", formatVal(boolAskAuto(data.AutoSkipPreview), data.FocusedRowIndex == 6, st), data.FocusedRowIndex == 6, width, st))
+		rows = append(rows, renderSettingRow("Post-credits", formatVal(boolAskAuto(data.AutoSkipPreview), data.FocusedRowIndex == 6, st), data.FocusedRowIndex == 6, width, st))
 
 		switch data.FocusedRowIndex {
 		case 0:
@@ -184,7 +184,7 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		case 5:
 			desc = "Skip recap sequence: ask (prompts [Enter]) or auto (jumps automatically)."
 		case 6:
-			desc = "Skip preview / post-credits: ask (prompts [Enter]) or auto (jumps automatically)."
+			desc = "Skip post-credits / preview: ask (prompts [Enter]) or auto (jumps automatically)."
 		}
 	case CategoryModes:
 		rows = append(rows, renderSettingRow("Startup mode", formatVal(data.DefaultModeName, data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))

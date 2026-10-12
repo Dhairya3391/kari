@@ -66,7 +66,6 @@ type anikotoCandidate struct {
 	animeID string
 }
 
-
 // resolveAnilistToAnikoto maps an AniList ID to anikoto's internal animeID and slug.
 // Results are cached for directCacheTTL seconds to avoid redundant scrapes.
 func (c *Client) resolveAnilistToAnikoto(ctx context.Context, anilistID string) (animeID, slug string, err error) {

@@ -336,3 +336,85 @@ func TestGetSkipArgs_AnimeSkipIntegration(t *testing.T) {
 		t.Errorf("expected --script-opts in args: %v", args)
 	}
 }
+
+func TestBuildSkipArgsFromTimes_ClampsEndingBeforePostCredits(t *testing.T) {
+	times := combinedSkipTimes{
+		EdStart:      7000.0,
+		EdEnd:        7500.0, // Erroneously extends past PreviewStart
+		PreviewStart: 7200.0, // Post-credits start
+		PreviewEnd:   7260.0,
+	}
+	settings := SkipSettings{
+		Provider:       "hybrid",
+		AutoSkipEnding: true,
+		SkipPreview:    false, // Ask
+	}
+
+	args, scriptPath := buildSkipArgsFromTimes(times, settings)
+	defer cleanupSkipScript(scriptPath)
+
+	for _, a := range args {
+		if strings.HasPrefix(a, "--script-opts=") {
+			if !strings.Contains(a, "skip-ed_end=7200.000000") {
+				t.Errorf("expected ed_end to clamp to preview_start (7200), got: %s", a)
+			}
+			if !strings.Contains(a, "skip-preview_start=7200.000000") {
+				t.Errorf("expected preview_start to remain 7200, got: %s", a)
+			}
+			if !strings.Contains(a, "skip-auto_preview=0") {
+				t.Errorf("expected auto_preview to be 0 (ask), got: %s", a)
+			}
+		}
+	}
+}
+
+func TestGetSkipArgs_LongOutroDoesNotSynthesizePreview(t *testing.T) {
+	introdbHTTP := &http.Client{
+		Transport: mockRoundTripper(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: io.NopCloser(bytes.NewBufferString(`{
+					"imdb_id": "tt2861424",
+					"season": 1,
+					"episode": 2,
+					"intro": {"start_sec": 0, "end_sec": 30},
+					"outro": {"start_sec": 1246, "end_sec": 1318},
+					"post_credits": null
+				}`)),
+				Header: make(http.Header),
+			}, nil
+		}),
+	}
+
+	introdbClient := introdb.NewClient(introdbHTTP, "test-api-key")
+	clients := SkipClients{IntroDB: introdbClient, HTTP: introdbHTTP}
+	args, scriptPath := getSkipArgs(clients, SkipSettings{
+		Provider:       "introdb",
+		AutoSkipEnding: true,
+		SkipPreview:    false, // Ask
+	}, model.ResolvedMedia{
+		SeriesTitle:   "Rick and Morty",
+		SeriesURL:     "tt2861424",
+		SeasonNumber:  1,
+		EpisodeNumber: 2,
+		MediaType:     "tv",
+	}, newTestSkipCache())
+	defer cleanupSkipScript(scriptPath)
+
+	foundOpts := false
+	for _, a := range args {
+		if strings.HasPrefix(a, "--script-opts=") {
+			foundOpts = true
+			// No upstream post-credits label: ending stays whole, no phantom preview is synthesized.
+			if !strings.Contains(a, "skip-ed_start=1246.000000") || !strings.Contains(a, "skip-ed_end=1318.000000") {
+				t.Errorf("expected full ed 1246-1318 without split, got: %s", a)
+			}
+			if strings.Contains(a, "skip-preview_start=1274.000000") {
+				t.Errorf("must not synthesize preview from long outro, got: %s", a)
+			}
+		}
+	}
+	if !foundOpts {
+		t.Fatal("expected --script-opts in args")
+	}
+}

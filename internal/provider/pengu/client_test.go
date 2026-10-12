@@ -68,12 +68,12 @@ func TestBuildConfigSegment(t *testing.T) {
 	}
 	// These backends play via Kari's header handling (verified with live
 	// mpv probes), so they stay enabled.
-	for _, key := range []string{"source_moviebox", "source_miruro", "source_anikoto", "source_2peckle", "source_4khdhub", "source_vegamovies", "source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy", "source_kisskh", "source_hdhub4u"} {
+	for _, key := range []string{"source_moviebox", "source_2peckle", "source_4khdhub", "source_vegamovies", "source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy", "source_kisskh", "source_hdhub4u", "source_moviesdrives", "source_vidy", "source_toonworld4all"} {
 		if parsed[key] != "on" {
 			t.Errorf("%s = %v, want on", key, parsed[key])
 		}
 	}
-	for _, key := range []string{"source_vidlink", "source_moviesdrives", "source_arctic"} {
+	for _, key := range []string{"source_vidlink", "source_arctic", "source_reanime", "source_miruro", "source_anikoto"} {
 		if parsed[key] != "off" {
 			t.Errorf("%s = %v, want off", key, parsed[key])
 		}
@@ -89,6 +89,37 @@ func TestBuildConfigSegment(t *testing.T) {
 	// Movy.sx must NOT be requested from Pengu (Kari handles it independently).
 	if parsed["source_movysx"] == "on" {
 		t.Errorf("source_movysx should not be enabled in Pengu config")
+	}
+}
+func TestBuildAnimeConfigSegment(t *testing.T) {
+	seg, err := buildAnimeConfigSegment("tok123")
+	if err != nil {
+		t.Fatalf("buildAnimeConfigSegment: %v", err)
+	}
+	rawB64 := strings.TrimPrefix(seg, "z")
+	data, err := base64.RawURLEncoding.DecodeString(rawB64)
+	if err != nil {
+		t.Fatalf("decode b64: %v", err)
+	}
+	zr := flate.NewReader(bytes.NewReader(data))
+	raw, err := io.ReadAll(zr)
+	_ = zr.Close()
+	if err != nil {
+		t.Fatalf("read deflated: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{"source_reanime", "source_anikoto", "source_miruro", "source_kisskh", "source_2peckle", "source_moviebox"} {
+		if parsed[key] != "on" {
+			t.Errorf("%s = %v, want on", key, parsed[key])
+		}
+	}
+	for _, key := range []string{"source_4khdhub", "source_vegamovies", "source_moviesdrives", "source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy", "source_hdhub4u", "source_vidy", "source_toonworld4all", "source_arctic", "source_live-sports"} {
+		if parsed[key] != "off" {
+			t.Errorf("%s = %v, want off", key, parsed[key])
+		}
 	}
 }
 
@@ -152,11 +183,18 @@ func TestParseStreamItemNewBackends(t *testing.T) {
 		{"🐧 PenguPlay 🧊 1080p • Arctic", "Arctic"},
 		{"🐧 PenguPlay 🧊 1080p • Atlantic", "Atlantic"},
 		{"🐧 PenguPlay 🧊 1080p • VixSrc", "VixSrc"},
+		{"🐧 PenguPlay ❄️ 4K • Vidy · Miami", "Vidy"},
+		{"🐧 PenguPlay 🧊 1080p • ToonWorld4All", "ToonWorld4All"},
+		{"🐧 PenguPlay 🧊 1080p • Reanime · HD-1 · Sub", "Reanime"},
+		{"🐧 PenguPlay 🧊 1080p • MoviesDrives · PixelDrain", "MoviesDrives"},
+		{"🐧 PenguPlay 🐧 360p • PlayFy · Fallback", "PlayFy"},
 	} {
 		src := parseStreamItem(penguStreamItem{Name: tc.name, URL: "https://example.com/stream.m3u8"})
 		want := "1080p [" + tc.backend + "]"
-		if tc.backend == "Cinejoy" && strings.HasPrefix(tc.name, "🐧 PenguPlay ❄️ 4K") {
+		if (tc.backend == "Cinejoy" || tc.backend == "Vidy") && strings.Contains(tc.name, "4K") {
 			want = "4K [" + tc.backend + "]"
+		} else if tc.backend == "PlayFy" {
+			want = "360p [" + tc.backend + "]"
 		}
 		if src.Quality != want {
 			t.Errorf("Quality for %q = %q, want %q", tc.name, src.Quality, want)
@@ -365,7 +403,7 @@ func TestFetchPenguStreamsRateLimit(t *testing.T) {
 			configSegment: "ztest",
 		}
 
-		_, err := c.fetchPenguStreams(context.Background(), provider.MediaTypeMovie, "tmdb:550")
+		_, err := c.fetchPenguStreams(context.Background(), provider.MediaTypeMovie, "tmdb:550", false)
 		if !errors.Is(err, provider.ErrRateLimited) {
 			t.Fatalf("fetchPenguStreams want ErrRateLimited, got %v", err)
 		}
@@ -384,7 +422,7 @@ func TestFetchPenguStreamsRateLimit(t *testing.T) {
 			configSegment: "ztest",
 		}
 
-		_, err := c.fetchPenguStreams(context.Background(), provider.MediaTypeMovie, "tmdb:550")
+		_, err := c.fetchPenguStreams(context.Background(), provider.MediaTypeMovie, "tmdb:550", false)
 		if !errors.Is(err, provider.ErrRateLimited) {
 			t.Fatalf("fetchPenguStreams want ErrRateLimited, got %v", err)
 		}

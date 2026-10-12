@@ -63,6 +63,8 @@ local opts = {
     auto_intro    = 0,
     auto_ending   = 0,
     auto_preview  = 0,
+    min_duration  = 60,
+    is_live       = 0,
 }
 
 pcall(function()
@@ -90,7 +92,11 @@ local function build_chapters()
         table.insert(segments, { at = opts.ed_end,        label = "Episode" })
     end
     if opts.preview_start >= 0 and opts.preview_end > opts.preview_start then
-        table.insert(segments, { at = opts.preview_start, label = "Preview" })
+        local prev_label = "Preview"
+        if opts.preview_start >= opts.ed_start and opts.ed_start >= 0 then
+            prev_label = "Post-Credits"
+        end
+        table.insert(segments, { at = opts.preview_start, label = prev_label })
         table.insert(segments, { at = opts.preview_end,   label = "Episode" })
     end
 
@@ -162,6 +168,16 @@ mp.register_event("file-loaded", inject_chapters)
 mp.register_event("playback-restart", inject_chapters)
 pcall(function()
     mp.observe_property("duration", "number", function(_, d)
+        if d and d > 0 and d <= opts.min_duration and opts.is_live == 0 then
+            local path = mp.get_property("path") or ""
+            if path:find("^https?://") then
+                mp.osd_message("Filtering short warning video (" .. string.format("%.0f", d) .. "s)...", 2)
+                pcall(function()
+                    mp.commandv("quit", "2")
+                end)
+                return
+            end
+        end
         if d and d > 0 and not chapters_injected then
             inject_chapters()
         end
@@ -178,21 +194,27 @@ local function active_zone(time)
     if opts.op_start >= 0 and time >= opts.op_start and time < (opts.op_end - 0.5) then
         return "intro", opts.op_end
     end
-    if opts.ed_start >= 0 and time >= opts.ed_start and time < (opts.ed_end - 0.5) then
-        return "ending", opts.ed_end
-    end
     if opts.preview_start >= 0 and time >= opts.preview_start and time < (opts.preview_end - 0.5) then
         return "preview", opts.preview_end
+    end
+    if opts.ed_start >= 0 and time >= opts.ed_start and time < (opts.ed_end - 0.5) then
+        return "ending", opts.ed_end
     end
     return nil, nil
 end
 
-local zone_labels = {
-    recap   = "Recap",
-    intro   = "Opening",
-    ending  = "Ending",
-    preview = "Preview",
-}
+local function zone_label(zone)
+    if zone == "preview" then
+        if opts.preview_start >= opts.ed_start and opts.ed_start >= 0 then
+            return "Post-Credits"
+        end
+        return "Preview"
+    end
+    if zone == "recap" then return "Recap" end
+    if zone == "intro" then return "Opening" end
+    if zone == "ending" then return "Ending" end
+    return ""
+end
 
 local auto_flags = {
     recap   = function() return opts.auto_recap   == 1 end,
@@ -211,7 +233,7 @@ pcall(function()
         local zone, end_time = active_zone(time)
 
         if zone then
-            local label = zone_labels[zone]
+            local label = zone_label(zone)
 
             if auto_flags[zone]() and not auto_fired[zone] then
                 auto_fired[zone] = true
@@ -252,7 +274,7 @@ local function do_skip()
         local zone, end_time = active_zone(time)
         if zone and end_time then
             mp.commandv("seek", end_time, "absolute")
-            mp.osd_message(zone_labels[zone] .. " Skipped", 2)
+            mp.osd_message(zone_label(zone) .. " Skipped", 2)
         end
     end)
 end
@@ -272,6 +294,7 @@ type combinedSkipTimes struct {
 	RecapEnd     float64
 	PreviewStart float64
 	PreviewEnd   float64
+	IsLive       bool
 }
 
 var (
@@ -424,7 +447,7 @@ func getSkipArgs(
 		return buildSkipArgsFromTimes(cached, settings)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 
 	// 1. Resolve AniList ID from media metadata if available
@@ -441,6 +464,7 @@ func getSkipArgs(
 		EdStart: -1, EdEnd: -1,
 		RecapStart: -1, RecapEnd: -1,
 		PreviewStart: -1, PreviewEnd: -1,
+		IsLive: media.IsLive(),
 	}
 
 	var (
@@ -615,8 +639,25 @@ func getSkipArgs(
 			applySkipDB()
 			applyIntroDB()
 		} else {
-			applySkipDB()
-			applyIntroDB()
+			if introdbRes != nil && skipdbRes != nil && introdbRes.EdStart >= 0 && skipdbRes.EdStart > introdbRes.EdStart+15 {
+				times.EdStart = introdbRes.EdStart
+				creditEnd := introdbRes.EdStart + 28
+				if creditEnd > skipdbRes.EdStart {
+					creditEnd = skipdbRes.EdStart
+				}
+				times.EdEnd = creditEnd
+				times.PreviewStart = creditEnd
+				times.PreviewEnd = skipdbRes.EdStart
+				if times.OpStart < 0 && skipdbRes.OpStart >= 0 {
+					times.OpStart, times.OpEnd = skipdbRes.OpStart, skipdbRes.OpEnd
+				}
+				if times.OpStart < 0 && introdbRes.OpStart >= 0 {
+					times.OpStart, times.OpEnd = introdbRes.OpStart, introdbRes.OpEnd
+				}
+			} else {
+				applySkipDB()
+				applyIntroDB()
+			}
 			applyAnimeSkip()
 			applyAniSkip()
 		}
@@ -633,7 +674,9 @@ func getSkipArgs(
 
 func buildSkipArgsFromTimes(times combinedSkipTimes, settings SkipSettings) ([]string, string) {
 	cleanupStaleScripts()
-
+	if times.PreviewStart >= 0 && times.EdStart >= 0 && times.EdStart < times.PreviewStart && times.EdEnd > times.PreviewStart {
+		times.EdEnd = times.PreviewStart
+	}
 	scriptPath := filepath.Join(os.TempDir(), fmt.Sprintf("kari-skip-%d-%d.lua", os.Getpid(), time.Now().UnixNano()))
 	if err := os.WriteFile(scriptPath, []byte(skipLuaScript), 0644); err != nil {
 		skipLog.Debug("temp lua script write failed", "err", err)
@@ -656,18 +699,22 @@ func buildSkipArgsFromTimes(times combinedSkipTimes, settings SkipSettings) ([]s
 		autoPreview = 1
 	}
 
+	liveFlag := 0
+	if times.IsLive {
+		liveFlag = 1
+	}
 	args := []string{
 		fmt.Sprintf("--script=%s", scriptPath),
 		fmt.Sprintf(
-			"--script-opts=skip-recap_start=%f,skip-recap_end=%f,skip-op_start=%f,skip-op_end=%f,skip-ed_start=%f,skip-ed_end=%f,skip-preview_start=%f,skip-preview_end=%f,skip-auto_recap=%d,skip-auto_intro=%d,skip-auto_ending=%d,skip-auto_preview=%d",
+			"--script-opts=skip-recap_start=%f,skip-recap_end=%f,skip-op_start=%f,skip-op_end=%f,skip-ed_start=%f,skip-ed_end=%f,skip-preview_start=%f,skip-preview_end=%f,skip-auto_recap=%d,skip-auto_intro=%d,skip-auto_ending=%d,skip-auto_preview=%d,skip-min_duration=60.000000,skip-is_live=%d",
 			times.RecapStart, times.RecapEnd,
 			times.OpStart, times.OpEnd,
 			times.EdStart, times.EdEnd,
 			times.PreviewStart, times.PreviewEnd,
 			autoRecap, autoIntro, autoEnding, autoPreview,
+			liveFlag,
 		),
 	}
-
 	return args, scriptPath
 }
 

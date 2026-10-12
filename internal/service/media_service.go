@@ -765,9 +765,10 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 
 // sort orders sources by transport first (challenged hosts last, always),
 // then the routes-table preference for the mode (e.g. Anikoto Vidstream-2
-// for anime, Movy.sx for movies/tv/cartoon), then by highest quality
-// first, breaking ties by provider priority so earlier-registered
-// providers surface before fallbacks.
+// for anime, Movy.sx for movies/tv/cartoon), then demoted backends below
+// playable-now sources, then by highest quality first, breaking ties by
+// provider priority so earlier-registered providers surface before
+// fallbacks.
 func (a *sourceAggregator) sort() {
 	slices.SortStableFunc(a.sources, func(si, sj provider.MediaSource) int {
 		ci, cj := challengedRank(si), challengedRank(sj)
@@ -784,6 +785,17 @@ func (a *sourceAggregator) sort() {
 		}
 		if ri >= 0 && rj >= 0 && ri != rj {
 			return ri - rj
+		}
+		di := provider.DemoteRank(a.mode, si.Resolver, si.Quality)
+		dj := provider.DemoteRank(a.mode, sj.Resolver, sj.Quality)
+		if (di >= 0) != (dj >= 0) {
+			if di >= 0 {
+				return 1
+			}
+			return -1
+		}
+		if di >= 0 && dj >= 0 && di != dj {
+			return di - dj
 		}
 
 		leftQuality := SourceQuality(si.Quality)

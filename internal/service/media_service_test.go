@@ -232,6 +232,24 @@ func TestSourceAggregatorSortQualityThenPriority(t *testing.T) {
 	}
 }
 
+// TestSourceAggregatorSortDemotesWeakBackends proves audit-dead backends
+// sort below playable-now rows from the same resolver even at higher
+// labeled quality.
+func TestSourceAggregatorSortDemotesWeakBackends(t *testing.T) {
+	pengu := &stubProvider{name: "pengu", mode: provider.ModeMovies}
+	agg := newSourceAggregatorForMode(provider.ModeMovies, []provider.Provider{pengu}, func(n string) string { return n })
+
+	agg.add("pengu", []provider.MediaSource{
+		{URL: "http://dead", Quality: "4K [MovieBox]"},
+		{URL: "http://live", Quality: "360p [VidFast]"},
+	})
+	agg.sort()
+
+	if len(agg.sources) != 2 || agg.sources[0].URL != "http://live" || agg.sources[1].URL != "http://dead" {
+		t.Fatalf("demoted row must sort last (order=%+v)", agg.sources)
+	}
+}
+
 func TestResolveUsesCrossProviderTMDBID(t *testing.T) {
 	// The series came from "origin"; "other" must receive the TMDB id as
 	// mediaID rather than origin's opaque handle.

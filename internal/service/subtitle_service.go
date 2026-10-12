@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -175,16 +176,6 @@ func (s *SubtitleService) Fetch(
 		}
 	}
 
-	candidates := selectAnyProviderCandidates(originalSubtitles, preferredResolver)
-	track, err := s.downloadProviderCandidates(ctx, media, candidates, attempted)
-	if err == nil && usableCachedTrack(track) {
-		s.cacheTrack(track, cacheKey, titleKey)
-		return track, nil
-	}
-	if err != nil {
-		failures = append(failures, err)
-	}
-
 	if len(failures) == 0 {
 		return model.SubtitleTrack{}, errors.New("no subtitles found")
 	}
@@ -221,7 +212,7 @@ func selectMatchingProviderCandidates(
 		return nil
 	}
 	preferredLang = lang.Normalize(preferredLang)
-	var exact, english, alternate []model.SubtitleTrack
+	var exact, english []model.SubtitleTrack
 	for _, track := range tracks {
 		if !strings.EqualFold(track.Resolver, preferredResolver) {
 			continue
@@ -230,13 +221,11 @@ func selectMatchingProviderCandidates(
 		switch {
 		case trackLang == preferredLang:
 			exact = append(exact, track)
-		case trackLang == "en":
+		case preferredLang != "en" && trackLang == "en":
 			english = append(english, track)
-		default:
-			alternate = append(alternate, track)
 		}
 	}
-	return append(append(defaultFirst(exact), defaultFirst(english)...), defaultFirst(alternate)...)
+	return append(defaultFirst(exact), defaultFirst(english)...)
 }
 
 func selectOtherProviderCandidates(
@@ -259,20 +248,6 @@ func selectOtherProviderCandidates(
 		}
 	}
 	return append(defaultFirst(exact), defaultFirst(english)...)
-}
-
-func selectAnyProviderCandidates(
-	tracks []model.SubtitleTrack,
-	preferredResolver string,
-) []model.SubtitleTrack {
-	out := make([]model.SubtitleTrack, 0, len(tracks))
-	for _, track := range tracks {
-		if preferredResolver != "" && strings.EqualFold(track.Resolver, preferredResolver) {
-			continue
-		}
-		out = append(out, track)
-	}
-	return defaultFirst(out)
 }
 
 func defaultFirst(tracks []model.SubtitleTrack) []model.SubtitleTrack {
@@ -384,6 +359,19 @@ func (s *SubtitleService) downloadProviderSubtitle(
 	media model.ResolvedMedia,
 	track model.SubtitleTrack,
 ) (model.SubtitleTrack, error) {
+	cacheDir, err := subtitles.CacheDir()
+	if err == nil {
+		urlHash := sha256.Sum256([]byte(strings.TrimSpace(track.URL)))
+		for _, ext := range []string{".vtt", ".srt", ".ass"} {
+			existingPath := filepath.Join(cacheDir, fmt.Sprintf("provider_sub_%x%s", urlHash[:12], ext))
+			if info, serr := os.Stat(existingPath); serr == nil && !info.IsDir() && info.Size() > 0 {
+				track.Path = existingPath
+				track.URL = ""
+				return track, nil
+			}
+		}
+	}
+
 	parsed, err := url.Parse(strings.TrimSpace(track.URL))
 	if err != nil {
 		return model.SubtitleTrack{}, fmt.Errorf("parse subtitle URL: %w", err)
@@ -432,11 +420,14 @@ func (s *SubtitleService) downloadProviderSubtitle(
 		return model.SubtitleTrack{}, fmt.Errorf("validate subtitle: %w", err)
 	}
 
-	cacheDir, err := subtitles.CacheDir()
-	if err != nil {
-		return model.SubtitleTrack{}, fmt.Errorf("subtitle cache dir: %w", err)
+	if cacheDir == "" {
+		cacheDir, err = subtitles.CacheDir()
+		if err != nil {
+			return model.SubtitleTrack{}, fmt.Errorf("subtitle cache dir: %w", err)
+		}
 	}
-	filename := fmt.Sprintf("provider_sub_%d%s", time.Now().UnixNano(), subtitles.FileExtension(format))
+	urlHash := sha256.Sum256([]byte(strings.TrimSpace(track.URL)))
+	filename := fmt.Sprintf("provider_sub_%x%s", urlHash[:12], subtitles.FileExtension(format))
 	path := filepath.Join(cacheDir, filename)
 	if err := util.AtomicWriteFile(path, processed, 0o644); err != nil {
 		return model.SubtitleTrack{}, fmt.Errorf("write subtitle: %w", err)
@@ -506,10 +497,13 @@ func subtitleCandidateKey(track model.SubtitleTrack) string {
 	if usableCachedTrack(track) {
 		return "path:" + strings.TrimSpace(track.Path)
 	}
-	return strings.Join([]string{
-		strings.TrimSpace(track.URL),
-		strings.TrimSpace(track.SourceID),
-		strings.TrimSpace(track.SourceURL),
-		strings.TrimSpace(track.Referer),
-	}, "\x00")
+	if strings.TrimSpace(track.URL) != "" {
+		return strings.Join([]string{
+			strings.TrimSpace(track.URL),
+			strings.TrimSpace(track.SourceID),
+			strings.TrimSpace(track.SourceURL),
+			strings.TrimSpace(track.Referer),
+		}, "\x00")
+	}
+	return "resolver:" + track.Resolver + ":" + track.Language
 }

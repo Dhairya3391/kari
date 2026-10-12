@@ -13,7 +13,7 @@
 ## 0. Registration (single source today)
 
 - `internal/provider/defaults/defaults.go` is the only registration
-  list: `anicine, movysx, anikoto, anilight, miruro, moovie, weebcentral, pengu, jellyfin`.
+  list: `anicine, movysx, anikoto, anilight, miruro, moovie, atlantic, cinecat, weebcentral, pengu, jellyfin`.
 - `jellyfin.When` gates on `JellyfinURL && JellyfinAPIKey`
   (`defaults.go:60-62`); factory failure skips with log, never fatal
   (`defaults.go:80-84`).
@@ -25,7 +25,7 @@ Declared modes/priorities:
 | mode | providers (priority) | evidence |
 | --- | --- | --- |
 | anime | anicine P1, anikoto P2, miruro P2, anilight P3 | `anicine`, `anikoto`, `miruro`, `anilight` `client.go` `Modes()` |
-| movies/tv/cartoon | anicine P1, movysx P2, pengu P2, moovie P2 | `anicine`, `movysx`, `pengu`, `moovie` `client.go` `Modes()` |
+| movies/tv/cartoon | movysx P2, pengu P2, moovie P2, atlantic P2, cinecat P2 | `movysx`, `pengu`, `moovie`, `atlantic`, `cinecat` `client.go` `Modes()` |
 | live | pengu P1 only | `pengu/client.go:162` |
 | manga | weebcentral P1 only | `weebcentral/client.go:48-50` |
 | jellyfin | jellyfin P1 only | `jellyfin/client.go:55-59` |
@@ -151,7 +151,7 @@ Cartoon search reuses TMDB multi-search + genre-16 filter via streambase
 
 Unified shapes: `provider.SearchResult` (`provider.go:64-97`),
 `provider.Episode` (`101-111`), `provider.MediaSource` (`116-138`),
-`MangaChapter/Page` (`143-167`); 
+`MangaChapter/Page` (`143-167`);
 
 | provider | raw → unified | gaps / inconsistencies |
 | --- | --- | --- |
@@ -162,6 +162,8 @@ Unified shapes: `provider.SearchResult` (`provider.go:64-97`),
 | pengu | TMDB base for search/items + own `/api/...` resolve; live catalog fan-out (`client.go:399-411`); `Quality "4K [4KHDHub] (Hindi)"` (`client_test.go:126`); `mapAudioLanguage("Hindi, English")→"hi"` (`client_test.go:231-233`); `Type hls/mp4` by ext (`client.go:700`); `Referer` per-stream host, `UserAgent DesktopUA`, `CookieHeader` passthrough | language normalized to ISO in one helper but quality embeds `[TAG]` + `(Lang)`; live `StartsAt` parsed by `parseLiveStart` (local-time conversion must be verified live); deflated `z…` config token (`buildConfigSegment`); 429 → `ErrRateLimited` |
 | weebcentral | HTMX scrape `weebcentral.com`; search ≤25; chapters from series page + `chapter-select` merge; pages `pageImgSrcRe`; `MangaPage{URL,Referer: site, UserAgent: DesktopUA}` | `FetchEpisodes/ResolveSource` return sentinels (correct for Reader); chapter numbers strings (`"10.5"`); year/genres scraped (`yearRe`, `seriesTitleRe`); throttle 300ms mutex (`client.go:89-103`) |
 | jellyfin | `X-Emby-Token` `authGET`; library cached 5m (`library.go:20`), `maxSearchResults 50`; `rankLibrary/matchScore/hasWordPrefix/containsAllWords/isSubsequence`; resolve synthetic `/Videos/{id}/stream?static=true&api_key=` `Type mp4 Quality "Jellyfin"` (`client.go:237-239`) | quality fixed string; no audio/subtitle langs from server yet; search falls back to `searchHints` when cache misses |
+| atlantic | TMDB base for search/items + multi-backend resolve (Helios, Moscow, Planets, Athena, Vespera); AES-GCM decrypted stream URLs; Granite + Natsuki subtitles; Referer/Origin headers + extensionless segment lavf demuxer args | direct HLS streams; quality tagged by backend name (e.g. 1080p (Helios)); multi-language subtitles via Granite & Natsuki normalized via lang.Normalize |
+| cinecat | TMDB base for search/items + ZCDN (zcdn.bluevelvet.space) multi-tier HLS streaming (4K, 1080p, 720p, 480p, Auto) + Granite (sub.vdrk.site) subtitles | direct multi-bitrate HLS streams; mpv plays directly; Referer hotlink protection |
 | streambase | TMDB multi-search + details + `errgroup` seasons sem 5 (`base.go:35-472`); key rotation `NextKey/MarkFailed` on 401/429 | movie → synthetic single episode; cartoon filter genre 16; `reEpisodeNum/reSeasonNum` package regexps (`base.go:28-29`) |
 
 Normalization gaps (repo-wide): quality strings mix heights (`1080p`),

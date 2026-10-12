@@ -165,9 +165,14 @@ func playSingleSourceWithIINA(binary string, source provider.MediaSource, media 
 		binary:     binary,
 		args:       args,
 		socketPath: socketPath,
+		sourceURL:  source.URL,
+		isLive:     media.IsLive(),
 	})
 	if result.succeeded() {
 		return result.playback, nil
+	}
+	if result.shortWarning {
+		return PlaybackResult{}, fmt.Errorf("source rejected: stream is a short placeholder/warning video (%.1fs <= %.0fs)", result.shortDur, ShortWarningVideoMaxDuration)
 	}
 	if result.mpvStderr == "" {
 		return PlaybackResult{}, fmt.Errorf("process exited with code %d", result.exitCode)

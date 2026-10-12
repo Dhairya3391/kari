@@ -24,15 +24,39 @@ func TestBoostRankPreferredBackends(t *testing.T) {
 	}
 }
 
+// TestDemoteRankWeakBackends pins the audit-driven demotion: pengu
+// MovieBox/Cinejoy rows sort last among playable sources in
+// movies/tv/cartoon, while sibling backends and other modes stay
+// unranked.
+func TestDemoteRankWeakBackends(t *testing.T) {
+	for _, mode := range []ContentType{ModeMovies, ModeTV, ModeCartoon} {
+		if got := DemoteRank(mode, "pengu", "360p [MovieBox]"); got != 0 {
+			t.Errorf("%s moviebox rank = %d, want 0", mode, got)
+		}
+		if got := DemoteRank(mode, "pengu", "480p [Cinejoy]"); got != 1 {
+			t.Errorf("%s cinejoy rank = %d, want 1", mode, got)
+		}
+		if got := DemoteRank(mode, "pengu", "4K [HDHub4u]"); got != -1 {
+			t.Errorf("%s hdhub rank = %d, want -1", mode, got)
+		}
+		if got := DemoteRank(mode, "movysx", "1080p [MovieBox]"); got != -1 {
+			t.Errorf("%s movysx moviebox rank = %d, want -1 (resolver-gated)", mode, got)
+		}
+	}
+	if got := DemoteRank(ModeAnime, "pengu", "360p [MovieBox]"); got != -1 {
+		t.Errorf("anime moviebox rank = %d, want -1", got)
+	}
+}
+
 // TestRoutesCoverKnownProviders ensures every provider serving a mode has
 // a routes-table entry (timeouts/strategies), so new registrations can't
 // silently fall back to defaults.
 func TestRoutesCoverKnownProviders(t *testing.T) {
 	known := map[ContentType][]string{
 		ModeAnime:    {"anicine", "anikoto", "miruro", "anilight"},
-		ModeMovies:   {"anicine", "movysx", "pengu", "moovie"},
-		ModeTV:       {"anicine", "movysx", "pengu", "moovie"},
-		ModeCartoon:  {"anicine", "movysx", "pengu", "moovie"},
+		ModeMovies:   {"movysx", "pengu", "moovie", "atlantic", "cinecat"},
+		ModeTV:       {"movysx", "pengu", "moovie", "atlantic", "cinecat"},
+		ModeCartoon:  {"movysx", "pengu", "moovie", "atlantic", "cinecat"},
 		ModeLive:     {"pengu"},
 		ModeManga:    {"weebcentral"},
 		ModeJellyfin: {"jellyfin"},

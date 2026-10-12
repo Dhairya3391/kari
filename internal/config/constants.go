@@ -41,7 +41,7 @@ const (
 	DefaultIntroDBAPIKey = "idb_Cbx3JSk4-MLeS8iOXQGFY0hXvM06XdFs"
 
 	// DefaultPenguAuthToken is the bundled fallback token for PenguPlay (https://pengu.uk).
-	DefaultPenguAuthToken = "ZXKooMjPl9wu9A4JI8HNQY54Jocc3H_qkUW422U6cpQ"
+	DefaultPenguAuthToken = "QrorVNGPLcKqQNDKYHlRWbkXMizhtq2fX7iWZ7TXOzs"
 
 	// WeebCentralBase is the WeebCentral site (HTMX HTML, no API):
 	// series search, full chapter listings, and chapter page images.
@@ -57,6 +57,30 @@ const (
 	// barelystarted host is the current deployment while miruro.tv
 	// rotates domains.
 	MiruroBase = "https://barelystarted.miruro.tv"
+
+	// AtlanticBase is the public web application for Atlantic (https://atlantic.st).
+	AtlanticBase = "https://atlantic.st"
+	// AtlanticReferer satisfies the hotlink protection enforced by Atlantic's
+	// stream and segment proxies.
+	AtlanticReferer = "https://atlantic.st/"
+	// AtlanticStreamBase is the multi-backend streaming resolution service (hls.lol)
+	// serving Helios, Moscow, and Planets shards.
+	AtlanticStreamBase = "https://stream.hls.lol"
+	// AtlanticAthenaBase is the BlueVelvet CDN backend for Athena streams.
+	AtlanticAthenaBase = "https://zcdn.bluevelvet.space"
+	// AtlanticSubsBase is the Natsuki subtitle API backend.
+	AtlanticSubsBase = "https://natsuki.hls.lol"
+	// AtlanticGraniteBase is the Granite subtitle API backend.
+	AtlanticGraniteBase = "https://sub.vdrk.site"
+
+	// CinecatBase is the public web application for Cinecat (https://beta.cinecat.eu).
+	CinecatBase = "https://beta.cinecat.eu"
+	// CinecatReferer satisfies the hotlink protection on Cinecat stream requests.
+	CinecatReferer = "https://beta.cinecat.eu/"
+	// CinecatCDNBase is the primary multi-quality HLS streaming backend for Cinecat.
+	CinecatCDNBase = "https://zcdn.bluevelvet.space"
+	// CinecatSubsBase is the Granite subtitle backend used by Cinecat.
+	CinecatSubsBase = "https://sub.vdrk.site"
 )
 
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var

@@ -57,6 +57,7 @@ func NewClient() *Client {
 		httpClient: httpclient.NewWithUserAgent(config.DesktopUserAgent),
 	}
 }
+
 // NewClientWithHTTPClient constructs the search client over a custom
 // HTTP client (offline tests serve canned index payloads).
 func NewClientWithHTTPClient(hc *http.Client) *Client {

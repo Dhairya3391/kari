@@ -33,6 +33,7 @@ type Styles struct {
 	// Form & Values
 	EditableValue lipgloss.Style
 }
+
 var (
 	stylesMu    sync.RWMutex
 	stylesCache = make(map[lipgloss.AdaptiveColor]Styles)
@@ -101,6 +102,7 @@ func buildStyles(accent lipgloss.AdaptiveColor) Styles {
 			Foreground(accent),
 	}
 }
+
 // RenderUnderline generates the horizontal underline string '─────' of given width in accent color.
 func RenderUnderline(width int, accent lipgloss.AdaptiveColor) string {
 	if width <= 0 {

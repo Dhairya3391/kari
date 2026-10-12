@@ -67,6 +67,7 @@ var names = map[string]string{
 	"pa":  "Punjabi",
 	"sw":  "Swahili",
 	"ha":  "Hausa",
+	"et":  "Estonian",
 }
 
 // aliases maps other forms seen in the wild — full names, typos, regional
@@ -146,6 +147,8 @@ var aliases = map[string]string{
 	"hun":             "hu",
 	"finnish":         "fi",
 	"fin":             "fi",
+	"estonian":        "et",
+	"est":             "et",
 	"danish":          "da",
 	"dan":             "da",
 	"norwegian":       "no",

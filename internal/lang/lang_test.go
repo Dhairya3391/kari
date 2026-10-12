@@ -27,6 +27,8 @@ func TestNormalizeFoldsNativeScripts(t *testing.T) {
 		{"may", "ms"},                  // ISO 639-2/B Malay code
 		{"disabled", "off"},            // subtitle off alias
 		{"none", "off"},                // subtitle off alias
+		{"Estonian", "et"},
+		{"est", "et"},
 	}
 	for _, tt := range tests {
 		if got := Normalize(tt.raw); got != tt.want {
@@ -51,6 +53,8 @@ func TestNameAlwaysRendersEnglish(t *testing.T) {
 		{"vi", "Vietnamese"},
 		{"ms", "Malay"},
 		{"may", "Malay"},
+		{"et", "Estonian"},
+		{"estonian", "Estonian"},
 	}
 	for _, tt := range tests {
 		if got := Name(tt.raw); got != tt.want {

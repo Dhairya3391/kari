@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"kari/internal/provider"
-	"kari/internal/tmdb"
 )
 
 // Canned Megaplay enc token; decrypts to a nexabloom master.m3u8.
@@ -21,7 +20,6 @@ const fixtureEnc = "wdeBruh3qqn_i5wUNnyaPcXqidp1UWP84FfPHzGyKXDMoY_RzXqbC0h49Xmo
 func newFixture(t *testing.T) (*Client, *httptest.Server) {
 	t.Helper()
 	mux := http.NewServeMux()
-	var base string
 
 	// AniList GraphQL (search + media) at the server root.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -38,35 +36,6 @@ func newFixture(t *testing.T) (*Client, *httptest.Server) {
 		fmt.Fprint(w, `{"data":{"Page":{"media":[
 			{"id":151807,"title":{"romaji":"Ore dake Level Up na Ken","english":"Solo Leveling","userPreferred":"Solo Leveling","native":"X"},"seasonYear":2024,"format":"TV"}
 		]}}}`)
-	})
-
-	// Worker token with a distant expiry.
-	mux.HandleFunc("/v1/token", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"token":"fixture-token","exp":%d}`, time.Now().Add(2*time.Hour).UnixMilli())
-	})
-
-	// Worker movie + TV endpoints.
-	mux.HandleFunc("/v1/movies/27205", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer fixture-token" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"sources":[
-			{"url":"https://cdn.example.com/movie.m3u8","type":"hls","quality":"Auto","provider":{"id":"vaplayer","name":"VaPlayer"}},
-			{"url":"https://cdn.example.com/movie.m3u8","type":"hls","quality":"Auto","provider":{"id":"vaplayer","name":"VaPlayer"}}
-		],"subtitles":[{"url":"https://cdn.example.com/en.vtt","label":"English"}]}`)
-	})
-	mux.HandleFunc("/v1/tv/1396/seasons/1/episodes/1", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer fixture-token" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"sources":[
-			{"url":"https://cdn.example.com/s01e01.m3u8","type":"hls","quality":"1080p","provider":{"id":"vaplayer","name":"VaPlayer"}}
-		],"subtitles":[]}`)
 	})
 
 	// Embed error page (unreleased track) vs shapeless page (drift).
@@ -97,10 +66,8 @@ func newFixture(t *testing.T) (*Client, *httptest.Server) {
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	base = srv.URL
-	_ = base
 
-	c, err := NewClientWithBaseURL(tmdb.NewKeyPool([]string{"k"}), srv.URL)
+	c, err := NewClientWithBaseURL(srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithBaseURL: %v", err)
 	}
@@ -108,26 +75,19 @@ func newFixture(t *testing.T) (*Client, *httptest.Server) {
 }
 
 func TestAnicineCapabilities(t *testing.T) {
-	c, err := NewClient(tmdb.NewKeyPool([]string{"k"}))
+	c, err := NewClient()
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	if c.Alias() == "" || c.Name() != "anicine" {
 		t.Errorf("identity wrong: %q %q", c.Alias(), c.Name())
 	}
-	for _, m := range []provider.ContentType{provider.ModeAnime, provider.ModeMovies, provider.ModeTV, provider.ModeCartoon} {
-		found := false
-		for _, mode := range c.Modes() {
-			if mode.Name == m && mode.Priority == 1 {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("mode %q missing at priority 1: %+v", m, c.Modes())
-		}
+	modes := c.Modes()
+	if len(modes) != 1 || modes[0].Name != provider.ModeAnime || modes[0].Priority != 1 {
+		t.Errorf("modes = %+v, want anime at priority 1 only", modes)
 	}
 	if !c.RequiresEpisodeListForMovies() {
-		t.Error("movies must go through the episode flow")
+		t.Error("anime movies must go through the episode flow")
 	}
 	if !c.Features(provider.ModeAnime).AudioSelection {
 		t.Error("anime must declare audio selection")
@@ -182,76 +142,13 @@ func TestAnicineAnimeResolve(t *testing.T) {
 	}
 }
 
-func TestAnicineMovieResolve(t *testing.T) {
+// TestAnicineResolveRejectsNonAnime proves TMDB-style IDs cannot resolve
+// through this provider: it serves anime only.
+func TestAnicineResolveRejectsNonAnime(t *testing.T) {
 	c, _ := newFixture(t)
-	sources, err := c.ResolveSource(context.Background(), "27205", provider.Episode{TMDBID: 27205})
-	if err != nil {
-		t.Fatalf("ResolveSource: %v", err)
-	}
-	// Duplicate URL collapses to one.
-	if len(sources) != 1 {
-		t.Fatalf("expected 1 source, got %d", len(sources))
-	}
-	if sources[0].URL != "https://cdn.example.com/movie.m3u8" {
-		t.Errorf("unexpected URL: %s", sources[0].URL)
-	}
-	if len(sources[0].Subtitles) != 1 || sources[0].Subtitles[0].Language != "en" {
-		t.Errorf("unexpected subtitles: %+v", sources[0].Subtitles)
-	}
-}
-
-func TestAnicineTVResolve(t *testing.T) {
-	c, _ := newFixture(t)
-	sources, err := c.ResolveSource(context.Background(), "1396", provider.Episode{TMDBID: 1396, Season: 1, Episode: 1})
-	if err != nil {
-		t.Fatalf("ResolveSource: %v", err)
-	}
-	if len(sources) != 1 || !strings.Contains(sources[0].Quality, "VaPlayer") {
-		t.Errorf("unexpected sources: %+v", sources)
-	}
-}
-
-func TestAnicineTokenRefresh(t *testing.T) {
-	c, _ := newFixture(t)
-	token, err := c.bearerToken(context.Background())
-	if err != nil {
-		t.Fatalf("bearerToken: %v", err)
-	}
-	if token != "fixture-token" {
-		t.Errorf("token = %q", token)
-	}
-	// Second call serves the cache without HTTP (would fail closed server).
-	if token2, err := c.bearerToken(context.Background()); err != nil || token2 != token {
-		t.Errorf("cached token = %q, %v", token2, err)
-	}
-}
-
-// TestAnicineRespectsDeadline proves a hung worker fails fast on context
-// cancellation instead of hanging past the provider deadline (the service
-// bounds each provider at 12s; this is what surfaces as
-// "Sources ✗ anicine timed out").
-func TestAnicineRespectsDeadline(t *testing.T) {
-	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-r.Context().Done():
-		case <-time.After(60 * time.Second):
-		}
-	}))
-	defer hang.Close()
-
-	c, err := NewClientWithBaseURL(tmdb.NewKeyPool([]string{"k"}), hang.URL)
-	if err != nil {
-		t.Fatalf("NewClientWithBaseURL: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	start := time.Now()
-	_, err = c.ResolveSource(ctx, "27205", provider.Episode{TMDBID: 27205})
+	_, err := c.ResolveSource(context.Background(), "27205", provider.Episode{TMDBID: 27205})
 	if err == nil {
-		t.Fatal("hung worker must error")
-	}
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Errorf("resolve hung %v past deadline", elapsed)
+		t.Fatal("TMDB resolve must error on the anime-only provider")
 	}
 }
 

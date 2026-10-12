@@ -36,31 +36,53 @@ const (
 	// seeing the window; a stream failing to open typically takes longer,
 	// bounded by --network-timeout=15 in the mpv args below.
 	mpvQuickExitThreshold = 2 * time.Second
+
+	// ShortWarningVideoMaxDuration is the maximum duration in seconds of a fake
+	// placeholder or warning clip (e.g. 45-second Cloudflare/VPN notice) served by
+	// hostile CDNs. Real episodic and movie media exceeds this threshold.
+	ShortWarningVideoMaxDuration = 60.0
 )
+
+func isShortWarningVideo(dur float64, rawURL string, isLive bool) bool {
+	if isLive || dur <= 0 || dur > ShortWarningVideoMaxDuration {
+		return false
+	}
+	u := strings.TrimSpace(rawURL)
+	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
+}
 
 type startupCheck struct {
 	binary     string
 	args       []string
 	socketPath string
+	sourceURL  string
+	isLive     bool
 }
 
 type pipeStartupCheck struct {
 	curlArgs   []string
 	mpvArgs    []string
 	socketPath string
+	sourceURL  string
+	isLive     bool
 }
 
 type launchResult struct {
-	mpvStderr  string
-	curlStderr string
-	exitCode   int
-	launched   bool
-	quickExit  bool
-	curlFailed bool
-	playback   PlaybackResult
+	mpvStderr    string
+	curlStderr   string
+	exitCode     int
+	launched     bool
+	quickExit    bool
+	curlFailed   bool
+	playback     PlaybackResult
+	shortWarning bool
+	shortDur     float64
 }
 
 func (r launchResult) succeeded() bool {
+	if r.shortWarning {
+		return false
+	}
 	return !r.curlFailed && attemptSucceeded(r.launched, r.exitCode, r.quickExit, r.playback)
 }
 
@@ -115,7 +137,12 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		binary:     "mpv",
 		args:       directArgs,
 		socketPath: socketPath,
+		sourceURL:  source.URL,
+		isLive:     media.IsLive(),
 	})
+	if direct.shortWarning {
+		return PlaybackResult{}, fmt.Errorf("source rejected: stream is a short placeholder/warning video (%.1fs <= %.0fs)", direct.shortDur, ShortWarningVideoMaxDuration)
+	}
 	if direct.succeeded() {
 		return direct.playback, nil
 	}
@@ -194,9 +221,14 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		curlArgs:   curlArgs,
 		mpvArgs:    pipeMpvArgs,
 		socketPath: socketPath,
+		sourceURL:  source.URL,
+		isLive:     media.IsLive(),
 	})
 	if pipeErr != nil {
 		return PlaybackResult{}, fmt.Errorf("mpv playback failed: pipe startup error: %w", pipeErr)
+	}
+	if pipe.shortWarning {
+		return PlaybackResult{}, fmt.Errorf("source rejected: stream is a short placeholder/warning video (%.1fs <= %.0fs)", pipe.shortDur, ShortWarningVideoMaxDuration)
 	}
 	if pipe.succeeded() {
 		return pipe.playback, nil
@@ -388,6 +420,8 @@ func ipcPoller(
 	ctx context.Context,
 	client *IPCClient,
 	stats *playbackStats,
+	sourceURL string,
+	isLive bool,
 	done <-chan struct{},
 ) {
 	defer client.Close()
@@ -413,6 +447,12 @@ func ipcPoller(
 			if b, ok := idle.(bool); ok {
 				isIdle = b
 			}
+		}
+		if isShortWarningVideo(durF, sourceURL, isLive) {
+			mpvLog.Warn("rejected short placeholder/warning stream", "duration", durF, "url", sourceURL)
+			stats.setShortWarning(durF)
+			_, _ = client.command("quit", "2")
+			return false
 		}
 
 		// Media is loaded if time-pos is available (even if 0.0), duration is
@@ -499,12 +539,17 @@ func waitForPlaybackReadiness(
 	ipcWG.Add(1)
 	go func() {
 		defer ipcWG.Done()
-		ipcPoller(context.Background(), client, stats, ipcDone)
+		ipcPoller(context.Background(), client, stats, check.sourceURL, check.isLive, ipcDone)
 	}()
 	defer func() {
 		close(ipcDone)
 		ipcWG.Wait()
 		result.playback = stats.snapshot()
+		if isShort, dur := stats.isShortWarning(); isShort {
+			result.shortWarning = true
+			result.shortDur = dur
+			result.launched = false
+		}
 	}()
 
 	phaseStart := time.Now()
@@ -528,13 +573,27 @@ func waitForPlaybackReadiness(
 			mpvLog.Warn("readiness timeout; killed process", "stderr", summarizeErr("", stderr.String()))
 			return launchResult{mpvStderr: stderr.String(), exitCode: 1, launched: true}
 		case <-ticker.C:
+			if isShort, dur := stats.isShortWarning(); isShort {
+				_ = cmd.Process.Kill()
+				<-done
+				return launchResult{
+					mpvStderr:    fmt.Sprintf("filtered short warning video (duration: %.1fs <= %.0fs)", dur, ShortWarningVideoMaxDuration),
+					exitCode:     2,
+					launched:     false,
+					shortWarning: true,
+					shortDur:     dur,
+				}
+			}
 			if stats.playing() {
 				err := <-done
+				isShort, dur := stats.isShortWarning()
 				return launchResult{
-					mpvStderr: stderr.String(),
-					exitCode:  exitCodeOf(err),
-					launched:  true,
-					quickExit: true,
+					mpvStderr:    stderr.String(),
+					exitCode:     exitCodeOf(err),
+					launched:     !isShort,
+					quickExit:    true,
+					shortWarning: isShort,
+					shortDur:     dur,
 				}
 			}
 		}
@@ -577,12 +636,17 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 	ipcWG.Add(1)
 	go func() {
 		defer ipcWG.Done()
-		ipcPoller(context.Background(), client, stats, ipcDone)
+		ipcPoller(context.Background(), client, stats, check.sourceURL, check.isLive, ipcDone)
 	}()
 	defer func() {
 		close(ipcDone)
 		ipcWG.Wait()
 		result.playback = stats.snapshot()
+		if isShort, dur := stats.isShortWarning(); isShort {
+			result.shortWarning = true
+			result.shortDur = dur
+			result.launched = false
+		}
 	}()
 
 	phaseStart := time.Now()
@@ -631,18 +695,36 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 				launched:   true,
 			}, nil
 		case <-ticker.C:
+			if isShort, dur := stats.isShortWarning(); isShort {
+				_ = mpv.Process.Kill()
+				<-mpvDone
+				if curlDone != nil {
+					_ = curl.Process.Kill()
+					<-curlDone
+				}
+				return launchResult{
+					mpvStderr:    fmt.Sprintf("filtered short warning video (duration: %.1fs <= %.0fs)", dur, ShortWarningVideoMaxDuration),
+					exitCode:     2,
+					launched:     false,
+					shortWarning: true,
+					shortDur:     dur,
+				}, nil
+			}
 			if !stats.playing() {
 				continue
 			}
 			mpvErr := <-mpvDone
 			curlErr := waitForCurlExit(curl, curlDone)
+			isShort, dur := stats.isShortWarning()
 			return launchResult{
-				mpvStderr:  mpvStderr.String(),
-				curlStderr: curlStderr.String(),
-				exitCode:   exitCodeOf(mpvErr),
-				launched:   true,
-				quickExit:  true,
-				curlFailed: exitCodeOf(curlErr) != 0 && !stats.playing(),
+				mpvStderr:    mpvStderr.String(),
+				curlStderr:   curlStderr.String(),
+				exitCode:     exitCodeOf(mpvErr),
+				launched:     !isShort,
+				quickExit:    true,
+				curlFailed:   exitCodeOf(curlErr) != 0 && !stats.playing(),
+				shortWarning: isShort,
+				shortDur:     dur,
 			}, nil
 		}
 	}

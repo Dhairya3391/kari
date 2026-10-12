@@ -41,4 +41,7 @@ type ResolvedMedia struct {
 	// Subtitles remains the unselected provider candidate list.
 	SelectedSubtitle *SubtitleTrack
 	StartTime        float64
+	// Live marks real-time broadcast playback where duration-based
+	// short video filtering and skip timestamps are inapplicable.
+	Live bool
 }
