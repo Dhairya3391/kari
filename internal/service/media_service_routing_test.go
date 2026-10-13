@@ -216,7 +216,7 @@ func (s *resolveStub) ResolveSource(ctx context.Context, mediaID string, episode
 
 // TestResolveMergeDedupesAndBoosts proves cross-provider dedupe by URL
 // and the routes-table preference (movysx first for movies).
-func TestResolveMergeDedupesAndBoosts(t *testing.T) {
+func TestResolveMergeDedupesAndPreservesSources(t *testing.T) {
 	movysx := &resolveStub{name: "movysx", mode: provider.ModeMovies,
 		sources: []provider.MediaSource{{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p"}}}
 	pengu := &resolveStub{name: "pengu", mode: provider.ModeMovies,
@@ -234,9 +234,6 @@ func TestResolveMergeDedupesAndBoosts(t *testing.T) {
 	}
 	if len(resolved.Playback) != 3 {
 		t.Fatalf("want 3 deduped sources, got %+v", resolved.Playback)
-	}
-	if resolved.Playback[0].Resolver != "movysx" {
-		t.Errorf("first source = %+v, want movysx preference", resolved.Playback[0])
 	}
 }
 

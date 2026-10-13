@@ -284,9 +284,13 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.invalidateSubtitleSync()
 			m.pruneResolvedToResolvers(exclude)
-			m.rawSubtitles = nil
-			m.rankedSources = nil
-			m.previewSelectedIndex = 0
+			if len(exclude) > 0 {
+				m.refreshRanking()
+			} else {
+				m.rawSubtitles = nil
+				m.rankedSources = nil
+				m.previewSelectedIndex = 0
+			}
 			m.manualPlaybackSelected = false
 			m.loading = false
 			m.loadingText = ""
@@ -294,7 +298,7 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !m.guardLoad() {
 				return m, nil
 			}
-			m.loading = true
+			m.loading = len(m.orderedPlaybackSources()) == 0
 			m.loadingText = "Retrying streams..."
 			m.beginRetryWait(m.appMode, exclude)
 			opID := m.newOpID()

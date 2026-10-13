@@ -44,4 +44,9 @@ type ResolvedMedia struct {
 	// Live marks real-time broadcast playback where duration-based
 	// short video filtering and skip timestamps are inapplicable.
 	Live bool
+	// CompletedResolvers names the providers that have finished resolving
+	// (with sources, empty, or failed) so dynamic progress reflects completion.
+	CompletedResolvers []string
+	// TotalResolvers is the count of providers queried during this resolve.
+	TotalResolvers int
 }

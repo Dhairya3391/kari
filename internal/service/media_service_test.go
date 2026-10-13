@@ -74,7 +74,7 @@ func TestMediaServiceSearchDedupesAnimeByAniListID(t *testing.T) {
 		},
 	}
 	p2 := &stubProvider{
-		name: "anilight",
+		name: "miruro",
 		mode: provider.ModeAnime,
 		results: []provider.SearchResult{
 			{Title: "One Piece", ID: "21", Type: provider.ModeAnime, Year: "1999"},
@@ -212,7 +212,7 @@ func TestSourceAggregatorPreservesTransportBoundSubtitles(t *testing.T) {
 	}
 }
 
-func TestSourceAggregatorSortQualityThenPriority(t *testing.T) {
+func TestSourceAggregatorPreservesArrivalOrder(t *testing.T) {
 	first := &stubProvider{name: "first", mode: provider.ModeTV}
 	second := &stubProvider{name: "second", mode: provider.ModeTV}
 	agg := newSourceAggregator([]provider.Provider{first, second}, func(n string) string { return n })
@@ -224,7 +224,7 @@ func TestSourceAggregatorSortQualityThenPriority(t *testing.T) {
 	})
 	agg.sort()
 
-	wantOrder := []string{"http://hi-1", "http://hi-2", "http://lo-1"}
+	wantOrder := []string{"http://hi-2", "http://lo-1", "http://hi-1"}
 	for i, want := range wantOrder {
 		if agg.sources[i].URL != want {
 			t.Fatalf("position %d: got %s want %s (order=%+v)", i, agg.sources[i].URL, want, agg.sources)
@@ -232,21 +232,18 @@ func TestSourceAggregatorSortQualityThenPriority(t *testing.T) {
 	}
 }
 
-// TestSourceAggregatorSortDemotesWeakBackends proves audit-dead backends
-// sort below playable-now rows from the same resolver even at higher
-// labeled quality.
-func TestSourceAggregatorSortDemotesWeakBackends(t *testing.T) {
-	pengu := &stubProvider{name: "pengu", mode: provider.ModeMovies}
-	agg := newSourceAggregatorForMode(provider.ModeMovies, []provider.Provider{pengu}, func(n string) string { return n })
+func TestSourceAggregatorSortsHardSubsBeforeSoftSubsPerProvider(t *testing.T) {
+	pengu := &stubProvider{name: "pengu", mode: provider.ModeAnime}
+	agg := newSourceAggregatorForMode(provider.ModeAnime, []provider.Provider{pengu}, func(n string) string { return n })
 
 	agg.add("pengu", []provider.MediaSource{
-		{URL: "http://dead", Quality: "4K [MovieBox]"},
-		{URL: "http://live", Quality: "360p [VidFast]"},
+		{URL: "http://soft", Quality: "1080p", SubType: provider.SubTypeSoft},
+		{URL: "http://hard", Quality: "1080p", SubType: provider.SubTypeHard},
 	})
 	agg.sort()
 
-	if len(agg.sources) != 2 || agg.sources[0].URL != "http://live" || agg.sources[1].URL != "http://dead" {
-		t.Fatalf("demoted row must sort last (order=%+v)", agg.sources)
+	if len(agg.sources) != 2 || agg.sources[0].URL != "http://hard" || agg.sources[1].URL != "http://soft" {
+		t.Fatalf("hard sub must sort before soft sub per provider (order=%+v)", agg.sources)
 	}
 }
 
@@ -274,7 +271,7 @@ func TestResolveUsesCrossProviderAnimeAniListID(t *testing.T) {
 	var gotAudio string
 	origin := &stubProvider{name: "anikoto", mode: provider.ModeAnime,
 		results: []provider.SearchResult{{Title: "One Piece", ID: "21", Type: provider.ModeAnime, MediaType: provider.MediaTypeAnime}}}
-	other := &resolveCaptureWithAudio{name: "anilight", mode: provider.ModeAnime, captureID: &gotID, captureAudio: &gotAudio}
+	other := &resolveCaptureWithAudio{name: "miruro", mode: provider.ModeAnime, captureID: &gotID, captureAudio: &gotAudio}
 
 	svc := NewMediaService(newTestRegistry(origin, other))
 	_, err := svc.Resolve(context.Background(), provider.ModeAnime,
@@ -311,7 +308,106 @@ func (r *resolveCaptureWithAudio) FetchEpisodes(ctx context.Context, s provider.
 func (r *resolveCaptureWithAudio) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
 	*r.captureID = mediaID
 	*r.captureAudio = episode.Audio
-	return []provider.MediaSource{{URL: "http://anilight-stream", Quality: "1080p"}}, nil
+	return []provider.MediaSource{{URL: "http://miruro-stream", Quality: "1080p"}}, nil
+}
+
+// availStub is an anime provider double with controllable availability
+// latency and outcome. FetchEpisodes (origin path) and
+// FetchAvailableEpisodes (probe path) resolve independently.
+type availStub struct {
+	name     string
+	delay    time.Duration
+	eps      []provider.Episode
+	err      error
+	fetch    []provider.Episode
+	fetchErr error
+}
+
+func (a *availStub) Name() string { return a.name }
+func (a *availStub) Modes() []provider.Mode {
+	return []provider.Mode{{Name: provider.ModeAnime, Priority: 1}}
+}
+func (a *availStub) Search(ctx context.Context, q string, m provider.ContentType) ([]provider.SearchResult, error) {
+	return nil, provider.ErrNoResults
+}
+func (a *availStub) FetchEpisodes(ctx context.Context, s provider.SearchResult) ([]provider.Episode, error) {
+	return a.fetch, a.fetchErr
+}
+func (a *availStub) FetchAvailableEpisodes(ctx context.Context, s provider.SearchResult) ([]provider.Episode, error) {
+	select {
+	case <-time.After(a.delay):
+		return a.eps, a.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+func (a *availStub) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
+	return nil, provider.ErrNoSources
+}
+
+// The availability probe races: a slow source must not delay a fast one.
+func TestFetchEpisodesRacesAvailabilitySources(t *testing.T) {
+	fast := &availStub{name: "fast", delay: 10 * time.Millisecond,
+		eps: []provider.Episode{{Episode: 1, Audio: "sub"}, {Episode: 1, Audio: "dub"}}}
+	slow := &availStub{name: "slow", delay: 5 * time.Second,
+		eps: []provider.Episode{{Episode: 1, Audio: "sub"}}}
+
+	svc := NewMediaService(newTestRegistry(slow, fast))
+	start := time.Now()
+	eps, err := svc.FetchEpisodes(context.Background(), provider.ModeAnime,
+		provider.SearchResult{Title: "T", ID: "21", Provider: "slow", Type: provider.ModeAnime}, "sub")
+	if err != nil {
+		t.Fatalf("FetchEpisodes: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("race took %v, want fast win well under slow source", elapsed)
+	}
+	if len(eps) != 1 || eps[0].Audio != "sub" {
+		t.Errorf("eps = %+v, want the fast source's filtered sub row", eps)
+	}
+}
+
+// When every availability source fails, sub loads fall back to the
+// origin episode list; dub loads report the miss.
+func TestFetchEpisodesFallsBackWhenAvailabilityFails(t *testing.T) {
+	origin := &availStub{name: "origin", err: errors.New("boom"),
+		fetch: []provider.Episode{{Episode: 7, Title: "Seven"}}}
+	other := &availStub{name: "other", err: errors.New("bust")}
+
+	svc := NewMediaService(newTestRegistry(origin, other))
+	eps, err := svc.FetchEpisodes(context.Background(), provider.ModeAnime,
+		provider.SearchResult{Title: "T", ID: "21", Provider: "origin", Type: provider.ModeAnime}, "sub")
+	if err != nil {
+		t.Fatalf("sub fallback: %v", err)
+	}
+	if len(eps) != 1 || eps[0].Episode != 7 {
+		t.Errorf("eps = %+v, want origin fallback row", eps)
+	}
+
+	dubSvc := NewMediaService(newTestRegistry(
+		&availStub{name: "a", err: provider.ErrNoEpisodes},
+		&availStub{name: "b", err: provider.ErrNoEpisodes}))
+	_, err = dubSvc.FetchEpisodes(context.Background(), provider.ModeAnime,
+		provider.SearchResult{Title: "T", ID: "21", Provider: "a", Type: provider.ModeAnime}, "dub")
+	if !errors.Is(err, provider.ErrNoEpisodes) {
+		t.Errorf("dub all-fail err = %v, want ErrNoEpisodes", err)
+	}
+}
+
+// Route timeouts: default when unset, explicit when set, never beyond
+// the overall budget.
+func TestProviderSourceTimeout(t *testing.T) {
+	if got := providerSourceTimeout(provider.Route{}, false); got != provider.DefaultSourceTimeout {
+		t.Errorf("no route = %v, want default", got)
+	}
+	r := provider.Route{Provider: "pengu", SourceTimeout: 40 * time.Second}
+	if got := providerSourceTimeout(r, true); got != 40*time.Second {
+		t.Errorf("explicit 40s = %v, want 40s", got)
+	}
+	r.SourceTimeout = 99 * time.Second
+	if got := providerSourceTimeout(r, true); got != provider.DefaultSourcesOverall {
+		t.Errorf("oversize clamped = %v, want overall", got)
+	}
 }
 func TestLiveAnimeResolution(t *testing.T) {
 	if testing.Short() {
@@ -441,13 +537,9 @@ func TestResolvedMediaSnapshotIsCopied(t *testing.T) {
 	}
 }
 
-func TestAggregatorSortPrioritizesMovy(t *testing.T) {
+func TestAggregatorPreservesArrivalOrderAcrossProviders(t *testing.T) {
 	agg := &sourceAggregator{
 		mode: provider.ModeMovies,
-		priority: map[string]int{
-			"movysx": 0,
-			"pengu":  1,
-		},
 		sources: []provider.MediaSource{
 			{Resolver: "pengu", Quality: "4K [4KHDHub]"},
 			{Resolver: "movysx", Quality: "1080p"},
@@ -462,47 +554,12 @@ func TestAggregatorSortPrioritizesMovy(t *testing.T) {
 		t.Fatalf("expected 4 sources, got %d", len(agg.sources))
 	}
 
-	// Movy sources must be at the top, sorted by quality
-	if agg.sources[0].Resolver != "movysx" || agg.sources[0].Quality != "2160p" {
-		t.Errorf("sources[0] = %+v, want movysx 2160p", agg.sources[0])
+	// Playable sources must stay in their exact arrival order
+	if agg.sources[0].Resolver != "pengu" || agg.sources[0].Quality != "4K [4KHDHub]" {
+		t.Errorf("sources[0] = %+v, want pengu 4K in arrival order", agg.sources[0])
 	}
 	if agg.sources[1].Resolver != "movysx" || agg.sources[1].Quality != "1080p" {
-		t.Errorf("sources[1] = %+v, want movysx 1080p", agg.sources[1])
-	}
-	// Pengu sources follow, sorted by quality
-	if agg.sources[2].Resolver != "pengu" || agg.sources[2].Quality != "4K [4KHDHub]" {
-		t.Errorf("sources[2] = %+v, want pengu 4K", agg.sources[2])
-	}
-	if agg.sources[3].Resolver != "pengu" || agg.sources[3].Quality != "1080p [VegaMovies]" {
-		t.Errorf("sources[3] = %+v, want pengu 1080p", agg.sources[3])
-	}
-}
-
-func TestAggregatorSortPrioritizesVidstream2Anikoto(t *testing.T) {
-	agg := &sourceAggregator{
-		mode: provider.ModeAnime,
-		priority: map[string]int{
-			"anikoto":  0,
-			"anilight": 1,
-			"reanime":  2,
-		},
-		sources: []provider.MediaSource{
-			{Resolver: "anilight", Quality: "Auto (l)", URL: "http://anilight-stream"},
-			{Resolver: "reanime", Quality: "Auto (HD1)", URL: "http://reanime-stream"},
-			{Resolver: "anikoto", Quality: "1080p (HD-2)", URL: "http://anikoto-hd2"},
-			{Resolver: "anikoto", Quality: "1080p (Vidstream-2)", URL: "http://anikoto-vidstream2"},
-		},
-	}
-
-	agg.sort()
-
-	if len(agg.sources) != 4 {
-		t.Fatalf("expected 4 sources, got %d", len(agg.sources))
-	}
-
-	// Vidstream-2 from Anikoto MUST be at position 0
-	if agg.sources[0].Resolver != "anikoto" || agg.sources[0].Quality != "1080p (Vidstream-2)" {
-		t.Errorf("sources[0] = %+v, want anikoto Vidstream-2", agg.sources[0])
+		t.Errorf("sources[1] = %+v, want movysx 1080p in arrival order", agg.sources[1])
 	}
 }
 

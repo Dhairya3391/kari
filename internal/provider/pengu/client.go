@@ -1,9 +1,9 @@
 // Package pengu implements provider.Provider against the PenguPlay aggregator
 // API (https://pengu.uk). PenguPlay is an aggregator that queries multiple
 // streaming backends (4KHDHub, MovieBox, VegaMovies, VAPlayer, Miruro,
-// VidFast, CineFreak, Cinejoy, KissKH, HDHub4u, Anikoto, 2Peckle, Arctic,
+// VidFast, CineFreak, Cinejoy, KissKH, HDHub4u, Anikoto, Ani.pm, 2Peckle, Arctic,
 // Atlantic, VixSrc, Vidy, ToonWorld4All, Reanime, PlayFy, MoviesDrives) and
-// returns direct and HLS streams. Reanime serves anime, ToonWorld4All serves
+// returns direct and HLS streams. Reanime, Ani.pm serve anime, ToonWorld4All serves
 // cartoons and general media, Vidy, MoviesDrives, and 4KHDHub serve movies
 // and TV shows, and live-sports serves live catalogs. VidLink and Arctic stay
 // disabled because VidLink returns 428 errors and Arctic currently serves no streams.
@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"kari/internal/config"
@@ -29,7 +30,9 @@ import (
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/anilist"
 	"kari/internal/provider/streambase"
+	"kari/internal/provider/kit"
 	"kari/internal/tmdb"
 )
 
@@ -42,13 +45,19 @@ const penguUA = config.DesktopUserAgent
 
 var (
 	reResolution = regexp.MustCompile(`(?i)\b(4k|2160p|1440p|1080p|720p|480p|360p)\b`)
-	reSourceTag  = regexp.MustCompile(`(?i)\b(4khdhub|moviebox|vegamovies|moviesdrives|miruro|cinefreak|vaplayer|vidlink|vidfast|cinejoy|hdghartv|kisskh|hdhub4u|atlantic|anikoto|2peckle|debridscloud|5clover|daddylive|binged|streamedpk|cdnlive|timstreams|arctic|vixsrc|vidy|toonworld4all|toonworld|reanime|playfy)\b`)
+	reSourceTag  = regexp.MustCompile(`(?i)\b(4khdhub|moviebox|vegamovies|moviesdrives|miruro|cinefreak|vaplayer|vidlink|vidfast|cinejoy|hdghartv|kisskh|hdhub4u|atlantic|anikoto|anipm|ani\.pm|2peckle|debridscloud|5clover|daddylive|binged|streamedpk|cdnlive|timstreams|arctic|vixsrc|vidy|toonworld4all|toonworld|reanime|playfy)\b`)
 	reAudioLang  = regexp.MustCompile(`(?i)(?:audio|language|languages):\s*([a-zA-Z, /]+)`)
 	// reDubSubMarker matches MovieBox-style audio markers in filenames:
 	// "{lang}dubaudio" (dubbed audio) vs "{lang}subaudio" (original audio
 	// with subtitles) vs "OriginalAudio".
 	reDubSubMarker  = regexp.MustCompile(`(?i)([a-z]+)(dub|sub)audio`)
 	reQualityHeight = regexp.MustCompile(`(?i)\b(4k|2160|1080|720|480|360)p?\b`)
+	// reHardSubRow / reHardDubRow match upstream burned-in subtitle
+	// markers ("Hard Sub", "Hard Dub", "HardSub"). Ani.pm serves each
+	// title in soft and hard variants; the markers are the only signal
+	// telling them apart.
+	reHardSubRow = regexp.MustCompile(`(?i)hard[\s_\-]*sub`)
+	reHardDubRow = regexp.MustCompile(`(?i)hard[\s_\-]*dub`)
 )
 
 // liveCatalogs is the list of PenguPlay Stremio live sports and channel catalogs.
@@ -78,11 +87,17 @@ type Client struct {
 	authToken     string
 	configSegment string
 	segAnime      string
+	// anilistBase is the AniList GraphQL endpoint for anime search and
+	// episode counts; config.AniListAPIBase in production, overrideable
+	// in tests.
+	anilistBase string
 	// langFilter mirrors the user's audio-language settings (see
 	// internal/settings LanguageFilter): nil or missing keys mean enabled.
 	// It filters foreign dubbed audio at resolve time; original-audio and
 	// English rows always pass.
 	langFilter map[string]bool
+	malMu      sync.Mutex
+	malCache   map[int]int
 }
 
 type penguStreamItem struct {
@@ -159,10 +174,12 @@ func NewClientWithLanguageFilter(keyPool *tmdb.KeyPool, authToken string, langFi
 	}
 	return &Client{
 		base:          base,
-		httpClient:    httpclient.NewWithUserAgent(penguUA),
+		httpClient:    httpclient.NewWithUserAgentAndTimeout(penguUA, 60*time.Second),
 		authToken:     token,
 		configSegment: segment,
 		segAnime:      segAnime,
+		anilistBase:   config.AniListAPIBase,
+		malCache:      make(map[int]int),
 		langFilter:    langFilter,
 	}, nil
 }
@@ -199,12 +216,20 @@ func (c *Client) Modes() []provider.Mode {
 		{Name: provider.ModeMovies, Priority: 2},
 		{Name: provider.ModeTV, Priority: 2},
 		{Name: provider.ModeCartoon, Priority: 2},
+		// Anime resolves through the anime config segment (Ani.pm,
+		// Reanime, Anikoto, Miruro, KissKH, 2Peckle, MovieBox). Priority
+		// trails the direct scrapers: same-height ties prefer direct CDN
+		// rows over proxied ones, while Pengu still adds fallback depth.
+		{Name: provider.ModeAnime, Priority: 3},
 		{Name: provider.ModeLive, Priority: 1},
 	}
 }
 
 // Features implements provider.FeatureSource.
 func (c *Client) Features(mode provider.ContentType) provider.Features {
+	if mode == provider.ModeAnime {
+		return provider.Features{AudioSelection: true}
+	}
 	if mode == provider.ModeLive {
 		return provider.Features{
 			AllowEmptyQuery:   true,
@@ -243,11 +268,29 @@ func (c *Client) AudioLanguages() []provider.AudioLanguage {
 	return audioLanguages
 }
 
-// Search delegates to TMDB search base for Movies/TV/Cartoons, and queries
-// PenguPlay's live sports catalogs when in ModeLive.
+// Search delegates to TMDB search base for Movies/TV/Cartoons, to the
+// shared AniList index for Anime, and queries PenguPlay's live sports
+// catalogs when in ModeLive.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	if mode == provider.ModeLive {
 		return c.searchLive(ctx, query)
+	}
+	if mode == provider.ModeAnime {
+		// Shared AniList index (cached + singleflighted across every
+		// anime provider), so joining the fan-out costs no extra
+		// upstream search. Bare AniList IDs dedupe against the direct
+		// providers' rows in the merged list.
+		if strings.TrimSpace(query) == "" {
+			return nil, provider.ErrNoResults
+		}
+		results, err := anilist.SearchWithEndpoint(ctx, c.httpClient, query, c.anilistBase)
+		if err != nil {
+			return nil, fmt.Errorf("pengu search: %w", err)
+		}
+		if len(results) == 0 {
+			return nil, provider.ErrNoResults
+		}
+		return results, nil
 	}
 	return c.base.Search(ctx, query, mode)
 }
@@ -263,7 +306,119 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 			},
 		}, nil
 	}
+	if series.Type == provider.ModeAnime || strings.HasPrefix(series.ID, "anilist:") {
+		return c.fetchAnimeEpisodes(ctx, series)
+	}
 	return c.base.FetchEpisodes(ctx, series)
+}
+
+// fetchAnimeEpisodes synthesizes the episode list from AniList metadata:
+// Absolute episode numbers in broadcast order. Audio stays unset so the
+// sub/dub filter passes every row and the choice surfaces at the source
+// level (Sub / Dub / Hard Sub / Hard Dub variants per backend). Episode
+// IDs carry the anilist: prefix so resolution addresses Pengu's anime
+// catalog directly.
+func (c *Client) fetchAnimeEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
+	id, ok := parseAnilistID(series.ID)
+	if !ok {
+		return nil, fmt.Errorf("pengu episodes: invalid anime id %q: %w", series.ID, provider.ErrNoEpisodes)
+	}
+	media, err := anilist.FetchMediaWithEndpoint(ctx, c.httpClient, id, c.anilistBase)
+	if err != nil {
+		return nil, fmt.Errorf("pengu episodes: %w", err)
+	}
+	if media.IDMal > 0 {
+		c.malMu.Lock()
+		if c.malCache == nil {
+			c.malCache = make(map[int]int)
+		}
+		c.malCache[id] = media.IDMal
+		c.malMu.Unlock()
+	}
+	if strings.EqualFold(strings.TrimSpace(media.Format), "MOVIE") {
+		return []provider.Episode{{
+			Title: series.Title,
+			ID:    fmt.Sprintf("anilist:%d", id),
+		}}, nil
+	}
+	count := media.EpisodeCount()
+	if count <= 0 {
+		return nil, fmt.Errorf("pengu episodes: unknown episode count for %q: %w", series.Title, provider.ErrNoEpisodes)
+	}
+	eps := make([]provider.Episode, 0, count)
+	for n := 1; n <= count; n++ {
+		eps = append(eps, provider.Episode{
+			Season:  1,
+			Episode: n,
+			Title:   fmt.Sprintf("Episode %d", n),
+			ID:      fmt.Sprintf("anilist:%d:%d", id, n),
+		})
+	}
+	return eps, nil
+}
+
+// parseAnilistID extracts the AniList numeric ID from a bare ("21") or
+// prefixed ("anilist:21", "anilist:21:1180") handle.
+func parseAnilistID(handle string) (int, bool) {
+	s := strings.TrimSpace(handle)
+	s = strings.TrimPrefix(s, "anilist:")
+	if i := strings.Index(s, ":"); i >= 0 {
+		s = s[:i]
+	}
+	id, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
+// malID returns the MyAnimeList ID for an AniList media ID, consulting the
+// client cache before querying AniList GraphQL. Returns 0 on failure.
+func (c *Client) malID(ctx context.Context, anilistID int) int {
+	c.malMu.Lock()
+	if c.malCache == nil {
+		c.malCache = make(map[int]int)
+	}
+	if malID, ok := c.malCache[anilistID]; ok {
+		c.malMu.Unlock()
+		return malID
+	}
+	c.malMu.Unlock()
+
+	media, err := anilist.FetchMediaWithEndpoint(ctx, c.httpClient, anilistID, c.anilistBase)
+	if err == nil && media.IDMal > 0 {
+		c.malMu.Lock()
+		if c.malCache == nil {
+			c.malCache = make(map[int]int)
+		}
+		c.malCache[anilistID] = media.IDMal
+		c.malMu.Unlock()
+		return media.IDMal
+	}
+	return 0
+}
+
+// animeStremioID builds the Stremio series ID Pengu's anime catalog wants:
+// anilist:{id}:{absoluteEpisode} for episodes (the absolute form returns
+// the full variant set including dubs, verified live), anilist:{id} for
+// movies. The AniList ID comes from either handle; bare numeric anime
+// handles are always AniList IDs because every anime provider is
+// AniList-keyed.
+func animeStremioID(mediaID string, episode provider.Episode) (string, bool) {
+	id, ok := parseAnilistID(mediaID)
+	if !ok {
+		id, ok = parseAnilistID(episode.ID)
+	}
+	if !ok {
+		return "", false
+	}
+	if episode.Season <= 0 && episode.Episode <= 0 {
+		return fmt.Sprintf("anilist:%d", id), true
+	}
+	if episode.Episode <= 0 {
+		return "", false
+	}
+	return fmt.Sprintf("anilist:%d:%d", id, episode.Episode), true
 }
 
 // ResolveSource resolves playable sources for the given media ID and episode,
@@ -276,6 +431,54 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			stremioID = episode.ID
 		}
 		return c.resolveLiveSource(ctx, stremioID)
+	}
+
+	isAnime := episode.Audio != "" || strings.HasPrefix(episode.ID, "watch/") ||
+		strings.HasPrefix(mediaID, "anilist:") || strings.HasPrefix(episode.ID, "anilist:") ||
+		strings.HasPrefix(mediaID, "mal:") || strings.HasPrefix(episode.ID, "mal:")
+	if isAnime {
+		mediaType := provider.MediaTypeMovie
+		if episode.Season > 0 || episode.Episode > 0 {
+			mediaType = provider.MediaTypeTV
+		}
+
+		// Try MAL-based Stremio ID first because Pengu's anime scrapers
+		// (Ani.pm, Reanime, Anikoto, 2Peckle) natively index by MyAnimeList ID,
+		// answering in ~1s whereas anilist: mapping often returns 0 streams
+		// or takes 5-10s upstream. Fall back to anilist: if mal: returns no sources.
+		anilistID, ok := parseAnilistID(mediaID)
+		if !ok {
+			anilistID, ok = parseAnilistID(episode.ID)
+		}
+		if !ok && strings.HasPrefix(episode.ID, "watch/") {
+			h := kit.ParseHandle(mediaID, episode.ID, episode.Audio, episode.Episode, "")
+			if n, err := strconv.Atoi(h.AniListID); err == nil && n > 0 {
+				anilistID, ok = n, true
+			}
+		}
+		if ok && anilistID > 0 {
+			malID := c.malID(ctx, anilistID)
+			if malID > 0 {
+				var stremioID string
+				if episode.Season <= 0 && episode.Episode <= 0 {
+					stremioID = fmt.Sprintf("mal:%d", malID)
+				} else if episode.Episode > 0 {
+					stremioID = fmt.Sprintf("mal:%d:%d", malID, episode.Episode)
+				}
+				if stremioID != "" {
+					sources, err := c.resolveStreams(ctx, mediaType, stremioID, 0, true)
+					if err == nil && len(sources) > 0 {
+						return sources, nil
+					}
+				}
+			}
+		}
+
+		stremioID, ok := animeStremioID(mediaID, episode)
+		if !ok {
+			return nil, fmt.Errorf("pengu: cannot resolve anime id %q", mediaID)
+		}
+		return c.resolveStreams(ctx, mediaType, stremioID, 0, true)
 	}
 
 	tmdbID := episode.TMDBID
@@ -294,8 +497,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		stremioID = fmt.Sprintf("tmdb:%d:%d:%d", tmdbID, episode.Season, episode.Episode)
 	}
 
-	isAnime := episode.Audio != "" || strings.HasPrefix(episode.ID, "watch/") || strings.HasPrefix(mediaID, "anilist:")
-	return c.resolveStreams(ctx, mediaType, stremioID, tmdbID, isAnime)
+	return c.resolveStreams(ctx, mediaType, stremioID, tmdbID, false)
 }
 
 func (c *Client) resolveLiveSource(ctx context.Context, stremioID string) ([]provider.MediaSource, error) {
@@ -375,7 +577,7 @@ func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string
 		// Foreign-language audio the user didn't enable is dropped here
 		// so it never floods the picker; original-audio, English, enabled
 		// languages, and undetectable tracks always pass.
-		if trackLang := streamAudioLanguage(stream); trackLang != "" && trackLang != "en" && !c.languageEnabled(trackLang, lang.Name(trackLang)) {
+		if trackLang := streamAudioLanguage(stream); trackLang != "" && trackLang != "en" && (!isAnime || trackLang != "ja") && !c.languageEnabled(trackLang, lang.Name(trackLang)) {
 			dropped = append(dropped, resolveCandidate{source: source, stream: stream})
 			continue
 		}
@@ -410,6 +612,7 @@ func collapseMirrors(candidates []resolveCandidate) []provider.MediaSource {
 		backend   string
 		height    int
 		lang      string
+		subType   string
 		container string
 		size      int64
 	}
@@ -420,6 +623,7 @@ func collapseMirrors(candidates []resolveCandidate) []provider.MediaSource {
 			backend:   mirrorBackend(cand.source.Quality),
 			height:    qualityHeight(cand.source.Quality),
 			lang:      cand.source.Language,
+			subType:   cand.source.SubType,
 			container: streamContainer(cand.source),
 			size:      cand.stream.BehaviorHints.VideoSize,
 		}
@@ -731,7 +935,7 @@ func isAuthPrompt(streams []penguStreamItem) bool {
 // buildConfigSegment compiles the default (movies/TV) multi-provider
 // configuration into a compact raw-deflated base64url segment expected by PenguPlay.
 // Movy.sx is deliberately omitted because Kari manages Movy.sx independently.
-// Anime-focused backends (reanime, anikoto, miruro) stay off here; anime
+// Anime-focused backends (reanime, anikoto, anipm, miruro) stay off here; anime
 // requests use buildAnimeConfigSegment instead.
 func buildConfigSegment(token string) (string, error) {
 	cfg := map[string]any{
@@ -748,6 +952,7 @@ func buildConfigSegment(token string) (string, error) {
 		"source_kisskh":        "on",
 		"source_hdhub4u":       "on",
 		"source_anikoto":       "off",
+		"source_anipm":         "off",
 		"source_2peckle":       "on",
 		"source_vidy":          "on",
 		"source_toonworld4all": "on",
@@ -769,11 +974,12 @@ func buildConfigSegment(token string) (string, error) {
 func buildAnimeConfigSegment(token string) (string, error) {
 	cfg := map[string]any{
 		"source_reanime":       "on",
-		"source_anikoto":       "on",
-		"source_miruro":        "on",
-		"source_kisskh":        "on",
+		"source_anikoto":       "off",
+		"source_anipm":         "on",
+		"source_miruro":        "off",
+		"source_kisskh":        "off",
 		"source_2peckle":       "on",
-		"source_moviebox":      "on",
+		"source_moviebox":      "off",
 		"source_4khdhub":       "off",
 		"source_vegamovies":    "off",
 		"source_moviesdrives":  "off",
@@ -912,12 +1118,36 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 
 	// 3. Audio Language. MovieBox-style "{lang}dubaudio"/"{lang}subaudio"
 	// filename markers are an extra signal for codes full-text detection
-	// misses (e.g. "esla", "ptbr").
+	// misses (e.g. "esla", "ptbr"). Ani.pm rows use a restricted detector:
+	// their "📝 Subtitles: English, French, …" list names subtitle tracks,
+	// and the shared full-text scan mistakes one for dub audio (a soft-sub
+	// row labeled "(French)" that a French-audio filter would then drop).
+	// Only the explicit Audio:/Language: line and filename markers count.
 	audioLang := streamAudioLanguage(stream)
+	if sourceName == "Ani.pm" {
+		audioLang = aniPmAudioLanguage(stream)
+	}
+	subType := ""
+	if sourceName == "Ani.pm" || sourceName == "Reanime" {
+		// Ani.pm declares burned-in vs toggleable subtitles per row:
+		// hard variants carry no subtitle tracks, soft variants do.
+		// Tagging SubType keeps same-resolution variants distinct in
+		// quality labels and lets ranking prefer hardsubs in anime mode.
+		if isHardSubRow(combined) {
+			subType = provider.SubTypeHard
+		} else {
+			subType = provider.SubTypeSoft
+		}
+	}
 	audioLangDisplay := ""
-	if audioLang != "" && audioLang != "en" {
+	switch {
+	case subType == provider.SubTypeHard && strings.Contains(strings.ToLower(combined), "dub"):
+		audioLangDisplay = "Hard Dub"
+	case subType == provider.SubTypeHard:
+		audioLangDisplay = "Hard Sub"
+	case audioLang != "" && audioLang != "en":
 		audioLangDisplay = lang.Name(audioLang)
-	} else if strings.Contains(strings.ToLower(stream.Name), "dub") || strings.Contains(strings.ToLower(stream.Description), "dub") {
+	case strings.Contains(strings.ToLower(stream.Name), "dub") || strings.Contains(strings.ToLower(stream.Description), "dub"):
 		audioLangDisplay = "Dub"
 	}
 
@@ -999,7 +1229,32 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 		UserAgent:    userAgent,
 		CookieHeader: cookie,
 		Language:     audioLang,
+		SubType:      subType,
 	}
+}
+
+// isHardSubRow reports whether combined stream metadata carries an
+// upstream burned-in subtitle marker ("Hard Sub"/"Hard Dub").
+func isHardSubRow(combined string) bool {
+	return reHardSubRow.MatchString(combined) || reHardDubRow.MatchString(combined)
+}
+
+// aniPmAudioLanguage determines audio language for Ani.pm rows from the
+// explicit Audio:/Language: line and filename dub markers only. The row
+// description lists subtitle languages ("📝 Subtitles: English, French,
+// …") which the shared full-text scan misreads as audio.
+func aniPmAudioLanguage(stream penguStreamItem) string {
+	if m := reDubSubMarker.FindStringSubmatch(stream.BehaviorHints.Filename); len(m) > 2 {
+		if code := mapAudioLanguage(m[1]); code != "" {
+			return code
+		}
+	}
+	if m := reAudioLang.FindStringSubmatch(stream.Name + " " + stream.Title + " " + stream.Description); len(m) > 1 {
+		if code := mapAudioLanguage(m[1]); code != "" {
+			return code
+		}
+	}
+	return ""
 }
 
 // streamAudioLanguage determines a stream's audio language as an ISO code,
@@ -1025,12 +1280,15 @@ func canonProviderName(token string) string {
 		"4KHDHub", "MovieBox", "VegaMovies", "MoviesDrives",
 		"Miruro", "CineFreak", "VAPlayer", "VidLink",
 		"VidFast", "Cinejoy", "HDGharTV", "KissKH", "HDHub4u", "Atlantic",
-		"Anikoto", "2Peckle", "DebridsCloud", "5Clover", "DaddyLive", "Binged", "StreamedPK", "CDNLIVE", "TimStreams",
+		"Anikoto", "Ani.pm", "2Peckle", "DebridsCloud", "5Clover", "DaddyLive", "Binged", "StreamedPK", "CDNLIVE", "TimStreams",
 		"Arctic", "VixSrc", "Vidy", "ToonWorld4All", "Reanime", "PlayFy",
 	} {
 		if strings.EqualFold(canon, token) {
 			return canon
 		}
+	}
+	if strings.EqualFold(token, "anipm") {
+		return "Ani.pm"
 	}
 	if strings.EqualFold(token, "toonworld") {
 		return "ToonWorld4All"

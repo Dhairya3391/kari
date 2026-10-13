@@ -105,6 +105,14 @@ func (m *modelImpl) refreshProviderWait() {
 	if m.totalProviders == 0 || m.resolved == nil {
 		return
 	}
+	if len(m.resolved.CompletedResolvers) > 0 {
+		remaining := m.totalProviders - len(m.resolved.CompletedResolvers)
+		if remaining < 0 {
+			remaining = 0
+		}
+		m.loadingProviders = remaining
+		return
+	}
 	seen := make(map[string]struct{}, len(m.resolved.Playback))
 	for _, src := range m.resolved.Playback {
 		seen[src.Resolver] = struct{}{}
@@ -179,8 +187,7 @@ func (m *modelImpl) retryExclude() []string {
 func (m *modelImpl) beginRetryWait(mode provider.ContentType, exclude []string) {
 	m.beginProviderWait(mode)
 	if n := len(exclude); n > 0 && n < m.totalProviders {
-		m.totalProviders -= n
-		m.loadingProviders = m.totalProviders
+		m.loadingProviders = m.totalProviders - n
 	}
 }
 

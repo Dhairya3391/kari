@@ -1,7 +1,7 @@
 // Megaplay helpers shared by the anime providers: AES-256-CBC token
 // decryption for Megaplay getSources responses and HMAC-SHA256 CDN URL
 // signing. The keys are global to the Megaplay infrastructure backing
-// anikoto, anilight, and anicine's anime embeds.
+// anikoto and anicine's anime embeds.
 package kit
 
 import (

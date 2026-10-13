@@ -100,7 +100,7 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 }
 
 // FetchEpisodes lists sub/dub episode entries for an anime series,
-// mirroring the anilight fallback shape.
+// synthesizing sub/dub entries from AniList episode counts.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	mediaID := series.ID
 	anID, err := strconv.Atoi(strings.TrimSpace(mediaID))

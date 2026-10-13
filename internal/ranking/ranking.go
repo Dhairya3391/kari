@@ -296,18 +296,20 @@ func scoreAudio(src provider.MediaSource, crit Criteria) int {
 			pref = provider.AudioSub
 		}
 		target := strings.ToLower(rawLang + " " + src.Quality + " " + src.Resolver)
-		if strings.Contains(target, pref) {
-			return 2
-		}
-		// If explicitly opposite track, demote
-		opposite := provider.AudioDub
 		if pref == provider.AudioDub {
-			opposite = provider.AudioSub
+			if strings.Contains(target, provider.AudioDub) {
+				return 2
+			}
+			if strings.Contains(target, provider.AudioSub) || src.SubType == provider.SubTypeHard {
+				return -2
+			}
+			return 0
 		}
-		if strings.Contains(target, opposite) {
+		// Anime default is sub: explicit dub demoted; sub and neutral both pass as sub.
+		if strings.Contains(target, provider.AudioDub) {
 			return -2
 		}
-		return 0 // Neutral when unspecified
+		return 2
 	}
 
 	// Movies / TV: check order in EnabledAudioLanguages

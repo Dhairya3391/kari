@@ -272,6 +272,20 @@ func providerSearchTimeout(providerCount int, route provider.Route, hasRoute boo
 	return timeout
 }
 
+// providerSourceTimeout returns the per-provider resolve deadline: the
+// route's explicit SourceTimeout when set, else the shared default,
+// never beyond the overall budget that bounds the whole fan-out.
+func providerSourceTimeout(route provider.Route, hasRoute bool) time.Duration {
+	timeout := provider.DefaultSourceTimeout
+	if hasRoute && route.SourceTimeout > 0 {
+		timeout = route.SourceTimeout
+	}
+	if timeout > provider.DefaultSourcesOverall {
+		timeout = provider.DefaultSourcesOverall
+	}
+	return timeout
+}
+
 // FetchEpisodes retrieves episode results for a series from its originating
 // provider. Anime audio availability is sourced from providers that expose
 // per-track data, so synthetic dub rows are never returned.
@@ -325,16 +339,16 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 			requestedAudio = provider.AudioSub
 		}
 
-		var lastErr error
-		for _, source := range s.episodeAvailabilitySources(mode, series) {
-			eps, err := source.FetchAvailableEpisodes(ctx, series)
-			if err != nil {
-				lastErr = err
-				continue
-			}
+		// Probe every availability source concurrently and take the
+		// first success. Sequential probing made every uncached load
+		// pay the slowest source (Anikoto's multi-hop slug walk runs
+		// ~14s) even when a sibling answers in ~1s. Verified
+		// sub/dub rows are interchangeable handles for the downstream
+		// cross-provider resolve, so fastest-wins changes nothing
+		// except latency.
+		if eps, lastErr, ok := s.firstAvailableEpisodes(ctx, s.episodeAvailabilitySources(mode, series), series); ok {
 			return filterAvailableEpisodesByAudio(eps, requestedAudio), nil
-		}
-		if requestedAudio == provider.AudioDub {
+		} else if requestedAudio == provider.AudioDub {
 			if lastErr != nil {
 				return nil, fmt.Errorf("dub availability: %w", lastErr)
 			}
@@ -347,6 +361,42 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 		return nil, err
 	}
 	return filterEpisodesByAudio(eps, requestedAudio), nil
+}
+
+// firstAvailableEpisodes probes every availability source concurrently
+// and returns the first successful episode list. The losers are
+// cancelled; the buffered channel (one slot per source) means no
+// goroutine ever blocks on send, so nothing leaks. A nil list means
+// every source failed, with the most recent error carried for the
+// dub-availability error path. Blocking receive is safe: each source
+// gets the shared deadline, so a hung source fails closed exactly as
+// it did under sequential probing.
+func (s *MediaService) firstAvailableEpisodes(ctx context.Context, sources []provider.EpisodeAvailabilitySource, series provider.SearchResult) ([]provider.Episode, error, bool) {
+	if len(sources) == 0 {
+		return nil, nil, false
+	}
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type availResult struct {
+		eps []provider.Episode
+		err error
+	}
+	ch := make(chan availResult, len(sources))
+	for _, source := range sources {
+		go func() {
+			eps, err := source.FetchAvailableEpisodes(childCtx, series)
+			ch <- availResult{eps: eps, err: err}
+		}()
+	}
+	var lastErr error
+	for range sources {
+		if r := <-ch; r.err == nil {
+			return r.eps, nil, true
+		} else {
+			lastErr = r.err
+		}
+	}
+	return nil, lastErr, false
 }
 
 func filterAvailableEpisodesByAudio(episodes []provider.Episode, audioMode string) []provider.Episode {
@@ -430,7 +480,8 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	}
 	// Bound the whole resolve so a slow/hung transport host can't leave the
 	// "Preparing playback" screen spinning indefinitely. Each provider is
-	// additionally bounded by its route's source deadline (at most 12s).
+	// additionally bounded by its route's source deadline (its explicit
+	// SourceTimeout, else the default, never beyond the overall budget).
 	ctx, cancel := context.WithTimeout(ctx, provider.DefaultSourcesOverall)
 	defer cancel()
 
@@ -442,10 +493,21 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 
 	agg := newSourceAggregatorForMode(mode, providers, s.registry.DisplayName)
 
+	var completedResolvers []string
+	completedSet := make(map[string]struct{})
+	noteCompleted := func(name string) {
+		if _, ok := completedSet[name]; !ok {
+			completedSet[name] = struct{}{}
+			completedResolvers = append(completedResolvers, name)
+		}
+	}
+
 	// Helper to build ResolvedMedia from current aggregated sources.
 	// Slices are copied so the snapshot handed to callers never aliases the
 	// shared backing arrays that other goroutines keep mutating.
 	buildResolved := func() model.ResolvedMedia {
+		completedCopy := make([]string, len(completedResolvers))
+		copy(completedCopy, completedResolvers)
 		playbackCopy := make([]provider.MediaSource, len(agg.sources))
 		copy(playbackCopy, agg.sources)
 		subsCopy := make([]model.SubtitleTrack, len(agg.subs))
@@ -461,9 +523,11 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			TMDBID:        series.TMDBID,
 			SeasonNumber:  episode.Season,
 			EpisodeNumber: episode.Episode,
-			Resolver:      "Aggregated",
-			Playback:      playbackCopy,
-			Subtitles:     subsCopy,
+			Resolver:           "Aggregated",
+			Playback:           playbackCopy,
+			Subtitles:          subsCopy,
+			CompletedResolvers: completedCopy,
+			TotalResolvers:     len(providers),
 		}
 	}
 
@@ -492,11 +556,21 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		}
 	}
 
+
 	g, _ := errgroup.WithContext(ctx)
 
 	for _, p := range providers {
 		p := p
 		g.Go(func() error {
+			defer func() {
+				mu.Lock()
+				noteCompleted(p.Name())
+				current := snapshot()
+				mu.Unlock()
+				if onResult != nil {
+					onResult(current)
+				}
+			}()
 			_, force := forcedRetry[strings.ToLower(strings.TrimSpace(p.Name()))]
 			if skipped, reason := s.health.Skipped(p.Name(), len(providers) == 1 || force); skipped {
 				mediaLog.Debug("resolve skipping circuit-broken provider", "provider", p.Name(), "reason", reason)
@@ -507,13 +581,11 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 				mu.Unlock()
 				return nil
 			}
-			timeout := provider.DefaultSourceTimeout
-			if r, ok := routeByName[p.Name()]; ok && r.SourceTimeout > 0 && r.SourceTimeout < timeout {
-				timeout = r.SourceTimeout
-			}
-			if timeout > provider.DefaultSourceTimeout {
-				timeout = provider.DefaultSourceTimeout
-			}
+			// A route's explicit deadline wins (shorter for fast
+			// lanes, longer for slow ones like Pengu anime); the
+			// overall deadline is the hard ceiling.
+			r, hasRoute := routeByName[p.Name()]
+			timeout := providerSourceTimeout(r, hasRoute)
 			pCtx, pCancel := context.WithTimeout(ctx, timeout)
 			defer pCancel()
 			// Determine the ID to use for this provider: results from other
@@ -521,10 +593,14 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			// or AniList ID (for anime).
 			mediaID := series.ID
 			if p.Name() != series.Provider {
-				if series.TMDBID > 0 {
+				if mode == provider.ModeAnime || series.Type == provider.ModeAnime {
+					if series.ID != "" {
+						mediaID = series.ID
+					} else {
+						return nil // Cannot resolve anime without AniList ID
+					}
+				} else if series.TMDBID > 0 {
 					mediaID = strconv.Itoa(series.TMDBID)
-				} else if (mode == provider.ModeAnime || series.Type == provider.ModeAnime) && series.ID != "" {
-					mediaID = series.ID
 				} else {
 					return nil // Cannot resolve with this provider without shared ID
 				}
@@ -725,6 +801,20 @@ const maxSourcesPerTier = 3
 // owning source's transport identity so signed or session-bound variants are
 // not collapsed before playback.
 func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource) {
+	// In anime mode: within each provider's batch, hard subs sort before soft subs.
+	if a.mode == provider.ModeAnime {
+		slices.SortStableFunc(batch, func(x, y provider.MediaSource) int {
+			xh := strings.EqualFold(strings.TrimSpace(x.SubType), provider.SubTypeHard) && !provider.ChallengedHost(x.URL)
+			yh := strings.EqualFold(strings.TrimSpace(y.SubType), provider.SubTypeHard) && !provider.ChallengedHost(y.URL)
+			if xh != yh {
+				if xh {
+					return -1
+				}
+				return 1
+			}
+			return 0
+		})
+	}
 	for _, src := range batch {
 		src.Resolver = providerName
 		identity := src.TransportIdentity()
@@ -769,41 +859,11 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 // playable-now sources, then by highest quality first, breaking ties by
 // provider priority so earlier-registered providers surface before
 // fallbacks.
+// sort preserves the arrival order of playable sources across providers,
+// pushing only anti-bot challenged hosts to the bottom.
 func (a *sourceAggregator) sort() {
 	slices.SortStableFunc(a.sources, func(si, sj provider.MediaSource) int {
-		ci, cj := challengedRank(si), challengedRank(sj)
-		if ci != cj {
-			return ci - cj
-		}
-		ri := provider.BoostRank(a.mode, si.Resolver, si.Quality)
-		rj := provider.BoostRank(a.mode, sj.Resolver, sj.Quality)
-		if (ri >= 0) != (rj >= 0) {
-			if ri >= 0 {
-				return -1
-			}
-			return 1
-		}
-		if ri >= 0 && rj >= 0 && ri != rj {
-			return ri - rj
-		}
-		di := provider.DemoteRank(a.mode, si.Resolver, si.Quality)
-		dj := provider.DemoteRank(a.mode, sj.Resolver, sj.Quality)
-		if (di >= 0) != (dj >= 0) {
-			if di >= 0 {
-				return 1
-			}
-			return -1
-		}
-		if di >= 0 && dj >= 0 && di != dj {
-			return di - dj
-		}
-
-		leftQuality := SourceQuality(si.Quality)
-		rightQuality := SourceQuality(sj.Quality)
-		if leftQuality != rightQuality {
-			return rightQuality - leftQuality
-		}
-		return a.priority[si.Resolver] - a.priority[sj.Resolver]
+		return challengedRank(si) - challengedRank(sj)
 	})
 }
 

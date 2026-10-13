@@ -4,6 +4,7 @@ package tui
 // the sub/dub audio toggle.
 
 import (
+	"context"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,6 +12,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/ranking"
+	"kari/internal/service"
 )
 
 func previewRetryModel() *modelImpl {
@@ -208,6 +210,46 @@ func TestPreviewDForDownloadAndDForDownloadsTab(t *testing.T) {
 	}
 	if m.loading {
 		t.Errorf("loading must be false for background downloads, got true")
+	}
+}
+
+func TestPreviewRetryPreservesDeliveredSources(t *testing.T) {
+	m := previewRetryModel()
+	reg := &provider.Registry{}
+	reg.Register(&repairFake{name: "anikoto", mode: provider.ModeAnime,
+		sources: []provider.MediaSource{{URL: "https://cdn.example.com/anikoto.m3u8", Quality: "1080p"}}})
+	reg.Register(&repairFake{name: "pengu", mode: provider.ModeAnime, err: provider.ErrTimeout})
+	m.registry = reg
+	m.mediaService = service.NewMediaService(reg)
+	series := provider.SearchResult{Title: "Frieren", ID: "151807", Provider: "anikoto", Type: provider.ModeAnime}
+	episode := provider.Episode{ID: "watch/anikoto/151807/sub/1", Episode: 1, Season: 1}
+	m.selectedSeries = &series
+	m.selectedEpisode = &episode
+
+	// Seed resolve: anikoto succeeds, pengu fails.
+	_, _ = m.mediaService.Resolve(context.Background(), provider.ModeAnime, series, episode, nil, service.ResolveOptions{})
+	m.resolved = &model.ResolvedMedia{
+		SeriesTitle: "Frieren",
+		Playback: []provider.MediaSource{
+			{URL: "https://cdn.example.com/anikoto.m3u8", Quality: "1080p", Resolver: "anikoto"},
+		},
+	}
+	m.refreshRanking()
+	m.activeView = viewPreview
+
+	mdl, cmd := m.updatePreview(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("R")})
+	m2 := mdl.(*modelImpl)
+	if cmd == nil || m2.resolveOpID == 0 {
+		t.Fatal("R did not start a retry")
+	}
+	if len(m2.rankedSources) == 0 {
+		t.Fatal("existing delivered sources must be preserved during retry")
+	}
+	if m2.loading {
+		t.Fatal("loading must be false when existing sources are present so table stays visible")
+	}
+	if m2.resolved == nil || len(m2.resolved.Playback) == 0 {
+		t.Fatal("resolved.Playback must retain the kept sources")
 	}
 }
 

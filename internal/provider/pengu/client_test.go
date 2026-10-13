@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -73,7 +74,7 @@ func TestBuildConfigSegment(t *testing.T) {
 			t.Errorf("%s = %v, want on", key, parsed[key])
 		}
 	}
-	for _, key := range []string{"source_vidlink", "source_arctic", "source_reanime", "source_miruro", "source_anikoto"} {
+	for _, key := range []string{"source_vidlink", "source_arctic", "source_reanime", "source_miruro", "source_anikoto", "source_anipm"} {
 		if parsed[key] != "off" {
 			t.Errorf("%s = %v, want off", key, parsed[key])
 		}
@@ -111,12 +112,12 @@ func TestBuildAnimeConfigSegment(t *testing.T) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, key := range []string{"source_reanime", "source_anikoto", "source_miruro", "source_kisskh", "source_2peckle", "source_moviebox"} {
+	for _, key := range []string{"source_reanime", "source_anipm", "source_2peckle"} {
 		if parsed[key] != "on" {
 			t.Errorf("%s = %v, want on", key, parsed[key])
 		}
 	}
-	for _, key := range []string{"source_4khdhub", "source_vegamovies", "source_moviesdrives", "source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy", "source_hdhub4u", "source_vidy", "source_toonworld4all", "source_arctic", "source_live-sports"} {
+	for _, key := range []string{"source_anikoto", "source_miruro", "source_kisskh", "source_moviebox", "source_4khdhub", "source_vegamovies", "source_moviesdrives", "source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy", "source_hdhub4u", "source_vidy", "source_toonworld4all", "source_arctic", "source_live-sports"} {
 		if parsed[key] != "off" {
 			t.Errorf("%s = %v, want off", key, parsed[key])
 		}
@@ -186,6 +187,8 @@ func TestParseStreamItemNewBackends(t *testing.T) {
 		{"🐧 PenguPlay ❄️ 4K • Vidy · Miami", "Vidy"},
 		{"🐧 PenguPlay 🧊 1080p • ToonWorld4All", "ToonWorld4All"},
 		{"🐧 PenguPlay 🧊 1080p • Reanime · HD-1 · Sub", "Reanime"},
+		{"🐧 PenguPlay 🧊 1080p • Ani.pm · HD-1 · Sub", "Ani.pm"},
+		{"🐧 PenguPlay 🧊 1080p • Anipm · HD-1 · Sub", "Ani.pm"},
 		{"🐧 PenguPlay 🧊 1080p • MoviesDrives · PixelDrain", "MoviesDrives"},
 		{"🐧 PenguPlay 🐧 360p • PlayFy · Fallback", "PlayFy"},
 	} {
@@ -198,6 +201,232 @@ func TestParseStreamItemNewBackends(t *testing.T) {
 		}
 		if src.Quality != want {
 			t.Errorf("Quality for %q = %q, want %q", tc.name, src.Quality, want)
+		}
+	}
+}
+
+// Ani.pm serves each title in soft and hard subtitle variants. The soft
+// rows must not mistake the "Subtitles: English, French, …" list for dub
+// audio, hard rows must keep distinct quality labels (same filename/size
+// would otherwise dedupe them away), and SubType must mark burned-in vs
+// toggleable tracks for anime ranking.
+func TestParseStreamItemAniPmHardSoft(t *testing.T) {
+	mk := func(name, desc string, subs []penguSubtitle) penguStreamItem {
+		return penguStreamItem{
+			Name:        name,
+			Description: desc,
+			URL:         "https://pengu.uk/hls/anipm/playlist/abc",
+			BehaviorHints: penguBehaviorHints{
+				Filename: "1080pHLS1080phls.pad-Ani.pm",
+			},
+			Subtitles: subs,
+		}
+	}
+	softSubs := []penguSubtitle{{ID: "anipm-0", URL: "https://pengu.uk/subs/anipm/abc", Lang: "English"}}
+	for _, tc := range []struct {
+		name        string
+		desc        string
+		subs        []penguSubtitle
+		wantQuality string
+		wantLang    string
+		wantSubType string
+	}{
+		{
+			"🐧 PenguPlay 🧊 1080p • Ani.pm · Sub",
+			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Sub\n📝 Subtitles: English, French, Arabic",
+			softSubs, "1080p [Ani.pm]", "", provider.SubTypeSoft,
+		},
+		{
+			"🐧 PenguPlay 🧊 1080p • Ani.pm · Dub",
+			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Dub\n🎧 Audio: English\n📝 Subtitles: English CC (Dub), English",
+			softSubs, "1080p [Ani.pm] (Dub)", "en", provider.SubTypeSoft,
+		},
+		{
+			"🐧 PenguPlay 🧊 1080p • Ani.pm · Hard Sub",
+			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Hard Sub\n🙊 No included subtitles",
+			nil, "1080p [Ani.pm] (Hard Sub)", "", provider.SubTypeHard,
+		},
+		{
+			"🐧 PenguPlay 🧊 1080p • Ani.pm · Hard Dub",
+			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Hard Dub\n🎧 Audio: English\n🙊 No included subtitles",
+			nil, "1080p [Ani.pm] (Hard Dub)", "en", provider.SubTypeHard,
+		},
+	} {
+		src := parseStreamItem(mk(tc.name, tc.desc, tc.subs))
+		if src.Quality != tc.wantQuality {
+			t.Errorf("Quality(%q) = %q, want %q", tc.name, src.Quality, tc.wantQuality)
+		}
+		if src.Language != tc.wantLang {
+			t.Errorf("Language(%q) = %q, want %q", tc.name, src.Language, tc.wantLang)
+		}
+		if src.SubType != tc.wantSubType {
+			t.Errorf("SubType(%q) = %q, want %q", tc.name, src.SubType, tc.wantSubType)
+		}
+		if src.Type != provider.SourceTypeHLS {
+			t.Errorf("Type(%q) = %q, want hls", tc.name, src.Type)
+		}
+	}
+}
+
+// Pengu joins anime mode at P3: the direct scrapers win same-height
+// ties while Pengu's aggregated backends (Ani.pm, Reanime, …) add
+// fallback depth.
+func TestModesIncludesAnime(t *testing.T) {
+	c := &Client{}
+	var found *provider.Mode
+	for _, m := range c.Modes() {
+		if m.Name == provider.ModeAnime {
+			m := m
+			found = &m
+		}
+	}
+	if found == nil {
+		t.Fatal("expected ModeAnime in Modes()")
+	}
+	if found.Priority != 3 {
+		t.Errorf("anime priority = %d, want 3", found.Priority)
+	}
+}
+
+// Anime search uses the shared AniList index with bare numeric IDs so
+// merged results dedupe against the direct providers' rows.
+func TestSearchAnimeUsesAnilist(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"Page":{"media":[
+			{"id":21,"title":{"romaji":"One Piece","english":"ONE PIECE","userPreferred":"ONE PIECE","native":"ワンピース"},"seasonYear":1999,"format":"TV"}
+		]}}}`)
+	}))
+	defer server.Close()
+
+	c := &Client{httpClient: server.Client(), anilistBase: server.URL}
+	results, err := c.Search(context.Background(), "one piece", provider.ModeAnime)
+	if err != nil {
+		t.Fatalf("Search(ModeAnime): %v", err)
+	}
+	if len(results) != 1 || results[0].ID != "21" || results[0].Type != provider.ModeAnime {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if _, err := c.Search(context.Background(), "   ", provider.ModeAnime); !errors.Is(err, provider.ErrNoResults) {
+		t.Errorf("empty anime query = %v, want ErrNoResults", err)
+	}
+}
+
+// Anime episodes synthesize from AniList metadata with anilist:-prefixed
+// IDs so resolution addresses Pengu's anime catalog directly.
+func TestFetchAnimeEpisodes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"Media":{"id":21,"idMal":21,"title":{"romaji":"One Piece","english":"ONE PIECE","userPreferred":"ONE PIECE","native":"ワンピース"},"format":"TV","status":"RELEASING","seasonYear":1999,"episodes":3,"synonyms":[],"nextAiringEpisode":null}}}`)
+	}))
+	defer server.Close()
+
+	c := &Client{httpClient: server.Client(), anilistBase: server.URL}
+	eps, err := c.FetchEpisodes(context.Background(), provider.SearchResult{Title: "ONE PIECE", ID: "21", Type: provider.ModeAnime})
+	if err != nil {
+		t.Fatalf("FetchEpisodes(anime): %v", err)
+	}
+	if len(eps) != 3 {
+		t.Fatalf("episodes = %d, want 3", len(eps))
+	}
+	if eps[0].ID != "anilist:21:1" || eps[2].Episode != 3 || eps[2].Season != 1 {
+		t.Errorf("unexpected episodes: %+v", eps)
+	}
+	for _, ep := range eps {
+		if ep.Audio != "" {
+			t.Errorf("episode audio = %q, want empty (match-all)", ep.Audio)
+		}
+	}
+}
+
+// Anime movies resolve to a single anilist:{id} handle for direct resolution.
+func TestFetchAnimeEpisodesMovie(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"Media":{"id":23273,"idMal":23273,"title":{"romaji":"Kimi no Na wa.","english":"Your Name.","userPreferred":"Your Name.","native":"君の名は。"},"format":"MOVIE","status":"FINISHED","seasonYear":2016,"episodes":1,"synonyms":[],"nextAiringEpisode":null}}}`)
+	}))
+	defer server.Close()
+
+	c := &Client{httpClient: server.Client(), anilistBase: server.URL}
+	eps, err := c.FetchEpisodes(context.Background(), provider.SearchResult{Title: "Your Name.", ID: "23273", Type: provider.ModeAnime, MediaType: provider.MediaTypeMovie})
+	if err != nil {
+		t.Fatalf("FetchEpisodes(anime movie): %v", err)
+	}
+	if len(eps) != 1 || eps[0].ID != "anilist:23273" {
+		t.Fatalf("unexpected episodes: %+v", eps)
+	}
+}
+
+// Cross-provider anime resolution (bare AniList handle + sub/dub episode
+// from a direct provider) must hit the anime catalog — never another
+// title's TMDB ID.
+func TestResolveAnimeUsesAnilistID(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(penguResponse{
+			Streams: []penguStreamItem{
+				{
+					Name:  "🐧 PenguPlay 🧊 1080p • Ani.pm · Sub",
+					URL:   "https://cdn.example.com/a.m3u8",
+					BehaviorHints: penguBehaviorHints{
+						Filename: "1080pHLS1080phls.pad-Ani.pm",
+					},
+					Subtitles: []penguSubtitle{{ID: "anipm-0", URL: "https://pengu.uk/subs/x", Lang: "English"}},
+				},
+				{
+					Name:  "🐧 PenguPlay 🧊 1080p • Ani.pm · Hard Sub",
+					URL:   "https://cdn.example.com/b.m3u8",
+					BehaviorHints: penguBehaviorHints{
+						Filename: "1080pHLS1080phls.pad-Ani.pm",
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	origBase := penguAPIBase
+	defer func() { penguAPIBase = origBase }()
+	penguAPIBase = server.URL
+	c := &Client{httpClient: server.Client(), configSegment: "ztest", segAnime: "zanime"}
+
+	sources, err := c.ResolveSource(context.Background(), "21", provider.Episode{
+		Season: 1, Episode: 1180, Audio: "sub", ID: "watch/anikoto/21/sub/1180",
+	})
+	if err != nil {
+		t.Fatalf("ResolveSource(anime): %v", err)
+	}
+	if !strings.Contains(gotPath, "/stream/series/anilist:21:1180.json") {
+		t.Errorf("request path = %q, want anilist:21:1180 series stream", gotPath)
+	}
+	if !strings.Contains(gotPath, "zanime") {
+		t.Errorf("request path = %q, want anime config segment", gotPath)
+	}
+	// Soft and hard variants stay distinct rows with their subtitle kinds.
+	if len(sources) != 2 {
+		t.Fatalf("sources = %d, want 2: %+v", len(sources), sources)
+	}
+	if sources[0].SubType != provider.SubTypeSoft || sources[1].SubType != provider.SubTypeHard {
+		t.Errorf("subtypes = %q %q, want soft hard", sources[0].SubType, sources[1].SubType)
+	}
+}
+
+// Prefixed handles and movie handles resolve to the matching anime catalog IDs.
+func TestAnimeStremioIDShapes(t *testing.T) {
+	for _, tc := range []struct {
+		mediaID string
+		episode provider.Episode
+		want    string
+		ok      bool
+	}{
+		{"anilist:21", provider.Episode{Season: 1, Episode: 1180}, "anilist:21:1180", true},
+		{"21", provider.Episode{Season: 1, Episode: 1180, Audio: "sub", ID: "watch/anikoto/21/sub/1180"}, "anilist:21:1180", true},
+		{"anilist:21", provider.Episode{}, "anilist:21", true},
+		{"tmdb:37854:1:1180", provider.Episode{Season: 1, Episode: 1180, Audio: "sub"}, "", false},
+		{"", provider.Episode{Season: 1, Episode: 1180, Audio: "sub"}, "", false},
+	} {
+		got, ok := animeStremioID(tc.mediaID, tc.episode)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("animeStremioID(%q) = (%q, %v), want (%q, %v)", tc.mediaID, got, ok, tc.want, tc.ok)
 		}
 	}
 }
@@ -256,6 +485,48 @@ func TestResolveSourceKeepsDistinctEncodes(t *testing.T) {
 	}
 	if sources[2].Quality != "4K [Cinejoy]" {
 		t.Errorf("sources[2].Quality = %q, want %q", sources[2].Quality, "4K [Cinejoy]")
+	}
+}
+
+func TestResolveAnimeMALPriority(t *testing.T) {
+	origBase := penguAPIBase
+	defer func() { penguAPIBase = origBase }()
+
+	var queriedPath string
+	penguServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queriedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"streams":[
+			{"name":"🐧 PenguPlay 🧊 1080p • Ani.pm · Sub","url":"https://cdn.example.com/anipm.m3u8"},
+			{"name":"🐧 PenguPlay 🧊 1080p • Reanime · HD-1 · Sub","url":"https://cdn.example.com/reanime.m3u8"}
+		]}`))
+	}))
+	defer penguServer.Close()
+	penguAPIBase = penguServer.URL
+
+	anilistServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"Media":{"id":21,"idMal":21,"format":"TV","status":"RELEASING"}}}`))
+	}))
+	defer anilistServer.Close()
+
+	c := &Client{
+		httpClient:    penguServer.Client(),
+		anilistBase:   anilistServer.URL,
+		configSegment: "cfg",
+		segAnime:      "segAnime",
+		malCache:      make(map[int]int),
+	}
+
+	sources, err := c.ResolveSource(context.Background(), "21", provider.Episode{Episode: 1180, Audio: "sub"})
+	if err != nil {
+		t.Fatalf("ResolveSource failed: %v", err)
+	}
+	if !strings.Contains(queriedPath, "mal:21:1180") {
+		t.Errorf("queriedPath = %q, want path containing mal:21:1180", queriedPath)
+	}
+	if len(sources) != 2 {
+		t.Fatalf("got %d sources, want 2", len(sources))
 	}
 }
 

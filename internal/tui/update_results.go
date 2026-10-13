@@ -713,6 +713,10 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 	if m.resolved.TMDBID == 0 && resolved.TMDBID != 0 {
 		m.resolved.TMDBID = resolved.TMDBID
 	}
+	if len(resolved.CompletedResolvers) > 0 {
+		m.resolved.CompletedResolvers = resolved.CompletedResolvers
+		m.resolved.TotalResolvers = resolved.TotalResolvers
+	}
 
 	// If user manually switched sources with Tab, restore that specific source URL.
 	// Otherwise default to the top-ranked source (index 0, e.g. Movy.sx).

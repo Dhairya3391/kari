@@ -98,11 +98,29 @@ func TestRoutesTableCoversAllModes(t *testing.T) {
 			if r.searchTimeout() > 8*time.Second {
 				t.Errorf("mode %q provider %q search timeout %v exceeds 8s", m, r.Provider, r.searchTimeout())
 			}
-			if r.sourceTimeout() > DefaultSourceTimeout {
-				t.Errorf("mode %q provider %q source timeout %v exceeds default", m, r.Provider, r.sourceTimeout())
+			// Source budgets may exceed the 20s default for slow
+			// lanes (Pengu anime), but never the overall deadline
+			// that bounds the whole fan-out.
+			if r.sourceTimeout() > DefaultSourcesOverall {
+				t.Errorf("mode %q provider %q source timeout %v exceeds overall", m, r.Provider, r.sourceTimeout())
 			}
 		}
 	}
+}
+
+// TestAnimePenguSourceTimeout proves Pengu's anime lane gets the
+// extended budget its slow scrapers need (live-timed 10-60s), while
+// every other lane stays at the default.
+func TestAnimePenguSourceTimeout(t *testing.T) {
+	for _, r := range RoutesFor(ModeAnime) {
+		if r.Provider == "pengu" {
+			if r.SourceTimeout != 40*time.Second {
+				t.Fatalf("anime pengu source timeout = %v, want 40s", r.SourceTimeout)
+			}
+			return
+		}
+	}
+	t.Fatal("anime routes lack pengu")
 }
 
 // TestRoutesStrategiesMatchSpec proves the default strategies: anime
@@ -138,9 +156,6 @@ func TestBoostRankMatchesLegacySort(t *testing.T) {
 	}
 	if BoostRank(ModeAnime, "anikoto", "1080p (HD-2)") >= 0 {
 		t.Error("anime anikoto hd-2 should not be boosted")
-	}
-	if BoostRank(ModeAnime, "anilight", "Auto (l)") >= 0 {
-		t.Error("anime anilight should not be boosted")
 	}
 	if BoostRank(ModeMovies, "movysx", "1080p") < 0 {
 		t.Error("movies movysx should be boosted")

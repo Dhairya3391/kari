@@ -21,11 +21,11 @@ func TestSubtitleServiceDisabled(t *testing.T) {
 		SeriesTitle:   "One Piece",
 		EpisodeNumber: 1,
 		Subtitles: []model.SubtitleTrack{
-			{URL: "https://example.com/en.vtt", Language: "en", Resolver: "anilight"},
+			{URL: "https://example.com/en.vtt", Language: "en", Resolver: "miruro"},
 		},
 	}
 
-	track, err := svc.Fetch(context.Background(), media, "off", "anilight")
+	track, err := svc.Fetch(context.Background(), media, "off", "miruro")
 	if err != nil {
 		t.Fatalf("expected nil error when subtitles disabled, got: %v", err)
 	}
@@ -49,11 +49,11 @@ func TestSubtitleServiceDownloadsAnimeProviderTrack(t *testing.T) {
 		Subtitles: []model.SubtitleTrack{{
 			URL:      srv.URL + "/subtitle.vtt",
 			Language: "en",
-			Resolver: "anilight",
+			Resolver: "miruro",
 		}},
 	}
 
-	track, err := svc.Fetch(context.Background(), media, "en", "anilight")
+	track, err := svc.Fetch(context.Background(), media, "en", "miruro")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestSubtitleServiceAnimeWithoutProviderTrackReturnsNoSubtitles(t *testing.T
 		Subtitles:     nil,
 	}
 
-	track, err := svc.Fetch(context.Background(), media, "en", "anilight")
+	track, err := svc.Fetch(context.Background(), media, "en", "miruro")
 	if err == nil {
 		t.Fatalf("expected an error when no subtitle source is available, got track: %+v", track)
 	}
@@ -174,11 +174,11 @@ func TestSubtitleServiceDisableAnimeSubtitlesOnly(t *testing.T) {
 		EpisodeNumber: 1,
 		MediaType:     provider.MediaTypeAnime,
 		Subtitles: []model.SubtitleTrack{
-			{URL: "https://example.com/en.vtt", Language: "en", Resolver: "anilight"},
+			{URL: "https://example.com/en.vtt", Language: "en", Resolver: "miruro"},
 		},
 	}
 
-	track, err := svc.Fetch(context.Background(), animeMedia, "en", "anilight")
+	track, err := svc.Fetch(context.Background(), animeMedia, "en", "miruro")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

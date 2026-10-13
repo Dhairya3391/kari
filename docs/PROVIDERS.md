@@ -13,7 +13,7 @@
 ## 0. Registration (single source today)
 
 - `internal/provider/defaults/defaults.go` is the only registration
-  list: `anicine, movysx, anikoto, anilight, miruro, moovie, atlantic, cinecat, weebcentral, pengu, jellyfin`.
+  list: `anicine, movysx, anikoto, miruro, moovie, atlantic, cinecat, weebcentral, pengu, jellyfin`.
 - `jellyfin.When` gates on `JellyfinURL && JellyfinAPIKey`
   (`defaults.go:60-62`); factory failure skips with log, never fatal
   (`defaults.go:80-84`).
@@ -24,7 +24,7 @@ Declared modes/priorities:
 
 | mode | providers (priority) | evidence |
 | --- | --- | --- |
-| anime | anicine P1, anikoto P2, miruro P2, anilight P3 | `anicine`, `anikoto`, `miruro`, `anilight` `client.go` `Modes()` |
+| anime | anicine P1, anikoto P2, miruro P2, pengu P3 | `anicine`, `anikoto`, `miruro`, `pengu` `client.go` `Modes()` |
 | movies/tv/cartoon | movysx P2, pengu P2, moovie P2, atlantic P2, cinecat P2 | `movysx`, `pengu`, `moovie`, `atlantic`, `cinecat` `client.go` `Modes()` |
 | live | pengu P1 only | `pengu/client.go:162` |
 | manga | weebcentral P1 only | `weebcentral/client.go:48-50` |
@@ -66,8 +66,8 @@ Cartoon search reuses TMDB multi-search + genre-16 filter via streambase
 - Movies/live bypass: `tui/update_selection.go:42` synthesizes
   `Episode{ID: series.ID}` when `MediaType==movie|live` and
   `!RequiresEpisodeListForMovies(provider)`. Default false
-  (`registry.go:154-167`); true only for anikoto/anilight/reanime
-  (`anikoto/client.go:42-46`, `anilight/client.go:42-45`,
+  (`registry.go:154-167`); true only for anikoto/reanime
+  (`anikoto/client.go:42-46`,
   `reanime/client.go:42-43`). So movysx/pengu/jellyfin movies resolve
   directly.
 

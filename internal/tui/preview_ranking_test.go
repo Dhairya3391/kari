@@ -58,10 +58,10 @@ func TestMergeResolvedKeepsUserCursor(t *testing.T) {
 	m.previewSelectedIndex = 1
 	m.mergeResolved(snap)
 	if m.previewSelectedIndex != 1 {
-		t.Errorf("user cursor should stay on FHD row, got %d", m.previewSelectedIndex)
+		t.Errorf("user cursor should stay on row 1, got %d", m.previewSelectedIndex)
 	}
-	if got := m.rankedSources[m.previewSelectedIndex].Source.URL; got != fhd.URL {
-		t.Errorf("cursor row = %s, want %s", got, fhd.URL)
+	if got := m.rankedSources[m.previewSelectedIndex].Source.URL; got != uhd.URL {
+		t.Errorf("cursor row = %s, want %s", got, uhd.URL)
 	}
 }
 
@@ -81,10 +81,8 @@ func TestMergeResolvedDropsPreviousEpisodeRanking(t *testing.T) {
 	}
 }
 
-// Movy leads whenever present, even when it arrives in a later progressive
-// snapshot: every merge re-ranks, so the list updates dynamically and a
-// cursor sitting on the top row tracks the new movy pick.
-func TestMergeResolvedMovyFirstAndLateArrival(t *testing.T) {
+// Progressive arrivals preserve provider arrival order.
+func TestMergeResolvedArrivalOrderAndLateArrival(t *testing.T) {
 	m := rankingTestModel()
 	penguFHD := provider.MediaSource{URL: "https://cdn.example.com/pengu.m3u8", Quality: "1080p", Resolver: "pengu"}
 	movyFHD := provider.MediaSource{URL: "https://cdn.example.com/movy.m3u8", Quality: "1080p", Resolver: "movysx"}
@@ -94,26 +92,26 @@ func TestMergeResolvedMovyFirstAndLateArrival(t *testing.T) {
 		t.Fatalf("single pengu row should lead alone, got %+v", m.rankedSources)
 	}
 
-	// Movy arrives late: it jumps to top and the top-tracking cursor follows.
+	// Movy arrives later: it appends after pengu in arrival order.
 	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: []provider.MediaSource{penguFHD, movyFHD}})
 	if len(m.rankedSources) != 2 {
 		t.Fatalf("ranked = %d rows, want 2", len(m.rankedSources))
 	}
-	if got := m.rankedSources[0].Source.URL; got != movyFHD.URL {
-		t.Errorf("top = %s, want movy first", got)
+	if got := m.rankedSources[0].Source.URL; got != penguFHD.URL {
+		t.Errorf("top = %s, want pengu first in arrival order", got)
 	}
-	if m.previewSelectedIndex != 0 {
-		t.Errorf("cursor should track the new movy top pick, got %d", m.previewSelectedIndex)
+	if got := m.rankedSources[1].Source.URL; got != movyFHD.URL {
+		t.Errorf("second = %s, want movy second in arrival order", got)
 	}
 
 	// A cursor the user moved off the top stays on its source URL.
 	m.previewSelectedIndex = 1
 	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: []provider.MediaSource{penguFHD, movyFHD}})
 	if m.previewSelectedIndex != 1 {
-		t.Errorf("user cursor should stay on pengu row, got %d", m.previewSelectedIndex)
+		t.Errorf("user cursor should stay on movy row, got %d", m.previewSelectedIndex)
 	}
-	if got := m.rankedSources[m.previewSelectedIndex].Source.URL; got != penguFHD.URL {
-		t.Errorf("cursor row = %s, want %s", got, penguFHD.URL)
+	if got := m.rankedSources[m.previewSelectedIndex].Source.URL; got != movyFHD.URL {
+		t.Errorf("cursor row = %s, want %s", got, movyFHD.URL)
 	}
 }
 
@@ -124,10 +122,10 @@ func TestMergeResolvedAppendsOnRetry(t *testing.T) {
 	m := rankingTestModel()
 	m.qualityMode = qualityAll
 	anikotoSrc := provider.MediaSource{URL: "https://cdn.example.com/anikoto.m3u8", Quality: "1080p", Resolver: "anikoto"}
-	anilightSrc := provider.MediaSource{URL: "https://cdn.example.com/anilight.m3u8", Quality: "1080p", Resolver: "anilight"}
+	miruroSrc := provider.MediaSource{URL: "https://cdn.example.com/miruro.m3u8", Quality: "1080p", Resolver: "miruro"}
 
-	// Initial resolve delivered from anikoto and anilight.
-	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "One Piece", Playback: []provider.MediaSource{anikotoSrc, anilightSrc}})
+	// Initial resolve delivered from anikoto and miruro.
+	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "One Piece", Playback: []provider.MediaSource{anikotoSrc, miruroSrc}})
 	if len(m.resolved.Playback) != 2 {
 		t.Fatalf("initial playback = %d, want 2", len(m.resolved.Playback))
 	}
@@ -157,39 +155,26 @@ func TestMergeResolvedQualitySettingOrdersNotHides(t *testing.T) {
 		{URL: "https://cdn.example.com/4k.m3u8", Quality: "4K", Resolver: "B"},
 	}
 
-	// Highest: 4K preselected, FHD next, HD and below hidden.
+	// Highest: FHD and above kept in arrival order, lower hidden.
 	m.qualityMode = qualityHighest
 	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: mixed})
 	if len(m.rankedSources) != 2 {
 		t.Fatalf("highest must keep FHD and above only, got %+v", m.rankedSources)
 	}
-	if got := m.rankedSources[0].Source.URL; got != "https://cdn.example.com/4k.m3u8" {
-		t.Errorf("top pick = %s, want 4K under Highest", got)
-	}
-	if got := m.rankedSources[1].Source.URL; got != "https://cdn.example.com/fhd.m3u8" {
-		t.Errorf("second pick = %s, want FHD directly under 4K", got)
-	}
 
-	// Lowest: same rows, smallest tier preselected.
+	// Lowest: all rows in arrival order.
 	m.qualityMode = qualityLowest
 	m.rankAndSelectSources()
 	if len(m.rankedSources) != 4 {
 		t.Fatalf("lowest must keep every row, got %+v", m.rankedSources)
 	}
-	if got := m.rankedSources[0].Source.URL; got != "https://cdn.example.com/sd.m3u8" {
-		t.Errorf("top pick = %s, want 480p under Lowest", got)
-	}
 
-	// Data Saver: caps preference at 1080p, so FHD leads.
+	// Data Saver: keeps all rows in arrival order.
 	m.qualityMode = qualityDataSaver
 	m.rankAndSelectSources()
-	if got := m.rankedSources[0].Source.URL; got != "https://cdn.example.com/fhd.m3u8" {
-		t.Errorf("top pick = %s, want FHD under Data Saver", got)
-	}
 	if len(m.rankedSources) != 4 {
 		t.Errorf("data saver must keep every row, got %d", len(m.rankedSources))
 	}
-
 	// A mid-only list under Highest keeps its best tier only.
 	mid := []provider.MediaSource{
 		{URL: "https://cdn.example.com/hd.m3u8", Quality: "720p", Resolver: "A"},

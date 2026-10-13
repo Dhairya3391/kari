@@ -41,8 +41,7 @@ func (h Handle) Valid() bool { return h.AniListID != "" && h.Number > 0 }
 // watch/<server>/<id>/<category>/<number> (or the 4- and 3-part shorter
 // forms), falling back to mediaID/audio/episode. When requireSegment is
 // non-empty, the 5-part form only matches if the second segment equals it
-// (anilight routes carry "anilight" there; other providers may use their
-// own segment name, which is ignored when requireSegment is empty).
+// (provider routes carry their provider name there, which is ignored when requireSegment is empty).
 func ParseHandle(mediaID, epID, audio string, episode int, requireSegment string) Handle {
 	requestedCategory := strings.ToLower(strings.TrimSpace(audio))
 	h := Handle{

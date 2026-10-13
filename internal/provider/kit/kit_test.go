@@ -18,12 +18,12 @@ func TestParseHandle(t *testing.T) {
 		},
 		{
 			name:    "five-part with required segment",
-			mediaID: "1", epID: "watch/anilight/123/dub/7", requireSegment: "anilight",
+			mediaID: "1", epID: "watch/custom/123/dub/7", requireSegment: "custom",
 			want: Handle{AniListID: "123", Category: "dub", Number: 7},
 		},
 		{
 			name:    "five-part rejected when segment differs",
-			mediaID: "1", epID: "watch/other/123/dub/7", requireSegment: "anilight", episode: 5,
+			mediaID: "1", epID: "watch/other/123/dub/7", requireSegment: "custom", episode: 5,
 			want: Handle{AniListID: "1", Category: "sub", Number: 5},
 		},
 		{

@@ -170,7 +170,11 @@ func renderSourcesTitle(data PreviewData, st Styles) string {
 			spinner = "⠋"
 		}
 		spinner = st.Current.Render(spinner)
-		return fmt.Sprintf("Sources  %s %d of %d providers · %d found", spinner, data.TotalProviders-data.LoadingProviders, data.TotalProviders, len(data.RankedSources))
+		done := data.TotalProviders - data.LoadingProviders
+		if done < 0 {
+			done = 0
+		}
+		return fmt.Sprintf("Sources  %s %d of %d providers · %d found", spinner, done, data.TotalProviders, len(data.RankedSources))
 	}
 
 	return fmt.Sprintf("Sources  %d", len(data.RankedSources))
@@ -222,9 +226,16 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 	}
 	rows = append(rows, headerRow)
 
-	// Visible window of 5 rows, cursor kept mid-window while it moves.
+	// Visible window of rows: responsive to terminal height so sources aren't cramped.
 	total := len(data.RankedSources)
 	windowSize := 5
+	if data.Height >= 38 {
+		windowSize = 12
+	} else if data.Height >= 30 {
+		windowSize = 9
+	} else if data.Height >= 25 {
+		windowSize = 7
+	}
 	startIdx := windowStart(total, data.SelectedIndex, windowSize)
 	endIdx := min(total, startIdx+windowSize)
 

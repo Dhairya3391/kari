@@ -2,7 +2,6 @@ package tui
 
 import (
 	"strings"
-	"time"
 
 	"kari/internal/provider"
 	"kari/internal/ranking"
@@ -33,86 +32,49 @@ func (m *modelImpl) rankAndSelectSources() {
 		sources = ranking.KeepHighestVisible(sources)
 	}
 
-	sticky := ""
-	if m.stickyProviders != nil {
-		sticky = m.stickyProviders[m.resolved.SeriesTitle]
+	scored := make([]ranking.ScoredSource, len(sources))
+	for i, s := range sources {
+		scored[i] = ranking.ScoredSource{
+			Source:        s,
+			OriginalIndex: i,
+		}
 	}
 
-	crit := ranking.Criteria{
-		Mode:                  m.appMode,
-		QualityMode:           m.qualityMode,
-		EnabledAudioLanguages: m.orderedEnabledLanguages(),
-		AnimeAudio:            m.audioMode,
-		AnimeSubtitlesEnabled: !m.disableAnimeSubtitles,
-		PreferredSubtitleLang: m.subtitleLanguage,
-		StickyProvider:        sticky,
-		FailedProviders:       m.failedProviders,
-		Now:                   time.Now(),
-	}
-
-	m.rankedSources = hardsubFirst(m.appMode, m.qualityMode, !m.disableAnimeSubtitles,
-		preferredFirst(m.appMode, ranking.RankSources(sources, crit)))
+	m.rankedSources = hardsubFirst(m.appMode, m.qualityMode, !m.disableAnimeSubtitles, scored)
 	m.previewSelectedIndex = 0
 }
 
-// hardsubFirst stable-partitions hard-subtitled anime rows above the rest,
-// preserving the ranked order inside each group. Burned-in subs need no
-// subtitle plumbing and cannot desync, so they are the default pick —
-// ahead of even preferred-resolver softsubs. It applies only when anime
-// subtitles are enabled (a forced track would defeat an explicit off)
-// and never in size-first quality modes (Lowest/Data Saver), where the
-// user asked for small files. Challenged-host rows never join the top
-// group: they stay last, always.
+// hardsubFirst stable-sorts hard-subtitled rows before soft-subtitled rows
+// within each provider itself, preserving the overall provider arrival order.
 func hardsubFirst(mode provider.ContentType, qualityMode int, subsEnabled bool, sources []ranking.ScoredSource) []ranking.ScoredSource {
-	if mode != provider.ModeAnime || !subsEnabled {
+	if mode != provider.ModeAnime || !subsEnabled || len(sources) <= 1 {
 		return sources
 	}
 	if qualityMode != qualityAll && qualityMode != qualityHighest {
 		return sources
 	}
-	var top, rest []ranking.ScoredSource
-	for _, s := range sources {
-		if strings.EqualFold(strings.TrimSpace(s.Source.SubType), provider.SubTypeHard) &&
-			!provider.ChallengedHost(s.Source.URL) {
-			top = append(top, s)
-		} else {
-			rest = append(rest, s)
+	out := make([]ranking.ScoredSource, 0, len(sources))
+	i := 0
+	for i < len(sources) {
+		prov := sources[i].Source.Resolver
+		j := i + 1
+		for j < len(sources) && sources[j].Source.Resolver == prov {
+			j++
 		}
-	}
-	return append(top, rest...)
-}
-
-// preferredFirst stable-partitions rows from the routes-table preferred
-// resolvers above the rest, preserving the ranked order inside each
-// group. It mirrors the service aggregator so Preview and playback agree
-// on the top pick, including when preferred rows arrive in a later
-// progressive snapshot (refreshRanking re-runs this every merge, so the
-// list updates dynamically and a cursor sitting on the top row tracks
-// the new pick). Challenged-host rows never join the top group even when
-// their resolver is preferred: they stay last, always.
-func preferredFirst(mode provider.ContentType, sources []ranking.ScoredSource) []ranking.ScoredSource {
-	preferred := provider.PreferredResolvers(mode)
-	if len(preferred) == 0 {
-		return sources
-	}
-	var top, rest []ranking.ScoredSource
-	for _, s := range sources {
-		matched := false
-		if !provider.ChallengedHost(s.Source.URL) {
-			for _, name := range preferred {
-				if strings.EqualFold(s.Source.Resolver, name) {
-					matched = true
-					break
-				}
+		var top, rest []ranking.ScoredSource
+		for _, s := range sources[i:j] {
+			if strings.EqualFold(strings.TrimSpace(s.Source.SubType), provider.SubTypeHard) &&
+				!provider.ChallengedHost(s.Source.URL) {
+				top = append(top, s)
+			} else {
+				rest = append(rest, s)
 			}
 		}
-		if matched {
-			top = append(top, s)
-		} else {
-			rest = append(rest, s)
-		}
+		out = append(out, top...)
+		out = append(out, rest...)
+		i = j
 	}
-	return append(top, rest...)
+	return out
 }
 
 // refreshRanking recomputes the ranked order from the current Playback

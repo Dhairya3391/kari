@@ -78,12 +78,17 @@ func (r Route) sourceTimeout() time.Duration {
 // anime merges searches and falls back for sources; movies/tv/cartoon
 // merge searches and race (with preference) for sources; live, manga
 // and jellyfin are single-provider modes.
+//
+// Pengu's anime route carries a longer source deadline: its anime
+// aggregation fans out to slow scrapers (Ani.pm, Reanime) that answer
+// in 10-60s live, and the default 20s clipped them to fast-backend
+// partials. 40s still fits inside DefaultSourcesOverall.
 func defaultRoutes() map[ContentType][]Route {
 	anime := []Route{
 		{Provider: "anicine", Search: StrategyMerge, Sources: StrategyFallback},
 		{Provider: "anikoto", Search: StrategyMerge, Sources: StrategyFallback},
 		{Provider: "miruro", Search: StrategyMerge, Sources: StrategyFallback},
-		{Provider: "anilight", Search: StrategyMerge, Sources: StrategyFallback},
+		{Provider: "pengu", Search: StrategyMerge, Sources: StrategyFallback, SourceTimeout: 40 * time.Second},
 	}
 	movies := []Route{
 		{Provider: "movysx", Search: StrategyMerge, Sources: StrategyRace},

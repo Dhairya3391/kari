@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	defaultTimeout = 15 * time.Second
+	defaultTimeout = 60 * time.Second
 	defaultRetries = 2
 	// maxPerHost caps concurrent requests to one host so provider fan-out
 	// stays polite: 16 in flight per host, the rest wait on context.
@@ -40,6 +40,16 @@ func NewWithTimeout(timeout time.Duration) *http.Client {
 // NewWithUserAgent returns a shared HTTP client that injects a User-Agent header.
 func NewWithUserAgent(userAgent string) *http.Client {
 	client := newClient(defaultTimeout)
+	client.Transport = &uaRoundTripper{
+		next: client.Transport,
+		ua:   userAgent,
+	}
+	return client
+}
+
+// NewWithUserAgentAndTimeout returns a shared HTTP client that injects a User-Agent header and custom timeout.
+func NewWithUserAgentAndTimeout(userAgent string, timeout time.Duration) *http.Client {
+	client := newClient(timeout)
 	client.Transport = &uaRoundTripper{
 		next: client.Transport,
 		ua:   userAgent,

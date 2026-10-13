@@ -49,7 +49,6 @@ var mpvMatrixCases = []mpvMatrixCase{
 	{provider: "anicine", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "anikoto", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "miruro", mode: provider.ModeAnime, query: "Naruto"},
-	{provider: "anilight", mode: provider.ModeAnime, query: "Naruto"},
 }
 
 // maxMPVCandidates caps how many resolved sources one matrix case probes
