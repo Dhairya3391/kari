@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	mpvReadinessTimeout = 20 * time.Second
+	mpvReadinessTimeout = 10 * time.Second
 
 	// mpvQuickExitThreshold bounds how long into the readiness phase mpv can
 	// exit cleanly (code 0) with no IPC evidence that media ever loaded before
@@ -184,7 +184,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		"--demuxer-max-back-bytes=100M",
 		"--demuxer-readahead-secs=300",
 		"--stream-buffer-size=8M",
-		"--network-timeout=15",
+		"--network-timeout=8",
 		"--input-ipc-server=" + socketPath,
 		hwdecOptionArg(),
 	}
@@ -265,7 +265,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 		"--gpu-context=auto",
 		"--focus-on=open",
 		hwdecOptionArg(),
-		"--network-timeout=15",
+		"--network-timeout=8",
 		"--cache=yes",
 		"--cache-pause-initial=no",
 		"--demuxer-seekable-cache=yes",
@@ -352,8 +352,8 @@ func optionalCurlFlags(finalURL string) []string {
 	}
 	return []string{
 		"--compressed",
-		"--connect-timeout", "5",
-		"--retry", "2",
+		"--connect-timeout", "4",
+		"--retry", "1",
 	}
 }
 

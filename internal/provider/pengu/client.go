@@ -1207,6 +1207,9 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 	if stream.BehaviorHints.ProxyHeaders != nil && stream.BehaviorHints.ProxyHeaders.Request != nil {
 		extractHeaders(stream.BehaviorHints.ProxyHeaders.Request)
 	}
+	if referer == "" {
+		referer = "https://pengu.uk/"
+	}
 
 	// 6. Subtitles
 	subtitles := []provider.SubtitleOption{}
@@ -1217,6 +1220,7 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 		subtitles = append(subtitles, provider.SubtitleOption{
 			URL:      sub.URL,
 			Language: lang.Normalize(sub.Lang),
+			Referer:  referer,
 		})
 	}
 
