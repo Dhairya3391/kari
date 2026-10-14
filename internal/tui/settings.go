@@ -260,9 +260,10 @@ func renderModeSettingRow(row ModeRow, isFocused bool, width int, st Styles) str
 		dot = st.Dim.Render("○")
 	}
 
-	nameStr := row.Label
+	nameTrunc := truncate(row.Label, 24)
+	namePadded := nameTrunc + strings.Repeat(" ", max(0, 24-lipgloss.Width(nameTrunc)))
 	if isFocused {
-		nameStr = st.Bold.Render(row.Label)
+		namePadded = st.Current.Render(nameTrunc) + strings.Repeat(" ", max(0, 24-lipgloss.Width(nameTrunc)))
 	}
 
 	var statusStr string
@@ -278,7 +279,7 @@ func renderModeSettingRow(row ModeRow, isFocused bool, width int, st Styles) str
 		statusStr = st.Dim.Render("off")
 	}
 
-	labelPart := fmt.Sprintf("%s %-24s", dot, nameStr)
+	labelPart := fmt.Sprintf("%s %s", dot, namePadded)
 	return fmt.Sprintf("%s%s  %s", cursor, labelPart, statusStr)
 }
 
@@ -292,7 +293,7 @@ func renderSettingRow(label, value string, isFocused bool, width int, st Styles)
 	labelTrunc := truncate(label, labelW)
 	labelPadded := labelTrunc + strings.Repeat(" ", max(0, labelW-lipgloss.Width(labelTrunc)))
 	if isFocused {
-		labelPadded = st.Bold.Render(labelTrunc) + strings.Repeat(" ", max(0, labelW-lipgloss.Width(labelTrunc)))
+		labelPadded = st.Current.Render(labelTrunc) + strings.Repeat(" ", max(0, labelW-lipgloss.Width(labelTrunc)))
 	}
 
 	return fmt.Sprintf("%s%s  %s", cursor, labelPadded, value)
@@ -303,9 +304,10 @@ func renderAccountRow(name string, connected bool, isFocused bool, width int, st
 	if isFocused {
 		cursor = st.Cursor.Render("▌ ")
 	}
-	nameStr := fmt.Sprintf("%-20s", name)
+	nameTrunc := truncate(name, 20)
+	namePadded := nameTrunc + strings.Repeat(" ", max(0, 20-lipgloss.Width(nameTrunc)))
 	if isFocused {
-		nameStr = st.Bold.Render(fmt.Sprintf("%-20s", name))
+		namePadded = st.Current.Render(nameTrunc) + strings.Repeat(" ", max(0, 20-lipgloss.Width(nameTrunc)))
 	}
 
 	statusDot := st.Dim.Render("○ not connected")
@@ -323,7 +325,7 @@ func renderAccountRow(name string, connected bool, isFocused bool, width int, st
 		}
 	}
 
-	return fmt.Sprintf("%s%s  %s  %s", cursor, nameStr, statusPadded, actionHint)
+	return fmt.Sprintf("%s%s  %s  %s", cursor, namePadded, statusPadded, actionHint)
 }
 
 func renderAccountSettingRow(label, value string, isFocused bool, width int, st Styles) string {
@@ -332,13 +334,14 @@ func renderAccountSettingRow(label, value string, isFocused bool, width int, st 
 		cursor = st.Cursor.Render("▌ ")
 	}
 
-	labelStr := fmt.Sprintf("%-20s", label)
+	labelTrunc := truncate(label, 20)
+	labelPadded := labelTrunc + strings.Repeat(" ", max(0, 20-lipgloss.Width(labelTrunc)))
 	if isFocused {
-		labelStr = st.Bold.Render(fmt.Sprintf("%-20s", label))
+		labelPadded = st.Current.Render(labelTrunc) + strings.Repeat(" ", max(0, 20-lipgloss.Width(labelTrunc)))
 	}
 
 	valStr := formatVal(value, isFocused, st)
-	return fmt.Sprintf("%s%s  %s", cursor, labelStr, valStr)
+	return fmt.Sprintf("%s%s  %s", cursor, labelPadded, valStr)
 }
 
 func formatVal(val string, isFocused bool, st Styles) string {
@@ -380,7 +383,7 @@ func renderAudioLanguagePicker(data SettingsData, st Styles) string {
 
 		label := l
 		if i == data.PickerIndex {
-			label = st.Bold.Render(l)
+			label = st.Current.Render(l)
 		}
 
 		rows = append(rows, fmt.Sprintf("%s%s%s", cursor, status, label))

@@ -62,10 +62,14 @@ func RenderDownloadsScreen(data DownloadsData) string {
 			titleTrunc := truncate(item.Title, titleW)
 			titleStr := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 			if isFocused {
-				titleStr = st.Bold.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+				titleStr = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 			}
 
-			qualityStr := st.Dim.Render(fmt.Sprintf("%-6s", truncate(item.Quality, 6)))
+			qFormatted := fmt.Sprintf("%-6s", truncate(item.Quality, 6))
+			qualityStr := st.Dim.Render(qFormatted)
+			if isFocused {
+				qualityStr = st.Current.Render(qFormatted)
+			}
 
 			if item.Queued {
 				rows = append(rows, fmt.Sprintf("%s%s  %s  %s", cursor, titleStr, qualityStr, st.Dim.Render("queued")))
@@ -102,10 +106,14 @@ func RenderDownloadsScreen(data DownloadsData) string {
 			titleTrunc := truncate(item.Title, titleW)
 			titleStr := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 			if isFocused {
-				titleStr = st.Bold.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+				titleStr = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 			}
 
-			qualityStr := st.Dim.Render(fmt.Sprintf("%-6s", truncate(item.Quality, 6)))
+			qFormatted := fmt.Sprintf("%-6s", truncate(item.Quality, 6))
+			qualityStr := st.Dim.Render(qFormatted)
+			if isFocused {
+				qualityStr = st.Current.Render(qFormatted)
+			}
 			checkStr := st.Ok.Render("✓ ")
 			sizeStr := st.Dim.Render(item.Size)
 

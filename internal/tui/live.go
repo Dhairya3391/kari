@@ -179,10 +179,15 @@ func renderLiveRow(e liveEntry, isFocused bool, width int, st Styles) string {
 	titleTrunc := truncate(title, titleW)
 	titlePadded := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 	if isFocused {
-		titlePadded = st.Bold.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+		titlePadded = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 	}
 
-	return fmt.Sprintf("%s%s%s  %s  %s", cursor, liveIcon, titlePadded, catStr, st.Dim.Render(timeCol))
+	timeStr := st.Dim.Render(timeCol)
+	if isFocused {
+		timeStr = st.Current.Render(timeCol)
+	}
+
+	return fmt.Sprintf("%s%s%s  %s  %s", cursor, liveIcon, titlePadded, catStr, timeStr)
 }
 
 // categoryFromGenres picks the first genre as a display category, or empty.

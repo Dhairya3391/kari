@@ -241,3 +241,39 @@ func TestDistinctSeasonNumbersMultiSeason(t *testing.T) {
 		t.Fatalf("filtered2 = %v, idxs2 = %v", filtered2, idxs2)
 	}
 }
+
+func TestEpisodesSelectedRowHighlight(t *testing.T) {
+	accent := ResolveAccent(model.KindAnime, "Auto")
+	st := NewStyles(accent)
+
+	data := EpisodesData{
+		SeriesTitle: "Frieren",
+		Episodes: []provider.Episode{
+			{Season: 1, Episode: 1, Title: "The End of the Beginning"},
+			{Season: 1, Episode: 2, Title: "It Didn't Have to Be Magic"},
+		},
+		SelectedIndex: 1,
+		Width:         80,
+		Height:        20,
+		Accent:        accent,
+	}
+
+	out := RenderEpisodesScreen(data)
+
+	// The selected episode title and code must be highlighted with accent color (st.Current).
+	expectedTitle := st.Current.Render("It Didn't Have to Be Magic")
+	if !strings.Contains(out, expectedTitle) {
+		t.Errorf("selected episode title must be highlighted with accent color (st.Current), output:\n%s", out)
+	}
+
+	expectedCode := st.Current.Render("02")
+	if !strings.Contains(out, expectedCode) {
+		t.Errorf("selected episode code must be highlighted with accent color (st.Current), output:\n%s", out)
+	}
+
+	// Unselected code must remain dim.
+	unselectedCode := st.Dim.Render("01")
+	if !strings.Contains(out, unselectedCode) {
+		t.Errorf("unselected episode code must remain dim, output:\n%s", out)
+	}
+}

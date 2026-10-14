@@ -142,7 +142,7 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 	rightCols := make([]string, len(seasonEpisodes))
 	rightW := 0
 	for i, ep := range seasonEpisodes {
-		rightCols[i] = episodeRightCol(ep, historyEntryFor(data, ep), data.Accent, st)
+		rightCols[i] = episodeRightCol(ep, historyEntryFor(data, ep), i == data.SelectedIndex, data.Accent, st)
 		if w := lipgloss.Width(rightCols[i]); w > rightW {
 			rightW = w
 		}
@@ -344,7 +344,7 @@ func episodeDisplayTitle(ep provider.Episode, index int) string {
 
 // episodeRightCol renders the trailing status: progress bar plus time
 // left for in-progress episodes, runtime when known, else empty.
-func episodeRightCol(ep provider.Episode, historyEntry *history.Entry, accent lipgloss.AdaptiveColor, st Styles) string {
+func episodeRightCol(ep provider.Episode, historyEntry *history.Entry, isFocused bool, accent lipgloss.AdaptiveColor, st Styles) string {
 	if historyEntry != nil {
 		if historyEntry.Complete || (historyEntry.DurationSecs > 0 && (historyEntry.PositionSecs/historyEntry.DurationSecs) >= 0.95) {
 			return ""
@@ -353,10 +353,18 @@ func episodeRightCol(ep provider.Episode, historyEntry *history.Entry, accent li
 			ratio := historyEntry.PositionSecs / historyEntry.DurationSecs
 			progressBar := RenderProgressBar(ratio, 8, accent)
 			leftSecs := historyEntry.DurationSecs - historyEntry.PositionSecs
-			return progressBar + "  " + st.Dim.Render(fmt.Sprintf("%dm left", int(leftSecs/60)))
+			leftStr := fmt.Sprintf("%dm left", int(leftSecs/60))
+			if isFocused {
+				return progressBar + "  " + st.Current.Render(leftStr)
+			}
+			return progressBar + "  " + st.Dim.Render(leftStr)
 		}
 		if historyEntry.DurationSecs > 0 {
-			return st.Dim.Render(formatDurationShort(historyEntry.DurationSecs))
+			durStr := formatDurationShort(historyEntry.DurationSecs)
+			if isFocused {
+				return st.Current.Render(durStr)
+			}
+			return st.Dim.Render(durStr)
 		}
 	}
 	return ""
@@ -381,10 +389,15 @@ func renderEpisodeRow(ep provider.Episode, index int, isFocused bool, multiSeaso
 
 		titleTrunc := truncate(title, listW-18)
 		if isFocused {
-			titleTrunc = st.Bold.Render(titleTrunc)
+			titleTrunc = st.Current.Render(titleTrunc)
 		}
 
-		return fmt.Sprintf("%s%s%s  %s", cursor, st.Dim.Render(box), st.Dim.Render(code), titleTrunc)
+		codeStr := st.Dim.Render(code)
+		if isFocused {
+			codeStr = st.Current.Render(code)
+		}
+
+		return fmt.Sprintf("%s%s%s  %s", cursor, st.Dim.Render(box), codeStr, titleTrunc)
 	}
 
 	// Normal Mode
@@ -414,10 +427,13 @@ func renderEpisodeRow(ep provider.Episode, index int, isFocused bool, multiSeaso
 	titleTrunc := truncate(title, titleW)
 	titlePadded := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 	if isFocused {
-		titlePadded = st.Bold.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+		titlePadded = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 	}
 
 	codeStr := st.Dim.Render(code)
+	if isFocused {
+		codeStr = st.Current.Render(code)
+	}
 
 	return fmt.Sprintf("%s%s%s  %s  %s", cursor, statusMarker, codeStr, titlePadded, rightPadded)
 }

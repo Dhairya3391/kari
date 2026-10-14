@@ -58,3 +58,40 @@ func TestSearchLoadingRendersInputOnly(t *testing.T) {
 		t.Errorf("input must stay, got:\n%s", out)
 	}
 }
+
+func TestResultsSelectedRowHighlight(t *testing.T) {
+	accent := ResolveAccent(model.KindAnime, "Auto")
+	st := NewStyles(accent)
+
+	data := ResultsData{
+		Query: "clover",
+		Mode:  provider.ModeAnime,
+		Results: []provider.SearchResult{
+			{Title: "Black Clover", Year: "2017"},
+			{Title: "Black Clover Season 2", Year: "2026"},
+		},
+		SelectedIndex: 1,
+		Width:         100,
+		Height:        20,
+		Accent:        accent,
+	}
+
+	out := RenderResultsScreen(data)
+
+	// The selected row's title and year must be rendered with accent highlight (st.Current).
+	expectedTitle := st.Current.Render("Black Clover Season 2")
+	if !strings.Contains(out, expectedTitle) {
+		t.Errorf("selected title must be highlighted with accent color (st.Current), output:\n%s", out)
+	}
+
+	expectedYear := st.Current.Render("2026")
+	if !strings.Contains(out, expectedYear) {
+		t.Errorf("selected year must be highlighted with accent color (st.Current), output:\n%s", out)
+	}
+
+	// The unselected row's year must remain dim.
+	unselectedYear := st.Dim.Render("2017")
+	if !strings.Contains(out, unselectedYear) {
+		t.Errorf("unselected year must remain dim, output:\n%s", out)
+	}
+}

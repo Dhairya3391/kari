@@ -7,16 +7,6 @@ import (
 	"kari/internal/ranking"
 )
 
-func (m *modelImpl) orderedEnabledLanguages() []string {
-	allLangs := m.availableLanguages()
-	var enabled []string
-	for _, l := range allLangs {
-		if m.languageFilter[l.Code] || m.languageFilter[l.Display] {
-			enabled = append(enabled, l.Display)
-		}
-	}
-	return enabled
-}
 
 func (m *modelImpl) rankAndSelectSources() {
 	if m.resolved == nil || len(m.resolved.Playback) == 0 {

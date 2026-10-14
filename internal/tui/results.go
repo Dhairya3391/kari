@@ -154,14 +154,18 @@ func renderResultsTable(data ResultsData, width, height int, st Styles) string {
 		titleTrunc := truncate(title, titleW)
 		titlePadded := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 		if isFocused {
-			titlePadded = st.Bold.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+			titlePadded = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 		}
 
 		yearStr := "    "
 		if item.Year != "" {
-			yearStr = st.Dim.Render(fmt.Sprintf("%4s", truncate(item.Year, 4)))
+			y := fmt.Sprintf("%4s", truncate(item.Year, 4))
+			if isFocused {
+				yearStr = st.Current.Render(y)
+			} else {
+				yearStr = st.Dim.Render(y)
+			}
 		}
-
 		row := fmt.Sprintf("%s%s  %s", cursor, titlePadded, yearStr)
 		rows = append(rows, row)
 	}

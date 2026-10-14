@@ -495,7 +495,6 @@ type modelImpl struct {
 	rankedSources        []ranking.ScoredSource
 	previewSelectedIndex int
 	stickyProviders      map[string]string
-	failedProviders      map[string]time.Time
 	loadingProviders     int
 	totalProviders       int
 	failedProviderName   string
