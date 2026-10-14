@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/model"
 	"kari/internal/provider"
@@ -220,4 +223,111 @@ func TestPreviewSubtitlesWithSubtitleType(t *testing.T) {
 			t.Errorf("want %q in output, got:\n%s", expected, out)
 		}
 	})
+}
+
+func TestPreviewEpisodeIndexAndCount(t *testing.T) {
+	episodes := make([]provider.Episode, 327)
+	for i := range episodes {
+		season := (i / 22) + 1
+		epNum := (i % 22) + 1
+		title := fmt.Sprintf("Episode %d", epNum)
+		if i == 0 {
+			title = "Pilot"
+		} else if i == 1 {
+			title = "Wendigo"
+		}
+		episodes[i] = provider.Episode{
+			Season:  season,
+			Episode: epNum,
+			Title:   title,
+			ID:      fmt.Sprintf("ep-%d", i),
+		}
+	}
+
+	m := &modelImpl{
+		keys:           defaultKeyMap(),
+		activeView:     viewPreview,
+		episodeResults: episodes,
+		selectedSeries: &provider.SearchResult{Title: "Supernatural", Type: provider.ModeTV},
+	}
+
+	// Select S01 E02 (Wendigo) at index 1
+	m.selectedEpisode = &episodes[1]
+	m.episodeIndex = 1
+
+	if idx := m.selectedEpisodeIndex(); idx != 1 {
+		t.Fatalf("selectedEpisodeIndex() = %d, want 1", idx)
+	}
+
+	data := m.collectPreviewData(100, 30, lipgloss.AdaptiveColor{})
+	wantInfo := "S01 E02 · Wendigo  (2 of 327)"
+	if data.EpisodeInfo != wantInfo {
+		t.Errorf("EpisodeInfo = %q, want %q", data.EpisodeInfo, wantInfo)
+	}
+
+	// Select S01 E01 (Pilot) at index 0
+	m.selectedEpisode = &episodes[0]
+	m.episodeIndex = 0
+	if idx := m.selectedEpisodeIndex(); idx != 0 {
+		t.Fatalf("selectedEpisodeIndex() = %d, want 0", idx)
+	}
+	data = m.collectPreviewData(100, 30, lipgloss.AdaptiveColor{})
+	wantInfo = "S01 E01 · Pilot  (1 of 327)"
+	if data.EpisodeInfo != wantInfo {
+		t.Errorf("EpisodeInfo = %q, want %q", data.EpisodeInfo, wantInfo)
+	}
+
+	// Out-of-sync episodeIndex repaired by selectedEpisode matching
+	m.selectedEpisode = &provider.Episode{Season: 1, Episode: 2, Title: "Wendigo", ID: "ep-1"}
+	m.episodeIndex = 0
+	if idx := m.selectedEpisodeIndex(); idx != 1 {
+		t.Errorf("selectedEpisodeIndex() with matching ID = %d, want 1", idx)
+	}
+}
+
+func TestStartEpisodeResolutionSyncsState(t *testing.T) {
+	episodes := make([]provider.Episode, 50)
+	for i := range episodes {
+		season := (i / 22) + 1
+		epNum := (i % 22) + 1
+		episodes[i] = provider.Episode{
+			Season:  season,
+			Episode: epNum,
+			Title:   fmt.Sprintf("S%02dE%02d", season, epNum),
+			ID:      fmt.Sprintf("ep-%d", i),
+		}
+	}
+
+	m := &modelImpl{
+		keys:           defaultKeyMap(),
+		appMode:        provider.ModeTV,
+		activeView:     viewEpisodes,
+		episodeResults: episodes,
+		selectedSeries: &provider.SearchResult{Title: "Supernatural", Type: provider.ModeTV},
+		registry:       &provider.Registry{},
+	}
+
+	// Resolving index 23 (Season 2 Episode 2)
+	m.startEpisodeResolution(23, false)
+	if m.episodeIndex != 23 {
+		t.Errorf("episodeIndex = %d, want 23", m.episodeIndex)
+	}
+	if m.selectedEpisode == nil || m.selectedEpisode.Episode != 2 || m.selectedEpisode.Season != 2 {
+		t.Errorf("selectedEpisode = %+v, want S02E02", m.selectedEpisode)
+	}
+	if m.activeSeason != 1 {
+		t.Errorf("activeSeason = %d, want 1 (Season 2)", m.activeSeason)
+	}
+	if m.seasonEpisodeIndex != 1 {
+		t.Errorf("seasonEpisodeIndex = %d, want 1 (second episode of Season 2)", m.seasonEpisodeIndex)
+	}
+	if idx := m.selectedEpisodeIndex(); idx != 23 {
+		t.Errorf("selectedEpisodeIndex() = %d, want 23", idx)
+	}
+
+	data := m.collectPreviewData(100, 30, lipgloss.AdaptiveColor{})
+	wantInfo := "S02 E02 · S02E02  (24 of 50)"
+	if data.EpisodeInfo != wantInfo {
+		t.Errorf("EpisodeInfo = %q, want %q", data.EpisodeInfo, wantInfo)
+	}
 }

@@ -127,11 +127,54 @@ func (m *modelImpl) refilterSeriesList() {
 	}
 }
 
+// selectedEpisodeIndex resolves the 0-based index of the currently active
+// episode within episodeResults. Custom grid navigation and autoplay advance
+// episodeIndex and selectedEpisode directly rather than driving the legacy
+// episodeList widget cursor.
 func (m *modelImpl) selectedEpisodeIndex() int {
+	if m.selectedEpisode != nil && len(m.episodeResults) > 0 {
+		if m.episodeIndex >= 0 && m.episodeIndex < len(m.episodeResults) {
+			ep := &m.episodeResults[m.episodeIndex]
+			if matchesEpisode(ep, m.selectedEpisode) {
+				return m.episodeIndex
+			}
+		}
+		for i := range m.episodeResults {
+			if matchesEpisode(&m.episodeResults[i], m.selectedEpisode) {
+				m.episodeIndex = i
+				return i
+			}
+		}
+	}
+	if m.episodeIndex >= 0 && m.episodeIndex < len(m.episodeResults) {
+		return m.episodeIndex
+	}
 	if item, ok := m.episodeList.SelectedItem().(rowItem); ok {
 		return item.index
 	}
 	return m.episodeList.Index()
+}
+
+func matchesEpisode(a, b *provider.Episode) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	if a.ID != "" && b.ID != "" && a.ID == b.ID {
+		return true
+	}
+	if a.Season > 0 && b.Season > 0 && a.Season == b.Season && a.Episode == b.Episode {
+		return true
+	}
+	if a.Season == 0 && b.Season == 0 && a.Episode > 0 && a.Episode == b.Episode {
+		return true
+	}
+	if a.Title != "" && b.Title != "" && a.Title == b.Title && a.Season == b.Season && a.Episode == b.Episode {
+		return true
+	}
+	return false
 }
 
 func (m *modelImpl) playNextEpisode() (tea.Model, tea.Cmd) {
@@ -158,6 +201,25 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	}
 	m.selectedEpisode = &m.episodeResults[idx]
 	m.episodeIndex = idx
+	if idx >= 0 && idx < len(m.episodeList.Items()) {
+		m.episodeList.Select(idx)
+	}
+	if m.selectedEpisode.Season > 0 {
+		seasons := distinctSeasonNumbers(m.episodeResults)
+		for sIdx, sNum := range seasons {
+			if sNum == m.selectedEpisode.Season {
+				m.activeSeason = sIdx
+				break
+			}
+		}
+	}
+	_, origIndices := m.currentSeasonEpisodes()
+	for i, origIdx := range origIndices {
+		if origIdx == idx {
+			m.seasonEpisodeIndex = i
+			break
+		}
+	}
 	m.loading = true
 	m.setStatus(statusInfo, "")
 	if autoPlay {

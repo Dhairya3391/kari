@@ -118,22 +118,27 @@ func (s *SubtitleService) Fetch(
 		mediaTitle,
 		preferredLang,
 	)
-	if !isAnime {
+	originalSubtitles := media.Subtitles
+	matchingCandidates := selectMatchingProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
+	// If the active provider has no candidates of its own, check if a
+	// previously resolved title-level track is already cached.
+	if len(matchingCandidates) == 0 {
 		if track, ok := s.cache.Get(titleKey); ok && usableCachedTrack(track) {
 			s.cache.Set(cacheKey, track)
 			return track, nil
 		}
 	}
 
-	originalSubtitles := media.Subtitles
 	attempted := make(map[string]struct{})
 	var failures []error
 
+	// Priority order:
+	// 1. Source's own provider candidates (matchingResolver)
+	// 2. Other providers' candidates (web stream rips matching the video encode)
+	// 3. OpenSubtitles (external fallback when no provider offers subtitles)
 	phases := [][]model.SubtitleTrack{
-		selectMatchingProviderCandidates(originalSubtitles, preferredLang, preferredResolver),
-	}
-	if isAnime {
-		phases = append(phases, selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver))
+		matchingCandidates,
+		selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver),
 	}
 
 	for _, candidates := range phases {
@@ -145,6 +150,11 @@ func (s *SubtitleService) Fetch(
 		if err != nil {
 			failures = append(failures, err)
 		}
+	}
+
+	if track, ok := s.cache.Get(titleKey); ok && usableCachedTrack(track) {
+		s.cache.Set(cacheKey, track)
+		return track, nil
 	}
 
 	if s.openSubtitles != nil && s.openSubtitles.Configured() {
@@ -161,18 +171,6 @@ func (s *SubtitleService) Fetch(
 		} else if found && usableCachedTrack(track) {
 			s.cacheTrack(track, cacheKey, titleKey)
 			return track, nil
-		}
-	}
-
-	if !isAnime {
-		candidates := selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
-		track, err := s.downloadProviderCandidates(ctx, media, candidates, attempted)
-		if err == nil && usableCachedTrack(track) {
-			s.cacheTrack(track, cacheKey, titleKey)
-			return track, nil
-		}
-		if err != nil {
-			failures = append(failures, err)
 		}
 	}
 

@@ -327,3 +327,48 @@ func TestSubtitleServiceReusesCachedFileForSameURL(t *testing.T) {
 		t.Errorf("expected 1 network request due to disk cache reuse, got %d", requests.Load())
 	}
 }
+
+func TestSubtitleServiceHierarchyMatchingOverOther(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/matching.vtt":
+			_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nmatching provider sub\n"))
+		case "/other.vtt":
+			_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nother provider sub\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	svc := NewSubtitleService(&config.Config{})
+	svc.httpClient = srv.Client()
+
+	media := model.ResolvedMedia{
+		SeriesTitle: "Hierarchy Test",
+		MediaType:   provider.MediaTypeMovie,
+		Subtitles: []model.SubtitleTrack{
+			{URL: srv.URL + "/matching.vtt", Language: "en", Resolver: "athena"},
+			{URL: srv.URL + "/other.vtt", Language: "en", Resolver: "movysx"},
+		},
+	}
+
+	// Case 1: active resolver is athena; matching candidate must be selected
+	track, err := svc.Fetch(context.Background(), media, "en", "athena")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if track.Resolver != "athena" {
+		t.Errorf("expected athena track, got resolver %q", track.Resolver)
+	}
+
+	// Case 2: active resolver has no subs (e.g. cinecat); other provider candidate must be selected
+	svc.cache = util.NewBoundedCache[model.SubtitleTrack](10)
+	track2, err := svc.Fetch(context.Background(), media, "en", "cinecat")
+	if err != nil {
+		t.Fatalf("Fetch fallback: %v", err)
+	}
+	if track2.Resolver != "athena" && track2.Resolver != "movysx" {
+		t.Errorf("expected fallback to other provider, got resolver %q", track2.Resolver)
+	}
+}

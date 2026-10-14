@@ -217,18 +217,28 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// If opening a series fresh (targetIdx == 0), start on Season 1 (index 0)
-	if targetIdx == 0 {
+	if m.selectedEpisode == nil && targetIdx == 0 {
 		m.activeSeason = 0
 		m.episodeIndex = 0
 	} else if m.episodeIndex >= 0 && m.episodeIndex < len(m.episodeResults) {
 		ep := m.episodeResults[m.episodeIndex]
 		if ep.Season > 0 {
-			m.activeSeason = ep.Season - 1
+			seasons := distinctSeasonNumbers(m.episodeResults)
+			m.activeSeason = 0
+			for sIdx, sNum := range seasons {
+				if sNum == ep.Season {
+					m.activeSeason = sIdx
+					break
+				}
+			}
 		} else {
 			m.activeSeason = 0
 		}
 	} else {
 		m.activeSeason = 0
+	}
+	if m.episodeIndex >= 0 && m.episodeIndex < len(m.episodeList.Items()) {
+		m.episodeList.Select(m.episodeIndex)
 	}
 	// A fresh episode list drops any stale text filter.
 	m.episodeFilter = ""
