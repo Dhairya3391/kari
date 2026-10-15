@@ -1017,6 +1017,7 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		TraktUserCode:       m.traktUserCode,
 		TraktVerifyURL:      m.traktVerifyURL,
 		StartupSync:         m.startupSync,
+		DiscordPresence:     m.discordPresence,
 		LoadingText:         m.loadingText,
 		SpinnerFrame:        m.spinner.View(),
 		PosterArtwork:       m.imagesEnabled,

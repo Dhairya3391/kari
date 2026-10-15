@@ -213,9 +213,12 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.settingsIndex == 1 {
 					return m.startTraktAuth()
 				}
-				m.startupSync = !m.startupSync
-				m.saveSettings()
-				return m, nil
+				if m.settingsIndex == 2 {
+					m.startupSync = !m.startupSync
+					m.saveSettings()
+					return m, nil
+				}
+				return m.toggleDiscordPresence()
 			}
 			m.cycleCurrentSetting(1)
 			m.saveSettings()
@@ -226,7 +229,9 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.settingsIndex == 0 {
 					return m.startAniListAuth()
 				}
-				return m.startTraktAuth()
+				if m.settingsIndex == 1 {
+					return m.startTraktAuth()
+				}
 			}
 		case "r":
 			if m.settingsCategory == CategoryAccounts {
@@ -248,7 +253,9 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.settingsIndex == 0 {
 					return m.startHistoryImport("anilist")
 				}
-				return m.startHistoryImport("trakt")
+				if m.settingsIndex == 1 {
+					return m.startHistoryImport("trakt")
+				}
 			}
 
 		case "esc":
@@ -270,7 +277,7 @@ func (m *modelImpl) maxRowsForCategory(cat SettingsCategory) int {
 	case CategoryModes:
 		return len(m.configuredModes) + 1
 	case CategoryAccounts:
-		return 3
+		return 4
 	case CategoryInterface:
 		return 3
 	default:
@@ -338,8 +345,12 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.reorderMode(delta)
 		}
 	case CategoryAccounts:
-		if m.settingsIndex == 2 {
+		switch m.settingsIndex {
+		case 2:
 			m.startupSync = !m.startupSync
+		case 3:
+			m.discordPresence = !m.discordPresence
+			m.applyPresenceToggle()
 		}
 
 	case CategoryInterface:

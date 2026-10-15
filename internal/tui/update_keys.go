@@ -313,6 +313,7 @@ func (m *modelImpl) saveSettings() {
 		SkipRecap:             m.skipRecap,
 		SkipPreview:           m.skipPreview,
 		StartupSync:           m.startupSync,
+		DiscordPresence:       m.discordPresence,
 		DefaultMode:           defaultMode,
 		Modes:                 modes,
 		ModesDisabled:         disabledList,

@@ -81,6 +81,7 @@ type SettingsData struct {
 	TraktUserCode     string
 	TraktVerifyURL    string
 	StartupSync       bool
+	DiscordPresence   bool
 	TraktWaitingCode  string
 	LoadingText       string
 	SpinnerFrame      string
@@ -216,6 +217,7 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 			rows = append(rows, "")
 		}
 		rows = append(rows, renderAccountSettingRow("Startup sync", boolOnOff(data.StartupSync), data.FocusedRowIndex == 2, width, st))
+		rows = append(rows, renderAccountSettingRow("Discord presence", boolOnOff(data.DiscordPresence), data.FocusedRowIndex == 3, width, st))
 		switch data.FocusedRowIndex {
 		case 0:
 			desc = "Automatically sync and scrobble anime watch progress."
@@ -223,6 +225,8 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 			desc = "Automatically sync movies and TV show progress across devices."
 		case 2:
 			desc = "Automatically pull and sync watched history from connected accounts on startup."
+		case 3:
+			desc = "Show what you're watching, reading, or listening to on your Discord profile."
 		}
 
 	case CategoryInterface:
