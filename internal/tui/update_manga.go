@@ -242,6 +242,9 @@ func (m *modelImpl) onPagesDone(msg pagesDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.pages = msg.pages
 	m.pushView(viewReader)
+	if m.selectedChapter != nil {
+		m.reportReading(*m.selectedChapter)
+	}
 	// A mid-read re-resolution lands back where the reader was; stale
 	// renders from the dead URLs are dropped and in-flight renders for
 	// them discarded via the bumped op ID.
@@ -289,6 +292,9 @@ func (m *modelImpl) onFallbackDone(msg fallbackDoneMsg) (tea.Model, tea.Cmd) {
 	m.pages = msg.readable.Pages
 	m.setStatus(statusSuccess, fmt.Sprintf("Reading via %s", m.registry.DisplayName(msg.readable.Series.Provider)))
 	m.pushView(viewReader)
+	if m.selectedChapter != nil {
+		m.reportReading(*m.selectedChapter)
+	}
 	return m, m.gotoReaderPage(0)
 }
 
@@ -303,6 +309,7 @@ func (m *modelImpl) clearReader() {
 	m.readerUnavailable = false
 	m.readerRelisted = false
 	m.readerResumePage = -1
+	m.clearPresence()
 }
 
 // readerDims derives the page-image box at full terminal size: the

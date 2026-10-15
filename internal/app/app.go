@@ -20,6 +20,7 @@ import (
 	"kari/internal/manga"
 	"kari/internal/player"
 	"kari/internal/poster"
+	"kari/internal/presence"
 	"kari/internal/provider/defaults"
 	"kari/internal/scrobble"
 	"kari/internal/service"
@@ -147,6 +148,21 @@ func Run() error {
 	anilistClient := scrobble.NewAniListClient(cfg.AniListClientID, cfg.AniListClientSecret)
 	posterClient := poster.NewClient(keyPool)
 
+	// Discord Rich Presence is opt-in and entirely best-effort: the client
+	// is idle until the TUI publishes a now-playing card, and reports live
+	// position/pause telemetry from players that expose IPC (mpv/IINA).
+	presenceClient := newPresenceClient()
+	if presenceClient != nil {
+		defer presenceClient.Close()
+		players.SetProgressObserver(func(p player.PlaybackProgress) {
+			presenceClient.UpdateProgress(presence.Progress{
+				PositionSecs: p.PositionSecs,
+				DurationSecs: p.DurationSecs,
+				Paused:       p.Paused,
+			})
+		})
+	}
+
 	// Bound on-disk caches so repeat sessions don't grow them without limit;
 	// eviction is oldest-first and failures only log.
 	if err := manga.PruneDiskCache(); err != nil {
@@ -160,7 +176,7 @@ func Run() error {
 	}
 
 	bg := detectTerminalBackground()
-	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, mangaService, mangaClient, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, Version, Commit)
+	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, mangaService, mangaClient, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, presenceClient, Version, Commit)
 	if setter, ok := m.(interface{ SetBaseBackgroundColor(color.RGBA) }); ok {
 		setter.SetBaseBackgroundColor(bg)
 	}
@@ -173,6 +189,22 @@ func Run() error {
 		historyStore.Close()
 	}
 	return err
+}
+
+// newPresenceClient builds the Discord Rich Presence client, honoring the
+// KARI_DISCORD_APP_ID override. A misconfigured id disables presence rather
+// than failing startup; presence is a nicety, never a requirement.
+func newPresenceClient() *presence.Client {
+	appID := strings.TrimSpace(os.Getenv("KARI_DISCORD_APP_ID"))
+	if appID == "" {
+		appID = config.DefaultDiscordAppID
+	}
+	client, err := presence.New(appID)
+	if err != nil {
+		logging.Warn("discord presence disabled", "err", err)
+		return nil
+	}
+	return client
 }
 
 func detectTerminalBackground() color.RGBA {

@@ -20,6 +20,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/poster"
+	"kari/internal/presence"
 	"kari/internal/provider"
 	"kari/internal/scrobble"
 	"kari/internal/service"
@@ -34,7 +35,7 @@ var tuiLog = logging.With("component", "tui")
 // NewModel wires every dependency into the TUI root model. This signature
 // is intentionally explicit: all components arrive pre-constructed from
 // app.Run, so nothing inside tui constructs I/O collaborators.
-func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, mangaService *service.MangaService, mangaClient *manga.Client, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, appVersion string, appCommit string) tea.Model {
+func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, mangaService *service.MangaService, mangaClient *manga.Client, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, presenceClient *presence.Client, appVersion string, appCommit string) tea.Model {
 	// Loaded up front (rather than where settings used to be applied,
 	// further down) so the accent color is in effect before any of the
 	// list delegates or the download bar below are built — those cache
@@ -214,6 +215,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		selectedEpisodes: make(map[int]struct{}),
 		batchChan:        make(chan tea.Msg, 50),
 		posterClient:     posterClient,
+		presence:         presenceClient,
 		imgProtocol:      termimg.Detect(),
 		imagesEnabled:    true,
 		// Rendered poster strings, not the images themselves — for the Kitty
@@ -298,6 +300,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			model.subtitleService.SetDisableAnimeSubtitles(model.disableAnimeSubtitles)
 		}
 		model.startupSync = s.StartupSync
+		model.discordPresence = s.DiscordPresence
 		model.defaultMode = s.DefaultMode
 		model.configuredModes = s.NormalizedModes()
 		model.disabledModes = s.DisabledModeSet()

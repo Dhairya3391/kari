@@ -440,7 +440,13 @@ func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 			providerName = src.Quality
 		}
 	}
+	// Built on the Update goroutine (reads model state); the closure below
+	// only touches the thread-safe presence client.
+	nowPlaying, publishPresence := m.nowPlayingFor(resolved)
 	return func() tea.Msg {
+		if publishPresence {
+			m.publishPresence(nowPlaying)
+		}
 		tuiLog.Debug("play starting", "opID", opID, "media", resolved.DisplayTitle(), "provider", providerName, "sourcesCount", len(sources), "startTime", startTime)
 		tuiLog.Debug("launching playback", "media", resolved.DisplayTitle(), "player", playerName, "hasSubtitles", resolved.SubtitlePath() != "")
 		result, err := m.players.PlayWithSources(sources, resolved, playerName)

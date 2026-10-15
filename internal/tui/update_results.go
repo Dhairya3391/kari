@@ -793,6 +793,7 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 	m.loading = false
 	m.loadingText = ""
 	m.autoPlayAfterResolve = false
+	m.clearPresence()
 
 	var needsConfirm *player.NeedsCompletionConfirmError
 	if msg.err != nil && !errors.As(msg.err, &needsConfirm) {

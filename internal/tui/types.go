@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"image/color"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -16,6 +17,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/poster"
+	"kari/internal/presence"
 	"kari/internal/provider"
 	"kari/internal/ranking"
 	"kari/internal/scrobble"
@@ -361,32 +363,36 @@ type modelImpl struct {
 	// subtitlePoolSize is len(rawSubtitles) at the last subtitle fetch:
 	// a grown pool re-triggers the fetch when the earlier (partial)
 	// pool produced nothing usable yet.
-	subtitlePoolSize      int
-	rawSubtitles          []model.SubtitleTrack
-	playOpID              int
-	downloadOpID          int
-	downloadProgress      float64
-	downloadTotalSize     string
-	downloadSpeed         string
-	downloadDownloaded    string
-	downloadETA           string
-	downloadChan          chan tea.Msg
-	resolveChan           chan tea.Msg
-	cancelDownload        context.CancelFunc
-	downloadTitle         string
-	downloadOutputDir     string
-	confirmQuit           bool
-	confirmStop           bool
-	confirmDelete         bool
-	confirmClearHistory   bool
-	anilistAuthURL        string
-	authInput             textinput.Model
-	traktAuthActive       bool
-	traktUserCode         string
-	traktVerifyURL        string
-	traktDeviceCode       string
-	traktCancel           context.CancelFunc
-	startupSync           bool
+	subtitlePoolSize    int
+	rawSubtitles        []model.SubtitleTrack
+	playOpID            int
+	downloadOpID        int
+	downloadProgress    float64
+	downloadTotalSize   string
+	downloadSpeed       string
+	downloadDownloaded  string
+	downloadETA         string
+	downloadChan        chan tea.Msg
+	resolveChan         chan tea.Msg
+	cancelDownload      context.CancelFunc
+	downloadTitle       string
+	downloadOutputDir   string
+	confirmQuit         bool
+	confirmStop         bool
+	confirmDelete       bool
+	confirmClearHistory bool
+	anilistAuthURL      string
+	authInput           textinput.Model
+	traktAuthActive     bool
+	traktUserCode       string
+	traktVerifyURL      string
+	traktDeviceCode     string
+	traktCancel         context.CancelFunc
+	startupSync         bool
+	discordPresence     bool
+	// presenceSession tags the current now-playing card so a late background
+	// artwork lookup can't revive a card that was already cleared or replaced.
+	presenceSession       atomic.Int64
 	settingsIndex         int
 	searchCache           *util.BoundedCache[searchCacheEntry]
 	audioMode             string
@@ -424,6 +430,7 @@ type modelImpl struct {
 	pendingDownload  *service.DownloadJob
 
 	posterClient             *poster.Client
+	presence                 *presence.Client
 	imgProtocol              termimg.Protocol
 	imagesEnabled            bool
 	posterCache              *util.BoundedCache[string]
