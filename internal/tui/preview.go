@@ -22,6 +22,7 @@ type PreviewData struct {
 	AudioTrack       string // e.g. "sub" or "dub" for controls bar
 	SubtitlesText    string // e.g. "English ✓"
 	SubtitleType     string // e.g. "soft subs", "hard subs", or ""
+	SubtitleProvider string // e.g. "Atlantic", "OpenSubtitles", or ""
 	ResumePosition   string // e.g. "13:08"
 	PosterBlock      string
 	Sources          []provider.MediaSource
@@ -139,6 +140,9 @@ func renderPreviewHeader(data PreviewData, st Styles) string {
 			subFmt = st.Current.Render(base) + " " + st.Ok.Render("✓")
 		} else {
 			subFmt = st.Current.Render(subFmt)
+		}
+		if data.SubtitleProvider != "" {
+			subFmt += st.Dim.Render(" · " + data.SubtitleProvider)
 		}
 		if subType != "" {
 			subFmt += st.Dim.Render(" · " + subType)

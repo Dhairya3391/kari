@@ -693,6 +693,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 
 	subtitlesText := ""
 	subtitleType := ""
+	subtitleProvider := ""
 	subLang := ""
 	if m.resolved != nil && m.resolved.SelectedSubtitle != nil {
 		subLang = lang.Normalize(m.resolved.SelectedSubtitle.Language)
@@ -712,6 +713,9 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 			subtitleType = detectSubtitleType(src, m.resolved, m.rawSubtitles, m.appMode, m.audioMode)
 			if m.resolved != nil && m.resolved.SubtitlePath() != "" {
 				subtitlesText += " ✓"
+				if m.resolved.SelectedSubtitle != nil {
+					subtitleProvider = m.subtitleProviderName(m.resolved.SelectedSubtitle.Resolver, m.resolved.SelectedSubtitle.Label)
+				}
 			}
 		}
 	}
@@ -767,6 +771,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		AudioTrack:       audioTrack,
 		SubtitlesText:    subtitlesText,
 		SubtitleType:     subtitleType,
+		SubtitleProvider: subtitleProvider,
 		ResumePosition:   resumePos,
 		PosterBlock:      poster,
 		Sources:          sources,
@@ -813,6 +818,32 @@ func detectSubtitleType(src provider.MediaSource, resolved *model.ResolvedMedia,
 	lowerURL := strings.ToLower(src.URL)
 	if strings.Contains(lowerQuality, "soft sub") || strings.Contains(lowerQuality, "softsub") || strings.Contains(lowerQuality, "[soft]") || strings.Contains(lowerURL, "softsub") {
 		return "soft subs"
+	}
+	return ""
+}
+
+func (m *modelImpl) subtitleProviderName(resolver, label string) string {
+	resolver = strings.TrimSpace(resolver)
+	if strings.EqualFold(resolver, "opensubtitles") || strings.Contains(strings.ToLower(label), "opensubtitles") {
+		return "OpenSubtitles"
+	}
+	if resolver != "" {
+		if m.registry != nil {
+			displayName := m.registry.DisplayName(resolver)
+			if displayName != "" && !strings.EqualFold(displayName, resolver) {
+				return displayName
+			}
+			if displayName != "" {
+				if len(displayName) > 0 && displayName[0] >= 'a' && displayName[0] <= 'z' {
+					return strings.ToUpper(displayName[:1]) + displayName[1:]
+				}
+				return displayName
+			}
+		}
+		if len(resolver) > 0 && resolver[0] >= 'a' && resolver[0] <= 'z' {
+			return strings.ToUpper(resolver[:1]) + resolver[1:]
+		}
+		return resolver
 	}
 	return ""
 }

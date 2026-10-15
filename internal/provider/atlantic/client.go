@@ -113,15 +113,22 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 
 	ch := make(chan []provider.MediaSource, 8)
 	var all []provider.MediaSource
+	seen := make(map[string]int)
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
 		for batch := range ch {
-			all = append(all, batch...)
+			for _, src := range batch {
+				if idx, ok := seen[src.URL]; ok {
+					all[idx] = src
+				} else {
+					seen[src.URL] = len(all)
+					all = append(all, src)
+				}
+			}
 		}
 	}()
-
 	subs, err := c.fanoutResolve(ctx, tmdbID, mediaType, season, epNum, ch)
 	close(ch)
 	<-done

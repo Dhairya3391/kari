@@ -155,6 +155,29 @@ func (r *Registry) SetSkipSettings(s SkipSettings) {
 	}
 }
 
+// PrefetchSkip asynchronously resolves and caches skip timestamps for resolved media
+// so that playback start hits the memory cache with zero latency.
+func (r *Registry) PrefetchSkip(media model.ResolvedMedia) {
+	if r == nil {
+		return
+	}
+	for _, p := range r.players {
+		target := p
+		if cp, ok := p.(*cachedPlayer); ok {
+			target = cp.Player
+		}
+		if mpv, ok := target.(*MPVPlayer); ok {
+			if mpv.skipCache != nil {
+				go func() {
+					_, script := getSkipArgs(mpv.skipClients, mpv.skipSettings, media, mpv.skipCache)
+					cleanupSkipScript(script)
+				}()
+				return
+			}
+		}
+	}
+}
+
 // NewRegistry constructs and populates the platform's player set with the
 // user's preference applied.
 func NewRegistry(preferred string, clients SkipClients, skipSettings SkipSettings) *Registry {

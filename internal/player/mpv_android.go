@@ -155,6 +155,9 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	}
 
 	for _, extra := range source.ExtraArgs {
+		if subtitlePath != "" && strings.HasPrefix(extra, "--demuxer-lavf-format=") {
+			continue
+		}
 		confBuilder.WriteString(strings.TrimPrefix(extra, "--"))
 		confBuilder.WriteString("\n")
 	}

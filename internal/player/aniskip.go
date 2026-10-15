@@ -324,7 +324,7 @@ func resolveIMDbID(ctx context.Context, media model.ResolvedMedia, keyPool *tmdb
 		apiKey, err := keyPool.NextKey()
 		if err == nil && apiKey != "" {
 			mediaType := "tv"
-			if media.MediaType == "movie" || (media.SeasonNumber == 0 && media.EpisodeNumber <= 1) {
+			if media.MediaType == "movie" || (media.MediaType != "tv" && media.MediaType != "anime" && media.MediaType != "cartoon" && media.SeasonNumber == 0 && media.EpisodeNumber <= 1) {
 				mediaType = "movie"
 			}
 			endpoint := fmt.Sprintf("%s/%s/%d/external_ids?api_key=%s",
@@ -447,7 +447,7 @@ func getSkipArgs(
 		return buildSkipArgsFromTimes(cached, settings)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 3500*time.Millisecond)
 	defer cancel()
 
 	// 1. Resolve AniList ID from media metadata if available

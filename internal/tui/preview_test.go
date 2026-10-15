@@ -223,6 +223,39 @@ func TestPreviewSubtitlesWithSubtitleType(t *testing.T) {
 			t.Errorf("want %q in output, got:\n%s", expected, out)
 		}
 	})
+
+	t.Run("with subtitle provider", func(t *testing.T) {
+		data := PreviewData{
+			SeriesTitle:      "Supernatural",
+			SubtitlesText:    "en ✓",
+			SubtitleProvider: "Atlantic",
+			Width:            100,
+			Height:           24,
+			Accent:           accent,
+		}
+		out := RenderPreviewScreen(data)
+		expected := st.Dim.Render("subtitles  ") + st.Current.Render("en") + " " + st.Ok.Render("✓") + st.Dim.Render(" · Atlantic")
+		if !strings.Contains(out, expected) {
+			t.Errorf("want %q in output, got:\n%s", expected, out)
+		}
+	})
+
+	t.Run("with subtitle provider and subtitle type", func(t *testing.T) {
+		data := PreviewData{
+			SeriesTitle:      "Frieren",
+			SubtitlesText:    "en ✓",
+			SubtitleProvider: "Atlantic",
+			SubtitleType:     "soft subs",
+			Width:            100,
+			Height:           24,
+			Accent:           accent,
+		}
+		out := RenderPreviewScreen(data)
+		expected := st.Dim.Render("subtitles  ") + st.Current.Render("en") + " " + st.Ok.Render("✓") + st.Dim.Render(" · Atlantic") + st.Dim.Render(" · soft subs")
+		if !strings.Contains(out, expected) {
+			t.Errorf("want %q in output, got:\n%s", expected, out)
+		}
+	})
 }
 
 func TestPreviewEpisodeIndexAndCount(t *testing.T) {

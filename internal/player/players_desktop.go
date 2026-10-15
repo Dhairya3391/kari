@@ -16,6 +16,7 @@ import (
 	"kari/internal/config"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/util"
 )
 
 const vlcStartupTimeout = 3 * time.Second
@@ -120,7 +121,11 @@ func buildVLCArgs(source provider.MediaSource, media model.ResolvedMedia) []stri
 
 // IINAPlayer launches the macOS IINA player (mpv-derived), reusing the
 // shared process/readiness machinery from mpv.go.
-type IINAPlayer struct{}
+type IINAPlayer struct {
+	skipClients  SkipClients
+	skipSettings SkipSettings
+	skipCache    *util.BoundedCache[combinedSkipTimes]
+}
 
 var _ Player = (*IINAPlayer)(nil)
 
@@ -130,17 +135,28 @@ func (p *IINAPlayer) Name() string { return "iina" }
 // Available implements Player.
 func (p *IINAPlayer) Available() bool { return iinaBinary() != "" }
 
+func (p *IINAPlayer) setSkipSettings(s SkipSettings) {
+	p.skipSettings = s
+}
+
 // Play implements Player.
 func (p *IINAPlayer) Play(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
 	bin := iinaBinary()
 	if bin == "" {
 		return PlaybackResult{}, errors.New("iina playback failed: iina-cli not found")
 	}
+	skipArgs, skipPath := getSkipArgs(
+		p.skipClients,
+		p.skipSettings,
+		media,
+		p.skipCache,
+	)
+	defer cleanupSkipScript(skipPath)
+
 	return attemptSources("iina", sources, func(source provider.MediaSource) (PlaybackResult, error) {
-		return playSingleSourceWithIINA(bin, source, media)
+		return playSingleSourceWithIINA(bin, source, media, skipArgs)
 	})
 }
-
 // iinaBinary locates IINA's CLI wrapper across common install shapes.
 func iinaBinary() string {
 	if path, err := exec.LookPath("iina-cli"); err == nil {
@@ -158,9 +174,9 @@ func iinaBinary() string {
 
 // playSingleSourceWithIINA plays one source through the shared readiness
 // check; IINA speaks mpv's IPC protocol so real stats come back.
-func playSingleSourceWithIINA(binary string, source provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
+func playSingleSourceWithIINA(binary string, source provider.MediaSource, media model.ResolvedMedia, aniskipArgs []string) (PlaybackResult, error) {
 	socketPath := DefaultMPVSocketPath()
-	args := buildIINAArgs(source, media, socketPath)
+	args := buildIINAArgs(source, media, socketPath, aniskipArgs)
 	result := startPlayerWithStartupCheck(startupCheck{
 		binary:     binary,
 		args:       args,
@@ -186,7 +202,7 @@ func playSingleSourceWithIINA(binary string, source provider.MediaSource, media 
 
 // buildIINAArgs mirrors buildMPVArgs minus mpv-only options IINA rejects;
 // keep both in sync when adding stream options.
-func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socketPath string) []string {
+func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socketPath string, aniskipArgs []string) []string {
 	args := []string{"--no-stdin", "--keep-running", source.URL, "--"}
 	args = append(args,
 		"--no-ytdl",
@@ -234,7 +250,14 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendIINASubtitleArgs(args, media.SubtitlePath())
 	args = appendAudioLangArgs(args, source.Language)
-	return append(args, source.ExtraArgs...)
+	args = append(args, aniskipArgs...)
+	// IINA puts the URL in [files] before "--", so mpv per-file brackets
+	// (--{ … --}) inside the "--" section cannot scope options to that URL.
+	// When a subtitle is loaded and ExtraArgs carry --demuxer-lavf-format=,
+	// that override bleeds onto the subtitle file open and silently drops it.
+	// Strip the format override in that case: Atlantic/miruro CDNs serve
+	// proper Content-Type headers so lavf auto-detects HLS by content probe.
+	return append(args, iinaExtraArgs(source.ExtraArgs, media.SubtitlePath())...)
 }
 
 // appendIINASubtitleArgs side-loads subtitle inputs using mpv's canonical
@@ -250,4 +273,23 @@ func appendIINASubtitleArgs(args []string, subtitlePath string) []string {
 	subtitlePath = strings.ReplaceAll(subtitlePath, `\`, `/`)
 	playerLog.Debug("subtitle side-loaded", "player", "iina", "path", subtitlePath)
 	return append(args, "--sub-files="+subtitlePath)
+}
+
+// iinaExtraArgs returns ExtraArgs safe for IINA's "--" passthrough. Because
+// IINA places the URL before "--", per-file brackets cannot scope demuxer
+// overrides to the video only. Strip --demuxer-lavf-format= when a subtitle
+// path is present so the format override does not bleed onto the subtitle
+// file open. Providers that set this option target remote HLS streams whose
+// CDN serves Content-Type headers, so lavf auto-detects the format anyway.
+func iinaExtraArgs(extraArgs []string, subtitlePath string) []string {
+	if strings.TrimSpace(subtitlePath) == "" || !hasLavfFormatOverride(extraArgs) {
+		return extraArgs
+	}
+	out := make([]string, 0, len(extraArgs))
+	for _, a := range extraArgs {
+		if !strings.HasPrefix(a, "--demuxer-lavf-format=") {
+			out = append(out, a)
+		}
+	}
+	return out
 }

@@ -140,11 +140,19 @@ func HotAddSubtitle(path string) error {
 	}
 	socketPath := DefaultMPVSocketPath()
 	client := NewIPCClient(socketPath)
-	if err := client.Connect(500 * time.Millisecond); err != nil {
-		return err
+
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if err := client.Connect(500 * time.Millisecond); err == nil {
+			defer client.Close()
+			return client.AddSubtitle(path)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	defer client.Close()
-	return client.AddSubtitle(path)
+	return lastErr
 }
 
 func (c *IPCClient) command(args ...any) (any, error) {

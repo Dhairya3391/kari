@@ -96,7 +96,7 @@ func TestDesktopPlayersUseTheirNativeAudioLanguageOptions(t *testing.T) {
 		t.Errorf("VLC args contain unsupported --alang: %v", vlcArgs)
 	}
 
-	iinaArgs := buildIINAArgs(source, media, "/tmp/iina.sock")
+	iinaArgs := buildIINAArgs(source, media, "/tmp/iina.sock", nil)
 	if !containsArg(iinaArgs, "--alang=hi,hin,hindi,en,eng") {
 		t.Errorf("IINA args missing mpv --alang: %v", iinaArgs)
 	}
@@ -109,8 +109,7 @@ func TestBuildIINAArgsUsesSubFilesOption(t *testing.T) {
 		SelectedSubtitle: testSelectedSubtitle("/Users/test/.config/kari/subs/test.srt"),
 	}
 
-	args := buildIINAArgs(source, media, "/tmp/iina.sock")
-
+	args := buildIINAArgs(source, media, "/tmp/iina.sock", nil)
 	if !containsArg(args, "--sub-files=/Users/test/.config/kari/subs/test.srt") {
 		t.Errorf("IINA args missing --sub-files option: %v", args)
 	}
@@ -121,6 +120,20 @@ func TestBuildIINAArgsUsesSubFilesOption(t *testing.T) {
 	}
 }
 
+func TestBuildIINAArgsIncludesSkipArgs(t *testing.T) {
+	source := provider.MediaSource{URL: "https://example.com/stream.m3u8"}
+	media := model.ResolvedMedia{SeriesTitle: "Frieren"}
+	skipArgs := []string{"--script=/tmp/skip.lua", "--script-opts=skip-op_start=10.000000"}
+
+	args := buildIINAArgs(source, media, "/tmp/iina.sock", skipArgs)
+	if !containsArg(args, "--script=/tmp/skip.lua") {
+		t.Errorf("IINA args missing skip script: %v", args)
+	}
+	if !containsArg(args, "--script-opts=skip-op_start=10.000000") {
+		t.Errorf("IINA args missing skip opts: %v", args)
+	}
+}
+
 func containsArg(args []string, want string) bool {
 	for _, arg := range args {
 		if arg == want {
@@ -128,6 +141,15 @@ func containsArg(args []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func indexOf(args []string, want string) int {
+	for i, arg := range args {
+		if arg == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestBuildMPVArgsIncludesIPCServer(t *testing.T) {
@@ -185,7 +207,11 @@ func TestBuildMPVArgsPassesSubtitlesRegardlessOfSubtype(t *testing.T) {
 	}
 }
 
-func TestBuildMPVArgsKeepsProviderExtraArgsBeforeSocketAndURL(t *testing.T) {
+// TestBuildMPVArgsExtraArgsBracketedWhenSubtitleAndLavfFormat verifies that
+// when ExtraArgs contain --demuxer-lavf-format= and a subtitle is loaded, the
+// extra args are wrapped in per-file brackets so the format override does not
+// bleed onto the external subtitle file open.
+func TestBuildMPVArgsExtraArgsBracketedWhenSubtitleAndLavfFormat(t *testing.T) {
 	args := buildMPVArgs(provider.MediaSource{
 		URL:       "https://example.com/stream.m3u8",
 		ExtraArgs: []string{"--demuxer=lavf", "--demuxer-lavf-format=hls"},
@@ -193,16 +219,65 @@ func TestBuildMPVArgsKeepsProviderExtraArgsBeforeSocketAndURL(t *testing.T) {
 		SelectedSubtitle: testSelectedSubtitle("/tmp/subtitles.srt"),
 	}, "/tmp/sock", nil)
 
-	wantTail := []string{"--demuxer=lavf", "--demuxer-lavf-format=hls", "--input-ipc-server=/tmp/sock", "https://example.com/stream.m3u8"}
-	if len(args) < len(wantTail) {
-		t.Fatalf("provider extra args missing from mpv arguments: %v", args)
-	}
-	gotTail := args[len(args)-len(wantTail):]
-	if !reflect.DeepEqual(gotTail, wantTail) {
-		t.Fatalf("provider extra args should precede socket and URL: got tail %v, want %v", gotTail, wantTail)
-	}
 	if !containsArg(args, "--sub-file=/tmp/subtitles.srt") {
 		t.Fatalf("external subtitle argument missing: %v", args)
+	}
+	wantTail := []string{"--{", "--demuxer=lavf", "--demuxer-lavf-format=hls", "--}", "--input-ipc-server=/tmp/sock", "https://example.com/stream.m3u8"}
+	if len(args) < len(wantTail) {
+		t.Fatalf("args too short (%d), want tail %v", len(args), wantTail)
+	}
+	if gotTail := args[len(args)-len(wantTail):]; !reflect.DeepEqual(gotTail, wantTail) {
+		t.Fatalf("per-file bracket ordering wrong:\n got  %v\n want %v", gotTail, wantTail)
+	}
+	subIdx, bracketIdx := indexOf(args, "--sub-file=/tmp/subtitles.srt"), indexOf(args, "--{")
+	if subIdx < 0 || bracketIdx < 0 || subIdx >= bracketIdx {
+		t.Fatalf("--sub-file must precede --{ bracket: sub=%d bracket=%d", subIdx, bracketIdx)
+	}
+}
+
+// TestBuildMPVArgsExtraArgsNoBracketWithoutLavfFormat confirms ExtraArgs
+// without --demuxer-lavf-format= pass through without brackets.
+func TestBuildMPVArgsExtraArgsNoBracketWithoutLavfFormat(t *testing.T) {
+	args := buildMPVArgs(provider.MediaSource{
+		URL:       "https://example.com/stream.m3u8",
+		ExtraArgs: []string{"--demuxer=lavf"},
+	}, model.ResolvedMedia{
+		SelectedSubtitle: testSelectedSubtitle("/tmp/subtitles.srt"),
+	}, "/tmp/sock", nil)
+
+	wantTail := []string{"--demuxer=lavf", "--input-ipc-server=/tmp/sock", "https://example.com/stream.m3u8"}
+	if len(args) < len(wantTail) {
+		t.Fatalf("args too short: %v", args)
+	}
+	if gotTail := args[len(args)-len(wantTail):]; !reflect.DeepEqual(gotTail, wantTail) {
+		t.Fatalf("got tail %v, want %v", gotTail, wantTail)
+	}
+	if containsArg(args, "--{") {
+		t.Fatalf("no bracket expected when no lavf-format override: %v", args)
+	}
+}
+
+// TestIINAExtraArgsStripsLavfFormat verifies iinaExtraArgs removes
+// --demuxer-lavf-format= when a subtitle path is present.
+func TestIINAExtraArgsStripsLavfFormat(t *testing.T) {
+	extra := []string{"--demuxer=lavf", "--demuxer-lavf-format=hls", "--demuxer-lavf-o=extension_picky=0"}
+	got := iinaExtraArgs(extra, "/tmp/sub.srt")
+	for _, a := range got {
+		if strings.HasPrefix(a, "--demuxer-lavf-format=") {
+			t.Fatalf("must strip --demuxer-lavf-format= when subtitle present, got %v", got)
+		}
+	}
+	if !containsArg(got, "--demuxer=lavf") || !containsArg(got, "--demuxer-lavf-o=extension_picky=0") {
+		t.Fatalf("other ExtraArgs must be preserved: %v", got)
+	}
+}
+
+// TestIINAExtraArgsNostripWithoutSubtitle confirms iinaExtraArgs is a no-op
+// when no subtitle is present.
+func TestIINAExtraArgsNostripWithoutSubtitle(t *testing.T) {
+	extra := []string{"--demuxer=lavf", "--demuxer-lavf-format=hls"}
+	if got := iinaExtraArgs(extra, ""); !reflect.DeepEqual(got, extra) {
+		t.Fatalf("iinaExtraArgs without subtitle must not modify args: got %v", got)
 	}
 }
 

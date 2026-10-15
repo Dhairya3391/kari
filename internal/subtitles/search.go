@@ -270,6 +270,7 @@ func (c *Client) FetchBestSubtitle(ctx context.Context, query, language string, 
 		Language: selectedLanguage,
 		Path:     localPath,
 		Default:  true,
+		Resolver: "opensubtitles",
 	}
 	return track, true, nil
 }

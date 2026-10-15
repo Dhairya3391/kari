@@ -211,7 +211,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	pipeMpvArgs = appendSubtitleArgs(pipeMpvArgs, media.SubtitlePath())
 	pipeMpvArgs = appendAudioLangArgs(pipeMpvArgs, source.Language)
 	pipeMpvArgs = append(pipeMpvArgs, aniskipArgs...)
-	pipeMpvArgs = append(pipeMpvArgs, source.ExtraArgs...)
+	pipeMpvArgs = appendExtraArgsWithBracket(pipeMpvArgs, source.ExtraArgs, media.SubtitlePath())
 	if runtime.GOOS == "windows" {
 		pipeMpvArgs = append(pipeMpvArgs, "--terminal=no")
 	}
@@ -326,7 +326,13 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 	args = appendSubtitleArgs(args, media.SubtitlePath())
 	args = appendAudioLangArgs(args, source.Language)
 	args = append(args, aniskipArgs...)
-	args = append(args, source.ExtraArgs...)
+	// ExtraArgs may contain --demuxer-lavf-format=hls (atlantic, miruro). When
+	// a subtitle file is present, that format override bleeds onto the subtitle
+	// file open and makes mpv fail with "Can not open external file". Scope
+	// ExtraArgs to the video file only via per-file brackets so the global
+	// subtitle open is not affected. Brackets are a no-op when ExtraArgs is
+	// empty or contains no format override.
+	args = appendExtraArgsWithBracket(args, source.ExtraArgs, media.SubtitlePath())
 	args = append(args, "--input-ipc-server="+socketPath)
 
 	return append(args, source.URL)
@@ -398,6 +404,36 @@ func appendAudioLangArgs(args []string, language string) []string {
 		return args
 	}
 	return append(args, "--alang="+strings.Join(alang, ","))
+}
+
+// hasLavfFormatOverride reports whether any of the given ExtraArgs sets
+// --demuxer-lavf-format, which causes mpv to force that format on every
+// file it opens — including external subtitle files — breaking sub loading.
+func hasLavfFormatOverride(extraArgs []string) bool {
+	for _, a := range extraArgs {
+		if strings.HasPrefix(a, "--demuxer-lavf-format=") {
+			return true
+		}
+	}
+	return false
+}
+
+// appendExtraArgsWithBracket appends provider ExtraArgs to args. When a
+// subtitle path is present and ExtraArgs contain --demuxer-lavf-format=, the
+// args are wrapped in mpv per-file brackets (--{ … --}) so the demuxer format
+// override only applies to the main video URL and not to the external subtitle
+// file that mpv opens separately. The URL must follow immediately after this
+// call for the bracket to take effect.
+func appendExtraArgsWithBracket(args, extraArgs []string, subtitlePath string) []string {
+	if len(extraArgs) == 0 {
+		return args
+	}
+	if strings.TrimSpace(subtitlePath) != "" && hasLavfFormatOverride(extraArgs) {
+		args = append(args, "--{")
+		args = append(args, extraArgs...)
+		return append(args, "--}")
+	}
+	return append(args, extraArgs...)
 }
 
 // joinNonEmpty concatenates parts with " ; ", skipping blanks.

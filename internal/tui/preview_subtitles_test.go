@@ -186,6 +186,30 @@ func TestPreviewSubtitleCheckmarkWaitsForDownloadedPath(t *testing.T) {
 	}
 }
 
+func TestCollectPreviewDataSubtitleProvider(t *testing.T) {
+	m := unavailableTestModel()
+	m.appMode = provider.ModeTV
+	m.subtitleLanguage = "en"
+	m.subtitleLangUsed = "en"
+	m.resolved = &model.ResolvedMedia{
+		SeriesTitle: "Supernatural",
+		Playback:    []provider.MediaSource{{URL: "https://cdn.example.com/stream.m3u8", Quality: "1080p", Resolver: "atlantic"}},
+	}
+	m.resolved.SelectedSubtitle = &model.SubtitleTrack{
+		Path:     "/tmp/sub.srt",
+		Language: "en",
+		Resolver: "atlantic",
+	}
+	m.rankedSources = []ranking.ScoredSource{{Source: m.resolved.Playback[0]}}
+	data := m.collectPreviewData(100, 24, lipgloss.AdaptiveColor{})
+	if data.SubtitlesText != "en ✓" {
+		t.Errorf("SubtitlesText = %q, want 'en ✓'", data.SubtitlesText)
+	}
+	if data.SubtitleProvider != "Atlantic" {
+		t.Errorf("SubtitleProvider = %q, want 'Atlantic'", data.SubtitleProvider)
+	}
+}
+
 func TestTriggerSubtitleSyncMaterializesProviderURL(t *testing.T) {
 	m := readySourceModel()
 	m.subtitleService = service.NewSubtitleService(&config.Config{})

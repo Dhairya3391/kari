@@ -622,6 +622,9 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 	// and the trigger re-fires only when the target changes or the pool
 	// grows with nothing secured yet.
 	subCmd := m.triggerSubtitleSync()
+	if m.players != nil && m.resolved != nil {
+		m.players.PrefetchSkip(*m.resolved)
+	}
 	if wasNil {
 		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails(), subCmd)
 	}
@@ -772,6 +775,7 @@ func subtitleCandidateIdentity(track model.SubtitleTrack) string {
 	if u != "" {
 		return strings.Join([]string{
 			u,
+			strings.TrimSpace(track.Resolver),
 			strings.TrimSpace(track.SourceID),
 			strings.TrimSpace(track.SourceURL),
 			strings.TrimSpace(track.Referer),

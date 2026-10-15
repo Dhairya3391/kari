@@ -143,7 +143,8 @@ func (c *Client) fanoutResolve(
 
 	var seenMu sync.Mutex
 	seenURLs := make(map[string]struct{})
-
+	var emittedMu sync.Mutex
+	var emittedSources []provider.MediaSource
 	var errMu sync.Mutex
 	var firstErr error
 	recordErr := func(err error) {
@@ -181,9 +182,38 @@ func (c *Client) fanoutResolve(
 			Subtitles: collector.get(),
 		}
 
+		emittedMu.Lock()
+		emittedSources = append(emittedSources, src)
+		emittedMu.Unlock()
+
 		select {
 		case updates <- []provider.MediaSource{src}:
 			atomic.AddInt64(&delivered, 1)
+		case <-ctx.Done():
+		}
+	}
+
+	broadcastSubtitles := func(newSubs []provider.SubtitleOption) {
+		if len(newSubs) == 0 {
+			return
+		}
+		collector.add(newSubs)
+		subs := collector.get()
+
+		emittedMu.Lock()
+		if len(emittedSources) == 0 {
+			emittedMu.Unlock()
+			return
+		}
+		updated := make([]provider.MediaSource, len(emittedSources))
+		for i, s := range emittedSources {
+			s.Subtitles = subs
+			updated[i] = s
+		}
+		emittedMu.Unlock()
+
+		select {
+		case updates <- updated:
 		case <-ctx.Done():
 		}
 	}
@@ -199,7 +229,7 @@ func (c *Client) fanoutResolve(
 			logging.Debug("atlantic granite subtitles failed", "tmdb", tmdbID, "err", err)
 			return
 		}
-		collector.add(subs)
+		broadcastSubtitles(subs)
 	}()
 
 	// 2. Subtitles: Natsuki API
@@ -211,7 +241,7 @@ func (c *Client) fanoutResolve(
 			logging.Debug("atlantic natsuki subtitles failed", "tmdb", tmdbID, "err", err)
 			return
 		}
-		collector.add(subs)
+		broadcastSubtitles(subs)
 	}()
 
 	// 3. Shard: Helios
@@ -290,6 +320,7 @@ func (c *Client) fanoutResolve(
 	}()
 
 	wg.Wait()
+	broadcastSubtitles(collector.get())
 
 	subs := collector.get()
 	if atomic.LoadInt64(&delivered) == 0 {
