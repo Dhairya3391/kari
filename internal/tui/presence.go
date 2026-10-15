@@ -73,12 +73,18 @@ func (m *modelImpl) clearPresence() {
 }
 
 // toggleDiscordPresence flips the Discord Rich Presence setting, applies it
-// immediately, and persists it.
+// immediately, and persists it. Enabling it mid-playback publishes the
+// current media right away rather than waiting for the next pause/seek.
 func (m *modelImpl) toggleDiscordPresence() (tea.Model, tea.Cmd) {
 	m.discordPresence = !m.discordPresence
 	m.applyPresenceToggle()
 	m.saveSettings()
 	if m.discordPresence {
+		if m.playOpID != 0 && m.resolved != nil {
+			if np, ok := m.nowPlayingFor(*m.resolved); ok {
+				m.publishPresence(np)
+			}
+		}
 		return m, m.setStatusTimed(statusInfo, "Discord presence on — your activity shows on your profile while watching")
 	}
 	return m, m.setStatusTimed(statusInfo, "Discord presence off")
