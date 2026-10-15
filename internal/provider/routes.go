@@ -86,6 +86,7 @@ func (r Route) sourceTimeout() time.Duration {
 func defaultRoutes() map[ContentType][]Route {
 	anime := []Route{
 		{Provider: "anicine", Search: StrategyMerge, Sources: StrategyFallback},
+		{Provider: "anipm", Search: StrategyMerge, Sources: StrategyFallback},
 		{Provider: "anikoto", Search: StrategyMerge, Sources: StrategyFallback},
 		{Provider: "miruro", Search: StrategyMerge, Sources: StrategyFallback},
 		{Provider: "pengu", Search: StrategyMerge, Sources: StrategyFallback, SourceTimeout: 40 * time.Second},

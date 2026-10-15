@@ -58,6 +58,15 @@ const (
 	// rotates domains.
 	MiruroBase = "https://barelystarted.miruro.tv"
 
+	// AniPMBase is the public web application for Ani.pm (https://ani.pm).
+	AniPMBase = "https://ani.pm"
+	// AniPMReferer satisfies hotlink protection on Ani.pm API requests.
+	AniPMReferer = "https://ani.pm/"
+	// AniPMEmbedBase is the Settlar embed host for Ani.pm streams.
+	AniPMEmbedBase = "https://embed.settlar.io"
+	// AniPMMediaReferer satisfies hotlink protection on media.settlar.io stream requests.
+	AniPMMediaReferer = "https://embed.settlar.io/"
+
 	// AtlanticBase is the public web application for Atlantic (https://atlantic.st).
 	AtlanticBase = "https://atlantic.st"
 	// AtlanticReferer satisfies the hotlink protection enforced by Atlantic's

@@ -903,10 +903,12 @@ func parseLiveStart(releaseInfo, released string) time.Time {
 }
 
 // isExcludedStream checks if a stream originated from an excluded backend
-// (Movy.sx is maintained independently in Kari).
+// (Movy.sx is maintained independently in Kari; Ani.pm is ignored due to
+// incorrect source mappings).
 func isExcludedStream(stream penguStreamItem) bool {
 	combined := strings.ToLower(stream.Name + " " + stream.Title + " " + stream.Description + " " + stream.URL)
-	return strings.Contains(combined, "movysx") || strings.Contains(combined, "movy.sx")
+	return strings.Contains(combined, "movysx") || strings.Contains(combined, "movy.sx") ||
+		strings.Contains(combined, "ani.pm") || strings.Contains(combined, "anipm")
 }
 
 // isHousekeepingEntry reports whether a stream item is one of Pengu's own
@@ -975,7 +977,7 @@ func buildAnimeConfigSegment(token string) (string, error) {
 	cfg := map[string]any{
 		"source_reanime":       "on",
 		"source_anikoto":       "off",
-		"source_anipm":         "on",
+		"source_anipm":         "off",
 		"source_miruro":        "off",
 		"source_kisskh":        "off",
 		"source_2peckle":       "on",

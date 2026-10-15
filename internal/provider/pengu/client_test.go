@@ -112,12 +112,12 @@ func TestBuildAnimeConfigSegment(t *testing.T) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, key := range []string{"source_reanime", "source_anipm", "source_2peckle"} {
+	for _, key := range []string{"source_reanime", "source_2peckle"} {
 		if parsed[key] != "on" {
 			t.Errorf("%s = %v, want on", key, parsed[key])
 		}
 	}
-	for _, key := range []string{"source_anikoto", "source_miruro", "source_kisskh", "source_moviebox", "source_4khdhub", "source_vegamovies", "source_moviesdrives", "source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy", "source_hdhub4u", "source_vidy", "source_toonworld4all", "source_arctic", "source_live-sports"} {
+	for _, key := range []string{"source_anipm", "source_anikoto", "source_miruro", "source_kisskh", "source_moviebox", "source_4khdhub", "source_vegamovies", "source_moviesdrives", "source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy", "source_hdhub4u", "source_vidy", "source_toonworld4all", "source_arctic", "source_live-sports"} {
 		if parsed[key] != "off" {
 			t.Errorf("%s = %v, want off", key, parsed[key])
 		}
@@ -365,18 +365,18 @@ func TestResolveAnimeUsesAnilistID(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(penguResponse{
 			Streams: []penguStreamItem{
 				{
-					Name:  "🐧 PenguPlay 🧊 1080p • Ani.pm · Sub",
-					URL:   "https://cdn.example.com/a.m3u8",
+					Name: "🐧 PenguPlay 🧊 1080p • Reanime · Sub",
+					URL:  "https://cdn.example.com/a.m3u8",
 					BehaviorHints: penguBehaviorHints{
-						Filename: "1080pHLS1080phls.pad-Ani.pm",
+						Filename: "1080pHLS1080phls.pad-Reanime",
 					},
-					Subtitles: []penguSubtitle{{ID: "anipm-0", URL: "https://pengu.uk/subs/x", Lang: "English"}},
+					Subtitles: []penguSubtitle{{ID: "reanime-0", URL: "https://pengu.uk/subs/x", Lang: "English"}},
 				},
 				{
-					Name:  "🐧 PenguPlay 🧊 1080p • Ani.pm · Hard Sub",
-					URL:   "https://cdn.example.com/b.m3u8",
+					Name: "🐧 PenguPlay 🧊 1080p • Reanime · Hard Sub",
+					URL:  "https://cdn.example.com/b.m3u8",
 					BehaviorHints: penguBehaviorHints{
-						Filename: "1080pHLS1080phls.pad-Ani.pm",
+						Filename: "1080pHLS1080phls.pad-Reanime",
 					},
 				},
 			},
@@ -497,7 +497,7 @@ func TestResolveAnimeMALPriority(t *testing.T) {
 		queriedPath = r.URL.Path
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"streams":[
-			{"name":"🐧 PenguPlay 🧊 1080p • Ani.pm · Sub","url":"https://cdn.example.com/anipm.m3u8"},
+			{"name":"🐧 PenguPlay 🧊 1080p • 2Peckle · Sub","url":"https://cdn.example.com/2peckle.m3u8"},
 			{"name":"🐧 PenguPlay 🧊 1080p • Reanime · HD-1 · Sub","url":"https://cdn.example.com/reanime.m3u8"}
 		]}`))
 	}))
