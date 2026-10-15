@@ -90,6 +90,17 @@ const (
 	CinecatCDNBase = "https://zcdn.bluevelvet.space"
 	// CinecatSubsBase is the Granite subtitle backend used by Cinecat.
 	CinecatSubsBase = "https://sub.vdrk.site"
+
+	// DefaultDiscordAppID is the Kari Discord application used for Rich
+	// Presence. Its registered name is what users see as the activity verb
+	// ("Watching Kari"); the KARI_DISCORD_APP_ID env var overrides it for
+	// forks and development.
+	DefaultDiscordAppID = "1560260983619059743"
+	// DiscordAssetLogo and DiscordAssetPaused are Rich Presence asset keys
+	// uploaded under the Discord application. Per-title posters are sent as
+	// external URLs instead, so only these two app-level assets exist.
+	DiscordAssetLogo   = "kari_logo"
+	DiscordAssetPaused = "paused"
 )
 
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var

@@ -122,9 +122,10 @@ func buildVLCArgs(source provider.MediaSource, media model.ResolvedMedia) []stri
 // IINAPlayer launches the macOS IINA player (mpv-derived), reusing the
 // shared process/readiness machinery from mpv.go.
 type IINAPlayer struct {
-	skipClients  SkipClients
-	skipSettings SkipSettings
-	skipCache    *util.BoundedCache[combinedSkipTimes]
+	skipClients      SkipClients
+	skipSettings     SkipSettings
+	skipCache        *util.BoundedCache[combinedSkipTimes]
+	progressObserver ProgressObserver
 }
 
 var _ Player = (*IINAPlayer)(nil)
@@ -137,6 +138,10 @@ func (p *IINAPlayer) Available() bool { return iinaBinary() != "" }
 
 func (p *IINAPlayer) setSkipSettings(s SkipSettings) {
 	p.skipSettings = s
+}
+
+func (p *IINAPlayer) setProgressObserver(obs ProgressObserver) {
+	p.progressObserver = obs
 }
 
 // Play implements Player.
@@ -154,9 +159,10 @@ func (p *IINAPlayer) Play(sources []provider.MediaSource, media model.ResolvedMe
 	defer cleanupSkipScript(skipPath)
 
 	return attemptSources("iina", sources, func(source provider.MediaSource) (PlaybackResult, error) {
-		return playSingleSourceWithIINA(bin, source, media, skipArgs)
+		return playSingleSourceWithIINA(bin, source, media, skipArgs, p.progressObserver)
 	})
 }
+
 // iinaBinary locates IINA's CLI wrapper across common install shapes.
 func iinaBinary() string {
 	if path, err := exec.LookPath("iina-cli"); err == nil {
@@ -174,7 +180,7 @@ func iinaBinary() string {
 
 // playSingleSourceWithIINA plays one source through the shared readiness
 // check; IINA speaks mpv's IPC protocol so real stats come back.
-func playSingleSourceWithIINA(binary string, source provider.MediaSource, media model.ResolvedMedia, aniskipArgs []string) (PlaybackResult, error) {
+func playSingleSourceWithIINA(binary string, source provider.MediaSource, media model.ResolvedMedia, aniskipArgs []string, observer ProgressObserver) (PlaybackResult, error) {
 	socketPath := DefaultMPVSocketPath()
 	args := buildIINAArgs(source, media, socketPath, aniskipArgs)
 	result := startPlayerWithStartupCheck(startupCheck{
@@ -183,6 +189,7 @@ func playSingleSourceWithIINA(binary string, source provider.MediaSource, media 
 		socketPath: socketPath,
 		sourceURL:  source.URL,
 		isLive:     media.IsLive(),
+		observer:   observer,
 	})
 	if result.succeeded() {
 		return result.playback, nil

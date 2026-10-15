@@ -29,6 +29,19 @@ type PlaybackResult struct {
 	Completed         bool // true if FinalPositionSecs/DurationSecs > 0.85
 }
 
+// PlaybackProgress is one live playback sample from a player that can observe
+// it (mpv and IINA via IPC). Zero values mean the player could not report.
+type PlaybackProgress struct {
+	PositionSecs float64
+	DurationSecs float64
+	Paused       bool
+}
+
+// ProgressObserver receives live playback samples. It is invoked from the
+// player's polling goroutine, so implementations must be fast and must never
+// block — a Rich Presence sink just coalesces.
+type ProgressObserver func(PlaybackProgress)
+
 // NeedsCompletionConfirmError signals "launched fine, but completion is
 // unobservable" — registry unwraps it as success with confirmation needed.
 type NeedsCompletionConfirmError struct{}

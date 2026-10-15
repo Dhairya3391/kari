@@ -100,6 +100,18 @@ func (c *Client) tmdbPosterURL(ctx context.Context, tmdbID int, mediaType string
 	return config.TMDBImageBase + tmdbPosterSize + details.PosterPath, nil
 }
 
+// tmdbArtworkURL is tmdbPosterURL at the smaller external-display size.
+func (c *Client) tmdbArtworkURL(ctx context.Context, tmdbID int, mediaType string) (string, error) {
+	details, err := c.fetchTMDBMediaDetails(ctx, tmdbID, mediaType)
+	if err != nil {
+		return "", err
+	}
+	if details.PosterPath == "" {
+		return "", nil
+	}
+	return config.TMDBImageBase + tmdbArtworkSize + details.PosterPath, nil
+}
+
 func (c *Client) tmdbDetailsInfo(ctx context.Context, tmdbID int, mediaType string) (Details, error) {
 	details, err := c.fetchTMDBMediaDetails(ctx, tmdbID, mediaType)
 	if err != nil {

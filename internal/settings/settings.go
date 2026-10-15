@@ -61,6 +61,9 @@ type Data struct {
 	SkipPreview bool `json:"skip_preview"`
 	// StartupSync controls whether watched history is synced from AniList/Trakt on startup.
 	StartupSync bool `json:"startup_sync"`
+	// DiscordPresence publishes playback as Discord Rich Presence. Off by
+	// default so nothing leaves the machine unless the user opts in.
+	DiscordPresence bool `json:"discord_presence"`
 
 	// DefaultMode sets which mode to open on startup: "last" (default), "first", or a specific mode key ("anime", "movies", etc.).
 	DefaultMode string `json:"default_mode"`

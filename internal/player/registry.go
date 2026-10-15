@@ -28,16 +28,22 @@ func (c *cachedPlayer) Available() bool {
 
 // Registry holds available players and picks between them by preference.
 type Registry struct {
-	players      []Player
-	preferred    string
-	skipClients  SkipClients
-	skipSettings SkipSettings
-	skipCache    *util.BoundedCache[combinedSkipTimes]
+	players          []Player
+	preferred        string
+	skipClients      SkipClients
+	skipSettings     SkipSettings
+	skipCache        *util.BoundedCache[combinedSkipTimes]
+	progressObserver ProgressObserver
 }
 
 // Register adds a player implementation.
 func (r *Registry) Register(p Player) {
 	r.players = append(r.players, &cachedPlayer{Player: p})
+	if r.progressObserver != nil {
+		if po, ok := p.(progressObservable); ok {
+			po.setProgressObserver(r.progressObserver)
+		}
+	}
 }
 
 // PlayWithSources tries sources in order against the preferred player,
@@ -141,6 +147,27 @@ func (r *Registry) preferredPlayers(preferred string) []Player {
 
 type skipConfigurable interface {
 	setSkipSettings(s SkipSettings)
+}
+
+// progressObservable is implemented by players that can report live playback
+// telemetry (mpv/IINA via IPC). The registry forwards the observer to them.
+type progressObservable interface {
+	setProgressObserver(obs ProgressObserver)
+}
+
+// SetProgressObserver installs a callback that receives live playback samples
+// from players that can observe them. Passing nil clears it.
+func (r *Registry) SetProgressObserver(obs ProgressObserver) {
+	r.progressObserver = obs
+	for _, p := range r.players {
+		target := p
+		if cp, ok := p.(*cachedPlayer); ok {
+			target = cp.Player
+		}
+		if po, ok := target.(progressObservable); ok {
+			po.setProgressObserver(obs)
+		}
+	}
 }
 
 // SetSkipSettings updates skip options for all player instances.

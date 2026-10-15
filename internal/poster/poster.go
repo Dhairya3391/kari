@@ -37,6 +37,11 @@ var posterLog = logging.With("component", "poster")
 // and pixel-level terminals (kitty/sixel) show every pixel of it.
 const tmdbPosterSize = "original"
 
+// tmdbArtworkSize is the poster size requested when a third-party service
+// displays the artwork itself (Discord Rich Presence). w500 is sharp at
+// Discord's card size without making it fetch a multi-megabyte original.
+const tmdbArtworkSize = "w500"
+
 // maxCachedImages/maxCachedDetails cap how many distinct titles' artwork and
 // descriptions stay in memory at once, so a long session that browses many
 // titles doesn't grow without limit. Decoded images are the heavier of the
@@ -65,6 +70,11 @@ type Client struct {
 	imgCache     *util.BoundedCache[image.Image]
 	detailsCache *util.BoundedCache[Details]
 
+	// urlCache remembers resolved poster URLs (not the downloaded bytes) for
+	// callers that only need a link to display elsewhere, e.g. Discord Rich
+	// Presence. Keyed like FetchImage but at tmdbArtworkSize.
+	urlCache *util.BoundedCache[string]
+
 	// rawCache and sf dedupe the underlying TMDB "/movie|tv/{id}" fetch: a
 	// title's poster (FetchImage) and its overview/genres (FetchDetails) are
 	// both derived from the same TMDB response, but arrive as two separate
@@ -85,6 +95,7 @@ func NewClient(keyPool *tmdb.KeyPool) *Client {
 		imgCache:     util.NewBoundedCache[image.Image](maxCachedImages),
 		detailsCache: util.NewBoundedCache[Details](maxCachedDetails),
 		rawCache:     util.NewBoundedCache[tmdbDetails](maxCachedDetails),
+		urlCache:     util.NewBoundedCache[string](maxCachedDetails),
 	}
 }
 
@@ -213,6 +224,33 @@ func (c *Client) resolveURL(ctx context.Context, tmdbID int, mediaType, title st
 		return c.tmdbPosterURL(ctx, tmdbID, mediaType)
 	}
 	return c.anilistPosterURL(ctx, title)
+}
+
+// ArtworkURL returns the public poster URL for a title without downloading
+// the image bytes. It is for services that display the artwork themselves
+// (Discord Rich Presence); TMDB art is requested at w500, AniList at
+// extraLarge. The result is cached in-memory. An empty URL with a nil error
+// means the title simply has no poster.
+func (c *Client) ArtworkURL(ctx context.Context, tmdbID int, mediaType, title string) (string, error) {
+	key := cacheKey(tmdbID, title, tmdbArtworkSize)
+	if url, ok := c.urlCache.Get(key); ok {
+		return url, nil
+	}
+
+	var (
+		url string
+		err error
+	)
+	if tmdbID != 0 {
+		url, err = c.tmdbArtworkURL(ctx, tmdbID, mediaType)
+	} else {
+		url, err = c.anilistPosterURL(ctx, title)
+	}
+	if err != nil {
+		return "", err
+	}
+	c.urlCache.Set(key, url)
+	return url, nil
 }
 
 func (c *Client) download(ctx context.Context, target string) ([]byte, error) {

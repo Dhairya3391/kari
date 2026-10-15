@@ -57,6 +57,7 @@ type startupCheck struct {
 	socketPath string
 	sourceURL  string
 	isLive     bool
+	observer   ProgressObserver
 }
 
 type pipeStartupCheck struct {
@@ -65,6 +66,7 @@ type pipeStartupCheck struct {
 	socketPath string
 	sourceURL  string
 	isLive     bool
+	observer   ProgressObserver
 }
 
 type launchResult struct {
@@ -89,9 +91,10 @@ func (r launchResult) succeeded() bool {
 // MPVPlayer plays via a desktop mpv process, using JSON IPC for position
 // tracking so resume/scrobble get real playback stats.
 type MPVPlayer struct {
-	skipClients  SkipClients
-	skipSettings SkipSettings
-	skipCache    *util.BoundedCache[combinedSkipTimes]
+	skipClients      SkipClients
+	skipSettings     SkipSettings
+	skipCache        *util.BoundedCache[combinedSkipTimes]
+	progressObserver ProgressObserver
 }
 
 var _ Player = (*MPVPlayer)(nil)
@@ -109,6 +112,10 @@ func (p *MPVPlayer) setSkipSettings(s SkipSettings) {
 	p.skipSettings = s
 }
 
+func (p *MPVPlayer) setProgressObserver(obs ProgressObserver) {
+	p.progressObserver = obs
+}
+
 // Play implements Player.
 func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
 	mpvLog.Debug("playback starting", "media", media.DisplayTitle(), "sources", len(sources))
@@ -121,14 +128,14 @@ func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMed
 	defer cleanupSkipScript(skipPath)
 
 	return attemptSources("mpv", sources, func(source provider.MediaSource) (PlaybackResult, error) {
-		return playSingleSource(source, media, skipArgs)
+		return playSingleSource(source, media, skipArgs, p.progressObserver)
 	})
 }
 
 // playSingleSource plays one source through two strategies: direct mpv with
 // native options first, then a curl|mpv pipe for streams whose TLS/header
 // quirks mpv's own HTTP stack rejects.
-func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, aniskipArgs []string) (PlaybackResult, error) {
+func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, aniskipArgs []string, observer ProgressObserver) (PlaybackResult, error) {
 	socketPath := DefaultMPVSocketPath()
 
 	// Strategy 1: direct MPV playback (primary).
@@ -139,6 +146,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		socketPath: socketPath,
 		sourceURL:  source.URL,
 		isLive:     media.IsLive(),
+		observer:   observer,
 	})
 	if direct.shortWarning {
 		return PlaybackResult{}, fmt.Errorf("source rejected: stream is a short placeholder/warning video (%.1fs <= %.0fs)", direct.shortDur, ShortWarningVideoMaxDuration)
@@ -223,6 +231,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		socketPath: socketPath,
 		sourceURL:  source.URL,
 		isLive:     media.IsLive(),
+		observer:   observer,
 	})
 	if pipeErr != nil {
 		return PlaybackResult{}, fmt.Errorf("mpv playback failed: pipe startup error: %w", pipeErr)
@@ -458,6 +467,7 @@ func ipcPoller(
 	stats *playbackStats,
 	sourceURL string,
 	isLive bool,
+	observer ProgressObserver,
 	done <-chan struct{},
 ) {
 	defer client.Close()
@@ -484,6 +494,12 @@ func ipcPoller(
 				isIdle = b
 			}
 		}
+		paused := false
+		if pauseProp, pauseErr := client.GetProperty("pause"); pauseErr == nil {
+			if b, ok := pauseProp.(bool); ok {
+				paused = b
+			}
+		}
 		if isShortWarningVideo(durF, sourceURL, isLive) {
 			mpvLog.Warn("rejected short placeholder/warning stream", "duration", durF, "url", sourceURL)
 			stats.setShortWarning(durF)
@@ -500,6 +516,9 @@ func ipcPoller(
 
 		if loaded || posF > 0 || durF > 0 {
 			stats.update(posF, durF, loaded)
+		}
+		if observer != nil && (loaded || posF > 0 || durF > 0) {
+			observer(PlaybackProgress{PositionSecs: posF, DurationSecs: durF, Paused: paused})
 		}
 		return !failed
 	}
@@ -575,7 +594,7 @@ func waitForPlaybackReadiness(
 	ipcWG.Add(1)
 	go func() {
 		defer ipcWG.Done()
-		ipcPoller(context.Background(), client, stats, check.sourceURL, check.isLive, ipcDone)
+		ipcPoller(context.Background(), client, stats, check.sourceURL, check.isLive, check.observer, ipcDone)
 	}()
 	defer func() {
 		close(ipcDone)
@@ -672,7 +691,7 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 	ipcWG.Add(1)
 	go func() {
 		defer ipcWG.Done()
-		ipcPoller(context.Background(), client, stats, check.sourceURL, check.isLive, ipcDone)
+		ipcPoller(context.Background(), client, stats, check.sourceURL, check.isLive, check.observer, ipcDone)
 	}()
 	defer func() {
 		close(ipcDone)

@@ -443,7 +443,7 @@ func TestMPVLoadsSelectedLocalSubtitle(t *testing.T) {
 		},
 	}
 
-	if _, err := playSingleSource(source, media, nil); err != nil {
+	if _, err := playSingleSource(source, media, nil, nil); err != nil {
 		t.Fatalf("playSingleSource: %v", err)
 	}
 }
