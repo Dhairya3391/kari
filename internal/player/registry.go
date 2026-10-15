@@ -9,6 +9,7 @@ import (
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/util"
 )
 
 // log scopes every line from this package/component.
@@ -31,6 +32,7 @@ type Registry struct {
 	preferred    string
 	skipClients  SkipClients
 	skipSettings SkipSettings
+	skipCache    *util.BoundedCache[combinedSkipTimes]
 }
 
 // Register adds a player implementation.
@@ -158,24 +160,13 @@ func (r *Registry) SetSkipSettings(s SkipSettings) {
 // PrefetchSkip asynchronously resolves and caches skip timestamps for resolved media
 // so that playback start hits the memory cache with zero latency.
 func (r *Registry) PrefetchSkip(media model.ResolvedMedia) {
-	if r == nil {
+	if r == nil || r.skipCache == nil {
 		return
 	}
-	for _, p := range r.players {
-		target := p
-		if cp, ok := p.(*cachedPlayer); ok {
-			target = cp.Player
-		}
-		if mpv, ok := target.(*MPVPlayer); ok {
-			if mpv.skipCache != nil {
-				go func() {
-					_, script := getSkipArgs(mpv.skipClients, mpv.skipSettings, media, mpv.skipCache)
-					cleanupSkipScript(script)
-				}()
-				return
-			}
-		}
-	}
+	go func() {
+		_, script := getSkipArgs(r.skipClients, r.skipSettings, media, r.skipCache)
+		cleanupSkipScript(script)
+	}()
 }
 
 // NewRegistry constructs and populates the platform's player set with the
@@ -185,6 +176,7 @@ func NewRegistry(preferred string, clients SkipClients, skipSettings SkipSetting
 		preferred:    preferred,
 		skipClients:  clients,
 		skipSettings: skipSettings,
+		skipCache:    util.NewBoundedCache[combinedSkipTimes](100),
 	}
 	registerPlayers(r)
 	return r

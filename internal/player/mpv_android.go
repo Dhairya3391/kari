@@ -153,7 +153,7 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 			confBuilder.WriteString("\n")
 		}
 	}
-
+	subtitlePath := media.SubtitlePath()
 	for _, extra := range source.ExtraArgs {
 		if subtitlePath != "" && strings.HasPrefix(extra, "--demuxer-lavf-format=") {
 			continue
@@ -172,7 +172,6 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	// to our include target and attach it with a sub-file line so it loads for
 	// this session. (mpv's sub-file is a list option, so a repeated line works.)
 	subPath := ""
-	subtitlePath := media.SubtitlePath()
 	if subtitlePath != "" {
 		if err := os.MkdirAll(mpvAndroidDir, 0o700); err != nil {
 			return fmt.Errorf("create mpv config dir: %w", err)
