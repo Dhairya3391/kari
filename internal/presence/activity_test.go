@@ -74,13 +74,21 @@ func TestBuildActivityMovieFallbacksToLogo(t *testing.T) {
 	}
 }
 
-func TestBuildActivityPausedFreezesTimer(t *testing.T) {
+func TestBuildActivityPausedShowsStoppedPosition(t *testing.T) {
 	now := time.Unix(3_000_000, 0)
 	np := NowPlaying{Media: model.ResolvedMedia{SeriesTitle: "Show", MediaType: provider.MediaTypeTV}}
 	act := buildActivity(np, Progress{PositionSecs: 100, DurationSecs: 600, Paused: true}, now)
 
-	if act.Timestamps != nil {
-		t.Errorf("timestamps = %+v, want nil while paused", act.Timestamps)
+	// Discord renders the start clock even while paused, so the elapsed time
+	// must reflect where playback stopped rather than falling back to 0:00.
+	if act.Timestamps == nil {
+		t.Fatal("timestamps = nil, want start anchored to the paused position")
+	}
+	if want := now.Add(-100 * time.Second).Unix(); act.Timestamps.Start != want {
+		t.Errorf("start = %d, want %d", act.Timestamps.Start, want)
+	}
+	if act.Timestamps.End != 0 {
+		t.Errorf("end = %d, want 0 while paused", act.Timestamps.End)
 	}
 	if act.Assets.SmallImage != config.DiscordAssetPaused {
 		t.Errorf("small image = %q, want paused asset", act.Assets.SmallImage)

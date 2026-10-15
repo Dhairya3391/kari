@@ -100,20 +100,22 @@ func buildActivity(np NowPlaying, p Progress, now time.Time) *Activity {
 		SmallText:  config.AppName,
 	}
 	if p.Paused {
-		// Discord has no native pause; freezing the timer (by omitting
-		// timestamps below) plus a paused badge is the conventional signal.
+		// Discord has no native pause, so the paused badge is the signal.
 		act.Assets.SmallImage = config.DiscordAssetPaused
 		act.Assets.SmallText = "Paused"
 	}
 
-	if !p.Paused {
-		start := now.Add(-secondsToDuration(p.PositionSecs))
-		ts := &Timestamps{Start: start.Unix()}
-		if !isLive && p.DurationSecs > 0 {
-			ts.End = start.Add(secondsToDuration(p.DurationSecs)).Unix()
-		}
-		act.Timestamps = ts
+	// Anchor the elapsed counter to the current position. Discord always
+	// renders the "start" clock, so it is set in both states: while playing it
+	// tracks the player, and while paused it shows where playback stopped
+	// (omitting it makes Discord fall back to 0:00). The remaining-time end is
+	// sent only while playing so a paused card does not count down.
+	start := now.Add(-secondsToDuration(p.PositionSecs))
+	ts := &Timestamps{Start: start.Unix()}
+	if !p.Paused && !isLive && p.DurationSecs > 0 {
+		ts.End = start.Add(secondsToDuration(p.DurationSecs)).Unix()
 	}
+	act.Timestamps = ts
 
 	act.Buttons = buttonsFor(media, np.AniListID, isLive)
 	return act
