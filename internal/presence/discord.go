@@ -25,6 +25,8 @@ const (
 	opHandshake = 0
 	opFrame     = 1
 	opClose     = 2
+	opPing      = 3
+	opPong      = 4
 )
 
 // maxFrameBytes bounds an inbound frame so a malformed length can't trigger
@@ -80,6 +82,10 @@ type Client struct {
 	// handshake or read.
 	connMu sync.Mutex
 	conn   io.ReadWriteCloser
+
+	// writeMu serializes frame writes so the worker's activity updates and the
+	// reader's PONG replies never interleave on the wire.
+	writeMu sync.Mutex
 
 	// lastSent is touched only by the worker goroutine.
 	lastSent time.Time
@@ -213,7 +219,10 @@ func (c *Client) flush() {
 	if conn == nil {
 		return
 	}
-	if err := writeActivity(conn, want); err != nil {
+	c.writeMu.Lock()
+	err := writeActivity(conn, want)
+	c.writeMu.Unlock()
+	if err != nil {
 		presenceLog.Debug("discord activity update failed", "err", err)
 		c.closeConn()
 		return
@@ -235,12 +244,50 @@ func (c *Client) connection() io.ReadWriteCloser {
 		return nil
 	}
 	c.conn = conn
+	go c.readLoop(conn)
 	return conn
 }
 
 func (c *Client) closeConn() {
 	c.connMu.Lock()
 	if c.conn != nil {
+		_ = c.conn.Close()
+		c.conn = nil
+	}
+	c.connMu.Unlock()
+}
+
+// readLoop keeps a connection healthy in two ways: Discord sends periodic PING
+// keepalives that must be answered with PONG, and reading notices a socket
+// that died silently so the next flush reconnects. Without it the unread
+// inbound stream eventually fills the socket buffer and Discord drops the
+// connection, which makes the presence flicker off and back on.
+func (c *Client) readLoop(conn io.ReadWriteCloser) {
+	defer c.forgetConn(conn)
+	for {
+		opcode, payload, err := readFrame(conn)
+		if err != nil {
+			return
+		}
+		switch opcode {
+		case opPing:
+			c.writeMu.Lock()
+			err := writeRawFrame(conn, opPong, payload)
+			c.writeMu.Unlock()
+			if err != nil {
+				return
+			}
+		case opClose:
+			return
+		}
+	}
+}
+
+// forgetConn closes conn and drops it from the client if it is still the
+// active connection, so a dead socket is never reused.
+func (c *Client) forgetConn(conn io.ReadWriteCloser) {
+	c.connMu.Lock()
+	if c.conn == conn {
 		_ = c.conn.Close()
 		c.conn = nil
 	}
@@ -268,13 +315,21 @@ func writeFrame(w io.Writer, opcode uint32, payload any) error {
 	if err != nil {
 		return err
 	}
+	return writeRawFrame(w, opcode, data)
+}
+
+// writeRawFrame writes one IPC frame whose payload is already encoded.
+func writeRawFrame(w io.Writer, opcode uint32, data []byte) error {
 	header := make([]byte, 8)
 	binary.LittleEndian.PutUint32(header[0:4], opcode)
 	binary.LittleEndian.PutUint32(header[4:8], uint32(len(data)))
 	if _, err := w.Write(header); err != nil {
 		return err
 	}
-	_, err = w.Write(data)
+	if len(data) == 0 {
+		return nil
+	}
+	_, err := w.Write(data)
 	return err
 }
 

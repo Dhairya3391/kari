@@ -150,3 +150,43 @@ func TestClientCloseClearsConnection(t *testing.T) {
 	c.Close()
 	// Close must be idempotent enough to not hang; reaching here is the test.
 }
+
+func TestClientAnswersPingWithPong(t *testing.T) {
+	client, server := net.Pipe()
+	t.Cleanup(func() { client.Close(); server.Close() })
+
+	ping := []byte(`{"nonce":"keepalive"}`)
+	got := make(chan struct{}, 1)
+	go func() {
+		// The first frame the client sends is the activity; consume it so the
+		// reply we read next is unambiguously the keepalive answer.
+		if _, _, err := readFrame(server); err != nil {
+			return
+		}
+		if err := writeRawFrame(server, opPing, ping); err != nil {
+			return
+		}
+		opcode, payload, err := readFrame(server)
+		if err != nil {
+			return
+		}
+		if opcode == opPong && bytes.Equal(payload, ping) {
+			got <- struct{}{}
+		}
+	}()
+
+	dial := func(context.Context, string) (io.ReadWriteCloser, error) { return client, nil }
+	c, err := newClient("12345", dial)
+	if err != nil {
+		t.Fatalf("newClient: %v", err)
+	}
+	defer c.Close()
+
+	c.SetNowPlaying(NowPlaying{Media: mediaFixture()})
+
+	select {
+	case <-got:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for a PONG reply to Discord's PING")
+	}
+}
