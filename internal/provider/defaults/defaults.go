@@ -13,6 +13,7 @@ import (
 	"kari/internal/provider/moovie"
 	"kari/internal/provider/movysx"
 	"kari/internal/provider/pengu"
+	"kari/internal/provider/solis"
 	"kari/internal/provider/weebcentral"
 	"kari/internal/tmdb"
 )
@@ -56,6 +57,12 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "moovie",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return moovie.NewClient(d.KeyPool)
+		},
+	},
+	{
+		ID: "solis",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return solis.NewClient(d.KeyPool)
 		},
 	},
 	{

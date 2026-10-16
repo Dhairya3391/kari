@@ -67,7 +67,8 @@ const (
 	// AniPMMediaReferer satisfies hotlink protection on media.settlar.io stream requests.
 	AniPMMediaReferer = "https://embed.settlar.io/"
 
-
+	// SolisAPIBase is the hosted streaming resolution API deployed on Vercel.
+	SolisAPIBase = "https://solis-api.vercel.app"
 	// CinecatBase is the public web application for Cinecat (https://beta.cinecat.eu).
 	CinecatBase = "https://beta.cinecat.eu"
 	// CinecatReferer satisfies the hotlink protection on Cinecat stream requests.
