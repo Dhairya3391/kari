@@ -332,6 +332,7 @@ type modelImpl struct {
 	configuredModes []string
 	disabledModes   map[string]bool
 	transitions     bool
+	startupSearchActive bool
 	baseBgColor     color.RGBA
 	crossfadeActive bool
 	crossfadeStep   int

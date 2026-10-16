@@ -860,9 +860,9 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 
 		// Get updated entry to have correct PercentComplete for scrobbling
 		if updated, ok := m.historyStore.Get(entry.Key); ok {
-			m.triggerScrobble(updated)
+			m.triggerScrobble(updated, m.resolved)
 		} else {
-			m.triggerScrobble(entry)
+			m.triggerScrobble(entry, m.resolved)
 		}
 	}
 

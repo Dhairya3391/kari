@@ -12,6 +12,8 @@ import (
 
 	"kari/internal/downloader"
 	"kari/internal/provider"
+	"kari/internal/history"
+	"kari/internal/model"
 )
 
 func (m *modelImpl) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -122,6 +124,47 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m.startBatchDownload()
+			case key.Matches(keyMsg, m.keys.MarkComplete) || keyMsg.String() == "m":
+				if len(m.selectedEpisodes) == 0 {
+					m.setStatus(statusWarn, "No episodes selected")
+					return m, nil
+				}
+				allComplete := true
+				for origIdx := range m.selectedEpisodes {
+					if origIdx < 0 || origIdx >= len(m.episodeResults) {
+						continue
+					}
+					if !m.isEpisodeComplete(m.episodeResults[origIdx]) {
+						allComplete = false
+						break
+					}
+				}
+				count := 0
+				if allComplete {
+					for origIdx := range m.selectedEpisodes {
+						if origIdx < 0 || origIdx >= len(m.episodeResults) {
+							continue
+						}
+						if err := m.unmarkEpisode(m.episodeResults[origIdx]); err == nil {
+							count++
+						}
+					}
+					m.setToast(fmt.Sprintf("unmarked %d episodes", count), ToastInfo)
+				} else {
+					for origIdx := range m.selectedEpisodes {
+						if origIdx < 0 || origIdx >= len(m.episodeResults) {
+							continue
+						}
+						if err := m.markEpisodeComplete(m.episodeResults[origIdx]); err == nil {
+							count++
+						}
+					}
+					m.setToast(fmt.Sprintf("marked %d episodes as complete", count), ToastSuccess)
+				}
+				m.selectedEpisodes = make(map[int]struct{})
+				m.selectMode = false
+				m.refreshEpisodeList()
+				return m, nil
 			case keyMsg.String() == "esc":
 				m.selectMode = false
 				m.clearStatus()
@@ -137,6 +180,24 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedEpisodes[origIdx] = struct{}{}
 				}
 				return m, nil
+			case key.Matches(keyMsg, m.keys.MarkComplete) || keyMsg.String() == "m":
+				if len(seasonEps) > 0 && m.seasonEpisodeIndex < len(seasonEps) {
+					ep := seasonEps[m.seasonEpisodeIndex]
+					origIdx := origIndices[m.seasonEpisodeIndex]
+					marked, err := m.toggleEpisodeComplete(ep)
+					if err != nil {
+						m.setStatus(statusWarn, fmt.Sprintf("Failed to update progress: %v", err))
+						return m, nil
+					}
+					code := episodeCode(ep, origIdx, len(distinctSeasonNumbers(m.episodeResults)) > 1)
+					if marked {
+						m.setToast("marked "+code+" complete", ToastSuccess)
+					} else {
+						m.setToast("unmarked "+code, ToastInfo)
+					}
+					m.refreshEpisodeList()
+					return m, nil
+				}
 			case key.Matches(keyMsg, m.keys.Select) || keyMsg.String() == "enter":
 				if len(origIndices) > 0 && m.seasonEpisodeIndex < len(origIndices) {
 					origIdx := origIndices[m.seasonEpisodeIndex]
@@ -459,12 +520,147 @@ func (m *modelImpl) selectAllEpisodes() {
 }
 
 func (m *modelImpl) refreshEpisodeList() {
+	if len(m.episodeResults) == 0 {
+		return
+	}
 	seriesTitle, mediaType := "", ""
 	if m.selectedSeries != nil {
 		seriesTitle = m.selectedSeries.Title
 		mediaType = m.selectedSeries.MediaType
 	}
 	m.episodeList.SetItems(episodesToItems(m.episodeResults, m.historyStore, seriesTitle, m.appMode, mediaType, m.selectedEpisodes))
+}
+
+func (m *modelImpl) episodeHistoryKey(ep provider.Episode) history.EntryKey {
+	seriesTitle, mediaType := "", ""
+	if m.selectedSeries != nil {
+		seriesTitle = m.selectedSeries.Title
+		mediaType = m.selectedSeries.MediaType
+	}
+	if seriesTitle == "" && m.resolved != nil {
+		seriesTitle = m.resolved.SeriesTitle
+	}
+	if mediaType == "" && m.resolved != nil {
+		mediaType = m.resolved.MediaType
+	}
+	if mediaType == "" {
+		mediaType = string(m.appMode)
+	}
+	return history.EntryKey{
+		Title:     seriesTitle,
+		Mode:      string(m.appMode),
+		MediaType: mediaType,
+		Season:    ep.Season,
+		Episode:   ep.Episode,
+	}
+}
+
+func (m *modelImpl) isEpisodeComplete(ep provider.Episode) bool {
+	if m.historyStore == nil {
+		return false
+	}
+	entry, ok := m.historyStore.Get(m.episodeHistoryKey(ep))
+	return ok && (entry.Complete || entry.PercentComplete >= 0.95 || (entry.DurationSecs > 0 && (entry.PositionSecs/entry.DurationSecs) >= 0.95))
+}
+
+func (m *modelImpl) markEpisodeComplete(ep provider.Episode) error {
+	if m.historyStore == nil {
+		return nil
+	}
+	key := m.episodeHistoryKey(ep)
+	existing, found := m.historyStore.Get(key)
+
+	seriesTitle, mediaType := "", ""
+	if m.selectedSeries != nil {
+		seriesTitle = m.selectedSeries.Title
+		mediaType = m.selectedSeries.MediaType
+	}
+	if seriesTitle == "" && m.resolved != nil {
+		seriesTitle = m.resolved.SeriesTitle
+	}
+	if mediaType == "" && m.resolved != nil {
+		mediaType = m.resolved.MediaType
+	}
+	if mediaType == "" {
+		mediaType = string(m.appMode)
+	}
+
+	tmdbID := 0
+	if m.selectedSeries != nil && m.selectedSeries.TMDBID != 0 {
+		tmdbID = m.selectedSeries.TMDBID
+	} else if ep.TMDBID != 0 {
+		tmdbID = ep.TMDBID
+	} else if m.resolved != nil {
+		tmdbID = m.resolved.TMDBID
+	}
+
+	epTitle := ep.Title
+	if epTitle == "" && m.resolved != nil {
+		epTitle = m.resolved.EpisodeTitle
+	}
+
+	entry := history.Entry{
+		Key:                  key,
+		Title:                seriesTitle,
+		EpisodeTitle:         epTitle,
+		Season:               ep.Season,
+		Episode:              ep.Episode,
+		WatchedAt:            time.Now(),
+		PercentComplete:      1.0,
+		Complete:             true,
+		LastScrobbledPercent: 1.0,
+		Mode:                 string(m.appMode),
+		MediaType:            mediaType,
+		TMDBID:               tmdbID,
+		AniListID:            anilistIDFor(m.appMode, m.selectedSeries),
+		AudioMode:            m.audioMode,
+	}
+
+	if found {
+		entry.DurationSecs = existing.DurationSecs
+		if existing.DurationSecs > 0 {
+			entry.PositionSecs = existing.DurationSecs
+		}
+		if existing.EpisodeTitle != "" && entry.EpisodeTitle == "" {
+			entry.EpisodeTitle = existing.EpisodeTitle
+		}
+	}
+
+	if err := m.historyStore.Upsert(entry); err != nil {
+		return err
+	}
+
+	media := &model.ResolvedMedia{
+		SeriesTitle:   seriesTitle,
+		EpisodeTitle:  entry.EpisodeTitle,
+		MediaType:     mediaType,
+		SeasonNumber:  ep.Season,
+		EpisodeNumber: ep.Episode,
+		TMDBID:        tmdbID,
+	}
+	m.triggerScrobble(entry, media)
+	return nil
+}
+
+func (m *modelImpl) unmarkEpisode(ep provider.Episode) error {
+	if m.historyStore == nil {
+		return nil
+	}
+	key := m.episodeHistoryKey(ep)
+	return m.historyStore.Delete(key)
+}
+
+func (m *modelImpl) toggleEpisodeComplete(ep provider.Episode) (bool, error) {
+	if m.isEpisodeComplete(ep) {
+		if err := m.unmarkEpisode(ep); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if err := m.markEpisodeComplete(ep); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (m *modelImpl) startBatchDownload() (tea.Model, tea.Cmd) {

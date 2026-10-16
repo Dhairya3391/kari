@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"kari/internal/history"
 	"kari/internal/model"
 	"kari/internal/provider"
 )
@@ -275,5 +276,32 @@ func TestEpisodesSelectedRowHighlight(t *testing.T) {
 	unselectedCode := st.Dim.Render("01")
 	if !strings.Contains(out, unselectedCode) {
 		t.Errorf("unselected episode code must remain dim, output:\n%s", out)
+	}
+}
+
+func TestRenderEpisodeRowComplete(t *testing.T) {
+	ep := provider.Episode{Season: 1, Episode: 1, Title: "The Name of the Game"}
+	accent := lipgloss.AdaptiveColor{Light: "#000", Dark: "#fff"}
+	st := NewStyles(accent)
+
+	historyIndex := history.EpisodeIndex{
+		history.EpisodeKey{Season: 1, Episode: 1}: history.Entry{
+			Complete:     true,
+			DurationSecs: 0,
+		},
+	}
+	data := EpisodesData{
+		Episodes:     []provider.Episode{ep},
+		HistoryIndex: historyIndex,
+	}
+
+	row := renderEpisodeRow(ep, 0, false, false, "", 0, data, 80, st)
+	if !strings.Contains(row, "✓") {
+		t.Errorf("expected complete row to contain '✓', got:\n%s", row)
+	}
+
+	rightCol := episodeRightCol(ep, historyEntryFor(data, ep), false, accent, st)
+	if rightCol != "" {
+		t.Errorf("expected rightCol to be empty for completed episode, got %q", rightCol)
 	}
 }

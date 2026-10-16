@@ -427,6 +427,7 @@ func TestSnapshot_Settings(t *testing.T) {
 				PosterArtwork:       true,
 				AccentName:          "Auto (per mode)",
 				Transitions:         true,
+				StartupSearchActive: true,
 			}
 
 			body := RenderSettingsScreen(data)

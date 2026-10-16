@@ -279,7 +279,7 @@ func (m *modelImpl) maxRowsForCategory(cat SettingsCategory) int {
 	case CategoryAccounts:
 		return 4
 	case CategoryInterface:
-		return 3
+		return 4
 	default:
 		return 1
 	}
@@ -362,6 +362,8 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.setAccent(m.accentIndex)
 		case 2: // Transitions
 			m.transitions = !m.transitions
+		case 3: // Startup search active
+			m.startupSearchActive = !m.startupSearchActive
 		}
 	}
 }
@@ -620,22 +622,22 @@ func (m *modelImpl) startAniListAuth() (tea.Model, tea.Cmd) {
 	return m, tea.Batch(m.setStatusTimed(statusInfo, "Browser opened — authorize Kari and paste code"), textinput.Blink)
 }
 
-func (m *modelImpl) triggerScrobble(entry history.Entry) {
-	if !trackableEntry(entry) || m.resolved == nil {
+func (m *modelImpl) triggerScrobble(entry history.Entry, media *model.ResolvedMedia) {
+	if !trackableEntry(entry) || media == nil {
 		return
 	}
 	if entry.Complete {
 		if m.anilistClient != nil && entry.Mode == string(provider.ModeAnime) {
 			go func() {
-				_ = m.anilistClient.UpdateProgress(context.Background(), *m.resolved)
+				_ = m.anilistClient.UpdateProgress(context.Background(), *media)
 			}()
 		}
 		if m.traktClient != nil {
 			go func() {
 				if entry.MediaType == provider.MediaTypeMovie {
-					_ = m.traktClient.ScrobbleMovie(context.Background(), *m.resolved, 100)
+					_ = m.traktClient.ScrobbleMovie(context.Background(), *media, 100)
 				} else {
-					_ = m.traktClient.ScrobbleEpisode(context.Background(), *m.resolved, 100)
+					_ = m.traktClient.ScrobbleEpisode(context.Background(), *media, 100)
 				}
 			}()
 		}

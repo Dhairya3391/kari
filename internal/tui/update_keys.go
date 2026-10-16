@@ -295,6 +295,7 @@ func (m *modelImpl) saveSettings() {
 	}
 
 	transitionsVal := m.transitions
+	startupSearchActiveVal := m.startupSearchActive
 
 	settings.Save(&settings.Data{
 		QualityMode:           m.qualityMode,
@@ -319,6 +320,7 @@ func (m *modelImpl) saveSettings() {
 		ModesDisabled:         disabledList,
 		LastMode:              string(m.appMode),
 		Transitions:           &transitionsVal,
+		StartupSearchActive:   &startupSearchActiveVal,
 	})
 	if m.players != nil {
 		m.players.SetSkipSettings(player.SkipSettings{

@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/provider"
 	"kari/internal/service"
 )
 
@@ -309,6 +311,37 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case "a":
 		return m.toggleAnimeAudio()
+
+	case "m":
+		if m.selectedEpisode != nil || m.resolved != nil {
+			var ep provider.Episode
+			if m.selectedEpisode != nil {
+				ep = *m.selectedEpisode
+			} else {
+				ep = provider.Episode{
+					Season:  m.resolved.SeasonNumber,
+					Episode: m.resolved.EpisodeNumber,
+					Title:   m.resolved.EpisodeTitle,
+					TMDBID:  m.resolved.TMDBID,
+				}
+			}
+			marked, err := m.toggleEpisodeComplete(ep)
+			if err != nil {
+				m.setStatus(statusWarn, fmt.Sprintf("Failed to update progress: %v", err))
+				return m, nil
+			}
+			if marked {
+				m.setToast("marked complete", ToastSuccess)
+			} else {
+				m.setToast("unmarked", ToastInfo)
+			}
+			if m.resolved != nil {
+				m.applyResumeFromHistory(m.resolved)
+			}
+			m.refreshEpisodeList()
+			return m, nil
+		}
+		return m, nil
 
 	case "n":
 		return m.playNextEpisode()

@@ -75,6 +75,8 @@ type Data struct {
 	LastMode string `json:"last_mode"`
 	// Transitions controls whether theme color crossfades are enabled (default true).
 	Transitions *bool `json:"transitions"`
+	// StartupSearchActive controls whether Kari starts with the search input focused (default true).
+	StartupSearchActive *bool `json:"startup_search_active"`
 }
 
 // NormalizedModes returns the ordered list of known modes, preserving the user's
@@ -130,6 +132,14 @@ func (d *Data) TransitionsEnabled() bool {
 		return true
 	}
 	return *d.Transitions
+}
+
+// StartupSearchActiveEnabled returns whether the search input is focused on startup (default true).
+func (d *Data) StartupSearchActiveEnabled() bool {
+	if d == nil || d.StartupSearchActive == nil {
+		return true
+	}
+	return *d.StartupSearchActive
 }
 
 // path resolves the settings file location, warning when the home

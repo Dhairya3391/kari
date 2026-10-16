@@ -346,7 +346,7 @@ func episodeDisplayTitle(ep provider.Episode, index int) string {
 // left for in-progress episodes, runtime when known, else empty.
 func episodeRightCol(ep provider.Episode, historyEntry *history.Entry, isFocused bool, accent lipgloss.AdaptiveColor, st Styles) string {
 	if historyEntry != nil {
-		if historyEntry.Complete || (historyEntry.DurationSecs > 0 && (historyEntry.PositionSecs/historyEntry.DurationSecs) >= 0.95) {
+		if historyEntry.Complete || historyEntry.PercentComplete >= 0.95 || (historyEntry.DurationSecs > 0 && (historyEntry.PositionSecs/historyEntry.DurationSecs) >= 0.95) {
 			return ""
 		}
 		if historyEntry.PositionSecs > 0 && historyEntry.DurationSecs > 0 {
@@ -407,7 +407,7 @@ func renderEpisodeRow(ep provider.Episode, index int, isFocused bool, multiSeaso
 	}
 
 	statusMarker := "  "
-	if historyEntry != nil && (historyEntry.Complete || (historyEntry.DurationSecs > 0 && (historyEntry.PositionSecs/historyEntry.DurationSecs) >= 0.95)) {
+	if historyEntry != nil && (historyEntry.Complete || historyEntry.PercentComplete >= 0.95 || (historyEntry.DurationSecs > 0 && (historyEntry.PositionSecs/historyEntry.DurationSecs) >= 0.95)) {
 		statusMarker = st.Ok.Render("✓ ")
 	}
 

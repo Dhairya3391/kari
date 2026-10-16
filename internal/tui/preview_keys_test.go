@@ -5,10 +5,13 @@ package tui
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/history"
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/ranking"
@@ -270,4 +273,61 @@ func stringsEqualFold(a, b string) bool {
 		}
 	}
 	return true
+}
+
+func TestPreviewMarkCompleteToggle(t *testing.T) {
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+
+	m := previewRetryModel()
+	m.selectedSeries.MediaType = provider.MediaTypeAnime
+	m.historyStore = store
+	m.activeView = viewPreview
+	m.resolved = &model.ResolvedMedia{
+		SeriesTitle:   "Frieren",
+		EpisodeTitle:  "EP 1",
+		MediaType:     provider.MediaTypeAnime,
+		SeasonNumber:  1,
+		EpisodeNumber: 1,
+		StartTime:     120,
+	}
+
+	// Press 'm' to mark complete
+	mdl, _ := m.updatePreview(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	m = mdl.(*modelImpl)
+
+	key := history.EntryKey{
+		Title:     "Frieren",
+		Mode:      string(provider.ModeAnime),
+		MediaType: provider.MediaTypeAnime,
+		Season:    1,
+		Episode:   1,
+	}
+	entry, ok := store.Get(key)
+	if !ok || !entry.Complete {
+		t.Errorf("expected episode to be marked complete in store")
+	}
+	if m.hasResumePosition() {
+		t.Errorf("hasResumePosition() should be false after marking complete")
+	}
+	if m.resolved.StartTime != 0 {
+		t.Errorf("resolved.StartTime should be 0 after marking complete, got %f", m.resolved.StartTime)
+	}
+	if m.activeToast == nil || !strings.Contains(m.activeToast.Message, "marked complete") {
+		t.Errorf("expected toast 'marked complete', got %+v", m.activeToast)
+	}
+
+	// Press 'm' again to unmark
+	mdl, _ = m.updatePreview(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("m")})
+	m = mdl.(*modelImpl)
+
+	if _, ok := store.Get(key); ok {
+		t.Errorf("expected entry to be deleted after unmarking")
+	}
+	if m.activeToast == nil || !strings.Contains(m.activeToast.Message, "unmarked") {
+		t.Errorf("expected toast 'unmarked', got %+v", m.activeToast)
+	}
 }

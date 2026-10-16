@@ -47,13 +47,16 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		}
 	}
 
+	startupSearchActive := savedSettings.StartupSearchActiveEnabled()
 	ti := textinput.New()
 	ti.CharLimit = 150
 	ti.Width = 70
 	ti.SetValue(strings.TrimSpace(initialQuery))
 	ti.Placeholder = "search…"
 	ti.Prompt = "› "
-	ti.Focus()
+	if startupSearchActive || strings.TrimSpace(initialQuery) != "" {
+		ti.Focus()
+	}
 
 	seriesDelegate := list.NewDefaultDelegate()
 	seriesDelegate.ShowDescription = true
@@ -206,6 +209,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		configuredModes:  (&settings.Data{}).NormalizedModes(),
 		disabledModes:    make(map[string]bool),
 		transitions:      true,
+		startupSearchActive: startupSearchActive,
 		baseBgColor:      HexToRGBA("#0B0D10"),
 		qualityMode:      qualityAll,
 		languageFilter:   make(map[string]bool),
@@ -305,6 +309,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		model.configuredModes = s.NormalizedModes()
 		model.disabledModes = s.DisabledModeSet()
 		model.transitions = s.TransitionsEnabled()
+		model.startupSearchActive = s.StartupSearchActiveEnabled()
 		model.updateEffectiveModes()
 
 		startupMode := strings.ToLower(strings.TrimSpace(s.DefaultMode))

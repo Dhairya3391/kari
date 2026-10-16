@@ -89,6 +89,7 @@ type SettingsData struct {
 	PosterArtwork bool   // on / off
 	AccentName    string // "Auto (per mode)", "Purple", etc.
 	Transitions   bool   // on / off
+	StartupSearchActive bool   // on / off
 }
 
 // RenderSettingsScreen renders the 2-pane Settings screen per KARI_TUI_SPEC §4.7.
@@ -230,10 +231,11 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		}
 
 	case CategoryInterface:
-		// 0: Poster artwork, 1: Accent, 2: Transitions
+		// 0: Poster artwork, 1: Accent, 2: Transitions, 3: Startup search active
 		rows = append(rows, renderSettingRow("Poster artwork", formatVal(boolOnOff(data.PosterArtwork), data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))
 		rows = append(rows, renderSettingRow("Accent", formatVal(data.AccentName, data.FocusedRowIndex == 1, st), data.FocusedRowIndex == 1, width, st))
 		rows = append(rows, renderSettingRow("Transitions", formatVal(boolOnOff(data.Transitions), data.FocusedRowIndex == 2, st), data.FocusedRowIndex == 2, width, st))
+		rows = append(rows, renderSettingRow("Startup search active", formatVal(boolOnOff(data.StartupSearchActive), data.FocusedRowIndex == 3, st), data.FocusedRowIndex == 3, width, st))
 
 		switch data.FocusedRowIndex {
 		case 0:
@@ -242,6 +244,8 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 			desc = "Theme accent color: Auto adapts per content mode."
 		case 2:
 			desc = "Smooth color transitions when changing themes or content modes."
+		case 3:
+			desc = "Start Kari with the search input focused. When off, start in control mode to use shortcuts directly."
 		}
 	}
 

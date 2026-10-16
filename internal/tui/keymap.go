@@ -30,6 +30,7 @@ type keyMap struct {
 	SelectAll         key.Binding
 	DeselectAll       key.Binding
 	BatchDownload     key.Binding
+	MarkComplete      key.Binding
 	Top               key.Binding
 	Bottom            key.Binding
 	ReaderNext        key.Binding
@@ -139,6 +140,10 @@ func defaultKeyMap() keyMap {
 		BatchDownload: key.NewBinding(
 			key.WithKeys("D"),
 			key.WithHelp("D", "batch dl"),
+		),
+		MarkComplete: key.NewBinding(
+			key.WithKeys("m"),
+			key.WithHelp("m", "mark complete"),
 		),
 		Top: key.NewBinding(
 			key.WithKeys("g"),

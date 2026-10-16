@@ -325,12 +325,10 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 		if len(m.seriesResults) > 0 {
 			return []KeyBinding{
 				{Key: "enter", Action: "open"},
-				{Key: "↑↓", Action: "move"},
-				{Key: "tab", Action: "mode"},
 				{Key: "space", Action: "search"},
-				{Key: "/", Action: "filter"},
-				{Key: "esc", Action: "back"},
+				{Key: "tab", Action: "mode"},
 				{Key: "?", Action: "help"},
+				{Key: "esc", Action: "back"},
 			}
 		}
 		return []KeyBinding{
@@ -346,37 +344,43 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 		if m.selectMode {
 			return []KeyBinding{
 				{Key: "space", Action: "toggle"},
-				{Key: "ctrl+a", Action: "all"},
-				{Key: "ctrl+d", Action: "none"},
+				{Key: "m", Action: "mark complete"},
 				{Key: "D", Action: "download"},
+				{Key: "?", Action: "help"},
 				{Key: "esc", Action: "cancel"},
 			}
 		}
-		return []KeyBinding{
+		keys := []KeyBinding{
 			{Key: "enter", Action: "open"},
 			{Key: "space", Action: "select"},
-			{Key: "[ ]", Action: "season"},
-			{Key: "/", Action: "filter"},
-			{Key: "a", Action: "sub/dub"},
-			{Key: "?", Action: "help"},
-			{Key: "esc", Action: "back"},
+			{Key: "m", Action: "mark complete"},
 		}
+		if len(distinctSeasonNumbers(m.episodeResults)) > 1 {
+			keys = append(keys, KeyBinding{Key: "[ ]", Action: "season"})
+		}
+		if m.appMode == provider.ModeAnime {
+			keys = append(keys, KeyBinding{Key: "a", Action: "sub/dub"})
+		}
+		keys = append(keys,
+			KeyBinding{Key: "?", Action: "help"},
+			KeyBinding{Key: "esc", Action: "back"},
+		)
+		return keys
 	case viewChapters:
 		return []KeyBinding{
-			{Key: "enter", Action: "open"},
-			{Key: "/", Action: "filter"},
+			{Key: "enter", Action: "read"},
 			{Key: "?", Action: "help"},
 			{Key: "esc", Action: "back"},
 		}
 	case viewPreview:
 		keys := []KeyBinding{
-			{Key: "enter/p", Action: "play"},
-			{Key: "↑↓", Action: "source"},
-			{Key: "n/]", Action: "next episode"},
-			{Key: "[", Action: "prev episode"},
-			{Key: "D", Action: "download"},
-			{Key: "A", Action: "autoplay"},
+			{Key: "enter", Action: "play"},
+			{Key: "m", Action: "mark complete"},
 		}
+		if m.resolved != nil && model.IsEpisodeBased(m.resolved.MediaType) {
+			keys = append(keys, KeyBinding{Key: "n", Action: "next"})
+		}
+		keys = append(keys, KeyBinding{Key: "D", Action: "download"})
 		if m.appMode == provider.ModeAnime {
 			keys = append(keys, KeyBinding{Key: "a", Action: "sub/dub"})
 		}
@@ -394,9 +398,7 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 		return []KeyBinding{
 			{Key: "enter", Action: "open"},
 			{Key: "tab", Action: "section"},
-			{Key: "/", Action: "filter"},
 			{Key: "d", Action: "delete"},
-			{Key: "D", Action: "clear all"},
 			{Key: "?", Action: "help"},
 			{Key: "esc", Action: "back"},
 		}
@@ -404,17 +406,13 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 		if data := m.collectSettingsData(m.width, m.height); data.AudioPickerOpen {
 			return []KeyBinding{
 				{Key: "space", Action: "toggle"},
-				{Key: "/", Action: "filter"},
 				{Key: "enter", Action: "done"},
 				{Key: "esc", Action: "cancel"},
 			}
 		}
 		return []KeyBinding{
-			{Key: "↑↓", Action: "move"},
-			{Key: "←→", Action: "change"},
 			{Key: "enter", Action: "edit"},
 			{Key: "tab", Action: "category"},
-			{Key: "i", Action: "import"},
 			{Key: "?", Action: "help"},
 			{Key: "esc", Action: "back"},
 		}
@@ -425,8 +423,7 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 		}
 		return []KeyBinding{
 			{Key: "p", Action: pAction},
-			{Key: "x", Action: "cancel item (2×)"},
-			{Key: "X", Action: "cancel all (2×)"},
+			{Key: "x", Action: "cancel"},
 			{Key: "enter", Action: "open folder"},
 			{Key: "?", Action: "help"},
 			{Key: "esc", Action: "back"},
@@ -1023,6 +1020,7 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		PosterArtwork:       m.imagesEnabled,
 		AccentName:          accentName,
 		Transitions:         m.transitions,
+		StartupSearchActive: m.startupSearchActive,
 		DefaultModeName:     defaultModeName,
 		ModesRows:           modeRows,
 	}
@@ -1137,6 +1135,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 		contextKeys = []KeyBinding{
 			{Key: "enter", Action: "open source preview"},
 			{Key: "space", Action: "toggle select mode"},
+			{Key: "m", Action: "toggle episode complete / unwatched"},
 			{Key: "[ ]", Action: "switch season tabs"},
 			{Key: "/", Action: "filter by title or number"},
 			{Key: "g / G", Action: "first / last episode"},
@@ -1154,6 +1153,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 			{Key: "enter", Action: "play selected source"},
 			{Key: "↑↓ j k", Action: "choose playback source"},
 			{Key: "enter / p", Action: "play selected source"},
+			{Key: "m", Action: "toggle complete / unwatched"},
 			{Key: "n / ]", Action: "next episode"},
 			{Key: "[", Action: "previous episode"},
 			{Key: "D", Action: "download selected source"},

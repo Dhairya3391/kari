@@ -28,6 +28,7 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	m.startupSync = true
 	m.defaultMode = "movies"
 	m.transitions = false
+	m.startupSearchActive = false
 
 	m.saveSettings()
 
@@ -66,6 +67,9 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	}
 	if saved.Transitions == nil || *saved.Transitions {
 		t.Errorf("saved.Transitions = %v, want false", saved.Transitions)
+	}
+	if saved.StartupSearchActive == nil || *saved.StartupSearchActive {
+		t.Errorf("saved.StartupSearchActive = %v, want false", saved.StartupSearchActive)
 	}
 }
 
@@ -113,6 +117,7 @@ func TestNewModelRestoresSettingsAfterRestart(t *testing.T) {
 	t.Setenv("HOME", tempHome)
 
 	transitionsFalse := false
+	startupSearchActiveFalse := false
 	settings.Save(&settings.Data{
 		Modes:                 []string{"tv", "movies", "anime", "cartoon", "live", "manga", "jellyfin"},
 		DisableImages:         true,
@@ -124,6 +129,7 @@ func TestNewModelRestoresSettingsAfterRestart(t *testing.T) {
 		StartupSync:           true,
 		DefaultMode:           "tv",
 		Transitions:           &transitionsFalse,
+		StartupSearchActive:   &startupSearchActiveFalse,
 	})
 
 	reg := &provider.Registry{}
@@ -165,6 +171,12 @@ func TestNewModelRestoresSettingsAfterRestart(t *testing.T) {
 	}
 	if m.transitions {
 		t.Errorf("m.transitions = true, want false")
+	}
+	if m.startupSearchActive {
+		t.Errorf("m.startupSearchActive = true, want false")
+	}
+	if m.queryInput.Focused() {
+		t.Errorf("m.queryInput.Focused() = true, want false")
 	}
 	if m.appMode != provider.ModeTV {
 		t.Errorf("m.appMode = %v, want %v", m.appMode, provider.ModeTV)
@@ -228,5 +240,99 @@ func TestCycleSkipProvider(t *testing.T) {
 	cur = cycleSkipProvider("hybrid", true)
 	if cur != "off" {
 		t.Fatalf("cycle wrap reverse want off, got %s", cur)
+	}
+}
+
+func TestStartupSearchActivePersistence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	m := newTestSwitchModel()
+	m.settingsCategory = CategoryInterface
+	m.settingsIndex = 3 // Startup search active
+	m.startupSearchActive = true
+
+	// Toggle via enter key
+	m.updateSettings(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.startupSearchActive {
+		t.Fatalf("expected m.startupSearchActive to be false after enter")
+	}
+
+	saved := settings.Load()
+	if saved == nil || saved.StartupSearchActive == nil || *saved.StartupSearchActive {
+		t.Fatalf("expected saved.StartupSearchActive to be false, got %+v", saved)
+	}
+
+	// Toggle back via right arrow
+	m.updateSettings(tea.KeyMsg{Type: tea.KeyRight})
+	if !m.startupSearchActive {
+		t.Fatalf("expected m.startupSearchActive to be true after right arrow")
+	}
+
+	saved = settings.Load()
+	if saved == nil || saved.StartupSearchActive == nil || !*saved.StartupSearchActive {
+		t.Fatalf("expected saved.StartupSearchActive to be true, got %+v", saved)
+	}
+}
+
+func TestStartupSearchActiveNewModel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	f := false
+	settings.Save(&settings.Data{
+		StartupSearchActive: &f,
+	})
+
+	reg := &provider.Registry{}
+	players := player.NewRegistry("", player.SkipClients{}, player.SkipSettings{})
+
+	// 1. With startup_search_active: false and empty initialQuery
+	mdl := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0", "")
+	m, ok := mdl.(*modelImpl)
+	if !ok {
+		t.Fatal("expected *modelImpl")
+	}
+	if m.startupSearchActive {
+		t.Error("expected m.startupSearchActive to be false")
+	}
+	if m.queryInput.Focused() {
+		t.Error("expected queryInput to be blurred when startupSearchActive is false")
+	}
+
+	// Pressing 'h' in search home view immediately executes history refresh without esc
+	mdl2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	m2 := mdl2.(*modelImpl)
+	if !m2.loading || m2.loadingText != "Loading history..." {
+		t.Errorf("expected loading history without Esc, got loading=%v, loadingText=%q", m2.loading, m2.loadingText)
+	}
+
+	// Pressing space when blurred focuses the search input
+	mdlSpace, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	mSpace := mdlSpace.(*modelImpl)
+	if !mSpace.queryInput.Focused() {
+		t.Error("expected space key to focus search input")
+	}
+
+	// 2. With startup_search_active: false but non-empty initialQuery ("frieren")
+	mdlQuery := NewModel(context.Background(), "frieren", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0", "")
+	mQuery := mdlQuery.(*modelImpl)
+	if !mQuery.queryInput.Focused() {
+		t.Error("expected queryInput to be focused when initialQuery is provided")
+	}
+	if mQuery.searchQuery != "frieren" {
+		t.Errorf("expected searchQuery to be 'frieren', got %q", mQuery.searchQuery)
+	}
+
+	// 3. With startup_search_active: true (or absent)
+	tr := true
+	settings.Save(&settings.Data{
+		StartupSearchActive: &tr,
+	})
+	mdlActive := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0", "")
+	mActive := mdlActive.(*modelImpl)
+	if !mActive.startupSearchActive {
+		t.Error("expected m.startupSearchActive to be true")
+	}
+	if !mActive.queryInput.Focused() {
+		t.Error("expected queryInput to be focused when startupSearchActive is true")
 	}
 }

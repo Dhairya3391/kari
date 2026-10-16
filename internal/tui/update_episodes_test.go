@@ -4,11 +4,14 @@ package tui
 // typing, g/G jump, and cursor clamping on filtered lists.
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/history"
 	"kari/internal/provider"
 )
 
@@ -278,5 +281,145 @@ func TestCollectDownloadsDataActiveBatchAndSingle(t *testing.T) {
 	}
 	if m.batchInProgress {
 		t.Errorf("batchInProgress must be false after 'X'")
+	}
+}
+
+func TestEpisodesMarkCompleteToggle(t *testing.T) {
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+
+	m := episodesTestModel()
+	m.historyStore = store
+	m.appMode = provider.ModeTV
+	m.selectedSeries = &provider.SearchResult{Title: "The Boys", MediaType: provider.MediaTypeTV}
+	m.seasonEpisodeIndex = 0
+
+	// 1. Press 'm' to mark complete
+	mdl, _ := m.updateEpisodes(runeKey("m"))
+	m = mdl.(*modelImpl)
+
+	key := history.EntryKey{
+		Title:     "The Boys",
+		Mode:      string(provider.ModeTV),
+		MediaType: provider.MediaTypeTV,
+		Season:    1,
+		Episode:   1,
+	}
+	entry, ok := store.Get(key)
+	if !ok {
+		t.Fatalf("expected entry in history store after marking complete")
+	}
+	if !entry.Complete {
+		t.Errorf("expected entry.Complete to be true, got false")
+	}
+	if entry.PercentComplete != 1.0 {
+		t.Errorf("expected entry.PercentComplete to be 1.0, got %f", entry.PercentComplete)
+	}
+	if m.activeToast == nil || !strings.Contains(m.activeToast.Message, "marked") || !strings.Contains(m.activeToast.Message, "complete") {
+		t.Errorf("expected toast with 'marked ... complete', got %+v", m.activeToast)
+	}
+
+	// 2. Press 'm' again to unmark
+	mdl, _ = m.updateEpisodes(runeKey("m"))
+	m = mdl.(*modelImpl)
+
+	_, ok = store.Get(key)
+	if ok {
+		t.Errorf("expected entry to be removed from history store after unmarking")
+	}
+	if m.activeToast == nil || !strings.Contains(m.activeToast.Message, "unmarked") {
+		t.Errorf("expected toast with 'unmarked', got %+v", m.activeToast)
+	}
+}
+
+func TestEpisodesSelectModeBatchMarkComplete(t *testing.T) {
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+
+	m := episodesTestModel()
+	m.historyStore = store
+	m.appMode = provider.ModeTV
+	m.selectedSeries = &provider.SearchResult{Title: "The Boys", MediaType: provider.MediaTypeTV}
+	m.seasonEpisodeIndex = 0
+
+	// Enter select mode with space on episode 0
+	mdl, _ := m.updateEpisodes(runeKey(" "))
+	m = mdl.(*modelImpl)
+	if !m.selectMode {
+		t.Fatalf("expected selectMode to be true")
+	}
+
+	// Move down and toggle episode 1
+	mdl, _ = m.updateEpisodes(runeKey("j"))
+	m = mdl.(*modelImpl)
+	mdl, _ = m.updateEpisodes(runeKey(" "))
+	m = mdl.(*modelImpl)
+
+	if len(m.selectedEpisodes) != 2 {
+		t.Fatalf("expected 2 selected episodes, got %d", len(m.selectedEpisodes))
+	}
+
+	// Press 'm' to mark both complete
+	mdl, _ = m.updateEpisodes(runeKey("m"))
+	m = mdl.(*modelImpl)
+
+	if m.selectMode {
+		t.Errorf("selectMode should be false after batch mark complete")
+	}
+	if len(m.selectedEpisodes) != 0 {
+		t.Errorf("selectedEpisodes should be empty after batch mark complete")
+	}
+	if m.activeToast == nil || !strings.Contains(m.activeToast.Message, "marked 2 episodes as complete") {
+		t.Errorf("expected toast 'marked 2 episodes as complete', got %+v", m.activeToast)
+	}
+
+	for _, epNum := range []int{1, 2} {
+		key := history.EntryKey{
+			Title:     "The Boys",
+			Mode:      string(provider.ModeTV),
+			MediaType: provider.MediaTypeTV,
+			Season:    1,
+			Episode:   epNum,
+		}
+		entry, ok := store.Get(key)
+		if !ok || !entry.Complete {
+			t.Errorf("episode %d should be complete in store", epNum)
+		}
+	}
+
+	// Re-enter select mode, select episode 0 and 1 (both complete)
+	m.seasonEpisodeIndex = 0
+	mdl, _ = m.updateEpisodes(runeKey(" "))
+	m = mdl.(*modelImpl)
+	mdl, _ = m.updateEpisodes(runeKey("j"))
+	m = mdl.(*modelImpl)
+	mdl, _ = m.updateEpisodes(runeKey(" "))
+	m = mdl.(*modelImpl)
+
+	// Press 'm': since all selected are complete, it unmarks both
+	mdl, _ = m.updateEpisodes(runeKey("m"))
+	m = mdl.(*modelImpl)
+
+	if m.activeToast == nil || !strings.Contains(m.activeToast.Message, "unmarked 2 episodes") {
+		t.Errorf("expected toast 'unmarked 2 episodes', got %+v", m.activeToast)
+	}
+
+	for _, epNum := range []int{1, 2} {
+		key := history.EntryKey{
+			Title:     "The Boys",
+			Mode:      string(provider.ModeTV),
+			MediaType: provider.MediaTypeTV,
+			Season:    1,
+			Episode:   epNum,
+		}
+		if _, ok := store.Get(key); ok {
+			t.Errorf("episode %d should be deleted from store", epNum)
+		}
 	}
 }

@@ -19,6 +19,7 @@ func newTestSwitchModel() *modelImpl {
 		disabledModes:   make(map[string]bool),
 		registry:        &provider.Registry{},
 		transitions:     true,
+		startupSearchActive: true,
 	}
 	// Register dummy providers for all modes so they are available
 	m.registry.Register(&fakeProviderForSwitch{name: "anikoto", modes: []provider.Mode{{Name: provider.ModeAnime}}})

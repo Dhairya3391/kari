@@ -55,6 +55,9 @@ func TestSettingsJsonRoundtripBackwardCompatible(t *testing.T) {
 	if !d.TransitionsEnabled() {
 		t.Error("transitions should default to true")
 	}
+	if !d.StartupSearchActiveEnabled() {
+		t.Error("startup_search_active should default to true")
+	}
 	if !reflect.DeepEqual(d.NormalizedModes(), DefaultModes) {
 		t.Errorf("modes = %v, want defaults", d.NormalizedModes())
 	}
@@ -78,6 +81,7 @@ func TestDefaultModeAndCustomOrderRoundtrip(t *testing.T) {
 
 func TestAllSettingsFieldsPresentInSerializedJSON(t *testing.T) {
 	transitions := true
+	startupSearchActive := true
 	data := &Data{
 		QualityMode:           0,
 		DownloadQuality:       0,
@@ -100,6 +104,7 @@ func TestAllSettingsFieldsPresentInSerializedJSON(t *testing.T) {
 		ModesDisabled:         []string{},
 		LastMode:              "anime",
 		Transitions:           &transitions,
+		StartupSearchActive:   &startupSearchActive,
 	}
 
 	bytes, err := json.Marshal(data)
@@ -129,11 +134,44 @@ func TestAllSettingsFieldsPresentInSerializedJSON(t *testing.T) {
 		"modes_disabled",
 		"last_mode",
 		"transitions",
+		"startup_search_active",
 	}
 
 	for _, key := range expectedKeys {
 		if !strings.Contains(jsonStr, `"`+key+`":`) {
 			t.Errorf("expected serialized JSON to contain key %q, got:\n%s", key, jsonStr)
 		}
+	}
+}
+
+func TestStartupSearchActiveEnabled(t *testing.T) {
+	var nilData *Data
+	if !nilData.StartupSearchActiveEnabled() {
+		t.Error("nil Data should default to true")
+	}
+
+	emptyData := &Data{}
+	if !emptyData.StartupSearchActiveEnabled() {
+		t.Error("empty Data should default to true")
+	}
+
+	f := false
+	disabledData := &Data{StartupSearchActive: &f}
+	if disabledData.StartupSearchActiveEnabled() {
+		t.Error("explicit false should return false")
+	}
+
+	tr := true
+	enabledData := &Data{StartupSearchActive: &tr}
+	if !enabledData.StartupSearchActiveEnabled() {
+		t.Error("explicit true should return true")
+	}
+
+	var parsed Data
+	if err := json.Unmarshal([]byte(`{"startup_search_active": false}`), &parsed); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if parsed.StartupSearchActiveEnabled() {
+		t.Error("JSON with startup_search_active: false should parse to false")
 	}
 }
