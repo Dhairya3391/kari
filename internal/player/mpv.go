@@ -335,7 +335,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 	args = appendSubtitleArgs(args, media.SubtitlePath())
 	args = appendAudioLangArgs(args, source.Language)
 	args = append(args, aniskipArgs...)
-	// ExtraArgs may contain --demuxer-lavf-format=hls (atlantic, miruro). When
+	// ExtraArgs may contain --demuxer-lavf-format=hls (miruro). When
 	// a subtitle file is present, that format override bleeds onto the subtitle
 	// file open and makes mpv fail with "Can not open external file". Scope
 	// ExtraArgs to the video file only via per-file brackets so the global

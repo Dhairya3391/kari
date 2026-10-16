@@ -2,7 +2,7 @@
 // API (https://pengu.uk). PenguPlay is an aggregator that queries multiple
 // streaming backends (4KHDHub, MovieBox, VegaMovies, VAPlayer, Miruro,
 // VidFast, CineFreak, Cinejoy, KissKH, HDHub4u, Anikoto, Ani.pm, 2Peckle, Arctic,
-// Atlantic, VixSrc, Vidy, ToonWorld4All, Reanime, PlayFy, MoviesDrives) and
+// VixSrc, Vidy, ToonWorld4All, Reanime, PlayFy, MoviesDrives) and
 // returns direct and HLS streams. Reanime, Ani.pm serve anime, ToonWorld4All serves
 // cartoons and general media, Vidy, MoviesDrives, and 4KHDHub serve movies
 // and TV shows, and live-sports serves live catalogs. VidLink and Arctic stay
@@ -45,7 +45,7 @@ const penguUA = config.DesktopUserAgent
 
 var (
 	reResolution = regexp.MustCompile(`(?i)\b(4k|2160p|1440p|1080p|720p|480p|360p)\b`)
-	reSourceTag  = regexp.MustCompile(`(?i)\b(4khdhub|moviebox|vegamovies|moviesdrives|miruro|cinefreak|vaplayer|vidlink|vidfast|cinejoy|hdghartv|kisskh|hdhub4u|atlantic|anikoto|anipm|ani\.pm|2peckle|debridscloud|5clover|daddylive|binged|streamedpk|cdnlive|timstreams|arctic|vixsrc|vidy|toonworld4all|toonworld|reanime|playfy)\b`)
+	reSourceTag  = regexp.MustCompile(`(?i)\b(4khdhub|moviebox|vegamovies|moviesdrives|miruro|cinefreak|vaplayer|vidlink|vidfast|cinejoy|hdghartv|kisskh|hdhub4u|anikoto|anipm|ani\.pm|2peckle|debridscloud|5clover|daddylive|binged|streamedpk|cdnlive|timstreams|arctic|vixsrc|vidy|toonworld4all|toonworld|reanime|playfy)\b`)
 	reAudioLang  = regexp.MustCompile(`(?i)(?:audio|language|languages):\s*([a-zA-Z, /]+)`)
 	// reDubSubMarker matches MovieBox-style audio markers in filenames:
 	// "{lang}dubaudio" (dubbed audio) vs "{lang}subaudio" (original audio
@@ -1285,7 +1285,7 @@ func canonProviderName(token string) string {
 	for _, canon := range []string{
 		"4KHDHub", "MovieBox", "VegaMovies", "MoviesDrives",
 		"Miruro", "CineFreak", "VAPlayer", "VidLink",
-		"VidFast", "Cinejoy", "HDGharTV", "KissKH", "HDHub4u", "Atlantic",
+		"VidFast", "Cinejoy", "HDGharTV", "KissKH", "HDHub4u",
 		"Anikoto", "Ani.pm", "2Peckle", "DebridsCloud", "5Clover", "DaddyLive", "Binged", "StreamedPK", "CDNLIVE", "TimStreams",
 		"Arctic", "VixSrc", "Vidy", "ToonWorld4All", "Reanime", "PlayFy",
 	} {

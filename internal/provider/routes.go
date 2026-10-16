@@ -95,7 +95,6 @@ func defaultRoutes() map[ContentType][]Route {
 		{Provider: "movysx", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "pengu", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "moovie", Search: StrategyMerge, Sources: StrategyRace},
-		{Provider: "atlantic", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "cinecat", Search: StrategyMerge, Sources: StrategyRace},
 	}
 	return map[ContentType][]Route{

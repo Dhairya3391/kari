@@ -262,7 +262,7 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 	// (--{ … --}) inside the "--" section cannot scope options to that URL.
 	// When a subtitle is loaded and ExtraArgs carry --demuxer-lavf-format=,
 	// that override bleeds onto the subtitle file open and silently drops it.
-	// Strip the format override in that case: Atlantic/miruro CDNs serve
+	// Strip the format override in that case: miruro CDNs serve
 	// proper Content-Type headers so lavf auto-detects HLS by content probe.
 	return append(args, iinaExtraArgs(source.ExtraArgs, media.SubtitlePath())...)
 }

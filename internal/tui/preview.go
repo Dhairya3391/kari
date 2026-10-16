@@ -22,7 +22,7 @@ type PreviewData struct {
 	AudioTrack       string // e.g. "sub" or "dub" for controls bar
 	SubtitlesText    string // e.g. "English ✓"
 	SubtitleType     string // e.g. "soft subs", "hard subs", or ""
-	SubtitleProvider string // e.g. "Atlantic", "OpenSubtitles", or ""
+	SubtitleProvider string // e.g. "Cinecat", "OpenSubtitles", or ""
 	ResumePosition   string // e.g. "13:08"
 	PosterBlock      string
 	Sources          []provider.MediaSource

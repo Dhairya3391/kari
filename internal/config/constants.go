@@ -67,20 +67,6 @@ const (
 	// AniPMMediaReferer satisfies hotlink protection on media.settlar.io stream requests.
 	AniPMMediaReferer = "https://embed.settlar.io/"
 
-	// AtlanticBase is the public web application for Atlantic (https://atlantic.st).
-	AtlanticBase = "https://atlantic.st"
-	// AtlanticReferer satisfies the hotlink protection enforced by Atlantic's
-	// stream and segment proxies.
-	AtlanticReferer = "https://atlantic.st/"
-	// AtlanticStreamBase is the multi-backend streaming resolution service (hls.lol)
-	// serving Helios, Moscow, and Planets shards.
-	AtlanticStreamBase = "https://stream.hls.lol"
-	// AtlanticAthenaBase is the BlueVelvet CDN backend for Athena streams.
-	AtlanticAthenaBase = "https://zcdn.bluevelvet.space"
-	// AtlanticSubsBase is the Natsuki subtitle API backend.
-	AtlanticSubsBase = "https://natsuki.hls.lol"
-	// AtlanticGraniteBase is the Granite subtitle API backend.
-	AtlanticGraniteBase = "https://sub.vdrk.site"
 
 	// CinecatBase is the public web application for Cinecat (https://beta.cinecat.eu).
 	CinecatBase = "https://beta.cinecat.eu"

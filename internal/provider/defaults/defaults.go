@@ -7,7 +7,6 @@ import (
 	"kari/internal/provider/anicine"
 	"kari/internal/provider/anikoto"
 	"kari/internal/provider/anipm"
-	"kari/internal/provider/atlantic"
 	"kari/internal/provider/cinecat"
 	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/miruro"
@@ -57,12 +56,6 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "moovie",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return moovie.NewClient(d.KeyPool)
-		},
-	},
-	{
-		ID: "atlantic",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return atlantic.NewClient(d.KeyPool)
 		},
 	},
 	{

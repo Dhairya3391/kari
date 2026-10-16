@@ -79,7 +79,7 @@ func TestBuildConfigSegment(t *testing.T) {
 			t.Errorf("%s = %v, want off", key, parsed[key])
 		}
 	}
-	for _, key := range []string{"source_hdghartv", "source_atlantic"} {
+	for _, key := range []string{"source_hdghartv"} {
 		if _, ok := parsed[key]; ok {
 			t.Errorf("%s should not be present in Pengu config", key)
 		}
@@ -182,7 +182,6 @@ func TestParseStreamItemNewBackends(t *testing.T) {
 		{"🐧 PenguPlay 🧊 1080p • 2Peckle", "2Peckle"},
 		{"🐧 PenguPlay 🧊 1080p • Miruro · Animegg", "Miruro"},
 		{"🐧 PenguPlay 🧊 1080p • Arctic", "Arctic"},
-		{"🐧 PenguPlay 🧊 1080p • Atlantic", "Atlantic"},
 		{"🐧 PenguPlay 🧊 1080p • VixSrc", "VixSrc"},
 		{"🐧 PenguPlay ❄️ 4K • Vidy · Miami", "Vidy"},
 		{"🐧 PenguPlay 🧊 1080p • ToonWorld4All", "ToonWorld4All"},
