@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -282,4 +283,33 @@ func formatLongRelativeTime(t time.Time) string {
 
 func renderInlineConfirm(prompt string, width int, st Styles) string {
 	return "\n\n" + st.Dim.Render("  "+prompt)
+}
+
+// sortGroupsByDateBucket reorders groups in Today → This week → Earlier
+// order, matching renderHistoryList exactly. Within each bucket the
+// original (newest-first) order is preserved. finishedTab selects
+// FarthestComplete instead of ContinueEntry for the timestamp, mirroring
+// the renderer's tab-aware entry selection.
+func sortGroupsByDateBucket(groups []history.Group, finishedTab bool) []history.Group {
+	now := time.Now()
+	bucket := func(g history.Group) int {
+		entry := g.ContinueEntry
+		if finishedTab {
+			entry = g.FarthestComplete
+		}
+		d := now.Sub(entry.WatchedAt)
+		if d < 24*time.Hour && now.Day() == entry.WatchedAt.Day() {
+			return 0 // Today
+		}
+		if d < 7*24*time.Hour {
+			return 1 // This week
+		}
+		return 2 // Earlier
+	}
+	out := make([]history.Group, len(groups))
+	copy(out, groups)
+	sort.SliceStable(out, func(i, j int) bool {
+		return bucket(out[i]) < bucket(out[j])
+	})
+	return out
 }

@@ -420,6 +420,41 @@ func TestRegistryPreservesCompletionConfirmation(t *testing.T) {
 	}
 }
 
+func TestRegistryDoesNotFallBackToAnotherPlayerOnError(t *testing.T) {
+	fallbackCalled := false
+	expectedErr := errors.New("mpv crashed")
+	registry := &Registry{preferred: "mpv"}
+	registry.players = []Player{
+		&stubPlayer{
+			name:      "mpv",
+			available: true,
+			play: func() (PlaybackResult, error) {
+				return PlaybackResult{}, expectedErr
+			},
+		},
+		&stubPlayer{
+			name:      "iina",
+			available: true,
+			play: func() (PlaybackResult, error) {
+				fallbackCalled = true
+				return PlaybackResult{}, nil
+			},
+		},
+	}
+
+	_, err := registry.PlayWithSources(
+		[]provider.MediaSource{{URL: "https://cdn.example.com/video.m3u8"}},
+		model.ResolvedMedia{},
+		"mpv",
+	)
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected error %v, got %v", expectedErr, err)
+	}
+	if fallbackCalled {
+		t.Fatal("player error must not fall back to another player; only the selected player should be tried")
+	}
+}
+
 func TestMPVLoadsSelectedLocalSubtitle(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("lavfi test source is not portable to Windows CI")

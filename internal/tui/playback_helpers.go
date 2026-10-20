@@ -82,13 +82,26 @@ func (m *modelImpl) refreshRanking() {
 		}
 	}
 	m.rankAndSelectSources()
-	if trackBest || selectedURL == "" {
-		return
+	if !trackBest && selectedURL != "" {
+		for i, s := range m.rankedSources {
+			if s.Source.URL == selectedURL {
+				m.previewSelectedIndex = i
+				return
+			}
+		}
 	}
-	for i, s := range m.rankedSources {
-		if s.Source.URL == selectedURL {
-			m.previewSelectedIndex = i
-			return
+	// On autoplay, if the user hasn't manually moved the cursor, prefer the same
+	// provider/resolver that the previous episode played from if available.
+	if m.autoPlayAfterResolve && m.prevSourceResolver != "" && !m.manualPlaybackSelected {
+		bestIdx := -1
+		for i, s := range m.rankedSources {
+			if strings.EqualFold(s.Source.Resolver, m.prevSourceResolver) {
+				bestIdx = i
+				break
+			}
+		}
+		if bestIdx >= 0 {
+			m.previewSelectedIndex = bestIdx
 		}
 	}
 }

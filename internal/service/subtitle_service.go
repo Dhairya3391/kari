@@ -110,14 +110,6 @@ func (s *SubtitleService) Fetch(
 		return track, nil
 	}
 
-	titleKey := fmt.Sprintf(
-		"%d:%d:%d:%s:%s",
-		media.TMDBID,
-		media.SeasonNumber,
-		media.EpisodeNumber,
-		mediaTitle,
-		preferredLang,
-	)
 	originalSubtitles := media.Subtitles
 	matchingCandidates := selectMatchingProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
 
@@ -125,13 +117,13 @@ func (s *SubtitleService) Fetch(
 	var failures []error
 
 	// Priority order:
-	// 1. Source's own provider candidates (matchingResolver)
+	// 1. Source's own provider candidates (matching resolver)
 	// 2. OpenSubtitles (dedicated subtitle fallback when active provider has no subs)
 	// 3. Other providers' candidates (web stream rips matching the video encode)
 	if len(matchingCandidates) > 0 {
 		track, err := s.downloadProviderCandidates(ctx, media, matchingCandidates, attempted)
 		if err == nil && usableCachedTrack(track) {
-			s.cacheTrack(track, cacheKey, titleKey)
+			s.cache.Set(cacheKey, track)
 			return track, nil
 		}
 		if err != nil {
@@ -151,7 +143,7 @@ func (s *SubtitleService) Fetch(
 		if err != nil {
 			failures = append(failures, fmt.Errorf("opensubtitles: %w", err))
 		} else if found && usableCachedTrack(track) {
-			s.cacheTrack(track, cacheKey, titleKey)
+			s.cache.Set(cacheKey, track)
 			return track, nil
 		}
 	}
@@ -160,17 +152,12 @@ func (s *SubtitleService) Fetch(
 	if len(otherCandidates) > 0 {
 		track, err := s.downloadProviderCandidates(ctx, media, otherCandidates, attempted)
 		if err == nil && usableCachedTrack(track) {
-			s.cacheTrack(track, cacheKey, titleKey)
+			s.cache.Set(cacheKey, track)
 			return track, nil
 		}
 		if err != nil {
 			failures = append(failures, err)
 		}
-	}
-
-	if track, ok := s.cache.Get(titleKey); ok && usableCachedTrack(track) {
-		s.cache.Set(cacheKey, track)
-		return track, nil
 	}
 
 	if len(failures) == 0 {
@@ -184,11 +171,6 @@ func (s *SubtitleService) areAnimeSubtitlesDisabled() bool {
 	disabled := s.disableAnime
 	s.disableMu.RUnlock()
 	return disabled
-}
-
-func (s *SubtitleService) cacheTrack(track model.SubtitleTrack, cacheKey, titleKey string) {
-	s.cache.Set(cacheKey, track)
-	s.cache.Set(titleKey, track)
 }
 
 func usableCachedTrack(track model.SubtitleTrack) bool {

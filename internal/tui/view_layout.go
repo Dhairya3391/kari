@@ -849,10 +849,11 @@ func (m *modelImpl) collectHistoryData(width, height int, accent lipgloss.Adapti
 	continued, finished := splitHistoryGroups(m.historyGroups)
 
 	activeTab := HistoryTabContinue
-	activeList := continued
-	if m.historyTab == historyTabFinished {
+	finishedTab := m.historyTab == historyTabFinished
+	activeList := sortGroupsByDateBucket(continued, false)
+	if finishedTab {
 		activeTab = HistoryTabFinished
-		activeList = finished
+		activeList = sortGroupsByDateBucket(finished, true)
 	}
 
 	poster := posterBlock(m.historyPoster, m.historyPosterUnavailable, m.imgProtocol, kittyHistoryImageID, m.imagesEnabled)

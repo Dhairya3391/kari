@@ -871,7 +871,8 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 
 	m.activeView = viewPreview
 
-	if m.autoplay && m.resolved != nil && model.IsEpisodeBased(m.resolved.MediaType) {
+	isFinished := msg.result.Completed || (msg.result.DurationSecs > 0 && (msg.result.FinalPositionSecs/msg.result.DurationSecs) >= 0.80)
+	if m.autoplay && m.resolved != nil && model.IsEpisodeBased(m.resolved.MediaType) && isFinished {
 		if idx, ok := m.nextEpisodeIndex(); ok {
 			logging.Info("autoplay: starting next episode", "index", idx)
 			return m.startEpisodeResolution(idx, true)

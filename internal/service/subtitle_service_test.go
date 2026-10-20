@@ -372,3 +372,49 @@ func TestSubtitleServiceHierarchyMatchingOverOther(t *testing.T) {
 		t.Errorf("expected fallback to other provider, got resolver %q", track2.Resolver)
 	}
 }
+
+// TestSubtitleServiceProviderSubsNotPoisonedByOpenSubtitles verifies that
+// scrolling through sources does not assign an OpenSubtitles track to a
+// resolver that carries its own provider subtitles. A previous resolver
+// (no provider subs) may fall back to OpenSubtitles and cache that result;
+// when the user switches to a resolver that has its own subs the provider
+// track must win, not the cached OpenSub track from the other resolver.
+func TestSubtitleServiceProviderSubsNotPoisonedByOpenSubtitles(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nprovider sub\n"))
+	}))
+	defer srv.Close()
+
+	svc := NewSubtitleService(&config.Config{})
+	svc.httpClient = srv.Client()
+
+	media := model.ResolvedMedia{
+		SeriesTitle:   "Fire Force",
+		SeasonNumber:  1,
+		EpisodeNumber: 1,
+		MediaType:     provider.MediaTypeAnime,
+		// Only anikoto has provider subs; miruro has none.
+		Subtitles: []model.SubtitleTrack{
+			{URL: srv.URL + "/provider.vtt", Language: "en", Resolver: "anikoto"},
+		},
+	}
+
+	// Simulate: user first selected a miruro source (no provider subs).
+	// Manually inject an OpenSub-style track under miruro's cacheKey to
+	// represent a prior fetch that reached OpenSubtitles and cached its result.
+	openSubPath := t.TempDir() + "/opensub.srt"
+	if err := os.WriteFile(openSubPath, []byte("1\n00:00,000 --> 00:01,000\nopemsub track\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	miruroKey := "0:1:1:Fire Force:en:miruro"
+	svc.cache.Set(miruroKey, model.SubtitleTrack{Path: openSubPath, Resolver: "opensubtitles"})
+
+	// Now user scrolls to anikoto source — must get anikoto's provider sub.
+	track, err := svc.Fetch(context.Background(), media, "en", "anikoto")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if track.Resolver != "anikoto" {
+		t.Errorf("expected anikoto provider track, got resolver %q (path %q)", track.Resolver, track.Path)
+	}
+}

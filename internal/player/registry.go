@@ -46,43 +46,40 @@ func (r *Registry) Register(p Player) {
 	}
 }
 
-// PlayWithSources tries sources in order against the preferred player,
-// falling back to others when unavailable. Players that cannot observe
-// completion return NeedsCompletionConfirmError after a successful launch.
+// PlayWithSources tries sources in order against the selected player only.
+// It does not fall back to other installed players if the selected player fails.
+// Players that cannot observe completion return NeedsCompletionConfirmError after a successful launch.
 func (r *Registry) PlayWithSources(sources []provider.MediaSource, media model.ResolvedMedia, preferred string) (PlaybackResult, error) {
 	playerLog.Debug("playback starting", "media", media.DisplayTitle(), "preferredPlayer", preferred, "sources", len(sources))
 
 	if preferred == "" {
 		preferred = r.DefaultPlayer()
 	}
-	order := r.preferredPlayers(preferred)
+	p := r.findPlayer(preferred)
+	if p == nil {
+		return PlaybackResult{}, fmt.Errorf("player %q not found", preferred)
+	}
 
-	var lastErr error
-	for _, p := range order {
-		playerLog.Debug("trying player", "player", p.Name(), "available", p.Available())
-		// If this is the explicitly preferred player, we try it even if it says it's unavailable,
-		// to bypass broken Android package detection.
-		if !p.Available() && p.Name() != playerName(preferred) {
-			continue
-		}
-		result, err := p.Play(sources, media)
-		if err != nil {
-			var needsConfirm *NeedsCompletionConfirmError
-			if errors.As(err, &needsConfirm) {
-				playerLog.Info("playback launched", "player", p.Name())
-				return result, err
-			}
-			playerLog.Warn("player failed; falling back", "player", p.Name(), "err", err)
-			lastErr = err
-		} else {
+	playerLog.Debug("trying player", "player", p.Name(), "available", p.Available())
+	// If this is the explicitly preferred player, we try it even if it says it's unavailable,
+	// to bypass broken Android package detection.
+	if !p.Available() && p.Name() != playerName(preferred) {
+		return PlaybackResult{}, fmt.Errorf("player %s is not available", p.Name())
+	}
+
+	result, err := p.Play(sources, media)
+	if err != nil {
+		var needsConfirm *NeedsCompletionConfirmError
+		if errors.As(err, &needsConfirm) {
 			playerLog.Info("playback launched", "player", p.Name())
-			return result, nil
+			return result, err
 		}
+		playerLog.Warn("player failed", "player", p.Name(), "err", err)
+		return PlaybackResult{}, err
 	}
-	if lastErr != nil {
-		return PlaybackResult{}, lastErr
-	}
-	return PlaybackResult{}, fmt.Errorf("no supported player found")
+
+	playerLog.Info("playback launched", "player", p.Name())
+	return result, nil
 }
 
 // AvailablePlayers lists names of registered players usable on this system.
@@ -122,27 +119,18 @@ func (r *Registry) DefaultPlayer() string {
 	return "mpv"
 }
 
-func (r *Registry) preferredPlayers(preferred string) []Player {
+func (r *Registry) findPlayer(preferred string) Player {
 	if strings.TrimSpace(preferred) == "" {
 		preferred = r.preferred
 	}
-	prefName := playerName(preferred)
-
-	// Try to find the preferred player
+	prefTrimmed := strings.TrimSpace(preferred)
+	prefNorm := playerName(preferred)
 	for _, p := range r.players {
-		if p.Name() == prefName {
-			// Return a list with preferred first, then others
-			ordered := []Player{p}
-			for _, other := range r.players {
-				if other.Name() != prefName {
-					ordered = append(ordered, other)
-				}
-			}
-			return ordered
+		if strings.EqualFold(p.Name(), prefTrimmed) || (prefNorm != "" && strings.EqualFold(p.Name(), prefNorm)) {
+			return p
 		}
 	}
-
-	return r.players
+	return nil
 }
 
 type skipConfigurable interface {

@@ -9,6 +9,7 @@ import (
 
 	"kari/internal/config"
 	"kari/internal/model"
+	"kari/internal/player"
 	"kari/internal/provider"
 	"kari/internal/ranking"
 	"kari/internal/service"
@@ -173,5 +174,83 @@ func TestToggleAnimeAudioDoesNotAppendOldSources(t *testing.T) {
 	}
 	if m2.resolved.Playback[0].URL != subSource.URL {
 		t.Errorf("expected only sub source, got %+v", m2.resolved.Playback[0])
+	}
+}
+
+func TestAutoplayOnlyAdvancesWhenEpisodeFinished(t *testing.T) {
+	m := readySourceModel()
+	m.autoplay = true
+	m.selectedSeries = &provider.SearchResult{Title: "Fire Force"}
+	m.episodeResults = []provider.Episode{
+		{Title: "Episode 1", Episode: 1},
+		{Title: "Episode 2", Episode: 2},
+	}
+	m.episodeIndex = 0
+	m.resolved = &model.ResolvedMedia{
+		SeriesTitle: "Fire Force",
+		MediaType:   provider.MediaTypeAnime,
+	}
+	m.playOpID = 10
+
+	// Case 1: Video stopped at 20% (unfinished) -> Autoplay must not start next episode
+	mdl1, cmd1 := m.onPlayDone(playDoneMsg{
+		opID: 10,
+		result: player.PlaybackResult{
+			FinalPositionSecs: 200,
+			DurationSecs:      1000,
+			Completed:         false,
+		},
+	})
+	m1 := mdl1.(*modelImpl)
+	if cmd1 != nil {
+		t.Fatal("expected no command when episode is not finished, but got one")
+	}
+	if m1.episodeIndex != 0 {
+		t.Fatalf("episodeIndex changed to %d on unfinished playback", m1.episodeIndex)
+	}
+
+	// Case 2: Video stopped at 82% (>= 80%) -> Autoplay starts next episode
+	m.playOpID = 11
+	mdl2, cmd2 := m.onPlayDone(playDoneMsg{
+		opID: 11,
+		result: player.PlaybackResult{
+			FinalPositionSecs: 820,
+			DurationSecs:      1000,
+			Completed:         false,
+		},
+	})
+	m2 := mdl2.(*modelImpl)
+	if cmd2 == nil {
+		t.Fatal("expected autoplay command when episode is >= 80% finished")
+	}
+	if m2.episodeIndex != 1 {
+		t.Fatalf("episodeIndex = %d, want 1", m2.episodeIndex)
+	}
+}
+
+func TestAutoplayPrefersSameProviderSource(t *testing.T) {
+	m := rankingTestModel()
+	m.autoPlayAfterResolve = true
+	m.prevSourceResolver = "anikoto"
+
+	miruroFHD := provider.MediaSource{URL: "https://cdn.example.com/miruro.m3u8", Quality: "1080p", Resolver: "miruro"}
+	anikotoFHD := provider.MediaSource{URL: "https://cdn.example.com/anikoto.m3u8", Quality: "1080p", Resolver: "anikoto"}
+
+	// Miruro arrives first
+	m.mergeResolved(model.ResolvedMedia{
+		SeriesTitle: "Fire Force",
+		Playback:    []provider.MediaSource{miruroFHD},
+	})
+	if m.previewSelectedIndex != 0 {
+		t.Fatalf("only miruro available, index = %d", m.previewSelectedIndex)
+	}
+
+	// Later, Anikoto arrives: because prevSourceResolver is anikoto, it should switch to anikoto
+	m.mergeResolved(model.ResolvedMedia{
+		SeriesTitle: "Fire Force",
+		Playback:    []provider.MediaSource{miruroFHD, anikotoFHD},
+	})
+	if got := m.rankedSources[m.previewSelectedIndex].Source.Resolver; got != "anikoto" {
+		t.Fatalf("selected resolver = %q, want 'anikoto' (same as previous episode)", got)
 	}
 }

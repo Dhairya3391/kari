@@ -228,6 +228,7 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 		m.loadingText = "Preparing playback..."
 	}
 	if src, ok := m.selectedPlaybackSource(); ok {
+		m.prevSourceResolver = src.Resolver
 		m.prevSourceLanguage = src.Language
 		m.prevSourceQuality = service.SourceQuality(src.Quality)
 	}

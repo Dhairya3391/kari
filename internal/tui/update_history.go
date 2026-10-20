@@ -104,9 +104,9 @@ func (m *modelImpl) cycleHistoryTab() tea.Cmd {
 func (m *modelImpl) refreshHistoryItems() {
 	continued, finished := splitHistoryGroups(m.historyGroups)
 	if m.historyTab == historyTabFinished {
-		m.historyList.SetItems(historyTabItems(finished, true))
+		m.historyList.SetItems(historyTabItems(sortGroupsByDateBucket(finished, true), true))
 	} else {
-		m.historyList.SetItems(historyTabItems(continued, false))
+		m.historyList.SetItems(historyTabItems(sortGroupsByDateBucket(continued, false), false))
 	}
 }
 

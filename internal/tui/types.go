@@ -319,6 +319,7 @@ type modelImpl struct {
 	helpScroll             int
 	selectedPlayback       int
 	manualPlaybackSelected bool
+	prevSourceResolver     string
 	prevSourceLanguage     string
 	prevSourceQuality      int
 	availablePlayers       []string
