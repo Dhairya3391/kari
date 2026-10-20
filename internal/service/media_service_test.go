@@ -133,7 +133,7 @@ func TestMatchesAudioMode(t *testing.T) {
 }
 
 func TestSourceAggregatorDedupesSourcesAndSubtitles(t *testing.T) {
-	agg := newSourceAggregator([]provider.Provider{
+	agg := newSourceAggregatorForMode("", []provider.Provider{
 		&stubProvider{name: "first", mode: provider.ModeTV},
 		&stubProvider{name: "second", mode: provider.ModeTV},
 	}, func(n string) string { return n })
@@ -215,7 +215,7 @@ func TestSourceAggregatorPreservesTransportBoundSubtitles(t *testing.T) {
 func TestSourceAggregatorPreservesArrivalOrder(t *testing.T) {
 	first := &stubProvider{name: "first", mode: provider.ModeTV}
 	second := &stubProvider{name: "second", mode: provider.ModeTV}
-	agg := newSourceAggregator([]provider.Provider{first, second}, func(n string) string { return n })
+	agg := newSourceAggregatorForMode("", []provider.Provider{first, second}, func(n string) string { return n })
 
 	agg.add("second", []provider.MediaSource{{URL: "http://hi-2", Quality: "1080p"}})
 	agg.add("first", []provider.MediaSource{

@@ -29,10 +29,13 @@ import (
 // defaultStreamBase is the source service backing direct resolution.
 const defaultStreamBase = "https://api.wecollege.net"
 
-// sourceEndpoints are the city shards serving encrypted source payloads.
-var sourceEndpoints = []string{
-	"miami", "boise", "seattle", "denver", "atlanta", "phoenix",
-	"portland", "austin", "dallas", "tampa", "orlando",
+// sourceEndpoints returns the current city shards serving encrypted payloads.
+func sourceEndpoints() []string {
+	return []string{
+		"miami", "boise", "vegas", "reno", "oakland", "seattle",
+		"phoenix", "atlanta", "portland", "austin", "dallas", "tampa",
+		"orlando", "munich", "berlin", "paris", "delhi", "cancun",
+	}
 }
 
 const (
@@ -377,6 +380,9 @@ func isHTTPErrorCode(err error, code int) bool {
 // once sourceQuorum shards deliver, stragglers get sourceGraceMS to land;
 // the soft deadline fires only while sources are already held.
 func (c *Client) fetchSourcesDirect(ctx context.Context, mediaType string, tmdbID, season, episode int, title, year, imdbID string, totalSeasons int, seed string) (*mergedResults, error) {
+	fanoutCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	params := url.Values{}
 	params.Set("title", title)
 	params.Set("mediaType", mediaType)
@@ -394,13 +400,14 @@ func (c *Client) fetchSourcesDirect(ctx context.Context, mediaType string, tmdbI
 	type shardResult struct {
 		payload *upstreamPayload
 	}
-	results := make(chan shardResult, len(sourceEndpoints))
+	endpoints := sourceEndpoints()
+	results := make(chan shardResult, len(endpoints))
 	var wg sync.WaitGroup
-	for _, ep := range sourceEndpoints {
+	for _, ep := range endpoints {
 		wg.Add(1)
 		go func(endpoint string) {
 			defer wg.Done()
-			reqCtx, cancel := context.WithTimeout(ctx, requestTimeoutMS*time.Millisecond)
+			reqCtx, cancel := context.WithTimeout(fanoutCtx, requestTimeoutMS*time.Millisecond)
 			defer cancel()
 			p, err := c.fetchEndpointSources(reqCtx, endpoint, params, seed, tmdbID)
 			if err != nil {

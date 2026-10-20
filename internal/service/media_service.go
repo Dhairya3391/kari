@@ -772,10 +772,6 @@ func (a *sourceAggregator) tierHasRoom(src provider.MediaSource) bool {
 	return true
 }
 
-func newSourceAggregator(providers []provider.Provider, displayName func(string) string) *sourceAggregator {
-	return newSourceAggregatorForMode("", providers, displayName)
-}
-
 // newSourceAggregatorForMode builds an aggregator whose sort preferences
 // come from the routes table for mode — no provider-name switches.
 func newSourceAggregatorForMode(mode provider.ContentType, providers []provider.Provider, displayName func(string) string) *sourceAggregator {
@@ -878,19 +874,6 @@ func challengedRank(s provider.MediaSource) int {
 		return 1
 	}
 	return 0
-}
-
-func containsSource(sources []provider.MediaSource, candidate provider.MediaSource) bool {
-	identity := candidate.TransportIdentity()
-	if identity == "" {
-		return true
-	}
-	for _, source := range sources {
-		if source.TransportIdentity() == identity {
-			return true
-		}
-	}
-	return false
 }
 
 func firstPlaybackURL(playback []provider.MediaSource) string {

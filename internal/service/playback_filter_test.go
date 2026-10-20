@@ -266,3 +266,16 @@ func TestContainsSourceIgnoresCosmeticURLDifferences(t *testing.T) {
 		t.Errorf("query-string tokens are significant, must not dedup: %q", other.URL)
 	}
 }
+
+func containsSource(sources []provider.MediaSource, candidate provider.MediaSource) bool {
+	identity := candidate.TransportIdentity()
+	if identity == "" {
+		return true
+	}
+	for _, source := range sources {
+		if source.TransportIdentity() == identity {
+			return true
+		}
+	}
+	return false
+}

@@ -406,13 +406,16 @@ func (c *Client) collectCandidates(ctx context.Context, providers []upstreamProv
 	if len(providers) == 0 {
 		return nil
 	}
+	fanoutCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	results := make(chan scrapeResult, len(providers))
 	var wg sync.WaitGroup
 	for _, p := range providers {
 		wg.Add(1)
 		go func(p upstreamProvider) {
 			defer wg.Done()
-			reqCtx, cancel := context.WithTimeout(ctx, requestTimeoutMS*time.Millisecond)
+			reqCtx, cancel := context.WithTimeout(fanoutCtx, requestTimeoutMS*time.Millisecond)
 			defer cancel()
 			results <- c.fetchProviderStreams(reqCtx, p, tmdbID, mediaType, season, episode)
 		}(p)

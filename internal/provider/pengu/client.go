@@ -261,6 +261,7 @@ var audioLanguages = []provider.AudioLanguage{
 	{Code: "vi", Display: "Vietnamese"},
 	{Code: "ms", Display: "Malay"},
 	{Code: "id", Display: "Indonesian"},
+	{Code: "uk", Display: "Ukrainian"},
 }
 
 // AudioLanguages implements provider.AudioLanguagesSource.
@@ -532,6 +533,19 @@ func (c *Client) resolveLiveSource(ctx context.Context, stremioID string) ([]pro
 }
 
 func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string, tmdbID int, isAnime bool) ([]provider.MediaSource, error) {
+	// Pengu's separate subtitle resource is fast and should finish while its
+	// stream aggregator is resolving. Bound the wait so a slow subtitle index
+	// cannot hold up otherwise playable sources.
+	subtitleCtx, cancelSubtitles := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelSubtitles()
+	type subtitleResult struct {
+		options []provider.SubtitleOption
+	}
+	subtitleResults := make(chan subtitleResult, 1)
+	go func() {
+		subtitleResults <- subtitleResult{options: c.fetchPenguSubtitles(subtitleCtx, mediaType, stremioID, isAnime)}
+	}()
+
 	resp, err := c.fetchPenguStreams(ctx, mediaType, stremioID, isAnime)
 	if err != nil {
 		return nil, err
@@ -594,7 +608,91 @@ func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources
 	}
+	select {
+	case result := <-subtitleResults:
+		for i := range sources {
+			sources[i].Subtitles = mergeSubtitleOptions(sources[i].Subtitles, result.options)
+		}
+	case <-subtitleCtx.Done():
+	}
 	return sources, nil
+}
+
+func (c *Client) fetchPenguSubtitles(ctx context.Context, mediaType, stremioID string, isAnime bool) []provider.SubtitleOption {
+	resourceType := "series"
+	if mediaType == provider.MediaTypeMovie {
+		resourceType = "movie"
+	}
+	segment := c.configSegment
+	if isAnime && c.segAnime != "" {
+		segment = c.segAnime
+	}
+	target := fmt.Sprintf("%s/%s/subtitles/%s/%s.json", penguAPIBase, segment, resourceType, stremioID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		pgLog.Debug("subtitle request construction failed", "err", err)
+		return nil
+	}
+	req.Header.Set("User-Agent", penguUA)
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if ctx.Err() == nil {
+			pgLog.Debug("subtitle request failed", "err", redactRequestError(err, c.configSegment))
+		}
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		pgLog.Debug("subtitle request returned non-200", "status", resp.StatusCode)
+		return nil
+	}
+	body, err := httpclient.ReadCapped(resp)
+	if err != nil {
+		pgLog.Debug("subtitle response read failed", "err", err)
+		return nil
+	}
+	var payload struct {
+		Subtitles []penguSubtitle `json:"subtitles"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		pgLog.Debug("subtitle response decode failed", "err", err)
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(payload.Subtitles))
+	options := make([]provider.SubtitleOption, 0, len(payload.Subtitles))
+	for _, track := range payload.Subtitles {
+		u := strings.TrimSpace(track.URL)
+		if u == "" {
+			continue
+		}
+		if _, ok := seen[u]; ok {
+			continue
+		}
+		seen[u] = struct{}{}
+		language := lang.Normalize(track.Lang)
+		if language == "" {
+			language = "und"
+		}
+		options = append(options, provider.SubtitleOption{URL: u, Language: language})
+	}
+	return options
+}
+
+func mergeSubtitleOptions(current, additional []provider.SubtitleOption) []provider.SubtitleOption {
+	seen := make(map[string]struct{}, len(current)+len(additional))
+	for _, track := range current {
+		seen[track.URL] = struct{}{}
+	}
+	for _, track := range additional {
+		if _, ok := seen[track.URL]; ok {
+			continue
+		}
+		current = append(current, track)
+		seen[track.URL] = struct{}{}
+	}
+	return current
 }
 
 // resolveCandidate pairs a parsed source with its raw stream for the

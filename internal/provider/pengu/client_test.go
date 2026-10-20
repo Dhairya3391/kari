@@ -358,7 +358,13 @@ func TestFetchAnimeEpisodesMovie(t *testing.T) {
 // title's TMDB ID.
 func TestResolveAnimeUsesAnilistID(t *testing.T) {
 	var gotPath string
+	var gotSubtitlePath string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/subtitles/") {
+			gotSubtitlePath = r.URL.Path
+			_, _ = w.Write([]byte(`{"subtitles":[]}`))
+			return
+		}
 		gotPath = r.URL.Path
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(penguResponse{
@@ -399,6 +405,9 @@ func TestResolveAnimeUsesAnilistID(t *testing.T) {
 	}
 	if !strings.Contains(gotPath, "zanime") {
 		t.Errorf("request path = %q, want anime config segment", gotPath)
+	}
+	if !strings.Contains(gotSubtitlePath, "/zanime/subtitles/series/anilist:21:1180.json") {
+		t.Errorf("subtitle request path = %q, want anime config segment and AniList episode ID", gotSubtitlePath)
 	}
 	// Soft and hard variants stay distinct rows with their subtitle kinds.
 	if len(sources) != 2 {
@@ -487,12 +496,50 @@ func TestResolveSourceKeepsDistinctEncodes(t *testing.T) {
 	}
 }
 
+func TestResolveStreamsMergesStandaloneSubtitles(t *testing.T) {
+	origBase := penguAPIBase
+	defer func() { penguAPIBase = origBase }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/ztest/stream/movie/tmdb:603.json":
+			_, _ = w.Write([]byte(`{"streams":[{"name":"PenguPlay 1080p • 4KHDHub","url":"https://cdn.example.com/video.m3u8","subtitles":[{"lang":"eng","url":"https://cdn.example.com/inline.vtt"}]}]}`))
+		case "/ztest/subtitles/movie/tmdb:603.json":
+			_, _ = w.Write([]byte(`{"subtitles":[{"id":"fr","lang":"fra","url":"https://subs.example.com/fr.srt"},{"id":"inline","lang":"eng","url":"https://cdn.example.com/inline.vtt"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	penguAPIBase = server.URL
+	c := &Client{httpClient: server.Client(), configSegment: "ztest"}
+	sources, err := c.resolveStreams(context.Background(), provider.MediaTypeMovie, "tmdb:603", 603, false)
+	if err != nil {
+		t.Fatalf("resolveStreams: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("sources = %d, want 1", len(sources))
+	}
+	if len(sources[0].Subtitles) != 2 {
+		t.Fatalf("subtitles = %+v, want inline and standalone tracks", sources[0].Subtitles)
+	}
+	if sources[0].Subtitles[1].Language != "fr" {
+		t.Errorf("standalone subtitle language = %q, want fr", sources[0].Subtitles[1].Language)
+	}
+}
+
 func TestResolveAnimeMALPriority(t *testing.T) {
 	origBase := penguAPIBase
 	defer func() { penguAPIBase = origBase }()
 
 	var queriedPath string
 	penguServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/subtitles/") {
+			_, _ = w.Write([]byte(`{"subtitles":[]}`))
+			return
+		}
 		queriedPath = r.URL.Path
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"streams":[
@@ -654,6 +701,12 @@ func TestAudioLanguagesCoverage(t *testing.T) {
 			t.Errorf("invalid audio language: %+v", l)
 		}
 	}
+	for _, l := range langs {
+		if l.Code == "uk" && l.Display == "Ukrainian" {
+			return
+		}
+	}
+	t.Error("Ukrainian audio must be exposed for provider language filtering")
 }
 
 func TestFetchPenguStreamsRateLimit(t *testing.T) {

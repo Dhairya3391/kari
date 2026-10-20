@@ -48,14 +48,24 @@ func newFixture(t *testing.T) (*Client, *httptest.Server) {
 		fmt.Fprint(w, `<html><body><div>redesigned</div></body></html>`)
 	})
 
-	// Megaplay MAL embed + getSources (served from the same mux since the
-	// test client points embedBase at it).
-	mux.HandleFunc("/stream/mal/52299/1/sub", func(w http.ResponseWriter, r *http.Request) {
+	// MegaPlay's AniList mapping is preferred; the MAL route remains a
+	// fallback when a title is indexed only by MAL.
+	mux.HandleFunc("/stream/ani/151807/1/sub", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprint(w, `<html><body><div class="player" data-id="999">File 999 - sub</div></body></html>`)
 	})
+	mux.HandleFunc("/stream/ani/151807/2/sub", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "AniList mapping missing", http.StatusGone)
+	})
+	mux.HandleFunc("/stream/mal/52299/1/sub", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("/stream/mal/52299/2/sub", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body><div class="player" data-id="998">File 998 - sub</div></body></html>`)
+	})
 	mux.HandleFunc("/stream/getSources", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("id") != "999" {
+		if r.URL.Query().Get("id") != "999" && r.URL.Query().Get("id") != "998" {
 			http.Error(w, "unknown file", http.StatusNotFound)
 			return
 		}
@@ -139,6 +149,18 @@ func TestAnicineAnimeResolve(t *testing.T) {
 	}
 	if len(s1.Subtitles) != 1 {
 		t.Errorf("expected 1 subtitle, got %+v", s1.Subtitles)
+	}
+}
+
+func TestAnicineAnimeResolveFallsBackToMAL(t *testing.T) {
+	c, _ := newFixture(t)
+	ep := provider.Episode{ID: "watch/anicine/151807/sub/2", Episode: 2, Audio: "sub"}
+	sources, err := c.ResolveSource(context.Background(), "151807", ep)
+	if err != nil {
+		t.Fatalf("ResolveSource: %v", err)
+	}
+	if len(sources) != 1 || !strings.HasPrefix(sources[0].URL, "https://fetch.nexabloom.top/") {
+		t.Fatalf("MAL fallback sources = %+v", sources)
 	}
 }
 

@@ -25,6 +25,7 @@ func TestStreamAudioLanguageMarkers(t *testing.T) {
 		{"480pH.264MP4Russiansubaudio~0.6Mbps.pad-MovieBox", "", "ru"},
 		{"1080pH.264MP4~2.2Mbps.pad-MovieBox", "", ""},
 		{"720pH.264MP4esladubaudio~1.1Mbps.pad-MovieBox", "Audio: Spanish, English", "es"},
+		{"", "Audio: Ukrainian", "uk"},
 	}
 	for _, tc := range cases {
 		if got := streamAudioLanguage(mk(tc.file, tc.desc)); got != tc.want {

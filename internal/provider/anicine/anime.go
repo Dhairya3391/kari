@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -64,24 +65,39 @@ func (c *Client) malID(ctx context.Context, anilistID string) (int, error) {
 	return media.IDMal, nil
 }
 
-// resolveAnime resolves one anime episode via its MAL id straight into a
-// Megaplay embed: file id, getSources token, shared AES decrypt, CDN sign.
-// This mirrors anicine's anicine-1 server without any site scraping.
+// resolveAnime tries MegaPlay's AniList mapping first, then its MAL mapping.
+// The direct route avoids an extra AniList query and provides a second index
+// for titles that are mapped under only one external catalogue.
 func (c *Client) resolveAnime(ctx context.Context, anilistID, category string, epNum int) ([]provider.MediaSource, error) {
-	malID, err := c.malID(ctx, anilistID)
-	if err != nil {
-		return nil, err
-	}
-
 	cat := strings.ToLower(strings.TrimSpace(category))
 	if cat != "dub" {
 		cat = "sub"
 	}
-	embedURL := fmt.Sprintf("%s/stream/mal/%d/%d/%s", c.embedBase, malID, epNum, cat)
+	aniEmbedURL := fmt.Sprintf("%s/stream/ani/%s/%d/%s", c.embedBase, anilistID, epNum, cat)
+	sources, aniErr := c.resolveMegaplayEmbed(ctx, aniEmbedURL, anilistID)
+	if aniErr == nil {
+		return sources, nil
+	}
+	if ctx.Err() != nil {
+		return nil, aniErr
+	}
 
+	malID, err := c.malID(ctx, anilistID)
+	if err != nil {
+		return nil, fmt.Errorf("anicine anime: AniList embed failed and MAL mapping unavailable: %w", errors.Join(aniErr, err))
+	}
+	malEmbedURL := fmt.Sprintf("%s/stream/mal/%d/%d/%s", c.embedBase, malID, epNum, cat)
+	sources, malErr := c.resolveMegaplayEmbed(ctx, malEmbedURL, strconv.Itoa(malID))
+	if malErr == nil {
+		return sources, nil
+	}
+	return nil, fmt.Errorf("anicine anime: AniList and MAL embeds failed: %w", errors.Join(aniErr, malErr))
+}
+
+func (c *Client) resolveMegaplayEmbed(ctx context.Context, embedURL, mediaID string) ([]provider.MediaSource, error) {
 	fileID, err := c.megaplayFileID(ctx, embedURL)
 	if err != nil {
-		return nil, fmt.Errorf("anicine anime: embed: %w", err)
+		return nil, fmt.Errorf("anicine anime: embed %s: %w", mediaID, err)
 	}
 
 	parsed, err := url.Parse(embedURL)
@@ -140,7 +156,7 @@ func (c *Client) resolveAnime(ctx context.Context, anilistID, category string, e
 		})
 	}
 
-	logging.Debug("resolve source done via megaplay", "provider", c.Name(), "mal", malID)
+	logging.Debug("resolve source done via megaplay", "provider", c.Name(), "mediaID", mediaID)
 	return []provider.MediaSource{{
 		URL:       kit.SignCDNURL(rawM3U8, 86400),
 		Quality:   kit.TagQuality("1080p", "Megaplay", "anicine"),
