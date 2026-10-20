@@ -327,20 +327,20 @@ type modelImpl struct {
 	autoPlayAfterResolve   bool
 	autoplay               bool
 
-	appMode         provider.ContentType
-	defaultMode     string
-	modes           []provider.ContentType
-	configuredModes []string
-	disabledModes   map[string]bool
-	transitions     bool
+	appMode             provider.ContentType
+	defaultMode         string
+	modes               []provider.ContentType
+	configuredModes     []string
+	disabledModes       map[string]bool
+	transitions         bool
 	startupSearchActive bool
-	baseBgColor     color.RGBA
-	crossfadeActive bool
-	crossfadeStep   int
-	crossfadeFrom   ModeTheme
-	crossfadeTo     ModeTheme
-	crossfadeOpID   int
-	nextOpID        int
+	baseBgColor         color.RGBA
+	crossfadeActive     bool
+	crossfadeStep       int
+	crossfadeFrom       ModeTheme
+	crossfadeTo         ModeTheme
+	crossfadeOpID       int
+	nextOpID            int
 
 	searchOpID           int
 	searchQueryCancel    context.CancelFunc
@@ -365,33 +365,34 @@ type modelImpl struct {
 	// subtitlePoolSize is len(rawSubtitles) at the last subtitle fetch:
 	// a grown pool re-triggers the fetch when the earlier (partial)
 	// pool produced nothing usable yet.
-	subtitlePoolSize    int
-	rawSubtitles        []model.SubtitleTrack
-	playOpID            int
-	downloadOpID        int
-	downloadProgress    float64
-	downloadTotalSize   string
-	downloadSpeed       string
-	downloadDownloaded  string
-	downloadETA         string
-	downloadChan        chan tea.Msg
-	resolveChan         chan tea.Msg
-	cancelDownload      context.CancelFunc
-	downloadTitle       string
-	downloadOutputDir   string
-	confirmQuit         bool
-	confirmStop         bool
-	confirmDelete       bool
-	confirmClearHistory bool
-	anilistAuthURL      string
-	authInput           textinput.Model
-	traktAuthActive     bool
-	traktUserCode       string
-	traktVerifyURL      string
-	traktDeviceCode     string
-	traktCancel         context.CancelFunc
-	startupSync         bool
-	discordPresence     bool
+	subtitlePoolSize     int
+	subtitlePoolComplete bool
+	rawSubtitles         []model.SubtitleTrack
+	playOpID             int
+	downloadOpID         int
+	downloadProgress     float64
+	downloadTotalSize    string
+	downloadSpeed        string
+	downloadDownloaded   string
+	downloadETA          string
+	downloadChan         chan tea.Msg
+	resolveChan          chan tea.Msg
+	cancelDownload       context.CancelFunc
+	downloadTitle        string
+	downloadOutputDir    string
+	confirmQuit          bool
+	confirmStop          bool
+	confirmDelete        bool
+	confirmClearHistory  bool
+	anilistAuthURL       string
+	authInput            textinput.Model
+	traktAuthActive      bool
+	traktUserCode        string
+	traktVerifyURL       string
+	traktDeviceCode      string
+	traktCancel          context.CancelFunc
+	startupSync          bool
+	discordPresence      bool
 	// presenceSession tags the current now-playing card so a late background
 	// artwork lookup can't revive a card that was already cleared or replaced.
 	presenceSession       atomic.Int64

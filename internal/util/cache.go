@@ -48,6 +48,14 @@ func (c *BoundedCache[V]) Get(key string) (V, bool) {
 	return zero, false
 }
 
+// Clear removes every entry from the cache.
+func (c *BoundedCache[V]) Clear() {
+	c.mu.Lock()
+	c.ll.Init()
+	c.items = make(map[string]*list.Element, c.max)
+	c.mu.Unlock()
+}
+
 // Set inserts or updates key, marking it most-recently-used and evicting
 // the least-recently-used entry when the cache exceeds its bound.
 func (c *BoundedCache[V]) Set(key string, value V) {

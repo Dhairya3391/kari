@@ -282,7 +282,7 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 
 		logging.Debug("search start", "mode", mode, "query", query)
 		results, usedQuery, warnings, err := m.mediaService.Search(searchCtx, mode, query)
-		if err == nil && cacheable {
+		if err == nil && cacheable && len(warnings) == 0 {
 			m.searchCache.Set(cacheKey, searchCacheEntry{
 				results:   results,
 				usedQuery: usedQuery,
@@ -356,6 +356,7 @@ func (m *modelImpl) invalidateSubtitleSync() {
 	m.subtitleLangUsed = ""
 	m.subtitleSourceUsed = ""
 	m.subtitlePoolSize = 0
+	m.subtitlePoolComplete = false
 	if m.resolved != nil {
 		m.resolved.SelectedSubtitle = nil
 	}
@@ -386,7 +387,12 @@ func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
 	targetChanged := src.Resolver != m.subtitleResolverUsed ||
 		m.subtitleLanguage != m.subtitleLangUsed ||
 		src.URL != m.subtitleSourceUsed ||
+		(subtitleResolutionComplete(*m.resolved) && !m.subtitlePoolComplete) ||
 		(len(m.rawSubtitles) > m.subtitlePoolSize && m.subtitleOpID == 0 && m.resolved.SelectedSubtitle == nil)
+	if m.subtitleOpID != 0 && src.Resolver == m.subtitleResolverUsed &&
+		m.subtitleLanguage == m.subtitleLangUsed && src.URL == m.subtitleSourceUsed {
+		return nil
+	}
 	if !targetChanged {
 		return nil
 	}
@@ -397,19 +403,24 @@ func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
 	m.subtitleLangUsed = m.subtitleLanguage
 	m.subtitleSourceUsed = src.URL
 	m.subtitlePoolSize = len(m.rawSubtitles)
+	m.subtitlePoolComplete = subtitleResolutionComplete(*m.resolved)
 	opID := m.newOpID()
 	m.subtitleOpID = opID
 	mediaForFetch := *m.resolved
 	mediaForFetch.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
-	return m.subtitleFetchCmd(opID, mediaForFetch, src.Resolver)
+	return m.subtitleFetchCmd(opID, mediaForFetch, src.Resolver, src.TransportIdentity())
 }
 
-func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia, preferredResolver string) tea.Cmd {
+func subtitleResolutionComplete(media model.ResolvedMedia) bool {
+	return media.TotalResolvers <= 0 || len(media.CompletedResolvers) >= media.TotalResolvers
+}
+
+func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia, preferredResolver, preferredSourceID string) tea.Cmd {
 	preferredLang := m.subtitleLanguage
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.appCtx, 10*time.Second)
 		defer cancel()
-		track, err := m.subtitleService.Fetch(ctx, resolved, preferredLang, preferredResolver)
+		track, err := m.subtitleService.FetchForSource(ctx, resolved, preferredLang, preferredResolver, preferredSourceID)
 		if err != nil {
 			tuiLog.Warn("subtitle fetch failed", "err", err)
 		}

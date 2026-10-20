@@ -21,12 +21,15 @@ type SubtitleTrack struct {
 // resolved for one selection, plus the metadata services need to scrobble,
 // organize downloads, and display it.
 type ResolvedMedia struct {
-	SeriesTitle   string
-	SeriesURL     string
-	EpisodeTitle  string
-	EpisodeURL    string
-	MediaURL      string
-	MediaType     string
+	SeriesTitle  string
+	SeriesURL    string
+	EpisodeTitle string
+	EpisodeURL   string
+	MediaURL     string
+	MediaType    string
+	// ContentMode identifies the provider catalog used for resolution. Anime
+	// movies keep MediaTypeMovie while still following anime subtitle policy.
+	ContentMode   provider.ContentType
 	Year          string
 	TMDBID        int
 	SeasonNumber  int

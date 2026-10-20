@@ -285,6 +285,9 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				retry = m.mediaService.LastFailures()
 			}
 			m.invalidateSubtitleSync()
+			if m.subtitleService != nil {
+				m.subtitleService.ClearCache()
+			}
 			m.pruneResolvedToResolvers(exclude)
 			if len(exclude) > 0 {
 				m.refreshRanking()

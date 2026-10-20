@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,12 +14,13 @@ import (
 
 // slowStub is a provider double with scripted latency and results.
 type slowStub struct {
-	name     string
-	mode     provider.ContentType
-	delay    time.Duration
-	results  []provider.SearchResult
-	episodes []provider.Episode
-	err      error
+	name        string
+	mode        provider.ContentType
+	delay       time.Duration
+	results     []provider.SearchResult
+	episodes    []provider.Episode
+	err         error
+	searchCalls atomic.Int32
 }
 
 func (s *slowStub) Name() string { return s.name }
@@ -26,6 +28,7 @@ func (s *slowStub) Modes() []provider.Mode {
 	return []provider.Mode{{Name: s.mode, Priority: 1}}
 }
 func (s *slowStub) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
+	s.searchCalls.Add(1)
 	select {
 	case <-time.After(s.delay):
 		return s.results, s.err
@@ -95,6 +98,13 @@ func TestSearchPartialResultsWithFailureList(t *testing.T) {
 	}
 	if len(warnings) != 1 || !strings.Contains(strings.ToLower(warnings[0]), "bad") {
 		t.Fatalf("warnings = %v, want the failed provider listed", warnings)
+	}
+	_, _, _, err = svc.Search(context.Background(), provider.ModeMovies, "inception")
+	if err != nil {
+		t.Fatalf("second partial search: %v", err)
+	}
+	if got := bad.searchCalls.Load(); got != 2 {
+		t.Fatalf("failed provider calls = %d, want a retry after partial cached results", got)
 	}
 }
 

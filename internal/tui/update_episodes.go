@@ -11,9 +11,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/downloader"
-	"kari/internal/provider"
 	"kari/internal/history"
 	"kari/internal/model"
+	"kari/internal/provider"
 )
 
 func (m *modelImpl) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {

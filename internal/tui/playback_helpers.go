@@ -7,7 +7,6 @@ import (
 	"kari/internal/ranking"
 )
 
-
 func (m *modelImpl) rankAndSelectSources() {
 	if m.resolved == nil || len(m.resolved.Playback) == 0 {
 		m.rankedSources = nil

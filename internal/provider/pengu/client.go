@@ -31,8 +31,8 @@ import (
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/provider/anilist"
-	"kari/internal/provider/streambase"
 	"kari/internal/provider/kit"
+	"kari/internal/provider/streambase"
 	"kari/internal/tmdb"
 )
 

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kari/internal/config"
@@ -32,11 +33,17 @@ const (
 
 // SubtitleService selects and materializes one subtitle track for playback.
 type SubtitleService struct {
-	openSubtitles *subtitles.Client
+	openSubtitles openSubtitleSource
 	httpClient    *http.Client
 	cache         *util.BoundedCache[model.SubtitleTrack]
+	cacheVersion  atomic.Uint64
 	disableMu     sync.RWMutex
 	disableAnime  bool
+}
+
+type openSubtitleSource interface {
+	Configured() bool
+	FetchBestSubtitle(context.Context, string, string, int, int, int) (model.SubtitleTrack, bool, error)
 }
 
 // SetDisableAnimeSubtitles toggles anime-specific subtitle suppression.
@@ -46,13 +53,20 @@ func (s *SubtitleService) SetDisableAnimeSubtitles(disable bool) {
 	s.disableMu.Unlock()
 }
 
+// ClearCache removes cached subtitle selections so the next fetch resolves
+// tracks again from the current provider results.
+func (s *SubtitleService) ClearCache() {
+	s.cacheVersion.Add(1)
+	s.cache.Clear()
+}
+
 // NewSubtitleService builds the service; OpenSubtitles stays unconfigured
 // unless credentials are present.
 func NewSubtitleService(cfg *config.Config) *SubtitleService {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	var openSubtitles *subtitles.Client
+	var openSubtitles openSubtitleSource
 	if strings.TrimSpace(cfg.OpenSubtitlesKey) != "" &&
 		strings.TrimSpace(cfg.OpenSubtitlesUser) != "" &&
 		strings.TrimSpace(cfg.OpenSubtitlesPass) != "" {
@@ -77,8 +91,31 @@ func (s *SubtitleService) Fetch(
 	preferredLang string,
 	preferredResolver string,
 ) (model.SubtitleTrack, error) {
+	return s.fetch(ctx, media, preferredLang, preferredResolver, "")
+}
+
+// FetchForSource selects a subtitle for one exact playback source so tracks
+// from another source handled by the same provider cannot be reused.
+func (s *SubtitleService) FetchForSource(
+	ctx context.Context,
+	media model.ResolvedMedia,
+	preferredLang string,
+	preferredResolver string,
+	preferredSourceID string,
+) (model.SubtitleTrack, error) {
+	return s.fetch(ctx, media, preferredLang, preferredResolver, preferredSourceID)
+}
+
+func (s *SubtitleService) fetch(
+	ctx context.Context,
+	media model.ResolvedMedia,
+	preferredLang string,
+	preferredResolver string,
+	preferredSourceID string,
+) (model.SubtitleTrack, error) {
 	ctx, cancel := context.WithTimeout(ctx, subtitleFetchTimeout)
 	defer cancel()
+	cacheVersion := s.cacheVersion.Load()
 
 	preferredLang = lang.Normalize(preferredLang)
 	if preferredLang == "off" {
@@ -88,7 +125,7 @@ func (s *SubtitleService) Fetch(
 		preferredLang = "en"
 	}
 
-	isAnime := media.MediaType == provider.MediaTypeAnime
+	isAnime := media.ContentMode == provider.ModeAnime || media.MediaType == provider.MediaTypeAnime
 	if isAnime && s.areAnimeSubtitlesDisabled() {
 		return model.SubtitleTrack{}, nil
 	}
@@ -98,20 +135,29 @@ func (s *SubtitleService) Fetch(
 		mediaTitle = strings.TrimSpace(media.EpisodeTitle)
 	}
 	cacheKey := fmt.Sprintf(
-		"%d:%d:%d:%s:%s:%s",
+		"%d:%d:%d:%s:%s:%s:%s:%s:%s:%d",
 		media.TMDBID,
 		media.SeasonNumber,
 		media.EpisodeNumber,
 		mediaTitle,
 		preferredLang,
 		preferredResolver,
+		preferredSourceID,
+		media.MediaType,
+		media.ContentMode,
+		cacheVersion,
 	)
 	if track, ok := s.cache.Get(cacheKey); ok && usableCachedTrack(track) {
 		return track, nil
 	}
 
 	originalSubtitles := media.Subtitles
-	matchingCandidates := selectMatchingProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
+	matchingCandidates := selectMatchingProviderCandidates(
+		originalSubtitles,
+		preferredLang,
+		preferredResolver,
+		preferredSourceID,
+	)
 
 	attempted := make(map[string]struct{})
 	var failures []error
@@ -131,7 +177,7 @@ func (s *SubtitleService) Fetch(
 		}
 	}
 
-	if s.openSubtitles != nil && s.openSubtitles.Configured() {
+	if !isAnime && subtitleFallbackReady(media) && s.openSubtitles != nil && s.openSubtitles.Configured() {
 		track, found, err := s.openSubtitles.FetchBestSubtitle(
 			ctx,
 			mediaTitle,
@@ -149,7 +195,7 @@ func (s *SubtitleService) Fetch(
 	}
 
 	otherCandidates := selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
-	if len(otherCandidates) > 0 {
+	if subtitleFallbackReady(media) && len(otherCandidates) > 0 {
 		track, err := s.downloadProviderCandidates(ctx, media, otherCandidates, attempted)
 		if err == nil && usableCachedTrack(track) {
 			s.cache.Set(cacheKey, track)
@@ -164,6 +210,10 @@ func (s *SubtitleService) Fetch(
 		return model.SubtitleTrack{}, errors.New("no subtitles found")
 	}
 	return model.SubtitleTrack{}, fmt.Errorf("no subtitles found: %w", errors.Join(failures...))
+}
+
+func subtitleFallbackReady(media model.ResolvedMedia) bool {
+	return media.TotalResolvers <= 0 || len(media.CompletedResolvers) >= media.TotalResolvers
 }
 
 func (s *SubtitleService) areAnimeSubtitlesDisabled() bool {
@@ -186,6 +236,7 @@ func selectMatchingProviderCandidates(
 	tracks []model.SubtitleTrack,
 	preferredLang string,
 	preferredResolver string,
+	preferredSourceID string,
 ) []model.SubtitleTrack {
 	if preferredResolver == "" {
 		return nil
@@ -194,6 +245,9 @@ func selectMatchingProviderCandidates(
 	var exact, english []model.SubtitleTrack
 	for _, track := range tracks {
 		if !strings.EqualFold(track.Resolver, preferredResolver) {
+			continue
+		}
+		if preferredSourceID != "" && track.SourceID != preferredSourceID {
 			continue
 		}
 		trackLang := lang.Normalize(track.Language)

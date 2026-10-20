@@ -131,6 +131,7 @@ func TestPruneResolvedToResolvers(t *testing.T) {
 			{URL: "https://cdn.example.com/a.vtt", Resolver: "anikoto"},
 			{URL: "https://cdn.example.com/b.vtt", Resolver: "miruro"},
 		}}
+		m.rawSubtitles = append([]model.SubtitleTrack{}, m.resolved.Subtitles...)
 		return m
 	}
 
@@ -141,6 +142,9 @@ func TestPruneResolvedToResolvers(t *testing.T) {
 	}
 	if len(m.resolved.Subtitles) != 1 || m.resolved.Subtitles[0].Resolver != "anikoto" {
 		t.Fatalf("winner subtitles must be kept: %+v", m.resolved.Subtitles)
+	}
+	if len(m.rawSubtitles) != 1 || m.rawSubtitles[0].Resolver != "anikoto" {
+		t.Fatalf("retry candidates must match kept providers: %+v", m.rawSubtitles)
 	}
 
 	m = mk()

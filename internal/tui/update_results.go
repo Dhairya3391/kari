@@ -478,7 +478,7 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 				m.setStatus(statusError, statusMsg)
 			}
 		}
-		return m, nil
+		return m, m.triggerSubtitleSync()
 	}
 	m.resolveAttempts = 0
 	m.mergeResolved(msg.resolved)
@@ -537,7 +537,14 @@ func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		tuiLog.Debug("subtitle unavailable; playing without", "err", msg.err)
 	}
+	var retryCmd tea.Cmd
+	if m.resolved == nil || m.resolved.SelectedSubtitle == nil {
+		retryCmd = m.triggerSubtitleSync()
+	}
 	if m.autoPlayAfterResolve {
+		if retryCmd != nil {
+			return m, tea.Batch(m.spinner.Tick, retryCmd)
+		}
 		return m.finalizeResolved()
 	}
 	if m.playOpID != 0 && msg.err == nil && strings.TrimSpace(msg.track.Path) != "" {
@@ -548,7 +555,7 @@ func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 			}
 		}()
 	}
-	return m, nil
+	return m, retryCmd
 }
 
 func (m *modelImpl) playStartedTimeoutCmd(opID int) tea.Cmd {
@@ -672,23 +679,33 @@ func (m *modelImpl) pruneResolvedToResolvers(keep []string) {
 		}
 	}
 	m.resolved.Subtitles = subs
+	rawSubtitles := m.rawSubtitles[:0]
+	for _, sub := range m.rawSubtitles {
+		if _, ok := keepSet[strings.ToLower(strings.TrimSpace(sub.Resolver))]; ok {
+			rawSubtitles = append(rawSubtitles, sub)
+		}
+	}
+	m.rawSubtitles = rawSubtitles
 }
 
 func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 	if m.resolved == nil {
 		m.resolved = &model.ResolvedMedia{
-			SeriesTitle:   resolved.SeriesTitle,
-			SeriesURL:     resolved.SeriesURL,
-			EpisodeTitle:  resolved.EpisodeTitle,
-			EpisodeURL:    resolved.EpisodeURL,
-			MediaType:     resolved.MediaType,
-			Year:          resolved.Year,
-			TMDBID:        resolved.TMDBID,
-			SeasonNumber:  resolved.SeasonNumber,
-			EpisodeNumber: resolved.EpisodeNumber,
-			Resolver:      resolved.Resolver,
-			Playback:      append([]provider.MediaSource{}, resolved.Playback...),
-			Subtitles:     append([]model.SubtitleTrack{}, resolved.Subtitles...),
+			SeriesTitle:        resolved.SeriesTitle,
+			SeriesURL:          resolved.SeriesURL,
+			EpisodeTitle:       resolved.EpisodeTitle,
+			EpisodeURL:         resolved.EpisodeURL,
+			MediaType:          resolved.MediaType,
+			ContentMode:        resolved.ContentMode,
+			Year:               resolved.Year,
+			TMDBID:             resolved.TMDBID,
+			SeasonNumber:       resolved.SeasonNumber,
+			EpisodeNumber:      resolved.EpisodeNumber,
+			Resolver:           resolved.Resolver,
+			Playback:           append([]provider.MediaSource{}, resolved.Playback...),
+			Subtitles:          append([]model.SubtitleTrack{}, resolved.Subtitles...),
+			CompletedResolvers: append([]string{}, resolved.CompletedResolvers...),
+			TotalResolvers:     resolved.TotalResolvers,
 		}
 		m.rawSubtitles = append([]model.SubtitleTrack{}, resolved.Subtitles...)
 		m.selectedPlayback = 0

@@ -203,6 +203,9 @@ collectResults:
 		res, ok := resultsMap[p.Name()]
 		if !ok || res.err != nil {
 			if ok {
+				if errors.Is(res.err, provider.ErrNoResults) {
+					continue
+				}
 				warnings = append(warnings, fmt.Sprintf("%s: %v", strings.ToUpper(s.registry.DisplayName(res.provider)), res.err))
 			} else {
 				warnings = append(warnings, fmt.Sprintf("%s: timed out", strings.ToUpper(s.registry.DisplayName(p.Name()))))
@@ -243,7 +246,7 @@ collectResults:
 		return nil, query, warnings, provider.ErrNoResults
 	}
 
-	if s.searchCache != nil && len(allResults) > 0 {
+	if s.searchCache != nil && len(allResults) > 0 && len(warnings) == 0 {
 		s.searchCache.Set(cacheKey, searchCacheEntry{
 			results:  allResults,
 			query:    query,
@@ -513,16 +516,17 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		subsCopy := make([]model.SubtitleTrack, len(agg.subs))
 		copy(subsCopy, agg.subs)
 		return model.ResolvedMedia{
-			SeriesTitle:   series.Title,
-			SeriesURL:     series.ID,
-			EpisodeTitle:  episode.Title,
-			EpisodeURL:    episode.ID,
-			MediaURL:      firstPlaybackURL(agg.sources),
-			MediaType:     series.MediaType,
-			Year:          series.Year,
-			TMDBID:        series.TMDBID,
-			SeasonNumber:  episode.Season,
-			EpisodeNumber: episode.Episode,
+			SeriesTitle:        series.Title,
+			SeriesURL:          series.ID,
+			EpisodeTitle:       episode.Title,
+			EpisodeURL:         episode.ID,
+			MediaURL:           firstPlaybackURL(agg.sources),
+			MediaType:          series.MediaType,
+			ContentMode:        mode,
+			Year:               series.Year,
+			TMDBID:             series.TMDBID,
+			SeasonNumber:       episode.Season,
+			EpisodeNumber:      episode.Episode,
 			Resolver:           "Aggregated",
 			Playback:           playbackCopy,
 			Subtitles:          subsCopy,
@@ -555,7 +559,6 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			failedOrder = append(failedOrder, name)
 		}
 	}
-
 
 	g, _ := errgroup.WithContext(ctx)
 

@@ -13,12 +13,12 @@ import (
 
 func newTestSwitchModel() *modelImpl {
 	m := &modelImpl{
-		keys:            defaultKeyMap(),
-		appMode:         provider.ModeAnime,
-		configuredModes: []string{"anime", "cartoon", "live", "manga", "movies", "tv", "jellyfin"},
-		disabledModes:   make(map[string]bool),
-		registry:        &provider.Registry{},
-		transitions:     true,
+		keys:                defaultKeyMap(),
+		appMode:             provider.ModeAnime,
+		configuredModes:     []string{"anime", "cartoon", "live", "manga", "movies", "tv", "jellyfin"},
+		disabledModes:       make(map[string]bool),
+		registry:            &provider.Registry{},
+		transitions:         true,
 		startupSearchActive: true,
 	}
 	// Register dummy providers for all modes so they are available

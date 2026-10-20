@@ -15,6 +15,22 @@ import (
 	"kari/internal/util"
 )
 
+type fakeOpenSubtitleSource struct {
+	track model.SubtitleTrack
+	calls int
+}
+
+func (f *fakeOpenSubtitleSource) Configured() bool { return true }
+
+func (f *fakeOpenSubtitleSource) FetchBestSubtitle(
+	_ context.Context,
+	_, _ string,
+	_, _, _ int,
+) (model.SubtitleTrack, bool, error) {
+	f.calls++
+	return f.track, true, nil
+}
+
 func TestSubtitleServiceDisabled(t *testing.T) {
 	svc := NewSubtitleService(&config.Config{})
 	media := model.ResolvedMedia{
@@ -62,6 +78,66 @@ func TestSubtitleServiceDownloadsAnimeProviderTrack(t *testing.T) {
 	}
 	if _, err := os.Stat(track.Path); err != nil {
 		t.Fatalf("subtitle path does not exist: %v", err)
+	}
+}
+
+func TestSubtitleServiceKeepsTracksBoundToTheirPlaybackSource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nsource subtitle\n"))
+	}))
+	defer srv.Close()
+
+	svc := NewSubtitleService(&config.Config{})
+	svc.httpClient = srv.Client()
+	media := model.ResolvedMedia{
+		SeriesTitle:   "Source-bound subtitles",
+		EpisodeNumber: 1,
+		MediaType:     provider.MediaTypeAnime,
+		Subtitles: []model.SubtitleTrack{
+			{URL: srv.URL + "/first.vtt", Language: "en", Resolver: "pengu", SourceID: "source-one"},
+			{URL: srv.URL + "/second.vtt", Language: "en", Resolver: "pengu", SourceID: "source-two"},
+		},
+	}
+
+	for _, sourceID := range []string{"source-one", "source-two"} {
+		track, err := svc.FetchForSource(context.Background(), media, "en", "pengu", sourceID)
+		if err != nil {
+			t.Fatalf("FetchForSource(%q): %v", sourceID, err)
+		}
+		if track.SourceID != sourceID {
+			t.Errorf("source %q received subtitle for %q", sourceID, track.SourceID)
+		}
+	}
+}
+
+func TestSubtitleServiceWaitsForProviderResolutionBeforeFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nother provider subtitle\n"))
+	}))
+	defer srv.Close()
+
+	svc := NewSubtitleService(&config.Config{})
+	svc.httpClient = srv.Client()
+	media := model.ResolvedMedia{
+		SeriesTitle:        "Progressive subtitle fallback",
+		EpisodeNumber:      1,
+		TotalResolvers:     2,
+		CompletedResolvers: []string{"pengu"},
+		Subtitles: []model.SubtitleTrack{{
+			URL: srv.URL + "/fallback.vtt", Language: "en", Resolver: "anikoto", SourceID: "other-source",
+		}},
+	}
+	if _, err := svc.FetchForSource(context.Background(), media, "en", "pengu", "pengu-source"); err == nil {
+		t.Fatal("fallback must wait while providers are still resolving")
+	}
+
+	media.CompletedResolvers = []string{"pengu", "anikoto"}
+	track, err := svc.FetchForSource(context.Background(), media, "en", "pengu", "pengu-source")
+	if err != nil {
+		t.Fatalf("FetchForSource after completion: %v", err)
+	}
+	if track.Resolver != "anikoto" {
+		t.Fatalf("fallback resolver = %q, want anikoto", track.Resolver)
 	}
 }
 
@@ -162,6 +238,30 @@ func TestSubtitleServiceAnimeWithoutProviderTrackReturnsNoSubtitles(t *testing.T
 	}
 	if track.Path != "" {
 		t.Fatalf("expected no track, got: %+v", track)
+	}
+}
+
+func TestSubtitleServiceDoesNotUseOpenSubtitlesForAnime(t *testing.T) {
+	path := t.TempDir() + "/opensub.srt"
+	if err := os.WriteFile(path, []byte("1\n00:00,000 --> 00:00,500\nanime subtitle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	openSubtitles := &fakeOpenSubtitleSource{
+		track: model.SubtitleTrack{Path: path, Resolver: "opensubtitles", Language: "en"},
+	}
+	svc := NewSubtitleService(&config.Config{})
+	svc.openSubtitles = openSubtitles
+	_, err := svc.Fetch(context.Background(), model.ResolvedMedia{
+		SeriesTitle: "Anime movie without provider subtitles",
+		MediaType:   provider.MediaTypeMovie,
+		ContentMode: provider.ModeAnime,
+	}, "en", "pengu")
+	if err == nil {
+		t.Fatal("anime subtitle lookup must not use OpenSubtitles")
+	}
+	if openSubtitles.calls != 0 {
+		t.Fatalf("OpenSubtitles calls = %d, want 0", openSubtitles.calls)
 	}
 }
 

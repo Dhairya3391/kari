@@ -86,9 +86,9 @@ type SettingsData struct {
 	LoadingText       string
 	SpinnerFrame      string
 	// Interface values
-	PosterArtwork bool   // on / off
-	AccentName    string // "Auto (per mode)", "Purple", etc.
-	Transitions   bool   // on / off
+	PosterArtwork       bool   // on / off
+	AccentName          string // "Auto (per mode)", "Purple", etc.
+	Transitions         bool   // on / off
 	StartupSearchActive bool   // on / off
 }
 
