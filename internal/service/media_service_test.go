@@ -540,12 +540,31 @@ func (a *availStub) ResolveSource(ctx context.Context, mediaID string, episode p
 	return nil, provider.ErrNoSources
 }
 
-// The availability probe races: a slow source must not delay a fast one.
-func TestFetchEpisodesRacesAvailabilitySources(t *testing.T) {
-	fast := &availStub{name: "fast", delay: 10 * time.Millisecond,
-		eps: []provider.Episode{{Episode: 1, Audio: "sub"}, {Episode: 1, Audio: "dub"}}}
-	slow := &availStub{name: "slow", delay: 5 * time.Second,
-		eps: []provider.Episode{{Episode: 1, Audio: "sub"}}}
+// titleStub is an availStub that also declares the capacity to name
+// episodes, mirroring providers whose rosters ship verified titles
+type titleStub struct {
+	availStub
+	titles map[int]string
+	err    error
+	calls  int
+}
+
+func (b *titleStub) FetchEpisodeTitles(ctx context.Context, s provider.SearchResult) (map[int]string, error) {
+	b.calls++
+	select {
+	case <-time.After(2 * time.Millisecond):
+		return b.titles, b.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Canonical titles allow the fastest provider to supply playback handles.
+func TestFetchEpisodesUsesFastestAvailableProvider(t *testing.T) {
+	slow := &availStub{name: "slow", delay: 20 * time.Millisecond,
+		eps: []provider.Episode{{Episode: 1, Title: "Preferred title", ID: "preferred-episode", Audio: "sub"}}}
+	fast := &availStub{name: "fast", delay: time.Millisecond,
+		eps: []provider.Episode{{Episode: 1, Title: "Fallback title", ID: "fallback-episode", Audio: "sub"}}}
 
 	svc := NewMediaService(newTestRegistry(slow, fast))
 	start := time.Now()
@@ -554,11 +573,40 @@ func TestFetchEpisodesRacesAvailabilitySources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchEpisodes: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Errorf("race took %v, want fast win well under slow source", elapsed)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("preferred source took %v, want prompt response", elapsed)
 	}
-	if len(eps) != 1 || eps[0].Audio != "sub" {
+	if len(eps) != 1 || eps[0].Audio != "sub" || eps[0].ID != "fallback-episode" {
 		t.Errorf("eps = %+v, want the fast source's filtered sub row", eps)
+	}
+}
+
+func TestCanonicalAnimeEpisodeTitlesComeFromProviderCapability(t *testing.T) {
+	names := &titleStub{availStub: availStub{name: "mirlike"}, titles: map[int]string{6: "Canonical episode title"}}
+	svc := NewMediaService(newTestRegistry(names))
+	series := provider.SearchResult{Title: "T", ID: "105310", Provider: "mirlike", Type: provider.ModeAnime}
+
+	got := svc.applyCanonicalAnimeEpisodeTitles(context.Background(), provider.ModeAnime, series,
+		[]provider.Episode{{Episode: 6, Title: "Streaming-provider title", Audio: provider.AudioDub}})
+	if len(got) != 1 || got[0].Title != "Canonical episode title" || got[0].ID != "" {
+		t.Fatalf("episodes = %+v", got)
+	}
+	// Cached per series: the second application must not re-query providers.
+	svc.applyCanonicalAnimeEpisodeTitles(context.Background(), provider.ModeAnime, series,
+		[]provider.Episode{{Episode: 6, Title: "Streaming-provider title"}})
+	if names.calls != 1 {
+		t.Errorf("provider called %d times, want 1 via cache", names.calls)
+	}
+}
+
+func TestCanonicalAnimeEpisodeTitlesAvoidUnverifiedProviderNames(t *testing.T) {
+	svc := NewMediaService(newTestRegistry())
+	episodes := []provider.Episode{{Episode: 6, Title: "Possibly wrong title"}}
+	got := svc.applyCanonicalAnimeEpisodeTitles(context.Background(), provider.ModeAnime, provider.SearchResult{
+		MediaType: provider.MediaTypeAnime,
+	}, episodes)
+	if len(got) != 1 || got[0].Title != "Episode 06" {
+		t.Fatalf("episodes = %+v, want a neutral title", got)
 	}
 }
 

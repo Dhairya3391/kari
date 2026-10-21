@@ -82,6 +82,10 @@ type SearchResult struct {
 	Year      string
 	MediaType string
 	TMDBID    int
+	// AniListID is the canonical AniList catalog ID when the title is anime.
+	AniListID int
+	// MALID is the canonical MyAnimeList catalog ID when known.
+	MALID int
 	// CoverURL is stamped by the provider itself at search time when the
 	// upstream catalog ships artwork directly (manga covers from
 	// WeebCentral). Empty for providers whose artwork resolves through
@@ -313,6 +317,15 @@ type Provider interface {
 // is known to be available from the provider.
 type EpisodeAvailabilitySource interface {
 	FetchAvailableEpisodes(ctx context.Context, series SearchResult) ([]Episode, error)
+}
+
+// EpisodeTitlesSource lets a provider supply its own per-number episode
+// titles for a series, scoped to the same catalog entry the provider keys
+// everything else by. Optional: providers whose rosters carry verified
+// titles implement it so rosters arriving from another provider cannot be
+// renamed from a foreign catalog's numbering.
+type EpisodeTitlesSource interface {
+	FetchEpisodeTitles(ctx context.Context, series SearchResult) (map[int]string, error)
 }
 
 // AudioLanguage is a display-ready audio-track language a provider can tag

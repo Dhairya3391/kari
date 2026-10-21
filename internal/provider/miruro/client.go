@@ -220,6 +220,36 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 	return out, nil
 }
 
+// FetchEpisodeTitles implements provider.EpisodeTitlesSource by reading the
+// watch payload's own episode titles, keyed by one-based episode number.
+// Titles come from the same AniList-keyed entry as every other Miruro
+// coordinate, so no other catalog season's titles can leak in.
+func (c *Client) FetchEpisodeTitles(ctx context.Context, series provider.SearchResult) (map[int]string, error) {
+	anilistID := strings.TrimSpace(series.ID)
+	logging.Debug("fetch episode titles", "provider", c.Name(), "mediaID", anilistID)
+	if anilistID == "" {
+		return nil, provider.ErrNoEpisodes
+	}
+	ref, err := c.resolveShow(ctx, anilistID, series.Title, "")
+	if err != nil {
+		return nil, err
+	}
+	eps, err := c.watchEpisodes(ctx, ref, 1)
+	if err != nil {
+		return nil, err
+	}
+	titles := make(map[int]string, len(eps))
+	for _, ep := range eps {
+		if title := strings.TrimSpace(ep.title); title != "" {
+			titles[ep.number] = title
+		}
+	}
+	if len(titles) == 0 {
+		return nil, provider.ErrNoEpisodes
+	}
+	return titles, nil
+}
+
 // ResolveSource implements provider.Provider by reading the episode's
 // watch chunk and returning its ranked direct streams.
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
@@ -264,8 +294,9 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 }
 
 var (
-	_ provider.Provider         = (*Client)(nil)
-	_ provider.Presenter        = (*Client)(nil)
-	_ provider.FeatureSource    = (*Client)(nil)
-	_ provider.MovieEpisodeFlow = (*Client)(nil)
+	_ provider.Provider            = (*Client)(nil)
+	_ provider.Presenter           = (*Client)(nil)
+	_ provider.FeatureSource       = (*Client)(nil)
+	_ provider.MovieEpisodeFlow    = (*Client)(nil)
+	_ provider.EpisodeTitlesSource = (*Client)(nil)
 )
