@@ -425,7 +425,8 @@ func (c *Client) fetchCandidateFromWatchPage(ctx context.Context, slug string) (
 		return anikotoCandidate{}, false
 	}
 
-	title := slug
+	// Slugs are hyphenated; spaces let season markers ("season-2") parse.
+	title := strings.ReplaceAll(slug, "-", " ")
 	if m := reHeadingTitle.FindSubmatch(body); len(m) >= 2 {
 		title = cleanTitle(string(m[1]))
 	} else if m := rePageTitle.FindSubmatch(body); len(m) >= 2 {
