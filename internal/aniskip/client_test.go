@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -84,7 +85,8 @@ func TestGetIDs(t *testing.T) {
 		"data": {
 			"Media": {
 				"id": 154587,
-				"idMal": 52991
+				"idMal": 52991,
+				"title": {"english": "Frieren: Beyond Journey's End", "romaji": "Sousou no Frieren", "native": "葬送のフリーレン"}
 			}
 		}
 	}`
@@ -100,7 +102,7 @@ func TestGetIDs(t *testing.T) {
 	}
 
 	client := NewClient(httpClient)
-	anilistID, malID, err := client.GetIDs(context.Background(), "Frieren")
+	anilistID, malID, err := client.GetIDs(context.Background(), "Sousou no Frieren")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -112,12 +114,56 @@ func TestGetIDs(t *testing.T) {
 	}
 }
 
+func TestGetIDs_RejectsNonExactTitle(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewBufferString(`{"data":{"Media":{"id":105310,"idMal":38671,"title":{"english":"Fire Force","romaji":"Enen no Shouboutai"}}}}`)),
+			Header:     make(http.Header),
+		}, nil
+	})})
+
+	aniID, malID, err := client.GetIDs(context.Background(), "Fire Force Season 2")
+	if err != nil {
+		t.Fatalf("GetIDs() error = %v", err)
+	}
+	if aniID != 0 || malID != 0 {
+		t.Fatalf("GetIDs() = (%d, %d), want no match", aniID, malID)
+	}
+}
+
+func TestGetIDsByAniListID(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		if !strings.Contains(string(body), `"id":105310`) || strings.Contains(string(body), `"search"`) {
+			t.Fatalf("query must resolve the exact AniList ID: %s", body)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewBufferString(`{"data":{"Media":{"id":105310,"idMal":38671}}}`)),
+			Header:     make(http.Header),
+		}, nil
+	})})
+
+	aniID, malID, err := client.GetIDsByAniListID(context.Background(), 105310)
+	if err != nil {
+		t.Fatalf("GetIDsByAniListID() error = %v", err)
+	}
+	if aniID != 105310 || malID != 38671 {
+		t.Fatalf("GetIDsByAniListID() = (%d, %d), want (105310, 38671)", aniID, malID)
+	}
+}
+
 func TestGetMALID(t *testing.T) {
 	jsonBody := `{
 		"data": {
 			"Media": {
 				"id": 154587,
-				"idMal": 52991
+				"idMal": 52991,
+				"title": {"english": "Frieren: Beyond Journey's End", "romaji": "Sousou no Frieren", "native": "葬送のフリーレン"}
 			}
 		}
 	}`
@@ -133,7 +179,7 @@ func TestGetMALID(t *testing.T) {
 	}
 
 	client := NewClient(httpClient)
-	malID, err := client.GetMALID(context.Background(), "Frieren")
+	malID, err := client.GetMALID(context.Background(), "Sousou no Frieren")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

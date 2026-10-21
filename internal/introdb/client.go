@@ -83,14 +83,14 @@ func parseSegment(s *segmentData) (float64, float64) {
 		if start == 0 && end == 0 {
 			return -1, -1
 		}
-		if end > start {
+		if start >= 0 && end > start {
 			return start, end
 		}
 	}
 	if s.StartMS == 0 && s.EndMS == 0 {
 		return -1, -1
 	}
-	if s.EndMS <= s.StartMS {
+	if s.StartMS < 0 || s.EndMS <= s.StartMS {
 		return -1, -1
 	}
 	return s.StartMS / 1000.0, s.EndMS / 1000.0
@@ -142,6 +142,16 @@ func (c *Client) GetSegments(ctx context.Context, imdbID string, season, episode
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return nil, fmt.Errorf("introdb decode: %w", err)
 	}
+	if !strings.EqualFold(strings.TrimSpace(data.IMDbID), cleanIMDb) {
+		return nil, nil
+	}
+	if isMovie {
+		if !data.IsMovie || data.Season != 0 || data.Episode != 0 {
+			return nil, nil
+		}
+	} else if data.IsMovie || season <= 0 || episode <= 0 || data.Season != season || data.Episode != episode {
+		return nil, nil
+	}
 
 	times := &SkipTimes{
 		OpStart:      -1,
@@ -158,6 +168,9 @@ func (c *Client) GetSegments(ctx context.Context, imdbID string, season, episode
 	times.RecapStart, times.RecapEnd = parseSegment(data.Recap)
 	times.EdStart, times.EdEnd = parseSegment(data.Outro)
 	times.PreviewStart, times.PreviewEnd = parseSegment(data.PostCredits)
+	if times.OpStart >= 0 && times.EdStart >= 0 && times.OpStart >= times.EdStart {
+		times.OpStart, times.OpEnd = -1, -1
+	}
 
 	if times.OpStart < 0 && times.EdStart < 0 && times.RecapStart < 0 && times.PreviewStart < 0 {
 		return nil, nil

@@ -76,14 +76,24 @@ func (c *Client) GetSkipTimes(ctx context.Context, malID int, episode int) (*Ski
 	}
 
 	for _, result := range data.Results {
+		start := result.Interval.StartTime
+		end := result.Interval.EndTime
+		if start < 0 || end <= start {
+			continue
+		}
 		switch result.SkipType {
 		case "op":
-			times.OpStart = result.Interval.StartTime
-			times.OpEnd = result.Interval.EndTime
+			if times.OpStart < 0 {
+				times.OpStart, times.OpEnd = start, end
+			}
 		case "ed":
-			times.EdStart = result.Interval.StartTime
-			times.EdEnd = result.Interval.EndTime
+			if times.EdStart < 0 {
+				times.EdStart, times.EdEnd = start, end
+			}
 		}
+	}
+	if times.OpStart >= 0 && times.EdStart >= 0 && times.OpStart >= times.EdStart {
+		times.OpStart, times.OpEnd = -1, -1
 	}
 
 	return times, nil

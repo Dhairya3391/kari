@@ -35,7 +35,7 @@ func (c *Client) Name() string { return "anipm" }
 // Modes implements provider.Provider, registering Ani.pm for anime streaming.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{
-		{Name: provider.ModeAnime, Priority: 1},
+		{Name: provider.ModeAnime, Priority: 2},
 	}
 }
 
@@ -149,6 +149,8 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 
 		results = append(results, provider.SearchResult{
 			ID:        resID,
+			AniListID: aniID,
+			MALID:     it.MALID,
 			Title:     it.Title,
 			Type:      mode,
 			Year:      strconv.Itoa(it.Year),

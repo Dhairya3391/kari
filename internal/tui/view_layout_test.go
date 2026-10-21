@@ -6,6 +6,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/provider"
 )
+
 func Test16StepCrossfadeTheme(t *testing.T) {
 	m := &modelImpl{
 		appMode:         provider.ModeAnime,

@@ -172,16 +172,30 @@ func (r *Registry) SetSkipSettings(s SkipSettings) {
 	}
 }
 
-// PrefetchSkip asynchronously resolves and caches skip timestamps for resolved media
-// so that playback start hits the memory cache with zero latency.
-func (r *Registry) PrefetchSkip(media model.ResolvedMedia) {
+// ResolveSkipInfo loads the selected skip timings and returns their provenance.
+func (r *Registry) ResolveSkipInfo(media model.ResolvedMedia) SkipInfo {
 	if r == nil || r.skipCache == nil {
-		return
+		return SkipInfo{}
 	}
-	go func() {
-		_, script := getSkipArgs(r.skipClients, r.skipSettings, media, r.skipCache)
-		cleanupSkipScript(script)
-	}()
+	mode := strings.ToLower(strings.TrimSpace(r.skipSettings.Provider))
+	if mode == "" {
+		mode = "hybrid"
+	}
+	if mode == "off" || mode == "none" {
+		return SkipInfo{}
+	}
+	_, script := getSkipArgs(r.skipClients, r.skipSettings, media, r.skipCache)
+	cleanupSkipScript(script)
+	cached, ok := r.skipCache.Get(skipCacheKey(media, mode))
+	if !ok {
+		return SkipInfo{}
+	}
+	return SkipInfo{
+		Opening: infoText(cached.OpSource),
+		Ending:  infoText(cached.EdSource),
+		Recap:   infoText(cached.RecapSource),
+		Preview: infoText(cached.PrevSource),
+	}
 }
 
 // NewRegistry constructs and populates the platform's player set with the

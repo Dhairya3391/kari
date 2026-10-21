@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"kari/internal/lang"
 	"kari/internal/config"
 	"kari/internal/httpclient"
+	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/provider/anilist"
@@ -160,13 +160,13 @@ func (c *Client) resolveMegaplayEmbed(ctx context.Context, embedURL, mediaID str
 
 	logging.Debug("resolve source done via megaplay", "provider", c.Name(), "mediaID", mediaID)
 	return []provider.MediaSource{{
-		URL:       kit.SignCDNURL(rawM3U8, 86400),
-		Quality:   kit.TagQuality("1080p", "Megaplay", "anicine"),
-		Referer:   parsed.Scheme + "://" + parsed.Host + "/",
-		Type:      provider.SourceTypeHLS,
-		UserAgent: config.DesktopUserAgent,
+		URL:            kit.SignCDNURL(rawM3U8, 86400),
+		Quality:        kit.TagQuality("1080p", "Megaplay", "anicine"),
+		Referer:        parsed.Scheme + "://" + parsed.Host + "/",
+		Type:           provider.SourceTypeHLS,
+		UserAgent:      config.DesktopUserAgent,
 		SuppressOrigin: true,
-		Subtitles: subs,
+		Subtitles:      subs,
 	}}, nil
 }
 

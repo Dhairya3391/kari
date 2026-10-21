@@ -81,14 +81,15 @@ type graphqlErrorResponse interface {
 }
 
 type showMeta struct {
-	ID string `json:"id"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type episodeMeta struct {
-	ID             string `json:"id"`
-	Number         string `json:"number"`
-	AbsoluteNumber string `json:"absoluteNumber"`
-	Name           string `json:"name"`
+	ID     string `json:"id"`
+	Season string `json:"season"`
+	Number string `json:"number"`
+	Name   string `json:"name"`
 }
 
 type timestampType struct {
@@ -135,6 +136,7 @@ type findTimestampsResponse struct {
 func (c *Client) GetTimestamps(
 	ctx context.Context,
 	anilistID string,
+	seasonNum int,
 	episodeNum int,
 	seriesTitle string,
 	episodeTitle string,
@@ -159,11 +161,16 @@ func (c *Client) GetTimestamps(
 	// Fallback: title search when unlinked.
 	if len(shows) == 0 && strings.TrimSpace(seriesTitle) != "" {
 		q := `query($s: String!) {
-            searchShows(search: $s, limit: 3) { id }
+            searchShows(search: $s, limit: 3) { id name }
         }`
 		var resp searchShowsResponse
 		if err := c.do(ctx, q, gqlVariables{Search: seriesTitle}, &resp); err == nil {
-			shows = resp.Data.SearchShows
+			target := normalizeTitle(seriesTitle)
+			for _, show := range resp.Data.SearchShows {
+				if normalizeTitle(show.Name) == target {
+					shows = append(shows, show)
+				}
+			}
 		} else {
 			if lookupErr != nil {
 				lookupErr = errors.Join(lookupErr, err)
@@ -199,7 +206,7 @@ func (c *Client) GetTimestamps(
 		go func(idx int, showID string) {
 			defer wg.Done()
 			q := `query($showId: ID!) {
-                findEpisodesByShowId(showId: $showId) { id number absoluteNumber name }
+				findEpisodesByShowId(showId: $showId) { id season number name }
             }`
 			var resp findEpisodesResponse
 			if err := c.do(ctx, q, gqlVariables{ShowID: showID}, &resp); err == nil {
@@ -225,7 +232,7 @@ func (c *Client) GetTimestamps(
 	}
 
 	// Match the best episode entry.
-	targetEp := bestEpisode(allEpisodes, episodeNum, episodeTitle)
+	targetEp := bestEpisode(allEpisodes, seasonNum, episodeNum, episodeTitle)
 	if targetEp == nil {
 		if len(allEpisodes) == 0 && episodeErr != nil {
 			return nil, fmt.Errorf("animeskip resolve episodes: %w", episodeErr)
@@ -248,41 +255,64 @@ func (c *Client) GetTimestamps(
 	return parseIntervals(tsResp.Data.FindTimestampsByEpisodeId), nil
 }
 
-// bestEpisode selects the episode metadata entry matching episodeTitle (by
-// normalized title string) or episodeNum (by number or absoluteNumber).
-func bestEpisode(episodes []episodeMeta, episodeNum int, episodeTitle string) *episodeMeta {
-	cleanTarget := normalizeTitle(episodeTitle)
-
-	// Strategy 1: Title match (protects against scraper episode offsets).
-	// The Contains check is fuzzy but can false-positive on short titles
-	// ("go" matching "godzilla"), so it is only applied when both sides
-	// have at least 4 characters after normalization.
-	if cleanTarget != "" {
-		for i := range episodes {
-			ep := episodes[i]
-			if ep.Name != "" {
-				epClean := normalizeTitle(ep.Name)
-				if epClean == cleanTarget {
-					epCopy := ep
-					return &epCopy
-				}
-				if len(cleanTarget) >= 4 && len(epClean) >= 4 {
-					if strings.Contains(epClean, cleanTarget) || strings.Contains(cleanTarget, epClean) {
-						epCopy := ep
-						return &epCopy
-					}
-				}
+// bestEpisode returns an episode only when its season and episode number or
+// exact title identify one unambiguous Anime-Skip entry.
+func bestEpisode(episodes []episodeMeta, seasonNum, episodeNum int, episodeTitle string) *episodeMeta {
+	if seasonNum > 0 {
+		seasonEpisodes := make([]episodeMeta, 0, len(episodes))
+		hasSeasonData := false
+		for _, ep := range episodes {
+			season := parseIntLoose(ep.Season)
+			if season > 0 {
+				hasSeasonData = true
 			}
+			if season == seasonNum {
+				seasonEpisodes = append(seasonEpisodes, ep)
+			}
+		}
+		if len(seasonEpisodes) > 0 {
+			episodes = seasonEpisodes
+		} else if hasSeasonData {
+			return nil
 		}
 	}
 
-	// Strategy 2: Match by episode number or absoluteNumber.
+	cleanTarget := normalizeTitle(episodeTitle)
+
+	var numbered *episodeMeta
 	for i := range episodes {
 		ep := episodes[i]
-		if matchesNum(&ep, episodeNum) {
+		if parseIntLoose(ep.Number) == episodeNum {
+			if numbered != nil {
+				numbered = nil
+				break
+			}
 			epCopy := ep
-			return &epCopy
+			numbered = &epCopy
 		}
+	}
+	if numbered != nil {
+		return numbered
+	}
+
+	// Exact titles can recover a numbering offset, but partial title matches
+	// may identify a different episode and are not safe skip data.
+	if cleanTarget == "" {
+		return nil
+	}
+	var exact *episodeMeta
+	for i := range episodes {
+		ep := episodes[i]
+		if normalizeTitle(ep.Name) == cleanTarget {
+			if exact != nil {
+				return nil
+			}
+			epCopy := ep
+			exact = &epCopy
+		}
+	}
+	if exact != nil {
+		return exact
 	}
 
 	return nil
@@ -299,19 +329,9 @@ func normalizeTitle(s string) string {
 	return b.String()
 }
 
-func matchesNum(ep *episodeMeta, n int) bool {
-	if parseIntLoose(ep.Number) == n {
-		return true
-	}
-	if ep.AbsoluteNumber != "" && parseIntLoose(ep.AbsoluteNumber) == n {
-		return true
-	}
-	return false
-}
-
 // parseIntervals converts Anime-Skip's sequential at-markers into discrete
-// start/end intervals for each zone type. Markers are sorted ascending; the
-// end of each zone is the at-value of the next marker.
+// intervals. An interval is returned only when a later marker supplies its
+// end boundary.
 func parseIntervals(timestamps []timestamp) *SkipTimes {
 	if len(timestamps) == 0 {
 		return nil
@@ -337,20 +357,10 @@ func parseIntervals(timestamps []timestamp) *SkipTimes {
 
 	for i, ts := range sorted {
 		startAt := ts.At
-		if startAt < 0 {
-			startAt = 0
+		if startAt < 0 || i+1 >= len(sorted) {
+			continue
 		}
-
-		var endAt float64
-		if i+1 < len(sorted) {
-			endAt = sorted[i+1].At
-		} else {
-			// Unclosed last marker: synthesize a 90s zone. This can extend
-			// past the real duration (e.g. preview at 1430 → 1520 on a
-			// 1440s episode) but mpv clamps chapter times to EOF and the
-			// active_zone check already handles overrun gracefully.
-			endAt = startAt + 90
-		}
+		endAt := sorted[i+1].At
 
 		if endAt <= startAt {
 			continue
@@ -378,6 +388,9 @@ func parseIntervals(timestamps []timestamp) *SkipTimes {
 				st.PreviewEnd = endAt
 			}
 		}
+	}
+	if st.OpStart >= 0 && st.EdStart >= 0 && st.OpStart >= st.EdStart {
+		st.OpStart, st.OpEnd = -1, -1
 	}
 
 	// If nothing useful was found, return nil rather than an empty struct.

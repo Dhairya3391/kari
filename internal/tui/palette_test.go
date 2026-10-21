@@ -81,7 +81,6 @@ func TestSmootherstep(t *testing.T) {
 	}
 }
 
-
 func TestThemeForOverride(t *testing.T) {
 	// Fixed preset override
 	thm := ThemeFor(model.KindAnime, "Green")
@@ -95,4 +94,3 @@ func TestThemeForOverride(t *testing.T) {
 		t.Errorf("got custom accent %s, want #123456", thmCustom.Accent.Dark)
 	}
 }
-

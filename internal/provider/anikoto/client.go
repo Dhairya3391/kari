@@ -37,7 +37,7 @@ func (c *Client) Name() string {
 // Modes implements provider.Provider, registering Anikoto as the primary anime provider.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{
-		{Name: provider.ModeAnime, Priority: 2},
+		{Name: provider.ModeAnime, Priority: 1},
 	}
 }
 

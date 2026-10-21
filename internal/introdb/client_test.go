@@ -164,3 +164,18 @@ func TestGetSegments_NotFound(t *testing.T) {
 		t.Fatalf("expected nil times on 404, got %+v", times)
 	}
 }
+
+func TestGetSegments_RejectsMismatchedEpisode(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		body := `{"imdb_id":"tt0903747","media_type":"tv","is_movie":false,"season":2,"episode":5,"intro":{"start_sec":100,"end_sec":190}}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}, "")
+
+	times, err := client.GetSegments(context.Background(), "tt0903747", 1, 5, false)
+	if err != nil {
+		t.Fatalf("GetSegments() error = %v", err)
+	}
+	if times != nil {
+		t.Fatalf("GetSegments() = %+v, want no match for a different season", times)
+	}
+}

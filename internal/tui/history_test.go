@@ -12,6 +12,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/provider"
 )
+
 func TestHistoryRowZeroProgressEmptyBar(t *testing.T) {
 	entry := history.Entry{
 		Title:        "Golmaal Again",

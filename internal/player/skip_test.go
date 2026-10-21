@@ -2,6 +2,7 @@ package player
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -17,6 +18,140 @@ import (
 
 func newTestSkipCache() *util.BoundedCache[combinedSkipTimes] {
 	return util.NewBoundedCache[combinedSkipTimes](100)
+}
+
+func TestSelectConsensusPrefersMostRepeatedTiming(t *testing.T) {
+	candidates := []skipCandidate{
+		{start: 68, end: 158, source: "AniSkip", priority: 1},
+		{start: 67, end: 157, source: "SkipDB", priority: 2},
+		{start: 64, end: 156, source: "IntroDB", priority: 3},
+		{start: 77, end: 167, source: "Anime-Skip", priority: 4},
+	}
+	selected, count, ok := selectConsensus(candidates)
+	if !ok || count != 4 || selected.source != "AniSkip" || selected.start != 68 {
+		t.Fatalf("selectConsensus() = (%+v, %d, %t), want preferred AniSkip timing", selected, count, ok)
+	}
+}
+
+func TestSelectConsensusAcceptsStronglyOverlappingTimings(t *testing.T) {
+	candidates := []skipCandidate{
+		{start: 68.315, end: 158.315, source: "AniSkip", priority: 1},
+		{start: 77.079, end: 167.152, source: "Anime-Skip", priority: 4},
+	}
+	selected, count, ok := selectConsensus(candidates)
+	if !ok || count != 2 || selected.source != "AniSkip" {
+		t.Fatalf("selectConsensus() = (%+v, %d, %t), want preferred AniSkip interval", selected, count, ok)
+	}
+}
+
+func TestSelectConsensusUsesHighestPriorityAvailableTiming(t *testing.T) {
+	cases := []struct {
+		name       string
+		candidates []skipCandidate
+		wantSource string
+		wantCount  int
+	}{
+		{
+			name:       "single source",
+			candidates: []skipCandidate{{start: 100, end: 190, source: "AniSkip", priority: 1}},
+			wantSource: "AniSkip",
+			wantCount:  1,
+		},
+		{
+			name: "priority breaks a conflicting vote tie",
+			candidates: []skipCandidate{
+				{start: 100, end: 190, source: "SkipDB", priority: 2},
+				{start: 101, end: 191, source: "IntroDB", priority: 3},
+				{start: 130, end: 220, source: "AniSkip", priority: 1},
+				{start: 131, end: 221, source: "Anime-Skip", priority: 4},
+			},
+			wantSource: "AniSkip",
+			wantCount:  2,
+		},
+		{
+			name: "provider priority beats a larger lower-priority group",
+			candidates: []skipCandidate{
+				{start: 100, end: 190, source: "AniSkip", priority: 1},
+				{start: 130, end: 220, source: "SkipDB", priority: 2},
+				{start: 131, end: 221, source: "IntroDB", priority: 3},
+			},
+			wantSource: "AniSkip",
+			wantCount:  1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			selected, count, ok := selectConsensus(tc.candidates)
+			if !ok || count != tc.wantCount || selected.source != tc.wantSource {
+				t.Fatalf("selectConsensus() = (%+v, %d, %t), want %s with %d matching source(s)", selected, count, ok, tc.wantSource, tc.wantCount)
+			}
+		})
+	}
+}
+
+func TestSkipInfoStringShowsOnlyUsedSources(t *testing.T) {
+	got := (SkipInfo{Opening: "AniSkip", Ending: "SkipDB", Recap: "AniSkip"}).String()
+	if got != "AniSkip + SkipDB" {
+		t.Fatalf("SkipInfo.String() = %q", got)
+	}
+}
+
+func TestHybridUsesConsensusAndReportsIt(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		introStart int
+		wantStart  string
+		wantInfo   string
+		wantRecap  string
+	}{
+		{name: "agreement and mixed chapter providers", introStart: 102, wantStart: "100.000000", wantInfo: "SkipDB + IntroDB", wantRecap: "skip-recap_start=30.000000"},
+		{name: "disagreement uses provider priority", introStart: 130, wantStart: "100.000000", wantInfo: "SkipDB + IntroDB", wantRecap: "skip-recap_start=30.000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clientHTTP := &http.Client{Transport: mockRoundTripper(func(req *http.Request) (*http.Response, error) {
+				var body string
+				switch req.URL.Host {
+				case "api.skipdb.tv":
+					body = `{"imdb_id":"tt1234567","season":1,"episode":1,"segments":{"intro":{"start_ms":100000,"end_ms":190000,"match":"exact"}}}`
+				case "api.introdb.app":
+					body = `{"imdb_id":"tt1234567","media_type":"tv","is_movie":false,"season":1,"episode":1,"intro":{"start_sec":` + fmt.Sprint(tc.introStart) + `,"end_sec":` + fmt.Sprint(tc.introStart+90) + `},"recap":{"start_sec":30,"end_sec":45}}`
+				default:
+					t.Fatalf("unexpected skip source host: %s", req.URL.Host)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			})}
+			clients := SkipClients{
+				SkipDB:  skipdb.NewClient(clientHTTP, "test"),
+				IntroDB: introdb.NewClient(clientHTTP, "test"),
+				HTTP:    clientHTTP,
+			}
+			registry := &Registry{skipClients: clients, skipSettings: SkipSettings{Provider: "hybrid"}, skipCache: newTestSkipCache()}
+			media := model.ResolvedMedia{SeriesTitle: "Test", SeriesURL: "tt1234567", MediaType: "tv", SeasonNumber: 1, EpisodeNumber: 1}
+			info := registry.ResolveSkipInfo(media)
+			if got := info.String(); got != tc.wantInfo {
+				t.Fatalf("ResolveSkipInfo() = %q, want %q", got, tc.wantInfo)
+			}
+			args, script := getSkipArgs(clients, registry.skipSettings, media, registry.skipCache)
+			defer cleanupSkipScript(script)
+			if tc.wantStart == "" {
+				if len(args) != 0 || script != "" {
+					t.Fatalf("disagreement produced playable skip args: %v", args)
+				}
+				return
+			}
+			for _, arg := range args {
+				if !strings.HasPrefix(arg, "--script-opts=") {
+					continue
+				}
+				if !strings.Contains(arg, "skip-op_start="+tc.wantStart) {
+					t.Fatalf("hybrid selected wrong opening boundary: %s", arg)
+				}
+				if tc.wantRecap != "" && !strings.Contains(arg, tc.wantRecap) {
+					t.Fatalf("hybrid omitted recap from another provider: %s", arg)
+				}
+			}
+		})
+	}
 }
 
 func TestGetSkipArgs_OffProvider(t *testing.T) {
@@ -99,6 +234,10 @@ func TestGetSkipArgs_AniSkipIntegration(t *testing.T) {
 	aniskipHTTP := &http.Client{
 		Transport: mockRoundTripper(func(req *http.Request) (*http.Response, error) {
 			if req.URL.Host == "graphql.anilist.co" {
+				body, _ := io.ReadAll(req.Body)
+				if !strings.Contains(string(body), `"id":154587`) {
+					t.Fatalf("AniSkip must resolve the selected AniList ID: %s", body)
+				}
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(bytes.NewBufferString(`{"data":{"Media":{"id":154587,"idMal":52991}}}`)),
@@ -130,7 +269,9 @@ func TestGetSkipArgs_AniSkipIntegration(t *testing.T) {
 		AutoSkipEnding: true,
 	}, model.ResolvedMedia{
 		SeriesTitle:   "Frieren Unique Test Series",
+		SeriesURL:     "154587",
 		EpisodeNumber: 1,
+		MediaType:     "anime",
 	}, newTestSkipCache())
 	defer cleanupSkipScript(scriptPath)
 

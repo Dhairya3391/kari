@@ -76,11 +76,14 @@ func parseSegment(s *segmentData) (float64, float64) {
 	if s == nil {
 		return -1, -1
 	}
+	if s.Match == "out-of-range" {
+		return -1, -1
+	}
 	// Sentinels: (0,0) explicitly denotes confirmed absent in SkipDB specification.
 	if s.StartMS == 0 && s.EndMS == 0 {
 		return -1, -1
 	}
-	if s.EndMS <= s.StartMS {
+	if s.StartMS < 0 || s.EndMS <= s.StartMS {
 		return -1, -1
 	}
 	return s.StartMS / 1000.0, s.EndMS / 1000.0
@@ -130,6 +133,16 @@ func (c *Client) GetSegments(ctx context.Context, imdbID string, season, episode
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return nil, fmt.Errorf("skipdb decode: %w", err)
 	}
+	if !strings.EqualFold(strings.TrimSpace(data.IMDbID), cleanIMDb) {
+		return nil, nil
+	}
+	if isMovie {
+		if data.Season != nil || data.Episode != nil {
+			return nil, nil
+		}
+	} else if season <= 0 || episode <= 0 || data.Season == nil || data.Episode == nil || *data.Season != season || *data.Episode != episode {
+		return nil, nil
+	}
 
 	times := &SkipTimes{
 		OpStart:      -1,
@@ -146,6 +159,9 @@ func (c *Client) GetSegments(ctx context.Context, imdbID string, season, episode
 	times.RecapStart, times.RecapEnd = parseSegment(data.Segments.Recap)
 	times.EdStart, times.EdEnd = parseSegment(data.Segments.Outro)
 	times.PreviewStart, times.PreviewEnd = parseSegment(data.Segments.Preview)
+	if times.OpStart >= 0 && times.EdStart >= 0 && times.OpStart >= times.EdStart {
+		times.OpStart, times.OpEnd = -1, -1
+	}
 
 	if times.OpStart < 0 && times.EdStart < 0 && times.RecapStart < 0 && times.PreviewStart < 0 {
 		return nil, nil

@@ -134,6 +134,11 @@ type resolveProgressMsg struct {
 	opID     int
 }
 
+type previewSkipInfoMsg struct {
+	opID int
+	info player.SkipInfo
+}
+
 type playDoneMsg struct {
 	opID     int
 	provider string
@@ -330,6 +335,9 @@ type modelImpl struct {
 	bodyScroll             int
 	helpScroll             int
 	selectedPlayback       int
+	previewSkipInfo        string
+	previewSkipKey         string
+	skipInfoOpID           int
 	manualPlaybackSelected bool
 	prevSourceResolver     string
 	prevSourceLanguage     string
@@ -504,8 +512,8 @@ type modelImpl struct {
 	pendingMangaResume *mangaResume
 
 	// Redesign Navigation & Router
-	activeToast *Toast
-	toastID     int
+	activeToast        *Toast
+	toastID            int
 	activeSeason       int
 	seasonEpisodeIndex int
 	selectMode         bool
@@ -527,7 +535,6 @@ type modelImpl struct {
 	settingsCategory SettingsCategory
 	audioPickerOpen  bool
 	audioPickerIndex int
-
 
 	// Anime Status picker modal
 	animeStatusPickerOpen      bool
