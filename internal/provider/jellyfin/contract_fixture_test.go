@@ -17,7 +17,7 @@ func fakeLibrary(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/Items", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Emby-Token") == "" {
+		if r.Header.Get("Authorization") != `MediaBrowser Token="test-key"` {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -125,6 +125,10 @@ func TestHintsFallback(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 	mux.HandleFunc("/Search/Hints", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != `MediaBrowser Token="test-key"` {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"SearchHints":[
 			{"Id":"m1","Name":"Inception","Type":"Movie","ProductionYear":2010},

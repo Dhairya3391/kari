@@ -77,7 +77,9 @@ func (c *Client) authGET(ctx context.Context, url string) (*http.Response, error
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Emby-Token", c.apiKey)
+	// The legacy X-Emby-Token header is rejected by current Jellyfin; the
+	// MediaBrowser Authorization header works across current and older servers.
+	req.Header.Set("Authorization", `MediaBrowser Token="`+c.apiKey+`"`)
 	return c.http.Do(req)
 }
 
