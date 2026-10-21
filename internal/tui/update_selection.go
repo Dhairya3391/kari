@@ -52,6 +52,7 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		}
 		m.loadingText = "Preparing playback..."
 		m.resolved = nil
+		m.resetPreviewSkipInfo()
 		m.rawSubtitles = nil
 		m.subtitleResolverUsed = ""
 		m.subtitleLangUsed = ""
@@ -65,13 +66,15 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		opID := m.newOpID()
 		m.resolveOpID = opID
 		m.pushView(viewPreview)
-		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode, nil, nil), m.prefetchPreviewPoster())
+		skipInfoCmd := m.triggerPreviewSkipInfoFor(previewSkipMedia(*m.selectedSeries, *m.selectedEpisode, m.appMode))
+		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode, nil, nil), m.prefetchPreviewPoster(), skipInfoCmd)
 	}
 
 	tuiLog.Debug("loading episodes", "title", m.selectedSeries.Title)
 	m.loading = true
 	m.loadingText = "Loading episodes..."
 	m.resolved = nil
+	m.resetPreviewSkipInfo()
 	m.rawSubtitles = nil
 	m.clearPreviewPoster()
 	m.setStatus(statusInfo, "")
@@ -233,6 +236,7 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 		m.prevSourceQuality = service.SourceQuality(src.Quality)
 	}
 	m.resolved = nil
+	m.resetPreviewSkipInfo()
 	m.rawSubtitles = nil
 	m.manualPlaybackSelected = false
 	m.resolveAttempts = 0
@@ -255,7 +259,8 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	m.resolveOpID = opID
 	m.pushView(viewPreview)
 	tuiLog.Debug("resolving playback", "series", series.Title, "episode", m.selectedEpisode.Title, "autoPlay", autoPlay)
-	return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, series, *m.selectedEpisode, nil, nil), m.prefetchPreviewPoster())
+	skipInfoCmd := m.triggerPreviewSkipInfoFor(previewSkipMedia(series, *m.selectedEpisode, m.appMode))
+	return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, series, *m.selectedEpisode, nil, nil), m.prefetchPreviewPoster(), skipInfoCmd)
 }
 func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 	if m.searchQueryCancel != nil {
@@ -418,7 +423,7 @@ func subtitleResolutionComplete(media model.ResolvedMedia) bool {
 func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia, preferredResolver, preferredSourceID string) tea.Cmd {
 	preferredLang := m.subtitleLanguage
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.appCtx, 10*time.Second)
+		ctx, cancel := context.WithTimeout(m.appCtx, 15*time.Second)
 		defer cancel()
 		track, err := m.subtitleService.FetchForSource(ctx, resolved, preferredLang, preferredResolver, preferredSourceID)
 		if err != nil {

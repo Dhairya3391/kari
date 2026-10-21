@@ -481,10 +481,11 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.resolveAttempts = 0
 	m.mergeResolved(msg.resolved)
+	skipInfoCmd := m.triggerPreviewSkipInfo()
 
 	// If playback is already active, don't re-trigger playback or override player status
 	if m.playOpID != 0 {
-		return m, nil
+		return m, skipInfoCmd
 	}
 
 	// Partial success with a preferred provider down (movy-first): one
@@ -500,7 +501,7 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 		m.beginRetryWait(m.appMode, exclude)
 		opID := m.newOpID()
 		m.resolveOpID = opID
-		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode, exclude, retry))
+		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode, exclude, retry), skipInfoCmd)
 	}
 
 	// The subtitle fetch started on the first progress snapshot, so by
@@ -511,10 +512,10 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	if m.autoPlayAfterResolve && (subCmd != nil || m.subtitleOpID != 0) {
 		m.loading = true
 		m.loadingText = "Loading subtitles..."
-		return m, tea.Batch(m.spinner.Tick, subCmd)
+		return m, tea.Batch(m.spinner.Tick, subCmd, skipInfoCmd)
 	}
 	mdl, cmd := m.finalizeResolved()
-	return mdl, tea.Batch(cmd, subCmd)
+	return mdl, tea.Batch(cmd, subCmd, skipInfoCmd)
 }
 
 // onSubtitleDone attaches the fetched track to the resolved media. When
@@ -628,11 +629,9 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 	// and the trigger re-fires only when the target changes or the pool
 	// grows with nothing secured yet.
 	subCmd := m.triggerSubtitleSync()
-	if m.players != nil && m.resolved != nil {
-		m.players.PrefetchSkip(*m.resolved)
-	}
+	skipInfoCmd := m.triggerPreviewSkipInfo()
 	if wasNil {
-		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails(), subCmd)
+		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails(), subCmd, skipInfoCmd)
 	}
 
 	// Progressive snapshots can carry the TMDBID after the first one;
@@ -640,10 +639,10 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 	// blank. Guarded to the TMDB path so anime/movies without an ID
 	// don't spam the AniList fallback on every snapshot.
 	if m.previewOverview == "" && msg.resolved.TMDBID != 0 {
-		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewDetails(), subCmd)
+		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewDetails(), subCmd, skipInfoCmd)
 	}
 
-	return m, tea.Batch(m.resolveSubscription(), subCmd)
+	return m, tea.Batch(m.resolveSubscription(), subCmd, skipInfoCmd)
 }
 
 // pruneResolvedToResolvers drops resolved rows for providers about to be

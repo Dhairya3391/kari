@@ -806,6 +806,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		SelectedIndex:    m.previewSelectedIndex,
 		PlayerName:       m.selectedPlayerName(),
 		Autoplay:         m.autoplay,
+		SkipInfo:         m.previewSkipInfo,
 		LoadingProviders: m.loadingProviders,
 		TotalProviders:   m.totalProviders,
 		FailedProvider:   m.failedProviderName,

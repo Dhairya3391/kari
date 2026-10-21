@@ -189,3 +189,18 @@ func TestGetSegments_SentinelZeroHandling(t *testing.T) {
 		t.Fatalf("expected all absent segments to return nil times, got %+v", times)
 	}
 }
+
+func TestGetSegments_RejectsMismatchedEpisode(t *testing.T) {
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		body := `{"imdb_id":"tt0903747","season":2,"episode":5,"segments":{"intro":{"start_ms":100000,"end_ms":190000}}}`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}, "")
+
+	times, err := client.GetSegments(context.Background(), "tt0903747", 1, 5, false)
+	if err != nil {
+		t.Fatalf("GetSegments() error = %v", err)
+	}
+	if times != nil {
+		t.Fatalf("GetSegments() = %+v, want no match for a different season", times)
+	}
+}

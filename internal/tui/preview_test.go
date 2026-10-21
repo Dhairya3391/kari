@@ -31,6 +31,23 @@ func TestPreviewFailedProviderRetryHint(t *testing.T) {
 	}
 }
 
+func TestRenderPreviewShowsSkipDataUnderAutoplay(t *testing.T) {
+	data := PreviewData{
+		SeriesTitle: "Fire Force",
+		SkipInfo:    "AniSkip + SkipDB",
+		Width:       100,
+	}
+	out := RenderPreviewScreen(data)
+	autoAt := strings.Index(out, "autoplay")
+	skipAt := strings.Index(out, "skip data")
+	if autoAt < 0 || skipAt < 0 || skipAt < autoAt {
+		t.Fatalf("preview should show skip data after autoplay:\n%s", out)
+	}
+	if !strings.Contains(out, data.SkipInfo) {
+		t.Fatalf("preview missing selected skip provenance: %q", out)
+	}
+}
+
 // An empty Preview table must distinguish "providers still resolving"
 // from "nothing found", or users stare at a dead screen.
 

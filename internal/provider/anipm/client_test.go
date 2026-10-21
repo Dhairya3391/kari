@@ -22,8 +22,8 @@ func TestClientIdentityAndModes(t *testing.T) {
 		t.Errorf("Alias = %q, want Ani.pm", c.Alias())
 	}
 	modes := c.Modes()
-	if len(modes) != 1 || modes[0].Name != provider.ModeAnime || modes[0].Priority != 1 {
-		t.Errorf("Modes = %+v, want ModeAnime at Priority 1", modes)
+	if len(modes) != 1 || modes[0].Name != provider.ModeAnime || modes[0].Priority != 2 {
+		t.Errorf("Modes = %+v, want ModeAnime at Priority 2", modes)
 	}
 	if !c.RequiresEpisodeListForMovies() {
 		t.Errorf("RequiresEpisodeListForMovies want true")

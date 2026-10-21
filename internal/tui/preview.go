@@ -30,6 +30,7 @@ type PreviewData struct {
 	SelectedIndex    int
 	PlayerName       string
 	Autoplay         bool
+	SkipInfo         string
 	LoadingProviders int
 	TotalProviders   int
 	FailedProvider   string
@@ -150,6 +151,9 @@ func renderPreviewHeader(data PreviewData, st Styles) string {
 		metaRows = append(metaRows, st.Dim.Render("subtitles  ")+subFmt)
 	}
 	metaRows = append(metaRows, st.Dim.Render("autoplay   ")+st.Current.Render(autoVal))
+	if data.SkipInfo != "" {
+		metaRows = append(metaRows, st.Dim.Render("skip data  ")+st.Current.Render(data.SkipInfo))
+	}
 	if data.ResumePosition != "" {
 		metaRows = append(metaRows, st.Dim.Render("resume     ")+st.Current.Render(data.ResumePosition))
 	}

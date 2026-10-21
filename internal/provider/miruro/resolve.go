@@ -331,20 +331,6 @@ func deadHost(rawURL string) bool {
 // serverSources maps one provider pool's servers to media sources,
 // skipping servers without streams (iframe embeds) and non-video files.
 func serverSources(pe providerEntry) []provider.MediaSource {
-	subs := make([]provider.SubtitleOption, 0, len(pe.subtitles))
-	for _, s := range pe.subtitles {
-		if !kit.IsSubtitleURL(s.file) {
-			continue
-		}
-		tag := lang.Normalize(strings.TrimSpace(s.language))
-		if tag == "" {
-			tag = lang.Normalize(strings.TrimSpace(s.label))
-		}
-		if tag == "" {
-			tag = "en"
-		}
-		subs = append(subs, provider.SubtitleOption{URL: s.file, Language: tag, Default: s.def})
-	}
 	subType := ""
 	switch pe.track {
 	case "ssub":
@@ -361,6 +347,22 @@ func serverSources(pe providerEntry) []provider.MediaSource {
 	for _, srv := range pe.servers {
 		if strings.TrimSpace(srv.server) == "" && strings.TrimSpace(srv.referer) == "" && len(srv.streams) == 0 {
 			continue
+		}
+		subs := make([]provider.SubtitleOption, 0, len(pe.subtitles))
+		for _, s := range pe.subtitles {
+			if !kit.IsSubtitleURL(s.file) {
+				continue
+			}
+			tag := lang.Normalize(strings.TrimSpace(s.language))
+			if tag == "" {
+				tag = lang.Normalize(strings.TrimSpace(s.label))
+			}
+			if tag == "" {
+				tag = "en"
+			}
+			subs = append(subs, provider.SubtitleOption{
+				URL: s.file, Language: tag, Default: s.def, Referer: strings.TrimSpace(srv.referer),
+			})
 		}
 		for _, st := range srv.streams {
 			typ := streamType(st)

@@ -27,6 +27,10 @@ const (
 	searchCacheMax   = 100
 	episodesCacheTTL = 15 * time.Minute
 	episodesCacheMax = 200
+	// episodeTitlesTimeout bounds one canonical-title fan-out: the race
+	// itself is parallel and ends with the fastest source, so this hard
+	// cap only fires when every naming source hangs.
+	episodeTitlesTimeout = 3 * time.Second
 )
 
 type searchCacheEntry struct {
@@ -60,6 +64,7 @@ type MediaService struct {
 
 	searchCache   *util.BoundedCache[searchCacheEntry]
 	episodesCache *util.BoundedCache[episodesCacheEntry]
+	episodeTitles *util.BoundedCache[map[int]string]
 	sf            singleflight.Group
 }
 
@@ -70,6 +75,7 @@ func NewMediaService(registry *provider.Registry) *MediaService {
 		health:        &provider.Health{},
 		searchCache:   util.NewBoundedCache[searchCacheEntry](searchCacheMax),
 		episodesCache: util.NewBoundedCache[episodesCacheEntry](episodesCacheMax),
+		episodeTitles: util.NewBoundedCache[map[int]string](200),
 	}
 }
 
@@ -419,13 +425,9 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 			requestedAudio = provider.AudioSub
 		}
 
-		// Probe every availability source concurrently and take the
-		// first success. Sequential probing made every uncached load
-		// pay the slowest source (Anikoto's multi-hop slug walk runs
-		// ~14s) even when a sibling answers in ~1s. Verified
-		// sub/dub rows are interchangeable handles for the downstream
-		// cross-provider resolve, so fastest-wins changes nothing
-		// except latency.
+		// Episode title metadata belongs to the selected source order.
+		// Racing providers can attach a different season's titles to
+		// otherwise interchangeable episode-number handles.
 		availSources := s.episodeAvailabilitySources(mode, series)
 		var enabledAvail, disabledAvail []provider.EpisodeAvailabilitySource
 		for _, as := range availSources {
@@ -446,6 +448,9 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 			eps, lastErr, ok = s.firstAvailableEpisodes(ctx, disabledAvail, series)
 		}
 		if ok {
+			if mode == provider.ModeAnime {
+				eps = s.applyCanonicalAnimeEpisodeTitles(ctx, mode, series, eps)
+			}
 			return filterAvailableEpisodesByAudio(eps, requestedAudio), nil
 		} else if requestedAudio == provider.AudioDub {
 			if lastErr != nil {
@@ -459,40 +464,135 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 	if err != nil {
 		return nil, err
 	}
+	if mode == provider.ModeAnime {
+		eps = s.applyCanonicalAnimeEpisodeTitles(ctx, mode, series, eps)
+	}
 	return filterEpisodesByAudio(eps, requestedAudio), nil
 }
 
-// firstAvailableEpisodes probes every availability source concurrently
-// and returns the first successful episode list. The losers are
-// cancelled; the buffered channel (one slot per source) means no
-// goroutine ever blocks on send, so nothing leaks. A nil list means
-// every source failed, with the most recent error carried for the
-// dub-availability error path. Blocking receive is safe: each source
-// gets the shared deadline, so a hung source fails closed exactly as
-// it did under sequential probing.
+func (s *MediaService) applyCanonicalAnimeEpisodeTitles(ctx context.Context, mode provider.ContentType, series provider.SearchResult, episodes []provider.Episode) []provider.Episode {
+	if series.MediaType == provider.MediaTypeMovie {
+		return episodes
+	}
+	if len(episodes) == 0 {
+		return episodes
+	}
+	cacheKey := fmt.Sprintf("titles:%s:%s", series.Type, strings.TrimSpace(series.ID))
+	titles, ok := s.episodeTitles.Get(cacheKey)
+	if !ok {
+		// Bounded hard so a slow naming provider can never delay the
+		// episode list; sources race in parallel and siblings are
+		// cancelled once the first usable map lands.
+		titleCtx, cancel := context.WithTimeout(ctx, episodeTitlesTimeout)
+		defer cancel()
+		titles, ok = s.firstEpisodeTitles(titleCtx, s.episodeTitleSources(mode, series), series)
+		if !ok {
+			mediaLog.Debug("canonical anime episode titles unavailable", "provider", series.Provider, "seriesID", series.ID)
+			setGenericEpisodeTitles(episodes)
+			return episodes
+		}
+		s.episodeTitles.Set(cacheKey, titles)
+	}
+	for i := range episodes {
+		if title := strings.TrimSpace(titles[episodes[i].Episode]); title != "" {
+			episodes[i].Title = title
+		} else {
+			episodes[i].Title = genericEpisodeTitle(episodes[i].Episode)
+		}
+	}
+	return episodes
+}
+
+// episodeTitleSources lists providers that supply their own episode titles
+// for mode, origin provider first so the running title usually wins the race.
+func (s *MediaService) episodeTitleSources(mode provider.ContentType, series provider.SearchResult) []provider.EpisodeTitlesSource {
+	providers := s.registry.ProvidersForMode(mode)
+	ordered := make([]provider.Provider, 0, len(providers)+1)
+	if origin, ok := s.registry.ProviderByNameForMode(strings.TrimSpace(series.Provider), mode); ok {
+		ordered = append(ordered, origin)
+	}
+	ordered = append(ordered, providers...)
+	var out []provider.EpisodeTitlesSource
+	seen := make(map[string]struct{}, len(ordered))
+	for _, p := range ordered {
+		if _, ok := seen[p.Name()]; ok {
+			continue
+		}
+		seen[p.Name()] = struct{}{}
+		if src, ok := p.(provider.EpisodeTitlesSource); ok {
+			out = append(out, src)
+		}
+	}
+	return out
+}
+
+// firstEpisodeTitles returns the first provider-supplied title map and
+// cancels sibling lookups so naming latency is bounded by the fastest source.
+func (s *MediaService) firstEpisodeTitles(ctx context.Context, sources []provider.EpisodeTitlesSource, series provider.SearchResult) (map[int]string, bool) {
+	if len(sources) == 0 {
+		return nil, false
+	}
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type titleResult struct {
+		titles map[int]string
+	}
+	results := make(chan titleResult, len(sources))
+	for _, source := range sources {
+		go func(source provider.EpisodeTitlesSource) {
+			titles, err := source.FetchEpisodeTitles(childCtx, series)
+			if err != nil {
+				mediaLog.Debug("episode titles unavailable from source", "source", source, "err", err)
+				titles = nil
+			}
+			results <- titleResult{titles: titles}
+		}(source)
+	}
+	for range sources {
+		if result := <-results; len(result.titles) > 0 {
+			return result.titles, true
+		}
+	}
+	return nil, false
+}
+
+func setGenericEpisodeTitles(episodes []provider.Episode) {
+	for i := range episodes {
+		episodes[i].Title = genericEpisodeTitle(episodes[i].Episode)
+	}
+}
+
+func genericEpisodeTitle(number int) string {
+	return fmt.Sprintf("Episode %02d", number)
+}
+
+// firstAvailableEpisodes returns the first usable episode list and cancels
+// sibling lookups so catalog latency is bounded by the fastest source.
 func (s *MediaService) firstAvailableEpisodes(ctx context.Context, sources []provider.EpisodeAvailabilitySource, series provider.SearchResult) ([]provider.Episode, error, bool) {
 	if len(sources) == 0 {
 		return nil, nil, false
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	type availResult struct {
-		eps []provider.Episode
-		err error
+	type availabilityResult struct {
+		episodes []provider.Episode
+		err      error
 	}
-	ch := make(chan availResult, len(sources))
+	results := make(chan availabilityResult, len(sources))
 	for _, source := range sources {
-		go func() {
-			eps, err := source.FetchAvailableEpisodes(childCtx, series)
-			ch <- availResult{eps: eps, err: err}
-		}()
+		go func(source provider.EpisodeAvailabilitySource) {
+			episodes, err := source.FetchAvailableEpisodes(childCtx, series)
+			results <- availabilityResult{episodes: episodes, err: err}
+		}(source)
 	}
 	var lastErr error
 	for range sources {
-		if r := <-ch; r.err == nil {
-			return r.eps, nil, true
-		} else {
-			lastErr = r.err
+		result := <-results
+		if result.err == nil && len(result.episodes) > 0 {
+			return result.episodes, nil, true
+		}
+		if result.err != nil {
+			lastErr = result.err
 		}
 	}
 	return nil, lastErr, false

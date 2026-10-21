@@ -26,7 +26,6 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.confirmStop = false
 	}
 
-
 	// Anime status modal captures all input while open
 	if m.animeStatusPickerOpen {
 		switch msg.String() {
@@ -259,7 +258,6 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 	}
 	return nil, false
 }
-
 
 func (m *modelImpl) triggerAnimeStatusModal() (tea.Cmd, bool) {
 	var title string

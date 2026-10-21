@@ -273,10 +273,8 @@ func TestAnikotoResolveSourceInvalid(t *testing.T) {
 }
 
 func TestBlackCloverSeason2Resolution(t *testing.T) {
-	c, err := NewClient()
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
+	fx := newDirectFixture(t, "195604", "Black Clover Season 2", "black-clover-season-2", "8839")
+	c := fx.client(t)
 
 	animeID, slug, err := c.resolveAnilistToAnikoto(context.Background(), "195604")
 	if err != nil {

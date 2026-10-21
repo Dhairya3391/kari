@@ -77,6 +77,17 @@ func TestMiruroCapabilities(t *testing.T) {
 	}
 }
 
+func TestMiruroFetchEpisodeTitles(t *testing.T) {
+	c := newFixture(t)
+	titles, err := c.FetchEpisodeTitles(context.Background(), provider.SearchResult{ID: "20", Title: "Naruto"})
+	if err != nil {
+		t.Fatalf("FetchEpisodeTitles: %v", err)
+	}
+	if titles[1] != "Enter" {
+		t.Fatalf("titles = %#v, want the watch payload's own title", titles)
+	}
+}
+
 func TestMiruroSearchKeepsAniListIDs(t *testing.T) {
 	c := newFixture(t)
 	results, err := c.Search(context.Background(), "naruto", provider.ModeAnime)
@@ -170,6 +181,8 @@ func TestMiruroResolveSub(t *testing.T) {
 	}
 	if len(s.Subtitles) != 1 || s.Subtitles[0].URL != "https://cdn.example.com/en.vtt" {
 		t.Errorf("Subtitles = %+v, want the english vtt", s.Subtitles)
+	} else if s.Subtitles[0].Referer != "https://megaplay.buzz/" {
+		t.Errorf("subtitle Referer = %q, want server Referer", s.Subtitles[0].Referer)
 	}
 }
 

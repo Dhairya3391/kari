@@ -284,17 +284,106 @@ pcall(function()
 end)
 `
 
-// combinedSkipTimes holds unified intervals across providers.
+// combinedSkipTimes holds agreed intervals and their source provenance.
 type combinedSkipTimes struct {
-	OpStart      float64
-	OpEnd        float64
-	EdStart      float64
-	EdEnd        float64
-	RecapStart   float64
-	RecapEnd     float64
-	PreviewStart float64
-	PreviewEnd   float64
-	IsLive       bool
+	OpStart       float64
+	OpEnd         float64
+	EdStart       float64
+	EdEnd         float64
+	RecapStart    float64
+	RecapEnd      float64
+	PreviewStart  float64
+	PreviewEnd    float64
+	IsLive        bool
+	OpSource      string
+	OpAgreement   int
+	OpConflict    bool
+	EdSource      string
+	EdAgreement   int
+	EdConflict    bool
+	RecapSource   string
+	RecapAgree    int
+	RecapConflict bool
+	PrevSource    string
+	PrevAgree     int
+	PrevConflict  bool
+}
+
+// SkipInfo describes the confirmed timing source for each chapter type.
+type SkipInfo struct {
+	// Opening describes the source selected for opening boundaries.
+	Opening string
+	// Ending describes the source selected for ending boundaries.
+	Ending string
+	// Recap describes the source selected for recap boundaries.
+	Recap string
+	// Preview describes the source selected for preview boundaries.
+	Preview string
+}
+
+// String formats which sources supplied the timings used for playback.
+func (s SkipInfo) String() string {
+	providers := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	for _, source := range []string{s.Opening, s.Ending, s.Recap, s.Preview} {
+		if source == "" {
+			continue
+		}
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		providers = append(providers, source)
+	}
+	if len(providers) == 0 {
+		return "none"
+	}
+	return strings.Join(providers, " + ")
+}
+
+type skipCandidate struct {
+	start, end float64
+	source     string
+	priority   int
+}
+
+// An 80% interval overlap accepts boundary drift while still requiring the
+// sources to identify substantially the same segment.
+const skipAgreementOverlap = 0.8
+
+func sameSkipInterval(a, b skipCandidate) bool {
+	intersection := min(a.end, b.end) - max(a.start, b.start)
+	if intersection <= 0 {
+		return false
+	}
+	union := max(a.end, b.end) - min(a.start, b.start)
+	return union > 0 && intersection/union >= skipAgreementOverlap
+}
+
+func selectConsensus(candidates []skipCandidate) (skipCandidate, int, bool) {
+	bestCount := 0
+	var best skipCandidate
+	for _, candidate := range candidates {
+		if candidate.start < 0 || candidate.end <= candidate.start {
+			continue
+		}
+		count := 0
+		for _, other := range candidates {
+			if other.source != candidate.source && sameSkipInterval(candidate, other) {
+				count++
+			}
+		}
+		count++
+		if bestCount == 0 || candidate.priority < best.priority ||
+			(candidate.priority == best.priority && count > bestCount) {
+			best, bestCount = candidate, count
+		}
+	}
+	return best, bestCount, bestCount > 0
+}
+
+func infoText(source string) string {
+	return source
 }
 
 var (
@@ -351,66 +440,6 @@ func resolveIMDbID(ctx context.Context, media model.ResolvedMedia, keyPool *tmdb
 		}
 	}
 
-	// 3. Fallback: Search TMDB by title if TMDBID is not populated
-	title := strings.TrimSpace(media.SeriesTitle)
-	if title != "" && keyPool != nil {
-		cacheKey := fmt.Sprintf("title:%s:%s", title, media.MediaType)
-		if cached, ok := imdbCache.Get(cacheKey); ok {
-			return cached
-		}
-
-		apiKey, err := keyPool.NextKey()
-		if err == nil && apiKey != "" {
-			endpoint := fmt.Sprintf("%s/search/multi?query=%s&api_key=%s",
-				config.TMDBAPIBase, url.QueryEscape(title), url.QueryEscape(apiKey))
-			req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-			if rerr == nil {
-				req.Header.Set("Accept", "application/json")
-				req.Header.Set("User-Agent", config.DesktopUserAgent)
-				resp, derr := httpClient.Do(req)
-				if derr == nil {
-					defer resp.Body.Close()
-					if resp.StatusCode == http.StatusOK {
-						var searchRes struct {
-							Results []struct {
-								ID        int    `json:"id"`
-								MediaType string `json:"media_type"`
-							} `json:"results"`
-						}
-						if jerr := json.NewDecoder(resp.Body).Decode(&searchRes); jerr == nil && len(searchRes.Results) > 0 {
-							first := searchRes.Results[0]
-							mType := first.MediaType
-							if mType != "movie" && mType != "tv" {
-								mType = "tv"
-							}
-							extEndpoint := fmt.Sprintf("%s/%s/%d/external_ids?api_key=%s",
-								config.TMDBAPIBase, mType, first.ID, url.QueryEscape(apiKey))
-							extReq, ererr := http.NewRequestWithContext(ctx, http.MethodGet, extEndpoint, nil)
-							if ererr == nil {
-								extReq.Header.Set("Accept", "application/json")
-								extReq.Header.Set("User-Agent", config.DesktopUserAgent)
-								extResp, ederr := httpClient.Do(extReq)
-								if ederr == nil {
-									defer extResp.Body.Close()
-									if extResp.StatusCode == http.StatusOK {
-										var extRes struct {
-											IMDbID string `json:"imdb_id"`
-										}
-										if ejerr := json.NewDecoder(extResp.Body).Decode(&extRes); ejerr == nil && strings.TrimSpace(extRes.IMDbID) != "" {
-											id := strings.ToLower(strings.TrimSpace(extRes.IMDbID))
-											imdbCache.Set(cacheKey, id)
-											return id
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
 	return ""
 }
 
@@ -433,17 +462,11 @@ func getSkipArgs(
 		return nil, ""
 	}
 
-	cacheKey := fmt.Sprintf(
-		"%d:%d:%d:%s:%s:%s:%s",
-		media.TMDBID,
-		media.SeasonNumber,
-		media.EpisodeNumber,
-		strings.TrimSpace(media.SeriesTitle),
-		strings.TrimSpace(media.SeriesURL),
-		media.MediaType,
-		providerMode,
-	)
+	cacheKey := skipCacheKey(media, providerMode)
 	if cached, ok := cache.Get(cacheKey); ok {
+		if cached.OpStart < 0 && cached.EdStart < 0 && cached.RecapStart < 0 && cached.PreviewStart < 0 {
+			return nil, ""
+		}
 		return buildSkipArgsFromTimes(cached, settings)
 	}
 
@@ -459,6 +482,7 @@ func getSkipArgs(
 	}
 
 	isMovie := media.MediaType == "movie" || (media.SeasonNumber == 0 && media.EpisodeNumber == 0 && media.MediaType != "tv" && media.MediaType != "anime")
+	isAnime := media.MediaType == "anime" || anilistID > 0
 	times := combinedSkipTimes{
 		OpStart: -1, OpEnd: -1,
 		EdStart: -1, EdEnd: -1,
@@ -477,13 +501,13 @@ func getSkipArgs(
 	)
 
 	// Anime-Skip
-	if (providerMode == "hybrid" || providerMode == "anime-skip") && clients.AnimeSkip != nil && !isMovie {
+	if (providerMode == "hybrid" || providerMode == "anime-skip") && clients.AnimeSkip != nil && isAnime && !isMovie {
 		g.Go(func() error {
 			aniIDStr := ""
 			if anilistID > 0 {
 				aniIDStr = strconv.Itoa(anilistID)
 			}
-			t, err := clients.AnimeSkip.GetTimestamps(ctx, aniIDStr, media.EpisodeNumber, media.SeriesTitle, media.EpisodeTitle)
+			t, err := clients.AnimeSkip.GetTimestamps(ctx, aniIDStr, media.SeasonNumber, media.EpisodeNumber, media.SeriesTitle, media.EpisodeTitle)
 			if err != nil {
 				skipLog.Debug("anime-skip lookup error", "err", err)
 			} else {
@@ -494,19 +518,18 @@ func getSkipArgs(
 	}
 
 	// AniSkip
-	if (providerMode == "hybrid" || providerMode == "aniskip") && clients.AniSkip != nil && !isMovie {
+	if (providerMode == "hybrid" || providerMode == "aniskip") && clients.AniSkip != nil && isAnime && !isMovie {
 		g.Go(func() error {
-			malID := 0
+			var malID int
+			var err error
 			if anilistID > 0 {
-				_, mID, err := clients.AniSkip.GetIDs(ctx, media.SeriesTitle)
-				if err == nil {
-					malID = mID
-				}
+				_, malID, err = clients.AniSkip.GetIDsByAniListID(ctx, anilistID)
 			} else if strings.TrimSpace(media.SeriesTitle) != "" {
-				_, mID, err := clients.AniSkip.GetIDs(ctx, media.SeriesTitle)
-				if err == nil {
-					malID = mID
-				}
+				_, malID, err = clients.AniSkip.GetIDs(ctx, media.SeriesTitle)
+			}
+			if err != nil {
+				skipLog.Debug("aniskip id lookup error", "err", err)
+				return nil
 			}
 			if malID > 0 {
 				t, err := clients.AniSkip.GetSkipTimes(ctx, malID, media.EpisodeNumber)
@@ -559,21 +582,23 @@ func getSkipArgs(
 	}
 	_ = g.Wait()
 
-	isAnime := media.MediaType == "anime" || anilistID > 0
-
 	applyAnimeSkip := func() {
 		if askipTimes != nil {
 			if times.OpStart < 0 && askipTimes.OpStart >= 0 {
 				times.OpStart, times.OpEnd = askipTimes.OpStart, askipTimes.OpEnd
+				times.OpSource, times.OpAgreement = "Anime-Skip", 1
 			}
 			if times.EdStart < 0 && askipTimes.EdStart >= 0 {
 				times.EdStart, times.EdEnd = askipTimes.EdStart, askipTimes.EdEnd
+				times.EdSource, times.EdAgreement = "Anime-Skip", 1
 			}
 			if times.RecapStart < 0 && askipTimes.RecapStart >= 0 {
 				times.RecapStart, times.RecapEnd = askipTimes.RecapStart, askipTimes.RecapEnd
+				times.RecapSource, times.RecapAgree = "Anime-Skip", 1
 			}
 			if times.PreviewStart < 0 && askipTimes.PreviewStart >= 0 {
 				times.PreviewStart, times.PreviewEnd = askipTimes.PreviewStart, askipTimes.PreviewEnd
+				times.PrevSource, times.PrevAgree = "Anime-Skip", 1
 			}
 		}
 	}
@@ -582,9 +607,11 @@ func getSkipArgs(
 		if aniskipRes != nil {
 			if times.OpStart < 0 && aniskipRes.OpStart >= 0 {
 				times.OpStart, times.OpEnd = aniskipRes.OpStart, aniskipRes.OpEnd
+				times.OpSource, times.OpAgreement = "AniSkip", 1
 			}
 			if times.EdStart < 0 && aniskipRes.EdStart >= 0 {
 				times.EdStart, times.EdEnd = aniskipRes.EdStart, aniskipRes.EdEnd
+				times.EdSource, times.EdAgreement = "AniSkip", 1
 			}
 		}
 	}
@@ -593,15 +620,19 @@ func getSkipArgs(
 		if skipdbRes != nil {
 			if times.OpStart < 0 && skipdbRes.OpStart >= 0 {
 				times.OpStart, times.OpEnd = skipdbRes.OpStart, skipdbRes.OpEnd
+				times.OpSource, times.OpAgreement = "SkipDB", 1
 			}
 			if times.EdStart < 0 && skipdbRes.EdStart >= 0 {
 				times.EdStart, times.EdEnd = skipdbRes.EdStart, skipdbRes.EdEnd
+				times.EdSource, times.EdAgreement = "SkipDB", 1
 			}
 			if times.RecapStart < 0 && skipdbRes.RecapStart >= 0 {
 				times.RecapStart, times.RecapEnd = skipdbRes.RecapStart, skipdbRes.RecapEnd
+				times.RecapSource, times.RecapAgree = "SkipDB", 1
 			}
 			if times.PreviewStart < 0 && skipdbRes.PreviewStart >= 0 {
 				times.PreviewStart, times.PreviewEnd = skipdbRes.PreviewStart, skipdbRes.PreviewEnd
+				times.PrevSource, times.PrevAgree = "SkipDB", 1
 			}
 		}
 	}
@@ -610,17 +641,71 @@ func getSkipArgs(
 		if introdbRes != nil {
 			if times.OpStart < 0 && introdbRes.OpStart >= 0 {
 				times.OpStart, times.OpEnd = introdbRes.OpStart, introdbRes.OpEnd
+				times.OpSource, times.OpAgreement = "IntroDB", 1
 			}
 			if times.EdStart < 0 && introdbRes.EdStart >= 0 {
 				times.EdStart, times.EdEnd = introdbRes.EdStart, introdbRes.EdEnd
+				times.EdSource, times.EdAgreement = "IntroDB", 1
 			}
 			if times.RecapStart < 0 && introdbRes.RecapStart >= 0 {
 				times.RecapStart, times.RecapEnd = introdbRes.RecapStart, introdbRes.RecapEnd
+				times.RecapSource, times.RecapAgree = "IntroDB", 1
 			}
 			if times.PreviewStart < 0 && introdbRes.PreviewStart >= 0 {
 				times.PreviewStart, times.PreviewEnd = introdbRes.PreviewStart, introdbRes.PreviewEnd
+				times.PrevSource, times.PrevAgree = "IntroDB", 1
 			}
 		}
+	}
+
+	applyConsensus := func() {
+		priority := map[string]int{"SkipDB": 1, "IntroDB": 2}
+		if isAnime {
+			priority = map[string]int{"AniSkip": 1, "SkipDB": 2, "IntroDB": 3, "Anime-Skip": 4}
+		}
+		selectZone := func(values ...skipCandidate) (float64, float64, string, int, bool) {
+			valid := make([]skipCandidate, 0, len(values))
+			for _, value := range values {
+				if value.start >= 0 && value.end > value.start {
+					valid = append(valid, value)
+				}
+			}
+			selected, agreement, ok := selectConsensus(valid)
+			if !ok {
+				return -1, -1, "", 0, len(valid) > 0
+			}
+			return selected.start, selected.end, selected.source, agreement, false
+		}
+		candidate := func(source string, start, end float64) skipCandidate {
+			return skipCandidate{start: start, end: end, source: source, priority: priority[source]}
+		}
+		var opCandidates, edCandidates, recapCandidates, previewCandidates []skipCandidate
+		if aniskipRes != nil {
+			opCandidates = append(opCandidates, candidate("AniSkip", aniskipRes.OpStart, aniskipRes.OpEnd))
+			edCandidates = append(edCandidates, candidate("AniSkip", aniskipRes.EdStart, aniskipRes.EdEnd))
+		}
+		if skipdbRes != nil {
+			opCandidates = append(opCandidates, candidate("SkipDB", skipdbRes.OpStart, skipdbRes.OpEnd))
+			edCandidates = append(edCandidates, candidate("SkipDB", skipdbRes.EdStart, skipdbRes.EdEnd))
+			recapCandidates = append(recapCandidates, candidate("SkipDB", skipdbRes.RecapStart, skipdbRes.RecapEnd))
+			previewCandidates = append(previewCandidates, candidate("SkipDB", skipdbRes.PreviewStart, skipdbRes.PreviewEnd))
+		}
+		if introdbRes != nil {
+			opCandidates = append(opCandidates, candidate("IntroDB", introdbRes.OpStart, introdbRes.OpEnd))
+			edCandidates = append(edCandidates, candidate("IntroDB", introdbRes.EdStart, introdbRes.EdEnd))
+			recapCandidates = append(recapCandidates, candidate("IntroDB", introdbRes.RecapStart, introdbRes.RecapEnd))
+			previewCandidates = append(previewCandidates, candidate("IntroDB", introdbRes.PreviewStart, introdbRes.PreviewEnd))
+		}
+		if isAnime && askipTimes != nil {
+			opCandidates = append(opCandidates, candidate("Anime-Skip", askipTimes.OpStart, askipTimes.OpEnd))
+			edCandidates = append(edCandidates, candidate("Anime-Skip", askipTimes.EdStart, askipTimes.EdEnd))
+			recapCandidates = append(recapCandidates, candidate("Anime-Skip", askipTimes.RecapStart, askipTimes.RecapEnd))
+			previewCandidates = append(previewCandidates, candidate("Anime-Skip", askipTimes.PreviewStart, askipTimes.PreviewEnd))
+		}
+		times.OpStart, times.OpEnd, times.OpSource, times.OpAgreement, times.OpConflict = selectZone(opCandidates...)
+		times.EdStart, times.EdEnd, times.EdSource, times.EdAgreement, times.EdConflict = selectZone(edCandidates...)
+		times.RecapStart, times.RecapEnd, times.RecapSource, times.RecapAgree, times.RecapConflict = selectZone(recapCandidates...)
+		times.PreviewStart, times.PreviewEnd, times.PrevSource, times.PrevAgree, times.PrevConflict = selectZone(previewCandidates...)
 	}
 
 	switch providerMode {
@@ -633,43 +718,29 @@ func getSkipArgs(
 	case "introdb":
 		applyIntroDB()
 	default: // "hybrid"
-		if isAnime {
-			applyAnimeSkip()
-			applyAniSkip()
-			applySkipDB()
-			applyIntroDB()
-		} else {
-			if introdbRes != nil && skipdbRes != nil && introdbRes.EdStart >= 0 && skipdbRes.EdStart > introdbRes.EdStart+15 {
-				times.EdStart = introdbRes.EdStart
-				creditEnd := introdbRes.EdStart + 28
-				if creditEnd > skipdbRes.EdStart {
-					creditEnd = skipdbRes.EdStart
-				}
-				times.EdEnd = creditEnd
-				times.PreviewStart = creditEnd
-				times.PreviewEnd = skipdbRes.EdStart
-				if times.OpStart < 0 && skipdbRes.OpStart >= 0 {
-					times.OpStart, times.OpEnd = skipdbRes.OpStart, skipdbRes.OpEnd
-				}
-				if times.OpStart < 0 && introdbRes.OpStart >= 0 {
-					times.OpStart, times.OpEnd = introdbRes.OpStart, introdbRes.OpEnd
-				}
-			} else {
-				applySkipDB()
-				applyIntroDB()
-			}
-			applyAnimeSkip()
-			applyAniSkip()
-		}
+		applyConsensus()
 	}
 
 	if times.OpStart < 0 && times.EdStart < 0 && times.RecapStart < 0 && times.PreviewStart < 0 {
+		cache.Set(cacheKey, times)
 		skipLog.Debug("no skip intervals found", "title", media.SeriesTitle, "episode", media.EpisodeNumber, "imdb", imdbID)
 		return nil, ""
 	}
 
 	cache.Set(cacheKey, times)
 	return buildSkipArgsFromTimes(times, settings)
+}
+
+func skipCacheKey(media model.ResolvedMedia, providerMode string) string {
+	return fmt.Sprintf("%d:%d:%d:%s:%s:%s:%s",
+		media.TMDBID,
+		media.SeasonNumber,
+		media.EpisodeNumber,
+		strings.TrimSpace(media.SeriesTitle),
+		strings.TrimSpace(media.SeriesURL),
+		media.MediaType,
+		providerMode,
+	)
 }
 
 func buildSkipArgsFromTimes(times combinedSkipTimes, settings SkipSettings) ([]string, string) {

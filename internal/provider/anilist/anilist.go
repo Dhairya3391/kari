@@ -130,7 +130,7 @@ func SearchWithEndpoint(ctx context.Context, hc *http.Client, query, endpoint st
 }
 
 func searchDirect(ctx context.Context, hc *http.Client, query, endpoint string) ([]provider.SearchResult, error) {
-	const gql = `query($search:String){Page(page:1,perPage:20){media(search:$search,type:ANIME,sort:SEARCH_MATCH){id title{romaji english userPreferred native} seasonYear format}}}`
+	const gql = `query($search:String){Page(page:1,perPage:20){media(search:$search,type:ANIME,sort:SEARCH_MATCH){id idMal title{romaji english userPreferred native} seasonYear format}}}`
 
 	body, err := gqlPost(ctx, hc, endpoint, gql, map[string]any{"search": query})
 	if err != nil {
@@ -141,6 +141,7 @@ func searchDirect(ctx context.Context, hc *http.Client, query, endpoint string) 
 			Page struct {
 				Media []struct {
 					ID         int    `json:"id"`
+					IDMal      int    `json:"idMal"`
 					Title      Title  `json:"title"`
 					SeasonYear int    `json:"seasonYear"`
 					Format     string `json:"format"`
@@ -169,6 +170,8 @@ func searchDirect(ctx context.Context, hc *http.Client, query, endpoint string) 
 		results = append(results, provider.SearchResult{
 			Title:     title,
 			ID:        strconv.Itoa(m.ID),
+			AniListID: m.ID,
+			MALID:     m.IDMal,
 			Type:      provider.ModeAnime,
 			Year:      year,
 			MediaType: mediaType,

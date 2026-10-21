@@ -34,7 +34,7 @@ func TestParseIntervals(t *testing.T) {
 			wantOp:    [2]float64{93.0, 183.0},
 			wantEd:    [2]float64{1340.0, 1430.0},
 			wantRecap: [2]float64{-1, -1},
-			wantPrev:  [2]float64{1430.0, 1520.0}, // unclosed preview: +90s
+			wantPrev:  [2]float64{-1, -1},
 		},
 		{
 			name: "timeline with recap and new intro",
@@ -46,7 +46,7 @@ func TestParseIntervals(t *testing.T) {
 				{At: 1300.0, Type: timestampType{Name: "New Credits"}},
 			},
 			wantOp:    [2]float64{100.0, 190.0},
-			wantEd:    [2]float64{1300.0, 1390.0},
+			wantEd:    [2]float64{-1, -1}, // final marker has no confirmed end boundary
 			wantRecap: [2]float64{0, 45.0},
 			wantPrev:  [2]float64{-1, -1},
 		},
@@ -55,6 +55,16 @@ func TestParseIntervals(t *testing.T) {
 			timestamps: []timestamp{
 				{At: 0, Type: timestampType{Name: "Canon"}},
 				{At: 1400.0, Type: timestampType{Name: "Canon"}},
+			},
+			wantOp:    [2]float64{-1, -1},
+			wantEd:    [2]float64{-1, -1},
+			wantRecap: [2]float64{-1, -1},
+			wantPrev:  [2]float64{-1, -1},
+		},
+		{
+			name: "unclosed opening is ignored",
+			timestamps: []timestamp{
+				{At: 90, Type: timestampType{Name: "Intro"}},
 			},
 			wantOp:    [2]float64{-1, -1},
 			wantEd:    [2]float64{-1, -1},
@@ -94,22 +104,6 @@ func TestParseIntervals(t *testing.T) {
 func TestBestEpisode(t *testing.T) {
 	episodes := []episodeMeta{
 		{
-			ID:     "ep-1-sparse",
-			Number: "1",
-			Name:   "Sparse Episode",
-		},
-		{
-			ID:     "ep-1-rich",
-			Number: "1",
-			Name:   "Rich Episode",
-		},
-		{
-			ID:             "ep-25-absolute",
-			Number:         "1",
-			AbsoluteNumber: "25",
-			Name:           "Hidden Inventory",
-		},
-		{
 			ID:     "ep-5-phantoms",
 			Number: "5",
 			Name:   "Phantoms of the Dead",
@@ -117,26 +111,65 @@ func TestBestEpisode(t *testing.T) {
 	}
 
 	// Should match by title "Phantoms of the Dead" even if requested as episode 6 (scraper shift)
-	epShifted := bestEpisode(episodes, 6, "Phantoms of the Dead")
+	epShifted := bestEpisode(episodes, 0, 6, "Phantoms of the Dead")
 	if epShifted == nil || epShifted.ID != "ep-5-phantoms" {
 		t.Fatalf("expected ep-5-phantoms by title match, got %+v", epShifted)
 	}
 
-	// Should match by absoluteNumber 25
-	ep25 := bestEpisode(episodes, 25, "")
-	if ep25 == nil || ep25.ID != "ep-25-absolute" {
-		t.Fatalf("expected ep-25-absolute, got %+v", ep25)
+	// Absolute numbering cannot substitute for the requested local number.
+	if ep25 := bestEpisode([]episodeMeta{
+		{ID: "absolute-25", Number: "1", Name: "Hidden Inventory"},
+	}, 0, 25, ""); ep25 != nil {
+		t.Fatalf("expected unmatched absolute number to be ignored, got %+v", ep25)
 	}
 
-	// Should match by number 1
-	ep1 := bestEpisode(episodes, 1, "")
-	if ep1 == nil {
-		t.Fatalf("expected non-nil for episode 1")
+	// Repeated episode numbers are ambiguous until a title identifies one.
+	// A local episode number can only select a single entry.
+	ep5 := bestEpisode([]episodeMeta{
+		{ID: "season-episode-5-a", Number: "5"},
+		{ID: "season-episode-5-b", Number: "5"},
+	}, 0, 5, "")
+	if ep5 != nil {
+		t.Fatalf("expected duplicate local episode number to be ignored, got %+v", ep5)
+	}
+
+	// A repeated local number across seasons is ambiguous without a title.
+	if ep5 := bestEpisode([]episodeMeta{
+		{ID: "season-1-episode-5", Number: "5"},
+		{ID: "season-2-episode-5", Number: "5"},
+	}, 0, 5, ""); ep5 != nil {
+		t.Fatalf("expected ambiguous episode number to be ignored, got %+v", ep5)
+	}
+
+	// Partial titles must not win merely because they appear before the
+	// numbered episode.
+	ep5 = bestEpisode([]episodeMeta{
+		{ID: "wrong-title", Number: "2", Name: "The Battle Begins Again"},
+		{ID: "numbered-episode", Number: "5", Name: "Other Title"},
+	}, 0, 5, "The Battle Begins")
+	if ep5 == nil || ep5.ID != "numbered-episode" {
+		t.Fatalf("expected exact episode number over partial title, got %+v", ep5)
 	}
 
 	// Missing episode returns nil
-	if ep99 := bestEpisode(episodes, 99, ""); ep99 != nil {
+	if ep99 := bestEpisode(episodes, 0, 99, ""); ep99 != nil {
 		t.Fatalf("expected nil for episode 99, got %+v", ep99)
+	}
+
+	// Anime-Skip groups multiple seasons under one AniList show ID.
+	ep5Season1 := bestEpisode([]episodeMeta{
+		{ID: "fire-force-s1-e5", Season: "1", Number: "5", Name: "The Battle Begins"},
+		{ID: "fire-force-s2-e5", Season: "2", Number: "5", Name: "Corna"},
+	}, 1, 5, "")
+	if ep5Season1 == nil || ep5Season1.ID != "fire-force-s1-e5" {
+		t.Fatalf("expected Fire Force season 1 episode 5, got %+v", ep5Season1)
+	}
+
+	if ep5 := bestEpisode([]episodeMeta{
+		{ID: "fire-force-s1-e5", Season: "1", Number: "5", Name: "The Battle Begins"},
+		{ID: "fire-force-s2-e5", Season: "2", Number: "5", Name: "Corna"},
+	}, 3, 5, ""); ep5 != nil {
+		t.Fatalf("expected missing season 3 episode to be ignored, got %+v", ep5)
 	}
 }
 
@@ -153,8 +186,14 @@ func TestClientGetTimestamps(t *testing.T) {
 		response := `{"data":{"findShowsByExternalId":[{"id":"show-123","name":"Frieren"}]}}`
 		switch {
 		case bytes.Contains(body, []byte("findEpisodesByShowId")):
-			response = `{"data":{"findEpisodesByShowId":[{"id":"episode-1","number":"1","name":"The Journey's End"}]}}`
+			if !bytes.Contains(body, []byte("season")) {
+				t.Fatalf("episode lookup must request season: %s", body)
+			}
+			response = `{"data":{"findEpisodesByShowId":[{"id":"episode-1","season":"1","number":"1","name":"The Journey's End"},{"id":"episode-2","season":"2","number":"1","name":"The Journey's End Again"}]}}`
 		case bytes.Contains(body, []byte("findTimestampsByEpisodeId")):
+			if !bytes.Contains(body, []byte(`"epId":"episode-1"`)) {
+				t.Fatalf("season 1 must select its own episode ID: %s", body)
+			}
 			response = `{"data":{"findTimestampsByEpisodeId":[{"at":0,"type":{"name":"Canon"}},{"at":90,"type":{"name":"Intro"}},{"at":180,"type":{"name":"Canon"}}]}}`
 		}
 
@@ -168,7 +207,7 @@ func TestClientGetTimestamps(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	times, err := client.GetTimestamps(t.Context(), "123", 1, "Frieren", "The Journey's End")
+	times, err := client.GetTimestamps(t.Context(), "123", 1, 1, "Frieren", "The Journey's End")
 	if err != nil {
 		t.Fatalf("GetTimestamps() error = %v", err)
 	}
