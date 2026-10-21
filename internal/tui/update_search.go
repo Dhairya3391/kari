@@ -333,16 +333,17 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setStatus(statusWarn, fmt.Sprintf("Failed to update progress: %v", err))
 				return m, nil
 			}
+			var toastCmd tea.Cmd
 			if marked {
-				m.setToast("marked complete", ToastSuccess)
+				toastCmd = m.setToast("marked complete", ToastSuccess)
 			} else {
-				m.setToast("unmarked", ToastInfo)
+				toastCmd = m.setToast("unmarked", ToastInfo)
 			}
 			if m.resolved != nil {
 				m.applyResumeFromHistory(m.resolved)
 			}
 			m.refreshEpisodeList()
-			return m, nil
+			return m, toastCmd
 		}
 		return m, nil
 
@@ -370,11 +371,9 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.autoplay = !m.autoplay
 		m.saveSettings()
 		if m.autoplay {
-			m.setToast("autoplay on", ToastSuccess)
-		} else {
-			m.setToast("autoplay off", ToastInfo)
+			return m, m.setToast("autoplay on", ToastSuccess)
 		}
-		return m, nil
+		return m, m.setToast("autoplay off", ToastInfo)
 
 	case "ctrl+p":
 		if len(m.availablePlayers) <= 1 {
@@ -415,8 +414,8 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.downloadPaused = false
-		m.setToast("episode queued for download", ToastSuccess)
-		return m, m.downloadCmd(opID, resolved)
+		toastCmd := m.setToast("episode queued for download", ToastSuccess)
+		return m, tea.Batch(toastCmd, m.downloadCmd(opID, resolved))
 	}
 	return m, nil
 }

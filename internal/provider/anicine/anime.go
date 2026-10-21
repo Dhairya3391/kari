@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"kari/internal/lang"
 	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/logging"
@@ -145,14 +146,15 @@ func (c *Client) resolveMegaplayEmbed(ctx context.Context, embedURL, mediaID str
 			strings.TrimSpace(track.File) == "" {
 			continue
 		}
-		language := strings.TrimSpace(track.Label)
-		if language == "" {
+		language := lang.Normalize(kit.Clean(track.Label))
+		if language == "unknown" || language == "" {
 			language = "en"
 		}
 		subs = append(subs, provider.SubtitleOption{
 			URL:      track.File,
 			Language: language,
 			Default:  track.Default,
+			Referer:  parsed.Scheme + "://" + parsed.Host + "/",
 		})
 	}
 

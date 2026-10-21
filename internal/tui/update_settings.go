@@ -476,7 +476,6 @@ func (m *modelImpl) onAuthDone(msg authDoneMsg) (tea.Model, tea.Cmd) {
 		return m, m.setStatusTimed(statusError, fmt.Sprintf("%s auth failed: %s", msg.service, cleanErrorForUI(msg.err)))
 	}
 	m.saveSettings()
-	m.setToast(fmt.Sprintf("%s connected", msg.service), ToastSuccess)
 	return m, m.setStatusTimed(statusSuccess, fmt.Sprintf("%s connected successfully", msg.service))
 }
 
@@ -621,8 +620,7 @@ func (m *modelImpl) onHistoryImport(msg historyImportMsg) (tea.Model, tea.Cmd) {
 	if msg.skipped > 0 {
 		parts = append(parts, fmt.Sprintf("%d already here", msg.skipped))
 	}
-	m.setToast(fmt.Sprintf("Imported from %s: %s", msg.source, strings.Join(parts, ", ")), ToastSuccess)
-	return m, nil
+	return m, m.setToast(fmt.Sprintf("Imported from %s: %s", msg.source, strings.Join(parts, ", ")), ToastSuccess)
 }
 
 func (m *modelImpl) startAniListAuth() (tea.Model, tea.Cmd) {
@@ -769,8 +767,7 @@ func (m *modelImpl) toggleModeAtIndex(idx int) (tea.Model, tea.Cmd) {
 	if !m.disabledModes[modeKey] {
 		effective := m.effectiveModesList()
 		if len(effective) <= 1 {
-			m.setToast("✗ keep at least one mode on", ToastError)
-			return m, nil
+			return m, m.setToast("✗ keep at least one mode on", ToastError)
 		}
 		m.disabledModes[modeKey] = true
 	} else {

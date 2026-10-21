@@ -428,7 +428,6 @@ func (m *modelImpl) handleUnavailableAudio() *modelImpl {
 		message += " — press a to switch to " + alternate
 	}
 	m.setStatus(statusWarn, message)
-	m.setToast(message, ToastInfo)
 	return m
 }
 
@@ -746,6 +745,9 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 	if len(resolved.CompletedResolvers) > 0 {
 		m.resolved.CompletedResolvers = resolved.CompletedResolvers
 		m.resolved.TotalResolvers = resolved.TotalResolvers
+		if resolved.TotalResolvers > 0 {
+			m.totalProviders = resolved.TotalResolvers
+		}
 	}
 
 	// If user manually switched sources with Tab, restore that specific source URL.
@@ -956,8 +958,7 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.pendingDownload = nil
 	m.downloadPaused = false
-	m.setToast(statusMsg, ToastSuccess)
-	return m, nil
+	return m, m.setToast(statusMsg, ToastSuccess)
 }
 
 func (m *modelImpl) downloadSubscription() tea.Cmd {

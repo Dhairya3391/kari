@@ -26,9 +26,9 @@ import (
 
 const (
 	subtitleCacheSize               = 100
-	subtitleFetchTimeout            = 10 * time.Second
+	subtitleFetchTimeout            = 15 * time.Second
 	subtitleProviderCandidateLimit  = 3
-	subtitleProviderDownloadTimeout = 3 * time.Second
+	subtitleProviderDownloadTimeout = 8 * time.Second
 )
 
 // SubtitleService selects and materializes one subtitle track for playback.
@@ -163,9 +163,8 @@ func (s *SubtitleService) fetch(
 	var failures []error
 
 	// Priority order:
-	// 1. Source's own provider candidates (matching resolver)
+	// 1. Source's own provider candidates (matching resolver and source identity)
 	// 2. OpenSubtitles (dedicated subtitle fallback when active provider has no subs)
-	// 3. Other providers' candidates (web stream rips matching the video encode)
 	if len(matchingCandidates) > 0 {
 		track, err := s.downloadProviderCandidates(ctx, media, matchingCandidates, attempted)
 		if err == nil && usableCachedTrack(track) {
@@ -191,18 +190,6 @@ func (s *SubtitleService) fetch(
 		} else if found && usableCachedTrack(track) {
 			s.cache.Set(cacheKey, track)
 			return track, nil
-		}
-	}
-
-	otherCandidates := selectOtherProviderCandidates(originalSubtitles, preferredLang, preferredResolver)
-	if subtitleFallbackReady(media) && len(otherCandidates) > 0 {
-		track, err := s.downloadProviderCandidates(ctx, media, otherCandidates, attempted)
-		if err == nil && usableCachedTrack(track) {
-			s.cache.Set(cacheKey, track)
-			return track, nil
-		}
-		if err != nil {
-			failures = append(failures, err)
 		}
 	}
 
@@ -242,45 +229,34 @@ func selectMatchingProviderCandidates(
 		return nil
 	}
 	preferredLang = lang.Normalize(preferredLang)
-	var exact, english []model.SubtitleTrack
+	var sameSourceExact, sameSourceEnglish []model.SubtitleTrack
+	var sameResolverExact, sameResolverEnglish []model.SubtitleTrack
 	for _, track := range tracks {
 		if !strings.EqualFold(track.Resolver, preferredResolver) {
 			continue
 		}
-		if preferredSourceID != "" && track.SourceID != preferredSourceID {
-			continue
-		}
 		trackLang := lang.Normalize(track.Language)
-		switch {
-		case trackLang == preferredLang:
-			exact = append(exact, track)
-		case preferredLang != "en" && trackLang == "en":
-			english = append(english, track)
-		}
-	}
-	return append(defaultFirst(exact), defaultFirst(english)...)
-}
+		isExactLang := trackLang == preferredLang
+		isEnglishFallback := preferredLang != "en" && trackLang == "en"
 
-func selectOtherProviderCandidates(
-	tracks []model.SubtitleTrack,
-	preferredLang string,
-	preferredResolver string,
-) []model.SubtitleTrack {
-	preferredLang = lang.Normalize(preferredLang)
-	var exact, english []model.SubtitleTrack
-	for _, track := range tracks {
-		if preferredResolver != "" && strings.EqualFold(track.Resolver, preferredResolver) {
-			continue
-		}
-		trackLang := lang.Normalize(track.Language)
-		switch {
-		case trackLang == preferredLang:
-			exact = append(exact, track)
-		case preferredLang != "en" && trackLang == "en":
-			english = append(english, track)
+		if preferredSourceID != "" && track.SourceID == preferredSourceID {
+			if isExactLang {
+				sameSourceExact = append(sameSourceExact, track)
+			} else if isEnglishFallback {
+				sameSourceEnglish = append(sameSourceEnglish, track)
+			}
+		} else {
+			if isExactLang {
+				sameResolverExact = append(sameResolverExact, track)
+			} else if isEnglishFallback {
+				sameResolverEnglish = append(sameResolverEnglish, track)
+			}
 		}
 	}
-	return append(defaultFirst(exact), defaultFirst(english)...)
+	if len(sameSourceExact) > 0 || len(sameSourceEnglish) > 0 {
+		return append(defaultFirst(sameSourceExact), defaultFirst(sameSourceEnglish)...)
+	}
+	return append(defaultFirst(sameResolverExact), defaultFirst(sameResolverEnglish)...)
 }
 
 func defaultFirst(tracks []model.SubtitleTrack) []model.SubtitleTrack {

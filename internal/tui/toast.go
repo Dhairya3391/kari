@@ -47,11 +47,72 @@ func (t *Toast) IsExpired(now time.Time) bool {
 
 // Render renders the toast message row.
 func (t *Toast) Render(accent lipgloss.AdaptiveColor) string {
-	if t == nil || t.Message == "" {
+	return t.RenderWithTime(accent, time.Now())
+}
+
+// RenderWithTime renders the toast message row with gentle soft fade-out dissolution
+// during the final 350ms of its lifetime.
+func (t *Toast) RenderWithTime(accent lipgloss.AdaptiveColor, now time.Time) string {
+	if t == nil || t.Message == "" || t.IsExpired(now) {
 		return ""
 	}
 
 	st := NewStyles(accent)
+
+	var icon string
+	var iconColor lipgloss.AdaptiveColor
+	switch t.Type {
+	case ToastSuccess:
+		icon = "✓ "
+		iconColor = ColorOk
+	case ToastError:
+		icon = "✗ "
+		iconColor = ColorErr
+	default:
+		icon = "• "
+		iconColor = accent
+	}
+
+	remaining := t.ExpiresAt.Sub(now)
+	const fadeDuration = 350 * time.Millisecond
+
+	if remaining < fadeDuration {
+		progress := float64(remaining) / float64(fadeDuration)
+		if progress < 0 {
+			progress = 0
+		} else if progress > 1 {
+			progress = 1
+		}
+
+		// Interpolate icon color from iconColor towards ColorDim
+		dimDark := HexToRGBA(ColorDim.Dark)
+		dimLight := HexToRGBA(ColorDim.Light)
+		icoDark := HexToRGBA(iconColor.Dark)
+		icoLight := HexToRGBA(iconColor.Light)
+
+		fadedIcoDark := SmoothMixRGB(dimDark, icoDark, progress)
+		fadedIcoLight := SmoothMixRGB(dimLight, icoLight, progress)
+
+		fadedIconStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
+			Dark:  RGBToHex(fadedIcoDark),
+			Light: RGBToHex(fadedIcoLight),
+		})
+
+		// Interpolate message color from standard text towards ColorDim
+		fgDark := HexToRGBA("#FFFFFF")
+		fgLight := HexToRGBA("#1F2328")
+
+		fadedTextDark := SmoothMixRGB(dimDark, fgDark, progress)
+		fadedTextLight := SmoothMixRGB(dimLight, fgLight, progress)
+
+		fadedTextStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
+			Dark:  RGBToHex(fadedTextDark),
+			Light: RGBToHex(fadedTextLight),
+		})
+
+		return fadedIconStyle.Render(icon) + fadedTextStyle.Render(t.Message)
+	}
+
 	switch t.Type {
 	case ToastSuccess:
 		return st.Ok.Render("✓ ") + t.Message

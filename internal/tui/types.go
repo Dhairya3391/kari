@@ -208,7 +208,7 @@ type batchStartedMsg struct {
 type resetConfirmQuitMsg struct{}
 type resetConfirmStopMsg struct{}
 type resetStatusMsg struct{ id int }
-
+type toastFadeTickMsg struct{ id int }
 type posterSlot string
 
 // History tabs into the Continue and Finished sections.
@@ -505,7 +505,7 @@ type modelImpl struct {
 
 	// Redesign Navigation & Router
 	activeToast *Toast
-	// Season grouping on Episodes screen
+	toastID     int
 	activeSeason       int
 	seasonEpisodeIndex int
 	selectMode         bool

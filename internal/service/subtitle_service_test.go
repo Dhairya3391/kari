@@ -110,7 +110,7 @@ func TestSubtitleServiceKeepsTracksBoundToTheirPlaybackSource(t *testing.T) {
 	}
 }
 
-func TestSubtitleServiceWaitsForProviderResolutionBeforeFallback(t *testing.T) {
+func TestSubtitleServiceDoesNotBorrowOtherProviderSubtitles(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nother provider subtitle\n"))
 	}))
@@ -119,25 +119,17 @@ func TestSubtitleServiceWaitsForProviderResolutionBeforeFallback(t *testing.T) {
 	svc := NewSubtitleService(&config.Config{})
 	svc.httpClient = srv.Client()
 	media := model.ResolvedMedia{
-		SeriesTitle:        "Progressive subtitle fallback",
+		SeriesTitle:        "Isolation test",
 		EpisodeNumber:      1,
 		TotalResolvers:     2,
-		CompletedResolvers: []string{"pengu"},
+		CompletedResolvers: []string{"pengu", "anikoto"},
 		Subtitles: []model.SubtitleTrack{{
 			URL: srv.URL + "/fallback.vtt", Language: "en", Resolver: "anikoto", SourceID: "other-source",
 		}},
 	}
-	if _, err := svc.FetchForSource(context.Background(), media, "en", "pengu", "pengu-source"); err == nil {
-		t.Fatal("fallback must wait while providers are still resolving")
-	}
-
-	media.CompletedResolvers = []string{"pengu", "anikoto"}
-	track, err := svc.FetchForSource(context.Background(), media, "en", "pengu", "pengu-source")
-	if err != nil {
-		t.Fatalf("FetchForSource after completion: %v", err)
-	}
-	if track.Resolver != "anikoto" {
-		t.Fatalf("fallback resolver = %q, want anikoto", track.Resolver)
+	_, err := svc.FetchForSource(context.Background(), media, "en", "pengu", "pengu-source")
+	if err == nil {
+		t.Fatal("subtitles must not be borrowed from another provider")
 	}
 }
 
@@ -462,14 +454,11 @@ func TestSubtitleServiceHierarchyMatchingOverOther(t *testing.T) {
 		t.Errorf("expected athena track, got resolver %q", track.Resolver)
 	}
 
-	// Case 2: active resolver has no subs (e.g. cinecat); other provider candidate must be selected
+	// Case 2: active resolver has no subs (e.g. cinecat); must NOT borrow other providers' subs
 	svc.cache = util.NewBoundedCache[model.SubtitleTrack](10)
-	track2, err := svc.Fetch(context.Background(), media, "en", "cinecat")
-	if err != nil {
-		t.Fatalf("Fetch fallback: %v", err)
-	}
-	if track2.Resolver != "athena" && track2.Resolver != "movysx" {
-		t.Errorf("expected fallback to other provider, got resolver %q", track2.Resolver)
+	_, err = svc.Fetch(context.Background(), media, "en", "cinecat")
+	if err == nil {
+		t.Fatal("expected no subtitles error when active resolver has no subs and no OpenSubtitles configured")
 	}
 }
 

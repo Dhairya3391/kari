@@ -49,19 +49,32 @@ func (m *modelImpl) currentModeTheme() ModeTheme {
 		return target
 	}
 
-	// Crossfade lerp in RGB over 10 steps (0..10 / 10.0) with smoothstep easing
-	frac := float64(m.crossfadeStep) / 10.0
+	// Crossfade lerp in RGB over 16 steps (0..16 / 16.0) with smootherstep easing
+	frac := float64(m.crossfadeStep) / 16.0
 	if frac > 1.0 {
 		frac = 1.0
 	}
 
+	dest := target
+	if m.crossfadeTo.Accent.Dark != "" {
+		dest = m.crossfadeTo
+	}
+
 	fromDark := HexToRGBA(m.crossfadeFrom.Accent.Dark)
-	toDark := HexToRGBA(target.Accent.Dark)
+	toDark := HexToRGBA(dest.Accent.Dark)
 	fromLight := HexToRGBA(m.crossfadeFrom.Accent.Light)
-	toLight := HexToRGBA(target.Accent.Light)
+	toLight := HexToRGBA(dest.Accent.Light)
 
 	curDark := SmoothMixRGB(fromDark, toDark, frac)
 	curLight := SmoothMixRGB(fromLight, toLight, frac)
+
+	fromDimDark := HexToRGBA(m.crossfadeFrom.AccentDim.Dark)
+	toDimDark := HexToRGBA(dest.AccentDim.Dark)
+	fromDimLight := HexToRGBA(m.crossfadeFrom.AccentDim.Light)
+	toDimLight := HexToRGBA(dest.AccentDim.Light)
+
+	curDimDark := SmoothMixRGB(fromDimDark, toDimDark, frac)
+	curDimLight := SmoothMixRGB(fromDimLight, toDimLight, frac)
 
 	return ModeTheme{
 		Accent: lipgloss.AdaptiveColor{
@@ -69,8 +82,8 @@ func (m *modelImpl) currentModeTheme() ModeTheme {
 			Light: RGBToHex(curLight),
 		},
 		AccentDim: lipgloss.AdaptiveColor{
-			Dark:  RGBToHex(curDark),
-			Light: RGBToHex(curLight),
+			Dark:  RGBToHex(curDimDark),
+			Light: RGBToHex(curDimLight),
 		},
 	}
 }
@@ -227,7 +240,10 @@ func (m *modelImpl) renderMainView() string {
 		loadingLine := st.Current.Render(sp) + " " + st.Dim.Render(text)
 		statusRows = append(statusRows, lipgloss.PlaceHorizontal(dims.ContentWidth, lipgloss.Center, loadingLine))
 	}
-	if text := strings.TrimSpace(m.statusText); text != "" && (m.statusExpiresAt.IsZero() || time.Now().Before(m.statusExpiresAt)) {
+	now := time.Now()
+	if m.activeToast != nil && !m.activeToast.IsExpired(now) {
+		statusRows = append(statusRows, lipgloss.PlaceHorizontal(dims.ContentWidth, lipgloss.Center, m.activeToast.RenderWithTime(accent, now)))
+	} else if text := strings.TrimSpace(m.statusText); text != "" && (m.statusExpiresAt.IsZero() || time.Now().Before(m.statusExpiresAt)) {
 		statusStyle := st.Dim
 		switch m.statusType {
 		case statusError:
@@ -238,9 +254,6 @@ func (m *modelImpl) renderMainView() string {
 		statusRows = append(statusRows, lipgloss.PlaceHorizontal(dims.ContentWidth, lipgloss.Center, statusStyle.Render(text)))
 	} else if m.playOpID != 0 && !m.loading {
 		statusRows = append(statusRows, lipgloss.PlaceHorizontal(dims.ContentWidth, lipgloss.Center, st.Current.Render("▶ Now Playing")))
-	}
-	if m.activeToast != nil && !m.activeToast.IsExpired(time.Now()) {
-		statusRows = append(statusRows, m.activeToast.Render(accent))
 	}
 
 	// Footer

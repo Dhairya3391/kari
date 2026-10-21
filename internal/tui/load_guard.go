@@ -91,10 +91,28 @@ func (m *modelImpl) mediaReady() bool {
 	return len(m.orderedPlaybackSources()) > 0
 }
 
-// beginProviderWait opens the preview provider countdown: every provider
-// serving mode is pending until its sources arrive in a snapshot.
+// enabledProvidersCount counts the number of enabled providers for mode.
+func (m *modelImpl) enabledProvidersCount(mode provider.ContentType) int {
+	if m.registry == nil {
+		return 0
+	}
+	all := m.registry.ProvidersForMode(mode)
+	count := 0
+	for _, p := range all {
+		if !m.isProviderDisabledKey(mode, p.Name()) {
+			count++
+		}
+	}
+	if count == 0 {
+		return len(all)
+	}
+	return count
+}
+
+// beginProviderWait opens the preview provider countdown: only enabled providers
+// serving mode are counted until their sources arrive in a snapshot.
 func (m *modelImpl) beginProviderWait(mode provider.ContentType) {
-	m.totalProviders = len(m.registry.ProvidersForMode(mode))
+	m.totalProviders = m.enabledProvidersCount(mode)
 	m.loadingProviders = m.totalProviders
 	m.failedProviderName = ""
 }
@@ -102,6 +120,9 @@ func (m *modelImpl) beginProviderWait(mode provider.ContentType) {
 // refreshProviderWait recounts pending providers from the distinct
 // resolvers present in the aggregated snapshot.
 func (m *modelImpl) refreshProviderWait() {
+	if m.resolved != nil && m.resolved.TotalResolvers > 0 {
+		m.totalProviders = m.resolved.TotalResolvers
+	}
 	if m.totalProviders == 0 || m.resolved == nil {
 		return
 	}

@@ -293,12 +293,17 @@ func MixRGB(c1, c2 color.RGBA, a float64) color.RGBA {
 	}
 }
 
-// SmoothMixRGB blends two colors using gamma-corrected perceptual interpolation
-// and an S-curve easing profile, preserving luminance across theme crossfades.
-func SmoothMixRGB(c1, c2 color.RGBA, a float64) color.RGBA {
+// Smootherstep computes quintic polynomial interpolation: 6a^5 - 15a^4 + 10a^3.
+// Both first and second derivatives are zero at endpoints a=0 and a=1.
+func Smootherstep(a float64) float64 {
 	a = math.Max(0.0, math.Min(1.0, a))
-	// Smoothstep cubic easing: 3a^2 - 2a^3
-	t := a * a * (3.0 - 2.0*a)
+	return a * a * a * (a*(a*6.0-15.0) + 10.0)
+}
+
+// SmoothMixRGB blends two colors using gamma-corrected perceptual interpolation
+// and a quintic smootherstep easing profile, preserving luminance across theme crossfades.
+func SmoothMixRGB(c1, c2 color.RGBA, a float64) color.RGBA {
+	t := Smootherstep(a)
 
 	r1, g1, b1 := float64(c1.R)*float64(c1.R), float64(c1.G)*float64(c1.G), float64(c1.B)*float64(c1.B)
 	r2, g2, b2 := float64(c2.R)*float64(c2.R), float64(c2.G)*float64(c2.G), float64(c2.B)*float64(c2.B)

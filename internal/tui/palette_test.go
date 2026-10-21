@@ -1,8 +1,9 @@
 package tui
 
 import (
-	"kari/internal/model"
 	"testing"
+
+	"kari/internal/model"
 )
 
 var allTestModes = []model.Kind{
@@ -62,6 +63,25 @@ func TestLegibilityGate(t *testing.T) {
 	}
 }
 
+func TestSmootherstep(t *testing.T) {
+	if s := Smootherstep(0.0); s != 0.0 {
+		t.Errorf("Smootherstep(0) = %f, want 0", s)
+	}
+	if s := Smootherstep(1.0); s != 1.0 {
+		t.Errorf("Smootherstep(1) = %f, want 1", s)
+	}
+	if s := Smootherstep(0.5); s != 0.5 {
+		t.Errorf("Smootherstep(0.5) = %f, want 0.5", s)
+	}
+	if s := Smootherstep(-0.5); s != 0.0 {
+		t.Errorf("Smootherstep(-0.5) = %f, want 0", s)
+	}
+	if s := Smootherstep(1.5); s != 1.0 {
+		t.Errorf("Smootherstep(1.5) = %f, want 1", s)
+	}
+}
+
+
 func TestThemeForOverride(t *testing.T) {
 	// Fixed preset override
 	thm := ThemeFor(model.KindAnime, "Green")
@@ -75,3 +95,4 @@ func TestThemeForOverride(t *testing.T) {
 		t.Errorf("got custom accent %s, want #123456", thmCustom.Accent.Dark)
 	}
 }
+

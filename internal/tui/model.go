@@ -152,7 +152,10 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 	historyList.SetShowTitle(false)
 
 	sp := spinner.New()
-	sp.Spinner = spinner.Dot
+	sp.Spinner = spinner.Spinner{
+		Frames: []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"},
+		FPS:    60 * time.Millisecond,
+	}
 
 	downloadBar := newDownloadBar()
 
@@ -410,13 +413,13 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case themeCrossfadeTickMsg:
 		if msg.opID == m.crossfadeOpID && m.crossfadeActive {
 			m.crossfadeStep++
-			if m.crossfadeStep >= 10 {
+			if m.crossfadeStep >= 16 {
 				m.crossfadeActive = false
 				return m, nil
 			}
 			opID := m.crossfadeOpID
 			step := m.crossfadeStep
-			return m, tea.Tick(18*time.Millisecond, func(t time.Time) tea.Msg {
+			return m, tea.Tick(14*time.Millisecond, func(t time.Time) tea.Msg {
 				return themeCrossfadeTickMsg{opID: opID, step: step + 1}
 			})
 		}
@@ -533,6 +536,18 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearStatus()
 		}
 		return m, spinnerCmd
+	case toastFadeTickMsg:
+		if m.toastID == msg.id && m.activeToast != nil {
+			if time.Now().Before(m.activeToast.ExpiresAt) {
+				id := msg.id
+				return m, tea.Batch(spinnerCmd, tea.Tick(40*time.Millisecond, func(t time.Time) tea.Msg {
+					return toastFadeTickMsg{id: id}
+				}))
+			}
+			m.activeToast = nil
+			return m, spinnerCmd
+		}
+		return m, spinnerCmd
 	case posterLoadedMsg:
 		switch msg.slot {
 		case posterSlotSearch:
@@ -608,13 +623,20 @@ func (m *modelImpl) startThemeCrossfade(fromKind, toKind model.Kind) tea.Cmd {
 		override = m.customAccentHex
 	}
 
+	from := ThemeFor(fromKind, override)
+	to := ThemeFor(toKind, override)
+	if from.Accent == to.Accent {
+		m.crossfadeActive = false
+		return nil
+	}
+
 	m.crossfadeActive = true
 	m.crossfadeStep = 0
-	m.crossfadeFrom = ThemeFor(fromKind, override)
-	m.crossfadeTo = ThemeFor(toKind, override)
+	m.crossfadeFrom = from
+	m.crossfadeTo = to
 	m.crossfadeOpID++
 	opID := m.crossfadeOpID
-	return tea.Tick(18*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(14*time.Millisecond, func(t time.Time) tea.Msg {
 		return themeCrossfadeTickMsg{opID: opID, step: 1}
 	})
 }

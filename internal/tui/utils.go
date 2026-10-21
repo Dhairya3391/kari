@@ -89,6 +89,7 @@ func (m *modelImpl) clearStatus() {
 	m.statusID++
 	m.statusExpiresAt = time.Time{}
 	m.activeToast = nil
+	m.toastID++
 	m.confirmQuit = false
 	m.confirmStop = false
 }
@@ -132,8 +133,13 @@ func (m *modelImpl) clearStatusAfter(d time.Duration) tea.Cmd {
 	})
 }
 
-func (m *modelImpl) setToast(msg string, ttype ToastType) {
+func (m *modelImpl) setToast(msg string, ttype ToastType) tea.Cmd {
+	m.toastID++
+	id := m.toastID
 	m.activeToast = NewToast(msg, ttype, 3*time.Second)
+	return tea.Tick(2650*time.Millisecond, func(t time.Time) tea.Msg {
+		return toastFadeTickMsg{id: id}
+	})
 }
 
 func (m *modelImpl) pushView(next viewState) {
@@ -220,10 +226,10 @@ func (m *modelImpl) toggleAnimeAudio() (tea.Model, tea.Cmd) {
 		m.audioMode = provider.AudioDub
 	}
 	m.saveSettings()
-	m.setToast("audio track: "+m.audioMode, ToastInfo)
+	toastCmd := m.setToast("audio track: "+m.audioMode, ToastInfo)
 
 	if m.selectedSeries == nil {
-		return m, nil
+		return m, toastCmd
 	}
 
 	// If on Preview screen, reload streams for current episode with new audio track.
@@ -254,7 +260,7 @@ func (m *modelImpl) toggleAnimeAudio() (tea.Model, tea.Cmd) {
 	m.loadingText = "Reloading episodes..."
 	opID := m.newOpID()
 	m.episodesOpID = opID
-	return m, tea.Batch(m.spinner.Tick, m.episodesCmd(opID, *m.selectedSeries))
+	return m, tea.Batch(toastCmd, m.spinner.Tick, m.episodesCmd(opID, *m.selectedSeries))
 }
 
 func (m *modelImpl) nextEpisodeIndex() (int, bool) {

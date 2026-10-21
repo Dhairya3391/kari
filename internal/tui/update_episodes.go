@@ -140,6 +140,7 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				count := 0
+				var toastCmd tea.Cmd
 				if allComplete {
 					for origIdx := range m.selectedEpisodes {
 						if origIdx < 0 || origIdx >= len(m.episodeResults) {
@@ -149,7 +150,7 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 							count++
 						}
 					}
-					m.setToast(fmt.Sprintf("unmarked %d episodes", count), ToastInfo)
+					toastCmd = m.setToast(fmt.Sprintf("unmarked %d episodes", count), ToastInfo)
 				} else {
 					for origIdx := range m.selectedEpisodes {
 						if origIdx < 0 || origIdx >= len(m.episodeResults) {
@@ -159,12 +160,12 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 							count++
 						}
 					}
-					m.setToast(fmt.Sprintf("marked %d episodes as complete", count), ToastSuccess)
+					toastCmd = m.setToast(fmt.Sprintf("marked %d episodes as complete", count), ToastSuccess)
 				}
 				m.selectedEpisodes = make(map[int]struct{})
 				m.selectMode = false
 				m.refreshEpisodeList()
-				return m, nil
+				return m, toastCmd
 			case keyMsg.String() == "esc":
 				m.selectMode = false
 				m.clearStatus()
@@ -190,13 +191,14 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 					code := episodeCode(ep, origIdx, len(distinctSeasonNumbers(m.episodeResults)) > 1)
+					var toastCmd tea.Cmd
 					if marked {
-						m.setToast("marked "+code+" complete", ToastSuccess)
+						toastCmd = m.setToast("marked "+code+" complete", ToastSuccess)
 					} else {
-						m.setToast("unmarked "+code, ToastInfo)
+						toastCmd = m.setToast("unmarked "+code, ToastInfo)
 					}
 					m.refreshEpisodeList()
-					return m, nil
+					return m, toastCmd
 				}
 			case key.Matches(keyMsg, m.keys.Select) || keyMsg.String() == "enter":
 				if len(origIndices) > 0 && m.seasonEpisodeIndex < len(origIndices) {
@@ -305,8 +307,7 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.cancelDownload()
 						m.cancelDownload = nil
 					}
-					m.setToast("download paused — press p to resume", ToastInfo)
-					return m, nil
+					return m, m.setToast("download paused — press p to resume", ToastInfo)
 				}
 			} else {
 				if m.pendingDownload != nil && m.downloadService != nil && m.mediaService != nil {
@@ -314,8 +315,8 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.downloadPaused = false
 					m.activeDownloads = nil
 					m.downloadOpID = m.newOpID()
-					m.setToast("resolving interrupted download", ToastInfo)
-					return m, m.resumePendingDownloadCmd(m.downloadOpID, job)
+					toastCmd := m.setToast("resolving interrupted download", ToastInfo)
+					return m, tea.Batch(toastCmd, m.resumePendingDownloadCmd(m.downloadOpID, job))
 				}
 				// Resume: re-run the same sources. aria2c picks up the
 				// .aria2 checkpoint, yt-dlp continues from .part files.
@@ -326,18 +327,16 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 					remIdx := max(0, m.batchCurrent-1)
 					if remIdx < len(m.batchEpisodes) {
 						rem := m.batchEpisodes[remIdx:]
-						m.setToast("download resumed", ToastSuccess)
+						toastCmd := m.setToast("download resumed", ToastSuccess)
 						cmd := m.batchDownloadCmd(opID, rem, m.batchSeries, m.batchMode, true)
-						return m, cmd
+						return m, tea.Batch(toastCmd, cmd)
 					}
 				} else if m.singleResolved != nil {
 					opID := m.newOpID()
-					m.downloadOpID = opID
-					m.setToast("download resumed", ToastSuccess)
-					return m, m.downloadCmd(opID, *m.singleResolved)
+					toastCmd := m.setToast("download resumed", ToastSuccess)
+					return m, tea.Batch(toastCmd, m.downloadCmd(opID, *m.singleResolved))
 				}
-				m.setToast("download resumed", ToastSuccess)
-				return m, nil
+				return m, m.setToast("download resumed", ToastSuccess)
 			}
 		case "x":
 			// Double-press confirmation for anything destructive, matching
@@ -359,8 +358,7 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.batchEpisodes = append(m.batchEpisodes[:targetIdx], m.batchEpisodes[targetIdx+1:]...)
 						m.batchTotal = len(m.batchEpisodes)
 					}
-					m.setToast(fmt.Sprintf("cancelled %s", item.Title), ToastInfo)
-					return m, nil
+					return m, m.setToast(fmt.Sprintf("cancelled %s", item.Title), ToastInfo)
 				}
 				if m.batchInProgress && len(m.batchEpisodes) > 0 {
 					// Skip the active episode: cancel its context, remove its
@@ -373,8 +371,8 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.batchActiveDir != "" {
 						m.downloadService.CleanupPartial(m.batchActiveDir, m.batchActiveTitle)
 					}
-					m.setToast(fmt.Sprintf("skipped %s", item.Title), ToastInfo)
 					curIdx := max(0, m.batchCurrent-1)
+					toastCmd := m.setToast(fmt.Sprintf("skipped %s", item.Title), ToastInfo)
 					if curIdx < len(m.batchEpisodes) {
 						m.batchEpisodes = append(m.batchEpisodes[:curIdx], m.batchEpisodes[curIdx+1:]...)
 						m.batchTotal = len(m.batchEpisodes)
@@ -385,10 +383,10 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.batchInProgress = true
 						rem := m.batchEpisodes[curIdx:]
 						cmd := m.batchDownloadCmd(opID, rem, m.batchSeries, m.batchMode, true)
-						return m, cmd
+						return m, tea.Batch(toastCmd, cmd)
 					}
 					m.batchInProgress = false
-					return m, nil
+					return m, toastCmd
 				}
 				// Single download cancel: stop it and delete its partials.
 				if m.cancelDownload != nil {
@@ -408,14 +406,12 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.downloadService != nil {
 					_ = m.downloadService.ClearPendingJob()
 				}
-				m.setToast("download cancelled", ToastInfo)
-				return m, nil
+				return m, m.setToast("download cancelled", ToastInfo)
 			} else if m.downloadsIndex >= len(data.Active) && len(data.Done) > 0 {
 				doneIdx := m.downloadsIndex - len(data.Active)
 				if doneIdx >= 0 && doneIdx < len(m.doneDownloads) {
 					m.doneDownloads = append(m.doneDownloads[:doneIdx], m.doneDownloads[doneIdx+1:]...)
-					m.setToast("removed from history", ToastInfo)
-					return m, nil
+					return m, m.setToast("removed from history", ToastInfo)
 				}
 			}
 			return m, nil
@@ -459,8 +455,7 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.downloadService != nil {
 				_ = m.downloadService.ClearPendingJob()
 			}
-			m.setToast("all downloads cancelled", ToastInfo)
-			return m, nil
+			return m, m.setToast("all downloads cancelled", ToastInfo)
 		case "esc":
 			m.goBackOne()
 			return m, nil
@@ -679,7 +674,7 @@ func (m *modelImpl) startBatchDownload() (tea.Model, tea.Cmd) {
 	m.selectMode = false
 	m.selectedEpisodes = make(map[int]struct{})
 	m.refreshEpisodeList()
-	m.setToast(fmt.Sprintf("batch download started (%d episodes)", m.batchTotal), ToastSuccess)
+	toastCmd := m.setToast(fmt.Sprintf("batch download started (%d episodes)", m.batchTotal), ToastSuccess)
 
 	opID := m.newOpID()
 	m.downloadOpID = opID
@@ -696,7 +691,7 @@ func (m *modelImpl) startBatchDownload() (tea.Model, tea.Cmd) {
 	m.batchMode = mode
 
 	cmd := m.batchDownloadCmd(opID, selected, series, mode, hasSeries)
-	return m, cmd
+	return m, tea.Batch(toastCmd, cmd)
 }
 
 func (m *modelImpl) orderedSelectedEpisodes() []provider.Episode {
@@ -851,8 +846,7 @@ func (m *modelImpl) onBatchDone(msg batchDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.completed == 0 {
 		return m, m.setStatusTimed(statusError, "Batch download failed")
 	}
-	m.setToast(fmt.Sprintf("downloaded %d/%d episodes", msg.completed, msg.total), ToastSuccess)
-	return m, nil
+	return m, m.setToast(fmt.Sprintf("downloaded %d/%d episodes", msg.completed, msg.total), ToastSuccess)
 }
 
 func (m *modelImpl) batchSubscription() tea.Cmd {

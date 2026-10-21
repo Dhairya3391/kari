@@ -195,10 +195,10 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 				m.downloadOpID = 0
 				m.drainDownloadChan()
 				m.downloadPaused = true
-				m.setToast("downloads paused — press p on the downloads screen to resume", ToastInfo)
+				toastCmd := m.setToast("downloads paused — press p on the downloads screen to resume", ToastInfo)
 				m.loading = false
 				m.loadingText = ""
-				return nil, true
+				return toastCmd, true
 			}
 			m.confirmStop = true
 			m.setStatus(statusWarn, "Press x again to pause downloads")
