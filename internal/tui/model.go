@@ -208,6 +208,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		resolveChan:         make(chan tea.Msg, 50),
 		configuredModes:     (&settings.Data{}).NormalizedModes(),
 		disabledModes:       make(map[string]bool),
+		disabledProviders:   make(map[string]bool),
 		transitions:         true,
 		startupSearchActive: startupSearchActive,
 		baseBgColor:         HexToRGBA("#0B0D10"),
@@ -308,8 +309,11 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		model.defaultMode = s.DefaultMode
 		model.configuredModes = s.NormalizedModes()
 		model.disabledModes = s.DisabledModeSet()
+		model.disabledProviders = s.DisabledProviderSet()
+		model.syncDisabledProvidersToService()
 		model.transitions = s.TransitionsEnabled()
 		model.startupSearchActive = s.StartupSearchActiveEnabled()
+		model.autoUpdate = s.AutoUpdate
 		model.updateEffectiveModes()
 
 		startupMode := strings.ToLower(strings.TrimSpace(s.DefaultMode))
@@ -419,6 +423,8 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case updateCheckMsg:
 		return m.onUpdateCheck(msg)
+	case autoUpdateDoneMsg:
+		return m.onAutoUpdateDone(msg)
 	case historyLoadedMsg:
 		m.loading = false
 		m.loadingText = ""

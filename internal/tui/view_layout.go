@@ -1022,8 +1022,10 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		AccentName:          accentName,
 		Transitions:         m.transitions,
 		StartupSearchActive: m.startupSearchActive,
+		AutoUpdate:          m.autoUpdate,
 		DefaultModeName:     defaultModeName,
 		ModesRows:           modeRows,
+		ProviderRows:        m.providerRows(),
 	}
 }
 

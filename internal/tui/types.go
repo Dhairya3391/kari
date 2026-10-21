@@ -332,8 +332,10 @@ type modelImpl struct {
 	modes               []provider.ContentType
 	configuredModes     []string
 	disabledModes       map[string]bool
+	disabledProviders   map[string]bool
 	transitions         bool
 	startupSearchActive bool
+	autoUpdate          bool
 	baseBgColor         color.RGBA
 	crossfadeActive     bool
 	crossfadeStep       int

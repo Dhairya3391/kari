@@ -71,12 +71,17 @@ type Data struct {
 	Modes []string `json:"modes"`
 	// ModesDisabled is the list of disabled mode keys.
 	ModesDisabled []string `json:"modes_disabled"`
+	// DisabledProviders is the list of user-disabled provider keys (e.g. "pengu", "anivault").
+	// When empty/nil, all providers are enabled.
+	DisabledProviders []string `json:"disabled_providers,omitempty"`
 	// LastMode is the last active content mode key.
 	LastMode string `json:"last_mode"`
 	// Transitions controls whether theme color crossfades are enabled (default true).
 	Transitions *bool `json:"transitions"`
 	// StartupSearchActive controls whether Kari starts with the search input focused (default true).
 	StartupSearchActive *bool `json:"startup_search_active"`
+	// AutoUpdate controls whether Kari automatically updates in the background when a new version is available (default false).
+	AutoUpdate bool `json:"auto_update"`
 }
 
 // NormalizedModes returns the ordered list of known modes, preserving the user's
@@ -121,6 +126,21 @@ func (d *Data) DisabledModeSet() map[string]bool {
 		m := strings.ToLower(strings.TrimSpace(raw))
 		if m != "" {
 			set[m] = true
+		}
+	}
+	return set
+}
+
+// DisabledProviderSet returns a set of disabled provider keys (lowercased).
+func (d *Data) DisabledProviderSet() map[string]bool {
+	set := make(map[string]bool)
+	if d == nil {
+		return set
+	}
+	for _, raw := range d.DisabledProviders {
+		p := strings.ToLower(strings.TrimSpace(raw))
+		if p != "" {
+			set[p] = true
 		}
 	}
 	return set

@@ -1,12 +1,13 @@
 // Package pengu implements provider.Provider against the PenguPlay aggregator
 // API (https://pengu.uk). PenguPlay is an aggregator that queries multiple
 // streaming backends (4KHDHub, MovieBox, VegaMovies, VAPlayer, Miruro,
-// VidFast, CineFreak, Cinejoy, KissKH, HDHub4u, Anikoto, Ani.pm, 2Peckle, Arctic,
+// VidFast, CineFreak, Cinejoy, KissKH, HDHub4u, Ani.pm, 2Peckle, Arctic,
 // VixSrc, Vidy, ToonWorld4All, Reanime, PlayFy, MoviesDrives) and
 // returns direct and HLS streams. Reanime, Ani.pm serve anime, ToonWorld4All serves
 // cartoons and general media, Vidy, MoviesDrives, and 4KHDHub serve movies
 // and TV shows, and live-sports serves live catalogs. VidLink and Arctic stay
 // disabled because VidLink returns 428 errors and Arctic currently serves no streams.
+// Anikoto stays disabled because Kari queries it natively.
 package pengu
 
 import (
@@ -45,7 +46,7 @@ const penguUA = config.DesktopUserAgent
 
 var (
 	reResolution = regexp.MustCompile(`(?i)\b(4k|2160p|1440p|1080p|720p|480p|360p)\b`)
-	reSourceTag  = regexp.MustCompile(`(?i)\b(4khdhub|moviebox|vegamovies|moviesdrives|miruro|cinefreak|vaplayer|vidlink|vidfast|cinejoy|hdghartv|kisskh|hdhub4u|anikoto|anipm|ani\.pm|2peckle|debridscloud|5clover|daddylive|binged|streamedpk|cdnlive|timstreams|arctic|vixsrc|vidy|toonworld4all|toonworld|reanime|playfy)\b`)
+	reSourceTag  = regexp.MustCompile(`(?i)\b(4khdhub|moviebox|vegamovies|moviesdrives|miruro|cinefreak|vaplayer|vidlink|vidfast|cinejoy|hdghartv|kisskh|hdhub4u|anipm|ani\.pm|2peckle|debridscloud|5clover|daddylive|binged|streamedpk|cdnlive|timstreams|arctic|vixsrc|vidy|toonworld4all|toonworld|reanime|playfy)\b`)
 	reAudioLang  = regexp.MustCompile(`(?i)(?:audio|language|languages):\s*([a-zA-Z, /]+)`)
 	// reDubSubMarker matches MovieBox-style audio markers in filenames:
 	// "{lang}dubaudio" (dubbed audio) vs "{lang}subaudio" (original audio
@@ -217,7 +218,7 @@ func (c *Client) Modes() []provider.Mode {
 		{Name: provider.ModeTV, Priority: 2},
 		{Name: provider.ModeCartoon, Priority: 2},
 		// Anime resolves through the anime config segment (Ani.pm,
-		// Reanime, Anikoto, Miruro, KissKH, 2Peckle, MovieBox). Priority
+		// Reanime, Miruro, KissKH, 2Peckle, MovieBox). Priority
 		// trails the direct scrapers: same-height ties prefer direct CDN
 		// rows over proxied ones, while Pengu still adds fallback depth.
 		{Name: provider.ModeAnime, Priority: 3},
@@ -444,7 +445,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		}
 
 		// Try MAL-based Stremio ID first because Pengu's anime scrapers
-		// (Ani.pm, Reanime, Anikoto, 2Peckle) natively index by MyAnimeList ID,
+		// (Ani.pm, Reanime, 2Peckle) natively index by MyAnimeList ID,
 		// answering in ~1s whereas anilist: mapping often returns 0 streams
 		// or takes 5-10s upstream. Fall back to anilist: if mal: returns no sources.
 		anilistID, ok := parseAnilistID(mediaID)
@@ -1000,12 +1001,19 @@ func parseLiveStart(releaseInfo, released string) time.Time {
 	return base.Add(-time.Duration(offset) * time.Second).In(time.Local)
 }
 
-// isExcludedStream checks if a stream originated from an excluded backend
-// (Movy.sx is maintained independently in Kari; Ani.pm is ignored due to
-// incorrect source mappings).
+// isExcludedStream checks if a stream originated from a backend Kari
+// maintains natively (Movy.sx, Anikoto) or ignores due to incorrect source
+// mappings (Ani.pm).
 func isExcludedStream(stream penguStreamItem) bool {
-	combined := strings.ToLower(stream.Name + " " + stream.Title + " " + stream.Description + " " + stream.URL)
+	combined := strings.ToLower(strings.Join([]string{
+		stream.Name,
+		stream.Title,
+		stream.Description,
+		stream.URL,
+		stream.BehaviorHints.Filename,
+	}, " "))
 	return strings.Contains(combined, "movysx") || strings.Contains(combined, "movy.sx") ||
+		strings.Contains(combined, "anikoto") ||
 		strings.Contains(combined, "ani.pm") || strings.Contains(combined, "anipm")
 }
 
@@ -1035,8 +1043,9 @@ func isAuthPrompt(streams []penguStreamItem) bool {
 // buildConfigSegment compiles the default (movies/TV) multi-provider
 // configuration into a compact raw-deflated base64url segment expected by PenguPlay.
 // Movy.sx is deliberately omitted because Kari manages Movy.sx independently.
-// Anime-focused backends (reanime, anikoto, anipm, miruro) stay off here; anime
-// requests use buildAnimeConfigSegment instead.
+// Anime-focused backends (reanime, anipm, miruro) stay off here; anikoto also
+// stays off because Kari queries it natively. Anime requests use
+// buildAnimeConfigSegment instead.
 func buildConfigSegment(token string) (string, error) {
 	cfg := map[string]any{
 		"source_4khdhub":       "on",
@@ -1071,6 +1080,8 @@ func buildConfigSegment(token string) (string, error) {
 	return encodeConfig(cfg)
 }
 
+// buildAnimeConfigSegment compiles the anime-only multi-provider
+// configuration. Anikoto stays off because Kari queries it natively.
 func buildAnimeConfigSegment(token string) (string, error) {
 	cfg := map[string]any{
 		"source_reanime":       "on",
@@ -1384,7 +1395,7 @@ func canonProviderName(token string) string {
 		"4KHDHub", "MovieBox", "VegaMovies", "MoviesDrives",
 		"Miruro", "CineFreak", "VAPlayer", "VidLink",
 		"VidFast", "Cinejoy", "HDGharTV", "KissKH", "HDHub4u",
-		"Anikoto", "Ani.pm", "2Peckle", "DebridsCloud", "5Clover", "DaddyLive", "Binged", "StreamedPK", "CDNLIVE", "TimStreams",
+		"Ani.pm", "2Peckle", "DebridsCloud", "5Clover", "DaddyLive", "Binged", "StreamedPK", "CDNLIVE", "TimStreams",
 		"Arctic", "VixSrc", "Vidy", "ToonWorld4All", "Reanime", "PlayFy",
 	} {
 		if strings.EqualFold(canon, token) {

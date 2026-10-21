@@ -13,7 +13,7 @@
 ## 0. Registration (single source today)
 
 - `internal/provider/defaults/defaults.go` is the only registration
-  list: `anicine, movysx, anikoto, miruro, moovie, solis, cinecat, weebcentral, pengu, jellyfin`.
+  list: `anicine, movysx, anikoto, anipm, anivault, miruro, moovie, solis, cinecat, weebcentral, pengu, jellyfin`.
 - `jellyfin.When` gates on `JellyfinURL && JellyfinAPIKey`
   (`defaults.go:60-62`); factory failure skips with log, never fatal
   (`defaults.go:80-84`).
@@ -24,7 +24,7 @@ Declared modes/priorities:
 
 | mode | providers (priority) | evidence |
 | --- | --- | --- |
-| anime | anicine P1, anikoto P2, miruro P2, pengu P3 | `anicine`, `anikoto`, `miruro`, `pengu` `client.go` `Modes()` |
+| anime | anicine P1, anikoto P2, anipm P1, anivault P2, miruro P2, pengu P3 | `anicine`, `anikoto`, `anipm`, `anivault`, `miruro`, `pengu` `client.go` `Modes()` |
 | movies/tv/cartoon | movysx P2, pengu P2, moovie P2, solis P2, cinecat P2 | `movysx`, `pengu`, `moovie`, `solis`, `cinecat` `client.go` `Modes()` |
 | live | pengu P1 only | `pengu/client.go:162` |
 | manga | weebcentral P1 only | `weebcentral/client.go:48-50` |
@@ -156,6 +156,7 @@ Unified shapes: `provider.SearchResult` (`provider.go:64-97`),
 | provider | raw → unified | gaps / inconsistencies |
 | --- | --- | --- |
 | anikoto | `/search?q=` JSON `{id(json.Number),name,format,year}` → `Title/ID/MediaType(movie iff format==MOVIE)/Year`; episodes JSON `{number float64}` → `Episode.Episode`; watch `/watch/<srv>/<id>/<cat>/<n>` via `kit.FetchFirst` servers `l,light,mello,vid`-like list → `MediaSource{URL,Quality:"Auto (…)",Referer: megaplay.buzz, Type hls/mp4 by ext}` | quality strings are server labels (`"Auto (HD1)"`), not heights; audio from handle category sub/dub only; subtitle langs via `kit.Subtitles` + `lang.Normalize`; size absent; headers per-source Referer, no Cookie |
+| anivault | `/api/search?q=` AniList-keyed JSON `{id,title,coverImage,format}` → `Title/ID/MediaType`; `/api/episodes?anilistId=&source=anivault` (AnimeHeaven fallback) → sub/dub handles; `/api/watch/<source>/<anilistId>/<ep>/<sub\|dub>` → `m3u8`/`mp4`, proxy-unwrapped direct CDN URL, proxy `ref` as Referer, external VTT subtitles | sub resolves Anikoto soft-subbed HLS and AnimeHeaven hard-subbed MP4 in parallel; dub availability verified per episode; quality label is `Auto (<server>)`, not a height |
 | anilight | same shape, base `noob3`, referer `anilight.live`, servers `[l,light,mello,vid]` (`anilight/client.go:237`); `cleanAniLightText`, `pickTitle` | same gaps as anikoto; title cleaning ad-hoc per provider |
 | reanime | same shape, base `noob4`, referer `flixcloud.cc`, servers `[hd1,hd2]` (`reanime/client.go:230`); `ArgPolicy{KeepHeaderFieldArgs,SkipURLArgs,StripQuotes}` (`reanime/client.go:254`) | same gaps; MPV arg filtering differs per provider |
 | movysx | search/items delegate to `streambase.Base` (TMDB); resolve `?tmdb=&type=movie\|tv&s=&e=` JSON `{sources[],audio[],subtitles[]}` → `MediaSource{URL,Quality raw,Referer movy.sx,Type declared-first (hls/mp4/dash/auto)}`; `audio[]` dubbed rows append as `Language`-tagged sources (`Auto (Hindi)`); 504 → `ErrTimeout` | quality raw upstream; main rows untagged, dubbed rows ISO (`hi`, `und` kept); subtitles ISO via `lang.Normalize`; no size; key-pool rotation in streambase (`isAuthError 401/429`) |

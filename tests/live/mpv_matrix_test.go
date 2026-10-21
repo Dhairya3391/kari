@@ -48,6 +48,7 @@ var mpvMatrixCases = []mpvMatrixCase{
 	{provider: "pengu", mode: provider.ModeCartoon, query: "SpongeBob"},
 	{provider: "anicine", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "anikoto", mode: provider.ModeAnime, query: "Naruto"},
+	{provider: "anivault", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "miruro", mode: provider.ModeAnime, query: "Naruto"},
 }
 

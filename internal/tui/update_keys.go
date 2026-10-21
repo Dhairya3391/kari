@@ -1,13 +1,13 @@
 package tui
 
 import (
-	"strings"
-	"time"
-
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/provider"
 	"kari/internal/settings"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -256,6 +256,13 @@ func (m *modelImpl) saveSettings() {
 			disabledList = append(disabledList, k)
 		}
 	}
+	disabledProvList := make([]string, 0)
+	for k, v := range m.disabledProviders {
+		if v {
+			disabledProvList = append(disabledProvList, k)
+		}
+	}
+	slices.Sort(disabledProvList)
 
 	accentSetting := "auto"
 	if m.accentIndex > 0 && m.accentIndex < len(accentPresets) {
@@ -318,9 +325,11 @@ func (m *modelImpl) saveSettings() {
 		DefaultMode:           defaultMode,
 		Modes:                 modes,
 		ModesDisabled:         disabledList,
+		DisabledProviders:     disabledProvList,
 		LastMode:              string(m.appMode),
 		Transitions:           &transitionsVal,
 		StartupSearchActive:   &startupSearchActiveVal,
+		AutoUpdate:            m.autoUpdate,
 	})
 	if m.players != nil {
 		m.players.SetSkipSettings(player.SkipSettings{

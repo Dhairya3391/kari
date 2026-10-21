@@ -178,7 +178,6 @@ func TestParseStreamItemNewBackends(t *testing.T) {
 	}{
 		{"🐧 PenguPlay ❄️ 4K • Cinejoy · Lisbon", "Cinejoy"},
 		{"🐧 PenguPlay 🧊 1080p • MovieBox", "MovieBox"},
-		{"🐧 PenguPlay 🧊 1080p • Anikoto", "Anikoto"},
 		{"🐧 PenguPlay 🧊 1080p • 2Peckle", "2Peckle"},
 		{"🐧 PenguPlay 🧊 1080p • Miruro · Animegg", "Miruro"},
 		{"🐧 PenguPlay 🧊 1080p • Arctic", "Arctic"},
@@ -643,6 +642,18 @@ func TestIsExcludedStream(t *testing.T) {
 	}
 	if !isExcludedStream(movyStream) {
 		t.Errorf("isExcludedStream want true for Movy.sx stream")
+	}
+
+	anikotoStream := penguStreamItem{
+		Name:        "🐧 PenguPlay 1080p • HD-1",
+		Description: "Source: HD-1",
+		URL:         "https://pengu.uk/hls/stream.m3u8",
+		BehaviorHints: penguBehaviorHints{
+			Filename: "1080pHLS-anikoto.mkv",
+		},
+	}
+	if !isExcludedStream(anikotoStream) {
+		t.Errorf("isExcludedStream want true for Anikoto stream")
 	}
 
 	twoPeckleStream := penguStreamItem{

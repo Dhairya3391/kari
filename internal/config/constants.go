@@ -58,6 +58,11 @@ const (
 	// rotates domains.
 	MiruroBase = "https://barelystarted.miruro.tv"
 
+	// AniVaultAPIBase is AniVault's public scraper API. The anivault.tv
+	// frontend is Cloudflare-challenged for non-browser clients; this
+	// deployment serves the same AniList-keyed catalog and playback routes.
+	AniVaultAPIBase = "https://anivault-api-production.up.railway.app"
+
 	// AniPMBase is the public web application for Ani.pm (https://ani.pm).
 	AniPMBase = "https://ani.pm"
 	// AniPMReferer satisfies hotlink protection on Ani.pm API requests.

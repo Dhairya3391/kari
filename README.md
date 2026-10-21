@@ -122,6 +122,7 @@ kari "frieren"
 | **Movy.sx** | Movies, TV, Cartoons | API (TMDB-indexed) | 1 |
 | **Pengu** | Movies, TV, Cartoons | Aggregator API (TMDB-indexed) | 2 |
 | **Anikoto** | Anime | API | 1 |
+| **AniVault** | Anime | API (AniList-indexed) | 2 |
 | **Jellyfin** | Movies, TV | Jellyfin Server API | 1 |
 
 *Lower priority number = primary provider. All providers are queried simultaneously in parallel.*

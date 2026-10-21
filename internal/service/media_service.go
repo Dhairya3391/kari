@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,6 +54,9 @@ type MediaService struct {
 
 	lastMu       sync.Mutex
 	lastFailures []string
+
+	disabledMu        sync.RWMutex
+	disabledProviders map[string]bool
 
 	searchCache   *util.BoundedCache[searchCacheEntry]
 	episodesCache *util.BoundedCache[episodesCacheEntry]
@@ -108,6 +112,45 @@ func (s *MediaService) setLastFailures(names []string) {
 	s.lastFailures = append([]string(nil), names...)
 }
 
+// SetDisabledProviders updates the set of disabled providers and invalidates
+// cached search and episode responses so queries immediately reflect the new filter.
+func (s *MediaService) SetDisabledProviders(names []string) {
+	s.disabledMu.Lock()
+	defer s.disabledMu.Unlock()
+	s.disabledProviders = make(map[string]bool, len(names))
+	for _, n := range names {
+		p := strings.ToLower(strings.TrimSpace(n))
+		if p != "" {
+			s.disabledProviders[p] = true
+		}
+	}
+	if s.searchCache != nil {
+		s.searchCache.Clear()
+	}
+	if s.episodesCache != nil {
+		s.episodesCache.Clear()
+	}
+}
+
+// IsProviderDisabled reports whether the named provider is disabled for the given mode.
+// It checks both the mode-scoped key (e.g. "anime:pengu") and the global key ("pengu").
+func (s *MediaService) IsProviderDisabled(mode provider.ContentType, name string) bool {
+	s.disabledMu.RLock()
+	defer s.disabledMu.RUnlock()
+	if len(s.disabledProviders) == 0 {
+		return false
+	}
+	p := strings.ToLower(strings.TrimSpace(name))
+	if s.disabledProviders[p] {
+		return true
+	}
+	m := strings.ToLower(strings.TrimSpace(string(mode)))
+	if m != "" && s.disabledProviders[m+":"+p] {
+		return true
+	}
+	return false
+}
+
 // Search fans a query out to every provider supporting the mode under a
 // shared deadline and merges results in provider priority order. Each
 // provider is additionally bounded by its route's search deadline (at
@@ -124,10 +167,53 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 		}
 	}
 
-	providers := s.registry.ProvidersForMode(mode)
-	if len(providers) == 0 {
+	allProviders := s.registry.ProvidersForMode(mode)
+	if len(allProviders) == 0 {
 		return nil, query, nil, fmt.Errorf("no providers available for mode %q", mode)
 	}
+
+	var enabledProviders, disabledProviders []provider.Provider
+	for _, p := range allProviders {
+		if s.IsProviderDisabled(mode, p.Name()) {
+			disabledProviders = append(disabledProviders, p)
+		} else {
+			enabledProviders = append(enabledProviders, p)
+		}
+	}
+
+	primaryProviders := enabledProviders
+	if len(primaryProviders) == 0 {
+		primaryProviders = allProviders
+		disabledProviders = nil
+	}
+
+	allResults, warnings, err := s.searchProviders(ctx, mode, query, primaryProviders)
+	if len(allResults) == 0 && len(disabledProviders) > 0 && ctx.Err() == nil {
+		mediaLog.Debug("search: enabled providers returned no results, attempting fallback to disabled providers",
+			"mode", mode, "query", query, "disabled", len(disabledProviders))
+		fallbackResults, fallbackWarnings, fallbackErr := s.searchProviders(ctx, mode, query, disabledProviders)
+		if len(fallbackResults) > 0 {
+			allResults = fallbackResults
+			warnings = append(warnings, fallbackWarnings...)
+			err = fallbackErr
+		}
+	}
+
+	if len(allResults) > 0 {
+		if s.searchCache != nil && len(warnings) == 0 {
+			s.searchCache.Set(cacheKey, searchCacheEntry{
+				results:  allResults,
+				query:    query,
+				warnings: warnings,
+				cachedAt: time.Now(),
+			})
+		}
+		return allResults, query, warnings, nil
+	}
+	return nil, query, warnings, err
+}
+
+func (s *MediaService) searchProviders(ctx context.Context, mode provider.ContentType, query string, providers []provider.Provider) ([]provider.SearchResult, []string, error) {
 	routes := provider.RoutesFor(mode)
 	routeByName := make(map[string]provider.Route, len(routes))
 	for _, r := range routes {
@@ -181,7 +267,6 @@ collectResults:
 			resultsMap[res.provider] = res
 			if res.err == nil && len(res.results) > 0 && !gotValidResults {
 				gotValidResults = true
-				// Once at least one provider succeeds with results, allow remaining providers 1.5s to finish
 				graceTimer = time.NewTimer(1500 * time.Millisecond)
 				defer graceTimer.Stop()
 				graceCh = graceTimer.C
@@ -227,7 +312,7 @@ collectResults:
 
 	if len(allResults) == 0 {
 		if err := ctx.Err(); err != nil {
-			return nil, query, nil, err
+			return nil, warnings, err
 		}
 		allNoResults := true
 		for _, p := range providers {
@@ -238,23 +323,15 @@ collectResults:
 			}
 		}
 		if allNoResults {
-			return nil, query, warnings, provider.ErrNoResults
+			return nil, warnings, provider.ErrNoResults
 		}
 		if len(warnings) > 0 {
-			return nil, query, warnings, errors.New(warnings[0])
+			return nil, warnings, errors.New(warnings[0])
 		}
-		return nil, query, warnings, provider.ErrNoResults
+		return nil, warnings, provider.ErrNoResults
 	}
 
-	if s.searchCache != nil && len(allResults) > 0 && len(warnings) == 0 {
-		s.searchCache.Set(cacheKey, searchCacheEntry{
-			results:  allResults,
-			query:    query,
-			warnings: warnings,
-			cachedAt: time.Now(),
-		})
-	}
-	return allResults, query, warnings, nil
+	return allResults, warnings, nil
 }
 
 // providerSearchTimeout returns the per-provider search deadline. A lone
@@ -349,7 +426,26 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 		// sub/dub rows are interchangeable handles for the downstream
 		// cross-provider resolve, so fastest-wins changes nothing
 		// except latency.
-		if eps, lastErr, ok := s.firstAvailableEpisodes(ctx, s.episodeAvailabilitySources(mode, series), series); ok {
+		availSources := s.episodeAvailabilitySources(mode, series)
+		var enabledAvail, disabledAvail []provider.EpisodeAvailabilitySource
+		for _, as := range availSources {
+			if prov, ok := as.(provider.Provider); ok && s.IsProviderDisabled(mode, prov.Name()) {
+				disabledAvail = append(disabledAvail, as)
+			} else {
+				enabledAvail = append(enabledAvail, as)
+			}
+		}
+		probeList := enabledAvail
+		if len(probeList) == 0 {
+			probeList = availSources
+			disabledAvail = nil
+		}
+		eps, lastErr, ok := s.firstAvailableEpisodes(ctx, probeList, series)
+		if !ok && len(disabledAvail) > 0 && ctx.Err() == nil {
+			mediaLog.Debug("episodes: enabled availability sources returned no episodes, attempting fallback to disabled sources")
+			eps, lastErr, ok = s.firstAvailableEpisodes(ctx, disabledAvail, series)
+		}
+		if ok {
 			return filterAvailableEpisodesByAudio(eps, requestedAudio), nil
 		} else if requestedAudio == provider.AudioDub {
 			if lastErr != nil {
@@ -455,10 +551,10 @@ type ResolveOptions struct {
 // Resolve resolves playback sources from supporting providers in parallel,
 // reporting each aggregated snapshot through onResult as batches arrive.
 func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, series provider.SearchResult, episode provider.Episode, onResult func(model.ResolvedMedia), opts ResolveOptions) (model.ResolvedMedia, error) {
-	providers := s.registry.ProvidersForMode(mode)
-	if len(opts.Exclude) > 0 && len(opts.Exclude) < len(providers) {
-		kept := providers[:0]
-		for _, p := range providers {
+	allProviders := s.registry.ProvidersForMode(mode)
+	if len(opts.Exclude) > 0 && len(opts.Exclude) < len(allProviders) {
+		kept := allProviders[:0]
+		for _, p := range allProviders {
 			skip := false
 			for _, name := range opts.Exclude {
 				if strings.EqualFold(p.Name(), name) {
@@ -470,11 +566,29 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 				kept = append(kept, p)
 			}
 		}
-		providers = kept
+		if len(kept) > 0 {
+			allProviders = kept
+		}
 	}
-	if len(providers) == 0 {
+	if len(allProviders) == 0 {
 		return model.ResolvedMedia{}, fmt.Errorf("no providers available for mode %q", mode)
 	}
+
+	var enabledProviders, disabledProviders []provider.Provider
+	for _, p := range allProviders {
+		if s.IsProviderDisabled(mode, p.Name()) {
+			disabledProviders = append(disabledProviders, p)
+		} else {
+			enabledProviders = append(enabledProviders, p)
+		}
+	}
+
+	primaryProviders := enabledProviders
+	if len(primaryProviders) == 0 {
+		primaryProviders = allProviders
+		disabledProviders = nil
+	}
+	providers := allProviders
 	forcedRetry := make(map[string]struct{}, len(opts.Retry))
 	for _, name := range opts.Retry {
 		if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
@@ -505,6 +619,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		}
 	}
 
+	totalTargetResolvers := len(primaryProviders)
 	// Helper to build ResolvedMedia from current aggregated sources.
 	// Slices are copied so the snapshot handed to callers never aliases the
 	// shared backing arrays that other goroutines keep mutating.
@@ -531,7 +646,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			Playback:           playbackCopy,
 			Subtitles:          subsCopy,
 			CompletedResolvers: completedCopy,
-			TotalResolvers:     len(providers),
+			TotalResolvers:     totalTargetResolvers,
 		}
 	}
 
@@ -560,158 +675,163 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		}
 	}
 
-	g, _ := errgroup.WithContext(ctx)
-
-	for _, p := range providers {
-		p := p
-		g.Go(func() error {
-			defer func() {
-				mu.Lock()
-				noteCompleted(p.Name())
-				current := snapshot()
-				mu.Unlock()
-				if onResult != nil {
-					onResult(current)
-				}
-			}()
-			_, force := forcedRetry[strings.ToLower(strings.TrimSpace(p.Name()))]
-			if skipped, reason := s.health.Skipped(p.Name(), len(providers) == 1 || force); skipped {
-				mediaLog.Debug("resolve skipping circuit-broken provider", "provider", p.Name(), "reason", reason)
-				mu.Lock()
-				failures = append(failures, fmt.Sprintf("%s: %s", p.Name(), reason))
-				audioUnavailableOnly = false
-				noteFailed(p.Name())
-				mu.Unlock()
-				return nil
-			}
-			// A route's explicit deadline wins (shorter for fast
-			// lanes, longer for slow ones like Pengu anime); the
-			// overall deadline is the hard ceiling.
-			r, hasRoute := routeByName[p.Name()]
-			timeout := providerSourceTimeout(r, hasRoute)
-			pCtx, pCancel := context.WithTimeout(ctx, timeout)
-			defer pCancel()
-			// Determine the ID to use for this provider: results from other
-			// providers can be resolved cross-provider via TMDB ID (for movies/TV)
-			// or AniList ID (for anime).
-			mediaID := series.ID
-			if p.Name() != series.Provider {
-				if mode == provider.ModeAnime || series.Type == provider.ModeAnime {
-					if series.ID != "" {
-						mediaID = series.ID
-					} else {
-						return nil // Cannot resolve anime without AniList ID
-					}
-				} else if series.TMDBID > 0 {
-					mediaID = strconv.Itoa(series.TMDBID)
-				} else {
-					return nil // Cannot resolve with this provider without shared ID
-				}
-			}
-
-			tmdbID := series.TMDBID
-			if tmdbID <= 0 && episode.TMDBID > 0 {
-				tmdbID = episode.TMDBID
-			}
-			if tmdbID <= 0 {
-				if id, err := strconv.Atoi(strings.TrimSpace(series.ID)); err == nil && id > 0 {
-					tmdbID = id
-				}
-			}
-
-			mediaEpisode := provider.Episode{
-				Title:   episode.Title,
-				ID:      episode.ID,
-				Season:  episode.Season,
-				Episode: episode.Episode,
-				Audio:   episode.Audio,
-				Filler:  episode.Filler,
-				TMDBID:  tmdbID,
-			}
-
-			recordFailure := func(err error) {
-				if provider.BreakerFailure(err) {
-					s.health.RecordFailure(p.Name())
-				}
-				mu.Lock()
-				failures = append(failures, fmt.Sprintf("%s: %v", p.Name(), err))
-				if !errors.Is(err, provider.ErrAudioUnavailable) {
-					audioUnavailableOnly = false
-				}
-				noteFailed(p.Name())
-				mu.Unlock()
-			}
-
-			// standard providers return one slice. Both feed the same
-			// aggregation path. Provider calls use the per-provider
-			// deadline (DefaultSourceTimeout) derived from the overall context.
-			var updates <-chan []provider.MediaSource
-			if sp, ok := p.(provider.StreamingProvider); ok {
-				ch := make(chan []provider.MediaSource, 4)
-				updates = ch
-				go func() {
-					defer close(ch)
-					if err := sp.ResolveStream(pCtx, mediaID, mediaEpisode, ch); err != nil {
-						mediaLog.Debug("streaming provider failed", "provider", p.Name(), "err", err)
-						recordFailure(err)
-					}
-				}()
-			} else {
-				sources, err := p.ResolveSource(pCtx, mediaID, mediaEpisode)
-				if err != nil {
-					mediaLog.Debug("provider resolve failed", "provider", p.Name(), "err", err)
-					recordFailure(err)
-					return nil
-				}
-				ch := make(chan []provider.MediaSource, 1)
-				ch <- sources
-				close(ch)
-				updates = ch
-			}
-
-			gotSources := false
-		streamLoop:
-			for {
-				select {
-				case batch, ok := <-updates:
-					if !ok {
-						break streamLoop
-					}
-					if len(batch) > 0 {
-						gotSources = true
-					}
+	runBatch := func(batch []provider.Provider) error {
+		g, _ := errgroup.WithContext(ctx)
+		for _, p := range batch {
+			p := p
+			g.Go(func() error {
+				defer func() {
 					mu.Lock()
-					agg.add(p.Name(), batch)
+					noteCompleted(p.Name())
 					current := snapshot()
 					mu.Unlock()
 					if onResult != nil {
 						onResult(current)
 					}
-				case <-pCtx.Done():
+				}()
+				_, force := forcedRetry[strings.ToLower(strings.TrimSpace(p.Name()))]
+				if skipped, reason := s.health.Skipped(p.Name(), len(allProviders) == 1 || force); skipped {
+					mediaLog.Debug("resolve skipping circuit-broken provider", "provider", p.Name(), "reason", reason)
+					mu.Lock()
+					failures = append(failures, fmt.Sprintf("%s: %s", p.Name(), reason))
+					audioUnavailableOnly = false
+					noteFailed(p.Name())
+					mu.Unlock()
+					return nil
+				}
+				r, hasRoute := routeByName[p.Name()]
+				timeout := providerSourceTimeout(r, hasRoute)
+				pCtx, pCancel := context.WithTimeout(ctx, timeout)
+				defer pCancel()
+				mediaID := series.ID
+				if p.Name() != series.Provider {
+					if mode == provider.ModeAnime || series.Type == provider.ModeAnime {
+						if series.ID != "" {
+							mediaID = series.ID
+						} else {
+							return nil
+						}
+					} else if series.TMDBID > 0 {
+						mediaID = strconv.Itoa(series.TMDBID)
+					} else {
+						return nil
+					}
+				}
+
+				tmdbID := series.TMDBID
+				if tmdbID <= 0 && episode.TMDBID > 0 {
+					tmdbID = episode.TMDBID
+				}
+				if tmdbID <= 0 {
+					if id, err := strconv.Atoi(strings.TrimSpace(series.ID)); err == nil && id > 0 {
+						tmdbID = id
+					}
+				}
+
+				mediaEpisode := provider.Episode{
+					Title:   episode.Title,
+					ID:      episode.ID,
+					Season:  episode.Season,
+					Episode: episode.Episode,
+					Audio:   episode.Audio,
+					Filler:  episode.Filler,
+					TMDBID:  tmdbID,
+				}
+
+				recordFailure := func(err error) {
+					if provider.BreakerFailure(err) {
+						s.health.RecordFailure(p.Name())
+					}
+					mu.Lock()
+					failures = append(failures, fmt.Sprintf("%s: %v", p.Name(), err))
+					if !errors.Is(err, provider.ErrAudioUnavailable) {
+						audioUnavailableOnly = false
+					}
+					noteFailed(p.Name())
+					mu.Unlock()
+				}
+
+				var updates <-chan []provider.MediaSource
+				if sp, ok := p.(provider.StreamingProvider); ok {
+					ch := make(chan []provider.MediaSource, 4)
+					updates = ch
 					go func() {
-						for range updates {
+						defer close(ch)
+						if err := sp.ResolveStream(pCtx, mediaID, mediaEpisode, ch); err != nil {
+							mediaLog.Debug("streaming provider failed", "provider", p.Name(), "err", err)
+							recordFailure(err)
 						}
 					}()
-					// A provider cut by its own deadline (not the overall
-					// one) failed to deliver in time: record it so the
-					// retry list and footer offer R for it, instead of
-					// vanishing silently while the countdown moves on.
-					if ctx.Err() == nil {
-						recordFailure(fmt.Errorf("%s: source deadline exceeded: %w", p.Name(), provider.ErrTimeout))
+				} else {
+					sources, err := p.ResolveSource(pCtx, mediaID, mediaEpisode)
+					if err != nil {
+						mediaLog.Debug("provider resolve failed", "provider", p.Name(), "err", err)
+						recordFailure(err)
+						return nil
 					}
-					break streamLoop
+					ch := make(chan []provider.MediaSource, 1)
+					ch <- sources
+					close(ch)
+					updates = ch
 				}
-			}
-			if gotSources {
-				s.health.RecordSuccess(p.Name())
-			}
-			return nil
-		})
+
+				gotSources := false
+			streamLoop:
+				for {
+					select {
+					case batch, ok := <-updates:
+						if !ok {
+							break streamLoop
+						}
+						if len(batch) > 0 {
+							gotSources = true
+						}
+						mu.Lock()
+						agg.add(p.Name(), batch)
+						current := snapshot()
+						mu.Unlock()
+						if onResult != nil {
+							onResult(current)
+						}
+					case <-pCtx.Done():
+						go func() {
+							for range updates {
+							}
+						}()
+						if ctx.Err() == nil {
+							recordFailure(fmt.Errorf("%s: source deadline exceeded: %w", p.Name(), provider.ErrTimeout))
+						}
+						break streamLoop
+					}
+				}
+				if gotSources {
+					s.health.RecordSuccess(p.Name())
+				}
+				return nil
+			})
+		}
+		return g.Wait()
 	}
 
-	if err := g.Wait(); err != nil {
+	if err := runBatch(primaryProviders); err != nil {
 		s.setLastFailures(failedOrder)
 		return model.ResolvedMedia{}, err
+	}
+
+	mu.Lock()
+	sourcesCount := len(agg.sources)
+	mu.Unlock()
+
+	if sourcesCount == 0 && len(disabledProviders) > 0 && ctx.Err() == nil {
+		mediaLog.Debug("resolve: enabled providers returned no sources, attempting fallback to disabled providers",
+			"mode", mode, "disabled", len(disabledProviders))
+		mu.Lock()
+		totalTargetResolvers = len(primaryProviders) + len(disabledProviders)
+		mu.Unlock()
+		if err := runBatch(disabledProviders); err != nil {
+			s.setLastFailures(failedOrder)
+			return model.ResolvedMedia{}, err
+		}
 	}
 
 	if len(agg.sources) == 0 {
@@ -720,7 +840,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			return model.ResolvedMedia{}, err
 		}
 		if len(failures) > 0 {
-			mediaLog.Warn("all providers failed to resolve", "providers", len(providers), "failures", strings.Join(failures, " | "))
+			mediaLog.Warn("all providers failed to resolve", "providers", len(allProviders), "failures", strings.Join(failures, " | "))
 			if audioUnavailableOnly {
 				return model.ResolvedMedia{}, fmt.Errorf("%s: %w", strings.Join(failures, "; "), provider.ErrAudioUnavailable)
 			}
@@ -741,10 +861,157 @@ type sourceAggregator struct {
 	priority    map[string]int // provider name -> priority (lower sorts first)
 	displayName func(string) string
 	sources     []provider.MediaSource
-	seenSources map[string]struct{}
+	sourceIndex map[string]int // canonical source identity -> index in sources
 	subs        []model.SubtitleTrack
 	seenSubs    map[string]struct{}
 	tierCounts  map[string]int
+}
+
+// isVolatileSourceParam reports whether a query key is a rotated auth or
+// signature value rather than part of the media address. Two providers
+// resolving the same CDN playlist independently receive different values
+// for these keys, but the underlying stream is identical.
+func isVolatileSourceParam(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "token", "expires", "expire", "expiry", "exp", "signature", "sig",
+		"auth", "hdnts", "policy", "key-pair-id":
+		return true
+	}
+	return false
+}
+
+// canonicalSourceURL removes volatile signing parameters and canonicalizes
+// host/query ordering so independently signed copies of one stream compare
+// equal. Non-auth query parameters stay significant because they can select
+// different media or renditions.
+func canonicalSourceURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return strings.TrimSuffix(rawURL, "/")
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Fragment = ""
+	query := parsed.Query()
+	for key := range query {
+		if isVolatileSourceParam(key) {
+			query.Del(key)
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return strings.TrimSuffix(parsed.String(), "/")
+}
+
+// sourceDedupeIdentity is the identity of the media address and its required
+// transport headers, with volatile signing parameters removed. User-Agent is
+// deliberately excluded: it is a client hint, not part of the address, and
+// providers commonly differ on whether they set it for the same CDN URL. The
+// full TransportIdentity still owns playback and subtitle matching.
+func sourceDedupeIdentity(src provider.MediaSource) string {
+	rawURL := canonicalSourceURL(src.URL)
+	if rawURL == "" {
+		return ""
+	}
+	return strings.Join([]string{
+		rawURL,
+		strings.TrimSpace(src.Referer),
+		strings.TrimSpace(src.CookieHeader),
+		strings.TrimSpace(src.Language),
+		strconv.FormatBool(src.SuppressOrigin),
+		strings.Join(src.ExtraArgs, "\x00"),
+	}, "\x00")
+}
+
+// mergeDuplicateSource folds descriptive metadata from a re-signed copy
+// into the row already kept. The kept URL and headers stay untouched so the
+// playable transport remains exactly what its provider resolved.
+func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) {
+	if dst.SubType == "" {
+		dst.SubType = src.SubType
+	}
+	if dst.Referer == "" {
+		dst.Referer = src.Referer
+	}
+	if dst.UserAgent == "" {
+		dst.UserAgent = src.UserAgent
+	}
+	if dst.CookieHeader == "" {
+		dst.CookieHeader = src.CookieHeader
+	}
+	if dst.Language == "" {
+		dst.Language = src.Language
+	}
+	if len(dst.ExtraArgs) == 0 {
+		dst.ExtraArgs = src.ExtraArgs
+	}
+	if SourceQuality(src.Quality) > SourceQuality(dst.Quality) {
+		dst.Quality = src.Quality
+	}
+	var missing []provider.SubtitleOption
+	for _, sub := range src.Subtitles {
+		if !hasSubtitleOption(dst.Subtitles, sub) && !hasSubtitleOption(missing, sub) {
+			missing = append(missing, sub)
+		}
+	}
+	if len(missing) > 0 {
+		merged := make([]provider.SubtitleOption, 0, len(dst.Subtitles)+len(missing))
+		merged = append(merged, dst.Subtitles...)
+		merged = append(merged, missing...)
+		dst.Subtitles = merged
+	}
+}
+
+// hasSubtitleOption reports whether options already carries the same
+// caption track (URL plus language).
+func hasSubtitleOption(options []provider.SubtitleOption, candidate provider.SubtitleOption) bool {
+	candidateURL := strings.TrimSpace(candidate.URL)
+	candidateLang := strings.ToLower(strings.TrimSpace(candidate.Language))
+	for _, option := range options {
+		if strings.EqualFold(strings.TrimSpace(option.URL), candidateURL) &&
+			strings.ToLower(strings.TrimSpace(option.Language)) == candidateLang {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldPreferSource reports whether candidate should replace existing as the
+// canonical row for duplicate streams. Lower provider priority index takes
+// precedence, ensuring primary/faster native providers (like anicine) win over fallbacks.
+func (a *sourceAggregator) shouldPreferSource(existing, candidate provider.MediaSource) bool {
+	pCand, hasCand := a.priority[candidate.Resolver]
+	pExist, hasExist := a.priority[existing.Resolver]
+	if hasCand && hasExist && pCand < pExist {
+		return true
+	}
+	return false
+}
+
+// retargetSubtitles updates existing subtitles whose source was replaced by
+// a preferred duplicate provider, keeping their SourceID and SourceURL valid.
+func (a *sourceAggregator) retargetSubtitles(oldID, newID, newURL, newResolver string) {
+	if oldID == "" || newID == "" {
+		return
+	}
+	for i := range a.subs {
+		if a.subs[i].SourceID == oldID {
+			if oldID != newID {
+				oldSubURL := a.subs[i].URL
+				delete(a.seenSubs, oldSubURL+"\x00"+oldID)
+				a.seenSubs[oldSubURL+"\x00"+newID] = struct{}{}
+				a.subs[i].SourceID = newID
+				a.subs[i].SourceURL = newURL
+			}
+			if newResolver != "" {
+				a.subs[i].Resolver = newResolver
+				a.subs[i].Label = fmt.Sprintf("%s (%s)", lang.Name(a.subs[i].Language), a.displayName(newResolver))
+			}
+		}
+	}
 }
 
 // tierKey groups interchangeable mirror rows: same resolver, same
@@ -783,7 +1050,7 @@ func newSourceAggregatorForMode(mode provider.ContentType, providers []provider.
 		mode:        mode,
 		priority:    priority,
 		displayName: displayName,
-		seenSources: make(map[string]struct{}),
+		sourceIndex: make(map[string]int),
 		seenSubs:    make(map[string]struct{}),
 	}
 }
@@ -796,10 +1063,14 @@ func newSourceAggregatorForMode(mode provider.ContentType, providers []provider.
 // their own budget and are never collapsed into each other.
 const maxSourcesPerTier = 3
 
-// add merges one provider batch. Playback sources and subtitles retain their
-// owning source's transport identity so signed or session-bound variants are
-// not collapsed before playback.
+// add merges one provider batch. Independently re-signed copies of the same
+// CDN media collapse into one row, while the kept row's full transport
+// identity still owns its subtitles so playback headers and source matching
+// stay exact.
 func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource) {
+	if a.sourceIndex == nil {
+		a.sourceIndex = make(map[string]int)
+	}
 	// In anime mode: within each provider's batch, hard subs sort before soft subs.
 	if a.mode == provider.ModeAnime {
 		slices.SortStableFunc(batch, func(x, y provider.MediaSource) int {
@@ -817,18 +1088,39 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 	for _, src := range batch {
 		src.Resolver = providerName
 		identity := src.TransportIdentity()
-		if identity != "" {
-			if _, seen := a.seenSources[identity]; !seen && a.tierHasRoom(src) {
-				a.seenSources[identity] = struct{}{}
-				a.sources = append(a.sources, src)
-			}
+		if identity == "" {
+			continue
 		}
+		dedupeKey := sourceDedupeIdentity(src)
+		kept := src
+		if index, ok := a.sourceIndex[dedupeKey]; ok {
+			if a.shouldPreferSource(a.sources[index], src) {
+				old := a.sources[index]
+				oldIdentity := old.TransportIdentity()
+				kept = src
+				mergeDuplicateSource(&kept, old)
+				a.sources[index] = kept
+				a.retargetSubtitles(oldIdentity, kept.TransportIdentity(), kept.URL, src.Resolver)
+			} else {
+				old := a.sources[index]
+				oldIdentity := old.TransportIdentity()
+				mergeDuplicateSource(&a.sources[index], src)
+				kept = a.sources[index]
+				if oldIdentity != kept.TransportIdentity() {
+					a.retargetSubtitles(oldIdentity, kept.TransportIdentity(), kept.URL, kept.Resolver)
+				}
+			}
+		} else if a.tierHasRoom(src) {
+			a.sourceIndex[dedupeKey] = len(a.sources)
+			a.sources = append(a.sources, src)
+		}
+		keptIdentity := kept.TransportIdentity()
 		for _, sub := range src.Subtitles {
 			subURL := strings.TrimSpace(sub.URL)
 			if subURL == "" {
 				continue
 			}
-			key := subURL + "\x00" + identity
+			key := subURL + "\x00" + keptIdentity
 			if _, seen := a.seenSubs[key]; seen {
 				continue
 			}
@@ -839,31 +1131,40 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 				referer = src.Referer
 			}
 			a.subs = append(a.subs, model.SubtitleTrack{
-				Label:     fmt.Sprintf("%s (%s)", lang.Name(subLang), a.displayName(providerName)),
+				Label:     fmt.Sprintf("%s (%s)", lang.Name(subLang), a.displayName(kept.Resolver)),
 				Language:  subLang,
 				URL:       subURL,
 				Referer:   referer,
-				SourceURL: src.URL,
-				SourceID:  identity,
+				SourceURL: kept.URL,
+				SourceID:  keptIdentity,
 				Default:   sub.Default,
-				Resolver:  providerName,
+				Resolver:  kept.Resolver,
 			})
 		}
 	}
 }
 
-// sort orders sources by transport first (challenged hosts last, always),
-// then the routes-table preference for the mode (e.g. Anikoto Vidstream-2
-// for anime, Movy.sx for movies/tv/cartoon), then demoted backends below
-// playable-now sources, then by highest quality first, breaking ties by
-// provider priority so earlier-registered providers surface before
-// fallbacks.
 // sort preserves the arrival order of playable sources across providers,
-// pushing only anti-bot challenged hosts to the bottom.
+// pushing only anti-bot challenged hosts to the bottom. It reindexes the
+// dedupe map because sorting reorders the backing slice.
 func (a *sourceAggregator) sort() {
 	slices.SortStableFunc(a.sources, func(si, sj provider.MediaSource) int {
 		return challengedRank(si) - challengedRank(sj)
 	})
+	a.reindexSources()
+}
+
+// reindexSources rebuilds the dedupe map after sorting. add and snapshot both
+// run under the service lock, but sort reorders the slice, so stale indices
+// would merge metadata into the wrong source on the next provider batch.
+func (a *sourceAggregator) reindexSources() {
+	if a.sourceIndex == nil {
+		a.sourceIndex = make(map[string]int)
+	}
+	clear(a.sourceIndex)
+	for i := range a.sources {
+		a.sourceIndex[sourceDedupeIdentity(a.sources[i])] = i
+	}
 }
 
 // challengedRank orders challenged-host sources below every playable-now

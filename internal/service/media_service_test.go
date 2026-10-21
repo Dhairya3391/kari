@@ -19,6 +19,7 @@ type stubProvider struct {
 	name    string
 	mode    provider.ContentType
 	results []provider.SearchResult
+	sources []provider.MediaSource
 	err     error
 }
 
@@ -33,6 +34,9 @@ func (s *stubProvider) FetchEpisodes(ctx context.Context, series provider.Search
 	return nil, errors.New("not implemented")
 }
 func (s *stubProvider) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
+	if len(s.sources) > 0 || s.err != nil {
+		return s.sources, s.err
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -171,6 +175,197 @@ func TestSourceAggregatorDedupesSourcesAndSubtitles(t *testing.T) {
 	}
 	if agg.subs[0].Resolver != "second" {
 		t.Fatalf("subtitle resolver not stamped: %+v", agg.subs[0])
+	}
+}
+
+func TestSourceAggregatorMergesResignedSourceVariants(t *testing.T) {
+	const (
+		playlist = "https://fetch.example/anime/abc/master.m3u8"
+		subURL   = "https://subs.example/eng-2.vtt"
+	)
+	subs := []provider.SubtitleOption{{URL: subURL, Language: "en"}}
+	cases := []struct {
+		name             string
+		firstProvider    string
+		secondProvider   string
+		first            provider.MediaSource
+		second           provider.MediaSource
+		wantResolver     string
+		wantURL          string
+		wantQualityLabel string
+		wantQuality      int
+		wantSubType      string
+	}{
+		{
+			name:           "later soft metadata fills earlier row",
+			firstProvider:  "anikoto",
+			secondProvider: "anivault",
+			first: provider.MediaSource{
+				URL: playlist + "?token=anikoto", Quality: "1080p (Vidstream-2)",
+				Referer: "https://megaplay.buzz/", Subtitles: subs,
+			},
+			second: provider.MediaSource{
+				URL: playlist + "?token=anivault", Quality: "Auto (HD-1)",
+				Referer: "https://megaplay.buzz/", SubType: provider.SubTypeSoft, Subtitles: subs,
+			},
+			wantResolver:     "anikoto",
+			wantURL:          playlist + "?token=anikoto",
+			wantQualityLabel: "1080p (Vidstream-2)",
+			wantQuality:      1080,
+			wantSubType:      provider.SubTypeSoft,
+		},
+		{
+			name:           "anikoto replaces earlier duplicate provider",
+			firstProvider:  "anivault",
+			secondProvider: "anikoto",
+			first: provider.MediaSource{
+				URL: playlist + "?token=anivault", Quality: "Auto (HD-1)",
+				Referer: "https://megaplay.buzz/", SubType: provider.SubTypeSoft, Subtitles: subs,
+			},
+			second: provider.MediaSource{
+				URL: playlist + "?token=anikoto", Quality: "1080p (Vidstream-2)",
+				Referer: "https://megaplay.buzz/", SubType: provider.SubTypeSoft, Subtitles: subs,
+			},
+			wantResolver:     "anikoto",
+			wantURL:          playlist + "?token=anikoto",
+			wantQualityLabel: "1080p (Vidstream-2)",
+			wantQuality:      1080,
+			wantSubType:      provider.SubTypeSoft,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agg := newSourceAggregatorForMode(provider.ModeAnime, []provider.Provider{
+				&stubProvider{name: "anikoto", mode: provider.ModeAnime},
+				&stubProvider{name: "anivault", mode: provider.ModeAnime},
+			}, func(n string) string { return n })
+			agg.add(tc.firstProvider, []provider.MediaSource{tc.first})
+			agg.add(tc.secondProvider, []provider.MediaSource{tc.second})
+
+			if len(agg.sources) != 1 {
+				t.Fatalf("signed variants = %d sources, want 1: %+v", len(agg.sources), agg.sources)
+			}
+			kept := agg.sources[0]
+			if kept.Resolver != tc.wantResolver {
+				t.Errorf("kept resolver = %q, want %q", kept.Resolver, tc.wantResolver)
+			}
+			if kept.URL != tc.wantURL {
+				t.Errorf("kept URL = %q, want %q", kept.URL, tc.wantURL)
+			}
+			if kept.Quality != tc.wantQualityLabel {
+				t.Errorf("merged quality label = %q, want %q", kept.Quality, tc.wantQualityLabel)
+			}
+			if SourceQuality(kept.Quality) != tc.wantQuality {
+				t.Errorf("merged quality = %q (%d), want %d", kept.Quality, SourceQuality(kept.Quality), tc.wantQuality)
+			}
+			if kept.SubType != tc.wantSubType {
+				t.Errorf("merged subtype = %q, want %q", kept.SubType, tc.wantSubType)
+			}
+			if len(kept.Subtitles) != 1 {
+				t.Errorf("merged subtitles = %d, want 1", len(kept.Subtitles))
+			}
+			if len(agg.subs) != 1 {
+				t.Fatalf("deduped subtitles = %d, want 1: %+v", len(agg.subs), agg.subs)
+			}
+			if agg.subs[0].SourceID != kept.TransportIdentity() {
+				t.Errorf("subtitle SourceID does not match kept source: %q != %q", agg.subs[0].SourceID, kept.TransportIdentity())
+			}
+			if agg.subs[0].SourceURL != kept.URL {
+				t.Errorf("subtitle SourceURL = %q, want %q", agg.subs[0].SourceURL, kept.URL)
+			}
+		})
+	}
+}
+
+func TestSourceAggregatorMergesUserAgentOnlyVariants(t *testing.T) {
+	agg := newSourceAggregatorForMode(provider.ModeAnime, nil, func(n string) string { return n })
+	const playlist = "https://fetch.example/anime/abc/master.m3u8"
+	agg.add("anivault", []provider.MediaSource{{
+		URL:     playlist + "?token=anivault",
+		Referer: "https://megaplay.buzz/",
+	}})
+	agg.add("anikoto", []provider.MediaSource{{
+		URL:       playlist + "?token=anikoto",
+		Referer:   "https://megaplay.buzz/",
+		UserAgent: "browser",
+	}})
+
+	if len(agg.sources) != 1 {
+		t.Fatalf("UA-only variants = %d sources, want 1: %+v", len(agg.sources), agg.sources)
+	}
+	if agg.sources[0].UserAgent != "browser" {
+		t.Errorf("merged UserAgent = %q, want the explicit browser UA", agg.sources[0].UserAgent)
+	}
+}
+
+func TestSourceAggregatorKeepsDistinctQuerySemantics(t *testing.T) {
+	agg := newSourceAggregatorForMode(provider.ModeAnime, nil, func(n string) string { return n })
+	agg.add("pengu", []provider.MediaSource{
+		{URL: "https://cdn.example.com/master.m3u8?token=one&quality=1080", Quality: "1080p"},
+		{URL: "https://cdn.example.com/master.m3u8?token=two&quality=720", Quality: "720p"},
+	})
+	if len(agg.sources) != 2 {
+		t.Fatalf("non-auth query params must stay significant, got %d: %+v", len(agg.sources), agg.sources)
+	}
+}
+
+func TestSourceAggregatorReindexesAfterSort(t *testing.T) {
+	agg := newSourceAggregatorForMode(provider.ModeAnime, []provider.Provider{
+		&stubProvider{name: "anikoto", mode: provider.ModeAnime},
+		&stubProvider{name: "anivault", mode: provider.ModeAnime},
+	}, func(n string) string { return n })
+	const playable = "https://fetch.example/anime/abc/master.m3u8"
+	agg.add("anivault", []provider.MediaSource{
+		{URL: "https://vault-01.uwucdn.top/stream/01/uwu.m3u8", Quality: "1080p", Referer: "https://one.example/"},
+		{URL: playable + "?token=one", Quality: "Auto (HD-1)", Referer: "https://two.example/"},
+	})
+	agg.sort()
+	if agg.sources[0].URL != playable+"?token=one" {
+		t.Fatalf("sort did not move playable source first: %+v", agg.sources)
+	}
+
+	agg.add("anikoto", []provider.MediaSource{{
+		URL: playable + "?token=two", Quality: "1080p (Vidstream-2)", Referer: "https://two.example/",
+	}})
+	if len(agg.sources) != 2 {
+		t.Fatalf("sources = %d, want 2 after merging duplicate", len(agg.sources))
+	}
+	if agg.sources[0].URL != playable+"?token=two" || agg.sources[0].Resolver != "anikoto" {
+		t.Errorf("anikoto must replace duplicate at index 0 after sort: %+v", agg.sources)
+	}
+	if agg.sources[1].URL != "https://vault-01.uwucdn.top/stream/01/uwu.m3u8" {
+		t.Errorf("challenged source was modified: %+v", agg.sources[1])
+	}
+}
+
+func TestCanonicalSourceURL(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "strips volatile signing params",
+			raw:  "https://CDN.example.com/a/master.m3u8?Token=abc&Expires=123&sig=xyz",
+			want: "https://cdn.example.com/a/master.m3u8",
+		},
+		{
+			name: "keeps and sorts non-auth params",
+			raw:  "https://cdn.example.com/a/master.m3u8?b=2&token=abc&a=1",
+			want: "https://cdn.example.com/a/master.m3u8?a=1&b=2",
+		},
+		{
+			name: "trims trailing slash",
+			raw:  "https://cdn.example.com/a/",
+			want: "https://cdn.example.com/a",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := canonicalSourceURL(tt.raw); got != tt.want {
+				t.Errorf("canonicalSourceURL(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -631,5 +826,88 @@ func TestMediaServiceSearchAndEpisodesCaching(t *testing.T) {
 	}
 	if p.episodesCount != 1 {
 		t.Fatalf("expected episodesCount=1 on cache hit, got %d", p.episodesCount)
+	}
+}
+
+func TestMediaServiceSearchFallsBackToDisabledProviders(t *testing.T) {
+	enabled := &stubProvider{name: "enabled_prov", mode: provider.ModeAnime, err: provider.ErrNoResults}
+	disabled := &stubProvider{name: "disabled_prov", mode: provider.ModeAnime, results: []provider.SearchResult{
+		{Title: "Fallback Anime", ID: "100", MediaType: provider.MediaTypeAnime},
+	}}
+
+	svc := NewMediaService(newTestRegistry(enabled, disabled))
+	svc.SetDisabledProviders([]string{"disabled_prov"})
+
+	if !svc.IsProviderDisabled(provider.ModeAnime, "disabled_prov") {
+		t.Fatal("expected disabled_prov to be disabled")
+	}
+	if svc.IsProviderDisabled(provider.ModeAnime, "enabled_prov") {
+		t.Fatal("expected enabled_prov to be enabled")
+	}
+
+	results, _, _, err := svc.Search(context.Background(), provider.ModeAnime, "query")
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Provider != "disabled_prov" {
+		t.Fatalf("expected 1 result from disabled fallback, got %+v", results)
+	}
+}
+
+func TestMediaServiceSearchUsesEnabledProvidersWhenAvailable(t *testing.T) {
+	enabled := &stubProvider{name: "enabled_prov", mode: provider.ModeAnime, results: []provider.SearchResult{
+		{Title: "Primary Anime", ID: "200", MediaType: provider.MediaTypeAnime},
+	}}
+	disabled := &stubProvider{name: "disabled_prov", mode: provider.ModeAnime, results: []provider.SearchResult{
+		{Title: "Fallback Anime", ID: "100", MediaType: provider.MediaTypeAnime},
+	}}
+
+	svc := NewMediaService(newTestRegistry(enabled, disabled))
+	svc.SetDisabledProviders([]string{"disabled_prov"})
+
+	results, _, _, err := svc.Search(context.Background(), provider.ModeAnime, "query")
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Provider != "enabled_prov" {
+		t.Fatalf("expected 1 result from enabled provider only, got %+v", results)
+	}
+}
+
+func TestMediaServiceResolveFallsBackToDisabledProviders(t *testing.T) {
+	enabled := &stubProvider{name: "enabled_prov", mode: provider.ModeAnime, err: provider.ErrNoSources}
+	disabled := &stubProvider{
+		name: "disabled_prov", mode: provider.ModeAnime,
+		sources: []provider.MediaSource{
+			{URL: "https://cdn.example.com/fallback.m3u8", Quality: "1080p"},
+		},
+	}
+
+	svc := NewMediaService(newTestRegistry(enabled, disabled))
+	svc.SetDisabledProviders([]string{"disabled_prov"})
+
+	series := provider.SearchResult{Title: "Anime", ID: "100", Provider: "enabled_prov"}
+	episode := provider.Episode{Episode: 1, Title: "Ep 1"}
+
+	resolved, err := svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil, ResolveOptions{})
+	if err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if len(resolved.Playback) != 1 || resolved.Playback[0].Resolver != "disabled_prov" {
+		t.Fatalf("expected playback from disabled fallback, got %+v", resolved.Playback)
+	}
+}
+
+func TestMediaServiceModeScopedDisabledProvider(t *testing.T) {
+	prov := &stubProvider{name: "shared_prov", mode: provider.ModeAnime}
+	svc := NewMediaService(newTestRegistry(prov))
+
+	svc.SetDisabledProviders([]string{"anime:shared_prov"})
+
+	if !svc.IsProviderDisabled(provider.ModeAnime, "shared_prov") {
+		t.Fatal("expected shared_prov to be disabled for anime")
+	}
+	if svc.IsProviderDisabled(provider.ModeMovies, "shared_prov") {
+		t.Fatal("expected shared_prov to remain enabled for movies")
 	}
 }

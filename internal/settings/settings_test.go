@@ -42,6 +42,21 @@ func TestDisabledModeSet(t *testing.T) {
 	}
 }
 
+func TestDisabledProviderSet(t *testing.T) {
+	var nilData *Data
+	if set := nilData.DisabledProviderSet(); len(set) != 0 {
+		t.Errorf("expected empty set for nil Data, got %+v", set)
+	}
+
+	d := &Data{
+		DisabledProviders: []string{"  PENGU  ", "AniVault", "", "   ", "anime:anikoto"},
+	}
+	set := d.DisabledProviderSet()
+	if !set["pengu"] || !set["anivault"] || !set["anime:anikoto"] || set[""] {
+		t.Errorf("unexpected disabled provider set: %+v", set)
+	}
+}
+
 func TestSettingsJsonRoundtripBackwardCompatible(t *testing.T) {
 	rawJson := `{"quality_mode": 1, "accent_color": "#BB9AF7"}`
 	var d Data
@@ -105,6 +120,7 @@ func TestAllSettingsFieldsPresentInSerializedJSON(t *testing.T) {
 		LastMode:              "anime",
 		Transitions:           &transitions,
 		StartupSearchActive:   &startupSearchActive,
+		AutoUpdate:            true,
 	}
 
 	bytes, err := json.Marshal(data)
@@ -135,6 +151,7 @@ func TestAllSettingsFieldsPresentInSerializedJSON(t *testing.T) {
 		"last_mode",
 		"transitions",
 		"startup_search_active",
+		"auto_update",
 	}
 
 	for _, key := range expectedKeys {

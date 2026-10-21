@@ -7,6 +7,7 @@ import (
 	"kari/internal/provider/anicine"
 	"kari/internal/provider/anikoto"
 	"kari/internal/provider/anipm"
+	"kari/internal/provider/anivault"
 	"kari/internal/provider/cinecat"
 	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/miruro"
@@ -45,6 +46,12 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "anipm",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return anipm.NewClient()
+		},
+	},
+	{
+		ID: "anivault",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return anivault.NewClient()
 		},
 	},
 	{

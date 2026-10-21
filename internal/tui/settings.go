@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"kari/internal/provider"
 )
 
 // SettingsCategory represents one of the settings tabs.
@@ -15,6 +17,7 @@ const (
 	CategoryLanguages
 	CategoryAnime
 	CategoryModes
+	CategoryProviders
 	CategoryAccounts
 	CategoryInterface
 )
@@ -24,8 +27,20 @@ var SettingsCategoryNames = []string{
 	"Languages",
 	"Anime",
 	"Modes",
+	"Providers",
 	"Accounts",
 	"Interface",
+}
+
+// ProviderRow represents one provider toggle row in Settings > Providers.
+type ProviderRow struct {
+	Section   string
+	Mode      provider.ContentType
+	ID        string
+	Name      string
+	Key       string
+	Enabled   bool
+	Available bool
 }
 
 // ModeRow represents one content mode row in Settings > Modes.
@@ -71,6 +86,8 @@ type SettingsData struct {
 	// Modes values
 	DefaultModeName string
 	ModesRows       []ModeRow
+	// Providers values
+	ProviderRows []ProviderRow
 	// Accounts values
 	AniListConnected  bool
 	AniListAuthActive bool
@@ -90,6 +107,7 @@ type SettingsData struct {
 	AccentName          string // "Auto (per mode)", "Purple", etc.
 	Transitions         bool   // on / off
 	StartupSearchActive bool   // on / off
+	AutoUpdate          bool   // on / off
 }
 
 // RenderSettingsScreen renders the 2-pane Settings screen per KARI_TUI_SPEC §4.7.
@@ -199,6 +217,35 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		} else {
 			desc = "The order here is the order tab / shift+tab cycles modes on Search. [←]/[→] reorders, [Space]/[Enter] toggles."
 		}
+	case CategoryProviders:
+		var lastSection string
+		focusedLine := -1
+		for i, pr := range data.ProviderRows {
+			if pr.Section != lastSection {
+				if lastSection != "" {
+					rows = append(rows, "")
+				}
+				lastSection = pr.Section
+				rows = append(rows, st.Dim.Render("── "+strings.ToUpper(pr.Section)+" "+strings.Repeat("─", max(0, min(width-8, 38)-len(pr.Section)))))
+			}
+			if i == data.FocusedRowIndex {
+				focusedLine = len(rows)
+			}
+			isFocused := i == data.FocusedRowIndex
+			rows = append(rows, renderProviderSettingRow(pr, isFocused, width, st))
+		}
+		desc = "[Space]/[Enter] toggles provider for this section. Disabled providers are queried as fallback."
+		if data.Height > 0 {
+			maxLines := max(10, data.Height-6)
+			if len(rows) > maxLines && focusedLine >= 0 {
+				start := max(0, focusedLine-maxLines/2)
+				end := min(len(rows), start+maxLines)
+				if end-start < maxLines {
+					start = max(0, end-maxLines)
+				}
+				rows = rows[start:end]
+			}
+		}
 	case CategoryAccounts:
 		// 0: AniList, 1: Trakt, 2: Startup sync.
 		rows = append(rows, renderAccountRow("AniList", data.AniListConnected, data.FocusedRowIndex == 0, width, st))
@@ -231,11 +278,12 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		}
 
 	case CategoryInterface:
-		// 0: Poster artwork, 1: Accent, 2: Transitions, 3: Startup search active
+		// 0: Poster artwork, 1: Accent, 2: Transitions, 3: Startup search active, 4: Auto update
 		rows = append(rows, renderSettingRow("Poster artwork", formatVal(boolOnOff(data.PosterArtwork), data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))
 		rows = append(rows, renderSettingRow("Accent", formatVal(data.AccentName, data.FocusedRowIndex == 1, st), data.FocusedRowIndex == 1, width, st))
 		rows = append(rows, renderSettingRow("Transitions", formatVal(boolOnOff(data.Transitions), data.FocusedRowIndex == 2, st), data.FocusedRowIndex == 2, width, st))
 		rows = append(rows, renderSettingRow("Startup search active", formatVal(boolOnOff(data.StartupSearchActive), data.FocusedRowIndex == 3, st), data.FocusedRowIndex == 3, width, st))
+		rows = append(rows, renderSettingRow("Auto update", formatVal(boolOnOff(data.AutoUpdate), data.FocusedRowIndex == 4, st), data.FocusedRowIndex == 4, width, st))
 
 		switch data.FocusedRowIndex {
 		case 0:
@@ -246,6 +294,8 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 			desc = "Smooth color transitions when changing themes or content modes."
 		case 3:
 			desc = "Start Kari with the search input focused. When off, start in control mode to use shortcuts directly."
+		case 4:
+			desc = "Automatically check for and apply updates in the background on startup."
 		}
 	}
 
@@ -281,6 +331,37 @@ func renderModeSettingRow(row ModeRow, isFocused bool, width int, st Styles) str
 			note = "unavailable"
 		}
 		statusStr = st.Dim.Render("unavailable · " + note)
+	} else if row.Enabled {
+		statusStr = st.Current.Render("on")
+	} else {
+		statusStr = st.Dim.Render("off")
+	}
+
+	labelPart := fmt.Sprintf("%s %s", dot, namePadded)
+	return fmt.Sprintf("%s%s  %s", cursor, labelPart, statusStr)
+}
+
+func renderProviderSettingRow(row ProviderRow, isFocused bool, width int, st Styles) string {
+	cursor := "  "
+	if isFocused {
+		cursor = st.Cursor.Render("▌ ")
+	}
+
+	dot := st.Dim.Render("○")
+	if row.Available {
+		dot = st.Ok.Render("●")
+	}
+
+	labelW := 26
+	nameTrunc := truncate(row.Name, labelW)
+	namePadded := nameTrunc + strings.Repeat(" ", max(0, labelW-lipgloss.Width(nameTrunc)))
+	if isFocused {
+		namePadded = st.Current.Render(nameTrunc) + strings.Repeat(" ", max(0, labelW-lipgloss.Width(nameTrunc)))
+	}
+
+	var statusStr string
+	if !row.Available {
+		statusStr = st.Dim.Render("unavailable")
 	} else if row.Enabled {
 		statusStr = st.Current.Render("on")
 	} else {

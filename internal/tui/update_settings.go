@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
-
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"slices"
+	"strings"
+	"time"
 
 	"kari/internal/history"
 	"kari/internal/lang"
@@ -127,15 +127,15 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 3. Category & Row Navigation
 		switch msg.String() {
 		case "tab":
-			m.settingsCategory = (m.settingsCategory + 1) % 6
+			m.settingsCategory = (m.settingsCategory + 1) % SettingsCategory(len(SettingsCategoryNames))
 			m.settingsIndex = 0
 			return m, nil
 		case "shift+tab":
-			m.settingsCategory = (m.settingsCategory - 1 + 6) % 6
+			m.settingsCategory = (m.settingsCategory - 1 + SettingsCategory(len(SettingsCategoryNames))) % SettingsCategory(len(SettingsCategoryNames))
 			m.settingsIndex = 0
 			return m, nil
 
-		// Direct category jumps via 1-6 keys
+		// Direct category jumps via 1-7 keys
 		case "1":
 			m.settingsCategory = CategoryPlayback
 			m.settingsIndex = 0
@@ -153,14 +153,17 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.settingsIndex = 0
 			return m, nil
 		case "5":
-			m.settingsCategory = CategoryAccounts
+			m.settingsCategory = CategoryProviders
 			m.settingsIndex = 0
 			return m, nil
 		case "6":
+			m.settingsCategory = CategoryAccounts
+			m.settingsIndex = 0
+			return m, nil
+		case "7":
 			m.settingsCategory = CategoryInterface
 			m.settingsIndex = 0
 			return m, nil
-
 		case "K", "shift+up":
 			if m.settingsCategory == CategoryModes && m.settingsIndex > 0 {
 				return m.reorderMode(-1)
@@ -183,15 +186,20 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "left", "h":
+			if m.settingsCategory == CategoryProviders {
+				return m.toggleProviderAtIndex(m.settingsIndex)
+			}
 			m.cycleCurrentSetting(-1)
 			m.saveSettings()
 			return m, m.triggerSubtitleSync()
 
 		case "right", "l":
+			if m.settingsCategory == CategoryProviders {
+				return m.toggleProviderAtIndex(m.settingsIndex)
+			}
 			m.cycleCurrentSetting(1)
 			m.saveSettings()
 			return m, m.triggerSubtitleSync()
-
 		case "enter", "space", " ":
 			if m.settingsCategory == CategoryModes {
 				if m.settingsIndex == 0 {
@@ -199,6 +207,9 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				return m.toggleModeAtIndex(m.settingsIndex - 1)
+			}
+			if m.settingsCategory == CategoryProviders {
+				return m.toggleProviderAtIndex(m.settingsIndex)
 			}
 			if m.settingsCategory == CategoryLanguages && m.settingsIndex == 0 {
 				// Open Audio language picker
@@ -276,10 +287,12 @@ func (m *modelImpl) maxRowsForCategory(cat SettingsCategory) int {
 		return 7
 	case CategoryModes:
 		return len(m.configuredModes) + 1
+	case CategoryProviders:
+		return len(m.providerRows())
 	case CategoryAccounts:
 		return 4
 	case CategoryInterface:
-		return 4
+		return 5
 	default:
 		return 1
 	}
@@ -364,6 +377,8 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.transitions = !m.transitions
 		case 3: // Startup search active
 			m.startupSearchActive = !m.startupSearchActive
+		case 4: // Auto update
+			m.autoUpdate = !m.autoUpdate
 		}
 	}
 }
@@ -813,4 +828,94 @@ func (m *modelImpl) effectiveModesList() []provider.ContentType {
 
 func (m *modelImpl) updateEffectiveModes() {
 	m.modes = m.effectiveModesList()
+}
+
+var providerSections = []struct {
+	Section string
+	Mode    provider.ContentType
+}{
+	{Section: "Anime", Mode: provider.ModeAnime},
+	{Section: "Movies", Mode: provider.ModeMovies},
+	{Section: "TV Shows", Mode: provider.ModeTV},
+	{Section: "Manga", Mode: provider.ModeManga},
+}
+
+func (m *modelImpl) isProviderDisabledKey(mode provider.ContentType, id string) bool {
+	if m.disabledProviders == nil {
+		return false
+	}
+	p := strings.ToLower(strings.TrimSpace(id))
+	if m.disabledProviders[p] {
+		return true
+	}
+	key := string(mode) + ":" + p
+	return m.disabledProviders[key]
+}
+
+func (m *modelImpl) providerRows() []ProviderRow {
+	if m.registry == nil {
+		return nil
+	}
+	var rows []ProviderRow
+	for _, sec := range providerSections {
+		providers := m.registry.ProvidersForMode(sec.Mode)
+		for _, p := range providers {
+			id := p.Name()
+			name := m.registry.DisplayName(id)
+			key := string(sec.Mode) + ":" + strings.ToLower(id)
+			avail := true
+			if id == "jellyfin" && !m.isModeAvailable("jellyfin") {
+				avail = false
+			}
+			rows = append(rows, ProviderRow{
+				Section:   sec.Section,
+				Mode:      sec.Mode,
+				ID:        id,
+				Name:      name,
+				Key:       key,
+				Enabled:   !m.isProviderDisabledKey(sec.Mode, id),
+				Available: avail,
+			})
+		}
+	}
+	return rows
+}
+
+func (m *modelImpl) toggleProviderAtIndex(index int) (tea.Model, tea.Cmd) {
+	rows := m.providerRows()
+	if index < 0 || index >= len(rows) {
+		return m, nil
+	}
+	row := rows[index]
+	if !row.Available {
+		return m, nil
+	}
+	key := strings.ToLower(strings.TrimSpace(row.Key))
+	id := strings.ToLower(strings.TrimSpace(row.ID))
+	if m.disabledProviders == nil {
+		m.disabledProviders = make(map[string]bool)
+	}
+	if m.isProviderDisabledKey(row.Mode, id) {
+		delete(m.disabledProviders, key)
+		delete(m.disabledProviders, id)
+	} else {
+		m.disabledProviders[key] = true
+	}
+	m.syncDisabledProvidersToService()
+	m.saveSettings()
+	return m, nil
+}
+
+func (m *modelImpl) syncDisabledProvidersToService() {
+	if m.mediaService == nil {
+		return
+	}
+	var list []string
+	for p, disabled := range m.disabledProviders {
+		if disabled {
+			list = append(list, p)
+		}
+	}
+	slices.Sort(list)
+	m.mediaService.SetDisabledProviders(list)
 }

@@ -29,6 +29,8 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	m.defaultMode = "movies"
 	m.transitions = false
 	m.startupSearchActive = false
+	m.disabledProviders = map[string]bool{"pengu": true, "anivault": true}
+	m.autoUpdate = true
 
 	m.saveSettings()
 
@@ -70,6 +72,13 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	}
 	if saved.StartupSearchActive == nil || *saved.StartupSearchActive {
 		t.Errorf("saved.StartupSearchActive = %v, want false", saved.StartupSearchActive)
+	}
+	if !saved.AutoUpdate {
+		t.Errorf("saved.AutoUpdate = false, want true")
+	}
+	wantDisabledProviders := []string{"anivault", "pengu"}
+	if !reflect.DeepEqual(saved.DisabledProviders, wantDisabledProviders) {
+		t.Errorf("saved.DisabledProviders = %v, want %v", saved.DisabledProviders, wantDisabledProviders)
 	}
 }
 
@@ -334,5 +343,38 @@ func TestStartupSearchActiveNewModel(t *testing.T) {
 	}
 	if !mActive.queryInput.Focused() {
 		t.Error("expected queryInput to be focused when startupSearchActive is true")
+	}
+}
+
+func TestProviderToggleInSettingsPersists(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	reg := &provider.Registry{}
+	reg.Register(&emptyQueryStubProvider{name: "first_prov", modes: []provider.Mode{{Name: provider.ModeAnime, Priority: 1}}})
+	reg.Register(&emptyQueryStubProvider{name: "second_prov", modes: []provider.Mode{{Name: provider.ModeAnime, Priority: 1}}})
+
+	m := newTestSwitchModel()
+	m.registry = reg
+	m.disabledProviders = make(map[string]bool)
+
+	// Toggle first provider off
+	m.toggleProviderAtIndex(0)
+	if !m.isProviderDisabledKey(provider.ModeAnime, "first_prov") {
+		t.Fatal("expected first_prov to be disabled for anime")
+	}
+
+	saved := settings.Load()
+	if saved == nil || len(saved.DisabledProviders) != 1 || saved.DisabledProviders[0] != "anime:first_prov" {
+		t.Fatalf("saved.DisabledProviders = %v, want ['anime:first_prov']", saved.DisabledProviders)
+	}
+
+	// Toggle first provider back on
+	m.toggleProviderAtIndex(0)
+	if m.isProviderDisabledKey(provider.ModeAnime, "first_prov") {
+		t.Fatal("expected first_prov to be enabled for anime")
+	}
+
+	saved2 := settings.Load()
+	if saved2 == nil || len(saved2.DisabledProviders) != 0 {
+		t.Fatalf("saved2.DisabledProviders = %v, want empty", saved2.DisabledProviders)
 	}
 }

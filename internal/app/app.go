@@ -23,6 +23,7 @@ import (
 	"kari/internal/presence"
 	"kari/internal/provider/defaults"
 	"kari/internal/scrobble"
+	"kari/internal/selfupdate"
 	"kari/internal/service"
 	"kari/internal/settings"
 	"kari/internal/skipdb"
@@ -72,6 +73,7 @@ func Run() error {
 	}
 	query := strings.TrimSpace(strings.Join(args, " "))
 	logging.Info("starting app", "query", query)
+	selfupdate.CleanupOldExecutables()
 	if p := logging.Path(); p != "" {
 		logging.Info("log file ready", "path", p)
 	}
@@ -138,6 +140,9 @@ func Run() error {
 		return err
 	}
 	mediaService := service.NewMediaService(registry)
+	if savedSettings != nil && len(savedSettings.DisabledProviders) > 0 {
+		mediaService.SetDisabledProviders(savedSettings.DisabledProviders)
+	}
 	mangaService := service.NewMangaService(registry)
 	mangaClient := manga.NewClient()
 	players := player.NewRegistry(cfg.PreferredPlayer, skipClients, skipSettings)
