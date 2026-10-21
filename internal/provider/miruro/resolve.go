@@ -371,14 +371,16 @@ func serverSources(pe providerEntry) []provider.MediaSource {
 				continue
 			}
 			quality := kit.TagQuality(kit.QualityLabel(st.quality, typ), srv.server, "")
+			suppressOrigin := strings.Contains(strings.ToLower(srv.referer), "megaplay.buzz")
 			out = append(out, provider.MediaSource{
-				URL:       st.url,
-				Quality:   quality,
-				Referer:   strings.TrimSpace(srv.referer),
-				Type:      typ,
-				Subtitles: subs,
-				SubType:   subType,
-				ExtraArgs: demuxerQuirk(st.url, typ),
+				URL:            st.url,
+				Quality:        quality,
+				Referer:        strings.TrimSpace(srv.referer),
+				Type:           typ,
+				Subtitles:      subs,
+				SubType:        subType,
+				ExtraArgs:      demuxerQuirk(st.url, typ),
+				SuppressOrigin: suppressOrigin,
 			})
 		}
 	}

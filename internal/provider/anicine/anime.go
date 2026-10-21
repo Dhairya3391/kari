@@ -165,6 +165,7 @@ func (c *Client) resolveMegaplayEmbed(ctx context.Context, embedURL, mediaID str
 		Referer:   parsed.Scheme + "://" + parsed.Host + "/",
 		Type:      provider.SourceTypeHLS,
 		UserAgent: config.DesktopUserAgent,
+		SuppressOrigin: true,
 		Subtitles: subs,
 	}}, nil
 }
