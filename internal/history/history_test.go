@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestStore_ConcurrentMutationsRace exercises Upsert/Delete concurrently
@@ -206,4 +207,139 @@ func TestStore_MangaMigration(t *testing.T) {
 	if _, err := os.Stat(bakPath); os.IsNotExist(err) {
 		t.Error("expected history.json.bak to be created on first migration")
 	}
+}
+
+// TestBuildGroups_RewatchScenarios confirms that when a completed series is rewatched,
+// BuildGroups identifies the recently rewatched episode as the continuation point rather
+// than jumping to the highest completed episode number.
+func TestBuildGroups_RewatchScenarios(t *testing.T) {
+	t0 := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	t1 := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("CompletedRewatchAdvancesFromRewatchedEpisode", func(t *testing.T) {
+		// User finished eps 1..12 at t0
+		var entries []Entry
+		for ep := 1; ep <= 12; ep++ {
+			entries = append(entries, Entry{
+				Key:       EntryKey{Title: "Frieren", Mode: "anime", MediaType: "tv", Season: 1, Episode: ep},
+				Title:     "Frieren",
+				Mode:      "anime",
+				MediaType: "tv",
+				Season:    1,
+				Episode:   ep,
+				Complete:  true,
+				WatchedAt: t0.Add(time.Duration(ep) * time.Hour),
+			})
+		}
+		// User now finishes episode 1 again on rewatch at t1
+		entries = append(entries, Entry{
+			Key:       EntryKey{Title: "Frieren", Mode: "anime", MediaType: "tv", Season: 1, Episode: 1},
+			Title:     "Frieren",
+			Mode:      "anime",
+			MediaType: "tv",
+			Season:    1,
+			Episode:   1,
+			Complete:  true,
+			WatchedAt: t1,
+		})
+
+		groups := BuildGroups(entries)
+		if len(groups) != 1 {
+			t.Fatalf("expected 1 group, got %d", len(groups))
+		}
+		group := groups[0]
+		if group.ContinueEntry.Episode != 1 {
+			t.Errorf("ContinueEntry.Episode = %d, want 1", group.ContinueEntry.Episode)
+		}
+		if group.FarthestComplete.Episode != 1 {
+			t.Errorf("FarthestComplete.Episode = %d, want 1 (so next episode resolves to 2)", group.FarthestComplete.Episode)
+		}
+	})
+
+	t.Run("IncompleteRewatchPreservesIncompleteProgress", func(t *testing.T) {
+		// User finished eps 1..12 at t0
+		var entries []Entry
+		for ep := 1; ep <= 12; ep++ {
+			entries = append(entries, Entry{
+				Key:       EntryKey{Title: "Frieren", Mode: "anime", MediaType: "tv", Season: 1, Episode: ep},
+				Title:     "Frieren",
+				Mode:      "anime",
+				MediaType: "tv",
+				Season:    1,
+				Episode:   ep,
+				Complete:  true,
+				WatchedAt: t0.Add(time.Duration(ep) * time.Hour),
+			})
+		}
+		// User starts rewatching episode 1, currently at 50%
+		entries = append(entries, Entry{
+			Key:             EntryKey{Title: "Frieren", Mode: "anime", MediaType: "tv", Season: 1, Episode: 1},
+			Title:           "Frieren",
+			Mode:            "anime",
+			MediaType:       "tv",
+			Season:          1,
+			Episode:         1,
+			Complete:        false,
+			PositionSecs:    600,
+			DurationSecs:    1200,
+			PercentComplete: 0.5,
+			WatchedAt:       t1,
+		})
+
+		groups := BuildGroups(entries)
+		if len(groups) != 1 {
+			t.Fatalf("expected 1 group, got %d", len(groups))
+		}
+		group := groups[0]
+		if !group.HasIncomplete {
+			t.Errorf("expected HasIncomplete = true for active rewatch")
+		}
+		if group.ContinueEntry.Episode != 1 {
+			t.Errorf("ContinueEntry.Episode = %d, want 1", group.ContinueEntry.Episode)
+		}
+	})
+
+	t.Run("StaleIncompleteOverriddenByLaterCompletion", func(t *testing.T) {
+		// Episode 1 was left incomplete at t0
+		entries := []Entry{
+			{
+				Key:             EntryKey{Title: "Frieren", Mode: "anime", MediaType: "tv", Season: 1, Episode: 1},
+				Title:           "Frieren",
+				Mode:            "anime",
+				MediaType:       "tv",
+				Season:          1,
+				Episode:         1,
+				Complete:        false,
+				PositionSecs:    300,
+				DurationSecs:    1200,
+				PercentComplete: 0.25,
+				WatchedAt:       t0,
+			},
+		}
+		// Episodes 1, 2, 3 were then completed at t1
+		for ep := 1; ep <= 3; ep++ {
+			entries = append(entries, Entry{
+				Key:       EntryKey{Title: "Frieren", Mode: "anime", MediaType: "tv", Season: 1, Episode: ep},
+				Title:     "Frieren",
+				Mode:      "anime",
+				MediaType: "tv",
+				Season:    1,
+				Episode:   ep,
+				Complete:  true,
+				WatchedAt: t1.Add(time.Duration(ep) * time.Hour),
+			})
+		}
+
+		groups := BuildGroups(entries)
+		if len(groups) != 1 {
+			t.Fatalf("expected 1 group, got %d", len(groups))
+		}
+		group := groups[0]
+		if group.HasIncomplete {
+			t.Errorf("expected HasIncomplete = false because completion was newer")
+		}
+		if group.ContinueEntry.Episode != 3 {
+			t.Errorf("ContinueEntry.Episode = %d, want 3", group.ContinueEntry.Episode)
+		}
+	})
 }

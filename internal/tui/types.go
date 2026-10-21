@@ -180,6 +180,18 @@ type batchDoneMsg struct {
 	total     int
 }
 
+type animeStatusLoadedMsg struct {
+	opID          int
+	entry         *scrobble.MediaListEntry
+	totalEpisodes int
+	err           error
+}
+
+type animeStatusUpdatedMsg struct {
+	statusText string
+	err        error
+}
+
 type downloadStartedMsg struct {
 	opID      int
 	cancel    context.CancelFunc
@@ -516,6 +528,17 @@ type modelImpl struct {
 	audioPickerOpen  bool
 	audioPickerIndex int
 
+
+	// Anime Status picker modal
+	animeStatusPickerOpen      bool
+	animeStatusPickerIndex     int
+	animeStatusTargetTitle     string
+	animeStatusTargetAniListID int
+	animeStatusTargetKey       history.GroupKey
+	animeStatusLoading         bool
+	animeStatusEntry           *scrobble.MediaListEntry
+	animeStatusTotalEpisodes   int
+	animeStatusOpID            int
 	// Downloads Queue state
 	activeDownloads []ActiveDownload
 	doneDownloads   []DoneDownload

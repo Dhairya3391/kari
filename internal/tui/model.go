@@ -575,6 +575,20 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case readerPageMsg:
 		mdl, cmd := m.onReaderPage(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)
+	case animeStatusLoadedMsg:
+		if msg.opID == m.animeStatusOpID {
+			m.animeStatusLoading = false
+			if msg.err == nil {
+				m.animeStatusEntry = msg.entry
+				m.animeStatusTotalEpisodes = msg.totalEpisodes
+			}
+		}
+		return m, spinnerCmd
+	case animeStatusUpdatedMsg:
+		if msg.err != nil {
+			return m, m.setStatusTimed(statusError, "AniList error: "+msg.err.Error())
+		}
+		return m, m.setStatusTimed(statusSuccess, msg.statusText)
 	}
 
 	mdl, cmd := m.updateActive(msg)

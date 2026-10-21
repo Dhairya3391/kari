@@ -161,11 +161,18 @@ func BuildGroups(entries []Entry) []Group {
 	for _, key := range order {
 		group := groupsByKey[key]
 		if group.HasIncomplete && group.HasComplete && entryAfter(group.FarthestComplete, group.ContinueEntry) {
-			group.HasIncomplete = false
+			if !group.ContinueEntry.WatchedAt.After(group.FarthestComplete.WatchedAt) {
+				group.HasIncomplete = false
+			}
 		}
 		if !group.HasIncomplete {
 			if isSeriesContent(group.FarthestComplete) {
-				group.ContinueEntry = group.FarthestComplete
+				if group.LastPlayed.WatchedAt.After(group.FarthestComplete.WatchedAt) && entryAfter(group.FarthestComplete, group.LastPlayed) {
+					group.ContinueEntry = group.LastPlayed
+					group.FarthestComplete = group.LastPlayed
+				} else {
+					group.ContinueEntry = group.FarthestComplete
+				}
 			} else {
 				group.ContinueEntry = group.LastPlayed
 			}

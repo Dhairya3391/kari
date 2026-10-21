@@ -1,13 +1,18 @@
 package tui
 
 import (
-	"kari/internal/model"
-	"kari/internal/player"
-	"kari/internal/provider"
-	"kari/internal/settings"
+	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
+
+	"kari/internal/history"
+	"kari/internal/model"
+	"kari/internal/player"
+	"kari/internal/provider"
+	"kari/internal/scrobble"
+	"kari/internal/settings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,6 +26,29 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.confirmStop = false
 	}
 
+
+	// Anime status modal captures all input while open
+	if m.animeStatusPickerOpen {
+		switch msg.String() {
+		case "esc":
+			m.animeStatusPickerOpen = false
+			m.clearStatus()
+			return nil, true
+		case "up", "k":
+			if m.animeStatusPickerIndex > 0 {
+				m.animeStatusPickerIndex--
+			}
+			return nil, true
+		case "down", "j":
+			if m.animeStatusPickerIndex < len(DefaultAnimeStatusChoices)-1 {
+				m.animeStatusPickerIndex++
+			}
+			return nil, true
+		case "enter":
+			return m.executeAnimeStatusAction(m.animeStatusPickerIndex)
+		}
+		return nil, true
+	}
 	// Help overlay captures all input except ? to dismiss and esc
 	if m.showHelp {
 		if msg.String() == "?" || msg.String() == "esc" {
@@ -224,10 +252,237 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.showHelp = !m.showHelp
 		m.helpScroll = 0
 		return nil, true
+	case key.Matches(msg, m.keys.Status):
+		if cmd, ok := m.triggerAnimeStatusModal(); ok {
+			return cmd, true
+		}
 	}
 	return nil, false
 }
 
+
+func (m *modelImpl) triggerAnimeStatusModal() (tea.Cmd, bool) {
+	var title string
+	var aniID int
+	var grpKey history.GroupKey
+
+	switch m.activeView {
+	case viewPreview:
+		if m.appMode != provider.ModeAnime || m.selectedSeries == nil {
+			return nil, false
+		}
+		title = m.selectedSeries.Title
+		if m.resolved != nil && m.resolved.SeriesTitle != "" {
+			title = m.resolved.SeriesTitle
+		}
+		aniID = anilistIDFor(m.appMode, m.selectedSeries)
+		grpKey = m.findHistoryGroupKeyForAnime(title)
+	case viewEpisodes:
+		if m.appMode != provider.ModeAnime || m.selectedSeries == nil {
+			return nil, false
+		}
+		title = m.selectedSeries.Title
+		aniID = anilistIDFor(m.appMode, m.selectedSeries)
+		grpKey = m.findHistoryGroupKeyForAnime(title)
+	case viewHistory:
+		item, ok := m.historyList.SelectedItem().(rowItem)
+		if !ok {
+			return nil, false
+		}
+		var grp *history.Group
+		for i := range m.historyGroups {
+			if m.historyGroups[i].Key.String() == item.key {
+				grp = &m.historyGroups[i]
+				break
+			}
+		}
+		if grp == nil || (grp.Mode != "anime" && grp.Mode != string(provider.ModeAnime)) {
+			return nil, false
+		}
+		title = grp.Title
+		aniID = grp.LastPlayed.AniListID
+		if aniID == 0 {
+			aniID = grp.ContinueEntry.AniListID
+		}
+		grpKey = grp.Key
+	default:
+		return nil, false
+	}
+
+	m.animeStatusTargetTitle = title
+	m.animeStatusTargetAniListID = aniID
+	m.animeStatusTargetKey = grpKey
+	m.animeStatusPickerOpen = true
+	m.animeStatusLoading = true
+	m.animeStatusPickerIndex = 0
+	m.animeStatusEntry = nil
+	m.animeStatusTotalEpisodes = 0
+	opID := m.newOpID()
+	m.animeStatusOpID = opID
+	return m.fetchAnimeStatusCmd(opID, aniID, title), true
+}
+
+func (m *modelImpl) findHistoryGroupKeyForAnime(title string) history.GroupKey {
+	if m.historyStore != nil {
+		normTitle := strings.ToLower(strings.TrimSpace(title))
+		for _, entry := range m.historyStore.All() {
+			if strings.ToLower(strings.TrimSpace(entry.Title)) == normTitle || strings.ToLower(strings.TrimSpace(entry.Key.Title)) == normTitle {
+				return history.GroupKey{
+					Title:     entry.Title,
+					Mode:      entry.Mode,
+					MediaType: entry.MediaType,
+				}
+			}
+		}
+	}
+	return history.GroupKey{Title: title, Mode: "anime", MediaType: "tv"}
+}
+
+func (m *modelImpl) executeAnimeStatusAction(index int) (tea.Cmd, bool) {
+	if index < 0 || index >= len(DefaultAnimeStatusChoices) {
+		return nil, true
+	}
+	choice := DefaultAnimeStatusChoices[index]
+	switch choice.Action {
+	case ActionAnimeWatching:
+		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
+			m.animeStatusPickerOpen = false
+			return m.setStatusTimed(statusWarn, "Connect AniList in Settings (s) > Accounts"), true
+		}
+		m.animeStatusPickerOpen = false
+		return m.updateAnimeStatusCmd(scrobble.StatusCurrent, nil, nil), true
+
+	case ActionAnimeRewatching:
+		if m.historyStore != nil {
+			_ = m.historyStore.DeleteGroup(m.animeStatusTargetKey)
+			m.historyGroups = history.BuildGroups(m.historyStore.All())
+			m.refreshHistoryItems()
+		}
+		if m.anilistClient != nil && m.anilistClient.IsAuthenticated() {
+			progress := 0
+			repeat := 1
+			if m.animeStatusEntry != nil && m.animeStatusEntry.Repeat > 0 {
+				repeat = m.animeStatusEntry.Repeat + 1
+			}
+			m.animeStatusPickerOpen = false
+			return tea.Batch(
+				m.updateAnimeStatusCmd(scrobble.StatusRepeating, &progress, &repeat),
+				m.setStatusTimed(statusSuccess, "Rewatch started: reset AniList & cleared local history"),
+			), true
+		}
+		m.animeStatusPickerOpen = false
+		return m.setStatusTimed(statusSuccess, "Rewatch started: cleared local history"), true
+
+	case ActionAnimeCompleted:
+		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
+			m.animeStatusPickerOpen = false
+			return m.setStatusTimed(statusWarn, "Connect AniList in Settings (s) > Accounts"), true
+		}
+		var progress *int
+		if m.animeStatusTotalEpisodes > 0 {
+			progress = &m.animeStatusTotalEpisodes
+		}
+		m.animeStatusPickerOpen = false
+		return m.updateAnimeStatusCmd(scrobble.StatusCompleted, progress, nil), true
+
+	case ActionAnimePaused:
+		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
+			m.animeStatusPickerOpen = false
+			return m.setStatusTimed(statusWarn, "Connect AniList in Settings (s) > Accounts"), true
+		}
+		m.animeStatusPickerOpen = false
+		return m.updateAnimeStatusCmd(scrobble.StatusPaused, nil, nil), true
+
+	case ActionAnimeDropped:
+		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
+			m.animeStatusPickerOpen = false
+			return m.setStatusTimed(statusWarn, "Connect AniList in Settings (s) > Accounts"), true
+		}
+		m.animeStatusPickerOpen = false
+		return m.updateAnimeStatusCmd(scrobble.StatusDropped, nil, nil), true
+
+	case ActionAnimePlanning:
+		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
+			m.animeStatusPickerOpen = false
+			return m.setStatusTimed(statusWarn, "Connect AniList in Settings (s) > Accounts"), true
+		}
+		progress := 0
+		m.animeStatusPickerOpen = false
+		return m.updateAnimeStatusCmd(scrobble.StatusPlanning, &progress, nil), true
+
+	case ActionAnimeRemoveFromAniList:
+		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
+			m.animeStatusPickerOpen = false
+			return m.setStatusTimed(statusWarn, "Connect AniList in Settings (s) > Accounts"), true
+		}
+		if m.animeStatusEntry == nil {
+			m.animeStatusPickerOpen = false
+			return m.setStatusTimed(statusWarn, "Anime not found in your AniList library"), true
+		}
+		m.animeStatusPickerOpen = false
+		return m.deleteAnimeStatusCmd(m.animeStatusEntry.ID), true
+
+	case ActionAnimeResetLocalHistory:
+		if m.historyStore != nil {
+			_ = m.historyStore.DeleteGroup(m.animeStatusTargetKey)
+			m.historyGroups = history.BuildGroups(m.historyStore.All())
+			m.refreshHistoryItems()
+		}
+		m.animeStatusPickerOpen = false
+		return m.setStatusTimed(statusSuccess, "Local watch history reset for "+m.animeStatusTargetTitle), true
+	}
+	m.animeStatusPickerOpen = false
+	return nil, true
+}
+
+func (m *modelImpl) fetchAnimeStatusCmd(opID int, anilistID int, title string) tea.Cmd {
+	return func() tea.Msg {
+		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
+			return animeStatusLoadedMsg{opID: opID}
+		}
+		ctx, cancel := context.WithTimeout(m.appCtx, 10*time.Second)
+		defer cancel()
+		entry, total, err := m.anilistClient.GetMediaListEntry(ctx, anilistID, title)
+		return animeStatusLoadedMsg{
+			opID:          opID,
+			entry:         entry,
+			totalEpisodes: total,
+			err:           err,
+		}
+	}
+}
+
+func (m *modelImpl) updateAnimeStatusCmd(status scrobble.MediaListStatus, progress *int, repeat *int) tea.Cmd {
+	mediaID := m.animeStatusTargetAniListID
+	title := m.animeStatusTargetTitle
+	return func() tea.Msg {
+		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
+			return animeStatusUpdatedMsg{err: fmt.Errorf("anilist not authenticated")}
+		}
+		ctx, cancel := context.WithTimeout(m.appCtx, 10*time.Second)
+		defer cancel()
+		err := m.anilistClient.UpdateMediaListStatus(ctx, mediaID, title, status, progress, repeat)
+		if err != nil {
+			return animeStatusUpdatedMsg{err: err}
+		}
+		return animeStatusUpdatedMsg{statusText: fmt.Sprintf("AniList status updated: %s", status)}
+	}
+}
+
+func (m *modelImpl) deleteAnimeStatusCmd(entryID int) tea.Cmd {
+	return func() tea.Msg {
+		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
+			return animeStatusUpdatedMsg{err: fmt.Errorf("anilist not authenticated")}
+		}
+		ctx, cancel := context.WithTimeout(m.appCtx, 10*time.Second)
+		defer cancel()
+		err := m.anilistClient.DeleteMediaListEntry(ctx, entryID)
+		if err != nil {
+			return animeStatusUpdatedMsg{err: err}
+		}
+		return animeStatusUpdatedMsg{statusText: "Removed from AniList"}
+	}
+}
 func (m *modelImpl) applyAccent(hex string) {
 	SetAccentColor(hex)
 	m.downloadBar = newDownloadBar()

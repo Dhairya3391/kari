@@ -27,6 +27,32 @@ type AniListToken struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 }
 
+// MediaListStatus represents the viewing status of an anime entry on AniList.
+type MediaListStatus string
+
+const (
+	// StatusCurrent indicates an anime is currently being watched.
+	StatusCurrent MediaListStatus = "CURRENT"
+	// StatusPlanning indicates an anime is planned to be watched.
+	StatusPlanning MediaListStatus = "PLANNING"
+	// StatusCompleted indicates an anime has been completed.
+	StatusCompleted MediaListStatus = "COMPLETED"
+	// StatusDropped indicates an anime has been dropped.
+	StatusDropped MediaListStatus = "DROPPED"
+	// StatusPaused indicates an anime is on hold/paused.
+	StatusPaused MediaListStatus = "PAUSED"
+	// StatusRepeating indicates an anime is currently being rewatched.
+	StatusRepeating MediaListStatus = "REPEATING"
+)
+
+// MediaListEntry contains the user's tracking entry details for an anime on AniList.
+type MediaListEntry struct {
+	ID       int             `json:"id"`
+	Status   MediaListStatus `json:"status"`
+	Progress int             `json:"progress"`
+	Repeat   int             `json:"repeat"`
+}
+
 // AniListClient updates anime watch progress via the AniList GraphQL API.
 // Tokens are persisted under ~/.config/kari.
 type AniListClient struct {
@@ -168,7 +194,7 @@ func (c *AniListClient) UpdateProgress(ctx context.Context, media model.Resolved
 
 	query := `
 	mutation ($mediaId: Int, $progress: Int) {
-		SaveMediaListEntry (mediaId: $mediaId, progress: $progress, status: CURRENT) {
+		SaveMediaListEntry (mediaId: $mediaId, progress: $progress) {
 			id
 			progress
 		}
@@ -181,6 +207,127 @@ func (c *AniListClient) UpdateProgress(ctx context.Context, media model.Resolved
 
 	if err := c.doGraphQL(ctx, query, vars, nil); err != nil {
 		return fmt.Errorf("failed to save progress to anilist: %w", err)
+	}
+
+	return nil
+}
+
+// GetMediaListEntry retrieves the authenticated user's list entry and total episodes for an anime.
+// mediaID can be 0 if searching by title. If the anime is not in the user's list, entry is nil.
+func (c *AniListClient) GetMediaListEntry(ctx context.Context, mediaID int, title string) (*MediaListEntry, int, error) {
+	if !c.IsAuthenticated() {
+		return nil, 0, fmt.Errorf("anilist client not authenticated")
+	}
+
+	query := `
+	query ($id: Int, $search: String) {
+		Media (id: $id, search: $search, type: ANIME) {
+			id
+			episodes
+			mediaListEntry {
+				id
+				status
+				progress
+				repeat
+			}
+		}
+	}
+	`
+	vars := make(map[string]interface{})
+	if mediaID > 0 {
+		vars["id"] = mediaID
+	} else if title != "" {
+		vars["search"] = title
+	} else {
+		return nil, 0, fmt.Errorf("media id or title required")
+	}
+
+	var res struct {
+		Data struct {
+			Media *struct {
+				ID             int             `json:"id"`
+				Episodes       *int            `json:"episodes"`
+				MediaListEntry *MediaListEntry `json:"mediaListEntry"`
+			} `json:"Media"`
+		} `json:"data"`
+	}
+
+	if err := c.doGraphQL(ctx, query, vars, &res); err != nil {
+		return nil, 0, err
+	}
+	if res.Data.Media == nil || res.Data.Media.ID == 0 {
+		return nil, 0, fmt.Errorf("media not found on anilist")
+	}
+
+	totalEpisodes := 0
+	if res.Data.Media.Episodes != nil {
+		totalEpisodes = *res.Data.Media.Episodes
+	}
+	return res.Data.Media.MediaListEntry, totalEpisodes, nil
+}
+
+// UpdateMediaListStatus updates or sets the status, progress, and repeat count for an anime on AniList.
+// If mediaID is <= 0, title is resolved via searchMediaID. progress and repeat are optional (nil to omit).
+func (c *AniListClient) UpdateMediaListStatus(ctx context.Context, mediaID int, title string, status MediaListStatus, progress *int, repeat *int) error {
+	if !c.IsAuthenticated() {
+		return fmt.Errorf("anilist client not authenticated")
+	}
+
+	if mediaID <= 0 {
+		var err error
+		mediaID, err = c.searchMediaID(ctx, title)
+		if err != nil {
+			return fmt.Errorf("failed to find anilist media id: %w", err)
+		}
+	}
+
+	query := `
+	mutation ($mediaId: Int, $status: MediaListStatus, $progress: Int, $repeat: Int) {
+		SaveMediaListEntry (mediaId: $mediaId, status: $status, progress: $progress, repeat: $repeat) {
+			id
+			status
+			progress
+			repeat
+		}
+	}
+	`
+	vars := map[string]interface{}{
+		"mediaId": mediaID,
+		"status":  status,
+	}
+	if progress != nil {
+		vars["progress"] = *progress
+	}
+	if repeat != nil {
+		vars["repeat"] = *repeat
+	}
+
+	if err := c.doGraphQL(ctx, query, vars, nil); err != nil {
+		return fmt.Errorf("failed to update anilist status: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteMediaListEntry removes a media list entry from the user's AniList library by entry ID.
+func (c *AniListClient) DeleteMediaListEntry(ctx context.Context, entryID int) error {
+	if !c.IsAuthenticated() {
+		return fmt.Errorf("anilist client not authenticated")
+	}
+
+	query := `
+	mutation ($id: Int) {
+		DeleteMediaListEntry (id: $id) {
+			deleted
+		}
+	}
+	`
+	vars := map[string]interface{}{
+		"id": entryID,
+	}
+
+	if err := c.doGraphQL(ctx, query, vars, nil); err != nil {
+		return fmt.Errorf("failed to delete anilist media list entry: %w", err)
 	}
 
 	return nil
@@ -230,7 +377,9 @@ func (c *AniListClient) doGraphQL(ctx context.Context, query string, vars map[st
 	req.Header.Set("Origin", "https://anilist.co")
 	req.Header.Set("Referer", "https://anilist.co/")
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
-	req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
+	if c.token != nil && c.token.AccessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

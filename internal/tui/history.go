@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/history"
+	"kari/internal/provider"
 )
 
 // HistoryTab identifies the active section tab.
@@ -245,10 +246,35 @@ func renderHistoryDetails(data HistoryData, width int, st Styles) string {
 	pos := formatContinuePosition(entry)
 	meta := fmt.Sprintf("%s · %s", kind, pos)
 	parts = append(parts, st.Dim.Render(meta))
+	// 4. Episode title if known
+	if strings.TrimSpace(entry.EpisodeTitle) != "" {
+		parts = append(parts, st.Current.Render(truncate(strings.TrimSpace(entry.EpisodeTitle), width-2)))
+	}
 
-	// 4. Relative time line (e.g. "9 minutes ago")
+	// 5. Timestamp and completion details
+	if entry.PositionSecs > 0 && entry.DurationSecs > 0 {
+		pct := int(entry.PercentComplete * 100)
+		if pct == 0 && entry.DurationSecs > 0 {
+			pct = int((entry.PositionSecs / entry.DurationSecs) * 100)
+		}
+		timeStr := fmt.Sprintf("%s / %s (%d%%)", formatTimeMMSS(entry.PositionSecs), formatTimeMMSS(entry.DurationSecs), pct)
+		parts = append(parts, st.Dim.Render(timeStr))
+	} else if entry.Complete {
+		parts = append(parts, st.Ok.Render("completed"))
+	}
+
+	if g.WatchedCount > 1 {
+		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d watched", g.WatchedCount)))
+	}
+
+	// 6. Relative time line (e.g. "9 minutes ago")
 	relTime := formatLongRelativeTime(entry.WatchedAt)
 	parts = append(parts, st.Dim.Render(relTime))
+
+	// 7. Context hint for anime
+	if entry.Mode == "anime" || entry.Mode == string(provider.ModeAnime) {
+		parts = append(parts, "", st.Dim.Render("t  status / rewatch"))
+	}
 
 	return strings.Join(parts, "\n")
 }

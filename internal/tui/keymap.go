@@ -31,6 +31,7 @@ type keyMap struct {
 	DeselectAll       key.Binding
 	BatchDownload     key.Binding
 	MarkComplete      key.Binding
+	Status            key.Binding
 	Top               key.Binding
 	Bottom            key.Binding
 	ReaderNext        key.Binding
@@ -120,6 +121,10 @@ func defaultKeyMap() keyMap {
 		Delete: key.NewBinding(
 			key.WithKeys("d"),
 			key.WithHelp("d", "delete"),
+		),
+		Status: key.NewBinding(
+			key.WithKeys("t"),
+			key.WithHelp("t", "status"),
 		),
 		ClearHistory: key.NewBinding(
 			key.WithKeys("D"),

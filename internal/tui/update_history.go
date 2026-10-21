@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -102,6 +103,9 @@ func (m *modelImpl) cycleHistoryTab() tea.Cmd {
 // refreshHistoryItems rebuilds the list for the active tab from the
 // retained groups, without re-reading the store.
 func (m *modelImpl) refreshHistoryItems() {
+	if m.historyList.Width() == 0 && m.historyList.Height() == 0 {
+		return
+	}
 	continued, finished := splitHistoryGroups(m.historyGroups)
 	if m.historyTab == historyTabFinished {
 		m.historyList.SetItems(historyTabItems(sortGroupsByDateBucket(finished, true), true))
@@ -249,6 +253,14 @@ func bestHistorySeriesMatch(results []provider.SearchResult, entry history.Entry
 	if entry.TMDBID > 0 {
 		for _, r := range results {
 			if r.TMDBID == entry.TMDBID {
+				return r
+			}
+		}
+	}
+	if entry.AniListID > 0 {
+		aniStr := strconv.Itoa(entry.AniListID)
+		for _, r := range results {
+			if strings.TrimSpace(r.ID) == aniStr {
 				return r
 			}
 		}

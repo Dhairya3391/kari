@@ -10,8 +10,8 @@ import (
 
 	"kari/internal/history"
 	"kari/internal/model"
+	"kari/internal/provider"
 )
-
 func TestHistoryRowZeroProgressEmptyBar(t *testing.T) {
 	entry := history.Entry{
 		Title:        "Golmaal Again",
@@ -79,5 +79,65 @@ func TestSortGroupsByDateBucketOrder(t *testing.T) {
 	// Original slice must be unmodified.
 	if groups[0].Title != "Earlier Show" {
 		t.Error("sortGroupsByDateBucket must not mutate the input slice")
+	}
+}
+
+func TestBestHistorySeriesMatch_AniListID(t *testing.T) {
+	results := []provider.SearchResult{
+		{ID: "99999", Title: "Frieren: Beyond Journey's End Season 2"},
+		{ID: "154587", Title: "Sousou no Frieren"},
+	}
+
+	entry := history.Entry{
+		Title:     "Frieren",
+		AniListID: 154587,
+	}
+
+	matched := bestHistorySeriesMatch(results, entry)
+	if matched.ID != "154587" {
+		t.Errorf("matched ID = %q, want 154587", matched.ID)
+	}
+}
+
+func TestRenderHistoryDetails_EnrichedOutput(t *testing.T) {
+	st := NewStyles(ResolveAccent(model.KindAnime, "Auto"))
+	entry := history.Entry{
+		Title:        "Sousou no Frieren",
+		EpisodeTitle: "The End of the Beginning",
+		Mode:         "anime",
+		MediaType:    "tv",
+		Season:       1,
+		Episode:      1,
+		PositionSecs: 720,
+		DurationSecs: 1440,
+		WatchedAt:    time.Now().Add(-5 * time.Minute),
+	}
+	group := history.Group{
+		Title:         "Sousou no Frieren",
+		Mode:          "anime",
+		ContinueEntry: entry,
+		WatchedCount:  4,
+	}
+
+	data := HistoryData{
+		Groups:        []history.Group{group},
+		SelectedIndex: 0,
+		Width:         80,
+		Height:        24,
+		Accent:        st.Accent,
+	}
+
+	out := renderHistoryDetails(data, 40, st)
+	if !strings.Contains(out, "The End of the Beginning") {
+		t.Errorf("details missing episode title: %s", out)
+	}
+	if !strings.Contains(out, "12:00 / 24:00 (50%)") {
+		t.Errorf("details missing timestamp: %s", out)
+	}
+	if !strings.Contains(out, "4 watched") {
+		t.Errorf("details missing watched count: %s", out)
+	}
+	if !strings.Contains(out, "status / rewatch") {
+		t.Errorf("details missing status shortcut hint: %s", out)
 	}
 }

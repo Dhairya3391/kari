@@ -129,7 +129,7 @@ func (m *modelImpl) renderSmallTerminalNotice() string {
 }
 
 func (m *modelImpl) searchPosterVisible() bool {
-	return (m.activeView == viewSearch || m.activeView == viewEpisodes) && !m.showHelp && m.imagesEnabled && m.searchPoster != ""
+	return (m.activeView == viewSearch || m.activeView == viewEpisodes) && !m.showHelp && !m.animeStatusPickerOpen && m.imagesEnabled && m.searchPoster != ""
 }
 
 func (m *modelImpl) previewPosterVisible() bool {
@@ -138,11 +138,11 @@ func (m *modelImpl) previewPosterVisible() bool {
 	// a still-valid poster every frame (blank art after refresh). The
 	// poster belongs to the selected series/episode, which retries
 	// never change; title switches already clear the slot explicitly.
-	return m.activeView == viewPreview && !m.showHelp && m.imagesEnabled && m.previewPoster != ""
+	return m.activeView == viewPreview && !m.showHelp && !m.animeStatusPickerOpen && m.imagesEnabled && m.previewPoster != ""
 }
 
 func (m *modelImpl) historyPosterVisible() bool {
-	return m.activeView == viewHistory && !m.showHelp && m.imagesEnabled && m.historyPoster != "" && m.width >= 100
+	return m.activeView == viewHistory && !m.showHelp && !m.animeStatusPickerOpen && m.imagesEnabled && m.historyPoster != "" && m.width >= 100
 }
 
 func (m *modelImpl) readerPageVisible() bool {
@@ -203,6 +203,8 @@ func (m *modelImpl) renderMainView() string {
 	var body string
 	if m.showHelp {
 		body = m.renderHelpOverlayContent(dims.ContentWidth, accent)
+	} else if m.animeStatusPickerOpen {
+		body = m.renderAnimeStatusOverlayContent(dims.ContentWidth, accent)
 	} else {
 		body = m.renderScreenBody(dims, accent)
 	}
@@ -253,6 +255,10 @@ func (m *modelImpl) activeCrumbs() []string {
 	if m.showHelp {
 		base := m.activeCrumbsForView(m.activeView)
 		return append(base, "help")
+	}
+	if m.animeStatusPickerOpen {
+		base := m.activeCrumbsForView(m.activeView)
+		return append(base, "status")
 	}
 	return m.activeCrumbsForView(m.activeView)
 }
@@ -319,7 +325,13 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			{Key: "esc", Action: "close help"},
 		}
 	}
-
+	if m.animeStatusPickerOpen {
+		return []KeyBinding{
+			{Key: "↑/↓", Action: "move"},
+			{Key: "enter", Action: "select"},
+			{Key: "esc", Action: "cancel"},
+		}
+	}
 	switch m.activeView {
 	case viewSearch:
 		if len(m.seriesResults) > 0 {
@@ -359,6 +371,7 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			keys = append(keys, KeyBinding{Key: "[ ]", Action: "season"})
 		}
 		if m.appMode == provider.ModeAnime {
+			keys = append(keys, KeyBinding{Key: "t", Action: "status"})
 			keys = append(keys, KeyBinding{Key: "a", Action: "sub/dub"})
 		}
 		keys = append(keys,
@@ -382,6 +395,7 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 		}
 		keys = append(keys, KeyBinding{Key: "D", Action: "download"})
 		if m.appMode == provider.ModeAnime {
+			keys = append(keys, KeyBinding{Key: "t", Action: "status"})
 			keys = append(keys, KeyBinding{Key: "a", Action: "sub/dub"})
 		}
 		if m.hasResumePosition() {
@@ -398,6 +412,7 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 		return []KeyBinding{
 			{Key: "enter", Action: "open"},
 			{Key: "tab", Action: "section"},
+			{Key: "t", Action: "status"},
 			{Key: "d", Action: "delete"},
 			{Key: "?", Action: "help"},
 			{Key: "esc", Action: "back"},
@@ -1149,6 +1164,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 			{Key: "ctrl+d", Action: "deselect all"},
 			{Key: "d", Action: "downloads"},
 			{Key: "a", Action: "toggle sub/dub (anime)"},
+			{Key: "t", Action: "anime status / rewatch"},
 		}
 	case viewPreview:
 		screenName = "Preview"
@@ -1163,6 +1179,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 			{Key: "d", Action: "open downloads screen"},
 			{Key: "A", Action: "toggle autoplay"},
 			{Key: "a", Action: "toggle sub/dub (anime)"},
+			{Key: "t", Action: "anime status / rewatch"},
 			{Key: "r", Action: "restart from the beginning"},
 			{Key: "ctrl+p", Action: "switch external player"},
 		}
@@ -1173,6 +1190,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 			{Key: "tab", Action: "switch Continue / Finished tab"},
 			{Key: "d", Action: "delete title from history"},
 			{Key: "D", Action: "clear all history"},
+			{Key: "t", Action: "anime status / rewatch"},
 			{Key: "/", Action: "filter history list"},
 		}
 	case viewSettings:
@@ -1230,6 +1248,21 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 		GlobalKeys:  globalKeys,
 		Width:       width,
 		Accent:      accent,
+	})
+}
+
+func (m *modelImpl) renderAnimeStatusOverlayContent(width int, accent lipgloss.AdaptiveColor) string {
+	connected := m.anilistClient != nil && m.anilistClient.IsAuthenticated()
+	return RenderAnimeStatusOverlay(AnimeStatusOverlayData{
+		Title:         m.animeStatusTargetTitle,
+		AniListID:     m.animeStatusTargetAniListID,
+		Connected:     connected,
+		Loading:       m.animeStatusLoading,
+		CurrentEntry:  m.animeStatusEntry,
+		TotalEpisodes: m.animeStatusTotalEpisodes,
+		SelectedIndex: m.animeStatusPickerIndex,
+		Accent:        accent,
+		Width:         width,
 	})
 }
 
