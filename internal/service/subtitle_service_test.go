@@ -133,6 +133,40 @@ func TestSubtitleServiceDoesNotBorrowOtherProviderSubtitles(t *testing.T) {
 	}
 }
 
+func TestSubtitleServiceFallsBackToWorkingMirrorOfSameResolver(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/broken.vtt" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte("WEBVTT\n\n00:00.000 --> 00:01.000\nworking subtitle\n"))
+	}))
+	defer srv.Close()
+
+	svc := NewSubtitleService(&config.Config{})
+	svc.httpClient = srv.Client()
+	media := model.ResolvedMedia{
+		SeriesTitle:   "Mirror Fallback",
+		EpisodeNumber: 1,
+		MediaType:     provider.MediaTypeAnime,
+		Subtitles: []model.SubtitleTrack{
+			{URL: srv.URL + "/broken.vtt", Language: "en", Resolver: "miruro", SourceID: "mirror-1"},
+			{URL: srv.URL + "/working.vtt", Language: "en", Resolver: "miruro", SourceID: "mirror-2"},
+		},
+	}
+
+	track, err := svc.FetchForSource(context.Background(), media, "en", "miruro", "mirror-1")
+	if err != nil {
+		t.Fatalf("FetchForSource failed: %v", err)
+	}
+	if track.Resolver != "miruro" {
+		t.Errorf("resolver = %q, want miruro", track.Resolver)
+	}
+	if track.SourceID != "mirror-2" {
+		t.Errorf("sourceID = %q, want mirror-2", track.SourceID)
+	}
+}
+
 func TestSubtitleServiceBoundsFailedProviderCandidates(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

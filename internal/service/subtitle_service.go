@@ -152,7 +152,7 @@ func (s *SubtitleService) fetch(
 	}
 
 	originalSubtitles := media.Subtitles
-	matchingCandidates := selectMatchingProviderCandidates(
+	exactSourceCandidates, otherMirrorCandidates := selectProviderCandidates(
 		originalSubtitles,
 		preferredLang,
 		preferredResolver,
@@ -162,11 +162,21 @@ func (s *SubtitleService) fetch(
 	attempted := make(map[string]struct{})
 	var failures []error
 
-	// Priority order:
-	// 1. Source's own provider candidates (matching resolver and source identity)
-	// 2. OpenSubtitles (dedicated subtitle fallback when active provider has no subs)
-	if len(matchingCandidates) > 0 {
-		track, err := s.downloadProviderCandidates(ctx, media, matchingCandidates, attempted)
+	// 1. Probe the exact playback source's own candidates first
+	if len(exactSourceCandidates) > 0 {
+		track, err := s.downloadProviderCandidates(ctx, media, exactSourceCandidates, attempted)
+		if err == nil && usableCachedTrack(track) {
+			s.cache.Set(cacheKey, track)
+			return track, nil
+		}
+		if err != nil {
+			failures = append(failures, err)
+		}
+	}
+
+	// 2. Fall back to other working mirrors of the same provider if the exact source failed
+	if len(otherMirrorCandidates) > 0 {
+		track, err := s.downloadProviderCandidates(ctx, media, otherMirrorCandidates, attempted)
 		if err == nil && usableCachedTrack(track) {
 			s.cache.Set(cacheKey, track)
 			return track, nil
@@ -219,18 +229,19 @@ func usableCachedTrack(track model.SubtitleTrack) bool {
 	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
-func selectMatchingProviderCandidates(
+func selectProviderCandidates(
 	tracks []model.SubtitleTrack,
 	preferredLang string,
 	preferredResolver string,
 	preferredSourceID string,
-) []model.SubtitleTrack {
+) ([]model.SubtitleTrack, []model.SubtitleTrack) {
 	if preferredResolver == "" {
-		return nil
+		return nil, nil
 	}
 	preferredLang = lang.Normalize(preferredLang)
-	var sameSourceExact, sameSourceEnglish []model.SubtitleTrack
-	var sameResolverExact, sameResolverEnglish []model.SubtitleTrack
+	var exactSourceExactLang, exactSourceEnglish []model.SubtitleTrack
+	var otherMirrorExactLang, otherMirrorEnglish []model.SubtitleTrack
+
 	for _, track := range tracks {
 		if !strings.EqualFold(track.Resolver, preferredResolver) {
 			continue
@@ -241,24 +252,23 @@ func selectMatchingProviderCandidates(
 
 		if preferredSourceID != "" && track.SourceID == preferredSourceID {
 			if isExactLang {
-				sameSourceExact = append(sameSourceExact, track)
+				exactSourceExactLang = append(exactSourceExactLang, track)
 			} else if isEnglishFallback {
-				sameSourceEnglish = append(sameSourceEnglish, track)
+				exactSourceEnglish = append(exactSourceEnglish, track)
 			}
 		} else {
 			if isExactLang {
-				sameResolverExact = append(sameResolverExact, track)
+				otherMirrorExactLang = append(otherMirrorExactLang, track)
 			} else if isEnglishFallback {
-				sameResolverEnglish = append(sameResolverEnglish, track)
+				otherMirrorEnglish = append(otherMirrorEnglish, track)
 			}
 		}
 	}
-	if len(sameSourceExact) > 0 || len(sameSourceEnglish) > 0 {
-		return append(defaultFirst(sameSourceExact), defaultFirst(sameSourceEnglish)...)
-	}
-	return append(defaultFirst(sameResolverExact), defaultFirst(sameResolverEnglish)...)
-}
 
+	exactSource := append(defaultFirst(exactSourceExactLang), defaultFirst(exactSourceEnglish)...)
+	otherMirror := append(defaultFirst(otherMirrorExactLang), defaultFirst(otherMirrorEnglish)...)
+	return exactSource, otherMirror
+}
 func defaultFirst(tracks []model.SubtitleTrack) []model.SubtitleTrack {
 	out := make([]model.SubtitleTrack, 0, len(tracks))
 	for _, track := range tracks {
