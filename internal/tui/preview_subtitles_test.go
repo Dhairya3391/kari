@@ -393,6 +393,44 @@ func TestHardSubAnimeDoesNotWaitForExternalSubtitle(t *testing.T) {
 	}
 }
 
+func TestHardSubAnimeFetchesProviderProvidedTracks(t *testing.T) {
+	m := readySourceModel()
+	m.appMode = provider.ModeAnime
+	m.resolved.MediaType = provider.MediaTypeAnime
+	m.resolved.Playback[0].SubType = provider.SubTypeHard
+	m.refreshRanking()
+	// The source's own provider shipped subtitle tracks for the episode
+	// (exact or same-provider mirror): the fetch must run.
+	m.rawSubtitles = []model.SubtitleTrack{{
+		URL:      "https://cdn.example.com/provider-en.vtt",
+		Language: "en",
+		Resolver: "movysx",
+	}}
+
+	if !m.subtitlesWanted() {
+		t.Fatal("hard-sub anime must still fetch provider-provided subtitles")
+	}
+}
+
+// Subs from a different provider never trigger a fetch for a subless
+// hard source: one provider's tracks stay out of another's playback.
+func TestHardSubAnimeIgnoresForeignProviderTracks(t *testing.T) {
+	m := readySourceModel()
+	m.appMode = provider.ModeAnime
+	m.resolved.MediaType = provider.MediaTypeAnime
+	m.resolved.Playback[0].SubType = provider.SubTypeHard
+	m.refreshRanking()
+	m.rawSubtitles = []model.SubtitleTrack{{
+		URL:      "https://cdn.example.com/other-provider-en.vtt",
+		Language: "en",
+		Resolver: "otherprovider",
+	}}
+
+	if m.subtitlesWanted() {
+		t.Fatal("hard-sub anime must not fetch another provider's subtitles")
+	}
+}
+
 func TestOnSubtitleDoneSelectsOneTrackWithoutMutatingCandidates(t *testing.T) {
 	m := readySourceModel()
 	m.rawSubtitles = []model.SubtitleTrack{{URL: "https://cdn.example.com/en.vtt", Language: "en"}}

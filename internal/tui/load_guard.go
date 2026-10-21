@@ -78,12 +78,36 @@ func (m *modelImpl) subtitlesWanted() bool {
 	if m.disableAnimeSubtitles && m.resolved != nil && m.resolved.MediaType == provider.MediaTypeAnime {
 		return false
 	}
-	if src, ok := m.selectedPlaybackSource(); ok &&
-		src.SubType == provider.SubTypeHard &&
-		len(src.Subtitles) == 0 {
+	src, ok := m.selectedPlaybackSource()
+	if !ok {
 		return false
 	}
+	if src.SubType == provider.SubTypeHard && len(src.Subtitles) == 0 {
+		// A hard-subtitled stream carries its captions burned into the
+		// video, so a sidecar would duplicate them — unless the source's
+		// own provider also shipped subtitle tracks for this episode
+		// (exact match or same-provider mirror, which the subtitle
+		// service resolves). Suppress only when the provider offered
+		// nothing; provider-provided subs must always load.
+		return m.providerSubtitlesAvailable(src.Resolver)
+	}
 	return true
+}
+
+// providerSubtitlesAvailable reports whether the resolver behind the
+// selected source declared any subtitle tracks for the episode, exact
+// source match or same-provider mirror alike.
+func (m *modelImpl) providerSubtitlesAvailable(resolver string) bool {
+	resolver = strings.ToLower(strings.TrimSpace(resolver))
+	if resolver == "" {
+		return false
+	}
+	for _, track := range m.rawSubtitles {
+		if strings.EqualFold(strings.TrimSpace(track.Resolver), resolver) {
+			return true
+		}
+	}
+	return false
 }
 
 // mediaReady reports whether at least one playable source is in.
