@@ -32,7 +32,14 @@ func (m *modelImpl) triggerPreviewSkipInfoFor(media model.ResolvedMedia) tea.Cmd
 	m.previewSkipInfo = "checking..."
 	players := m.players
 	return func() tea.Msg {
-		return previewSkipInfoMsg{opID: opID, info: players.ResolveSkipInfo(media)}
+		info, conclusive := players.ResolveSkipInfo(media)
+		if !conclusive {
+			// A cold DNS/TLS handshake can consume the first lookup's
+			// deadline. Retry once before reporting "none": the connection
+			// is warm now, so a transient miss usually resolves.
+			info, _ = players.ResolveSkipInfo(media)
+		}
+		return previewSkipInfoMsg{opID: opID, info: info}
 	}
 }
 

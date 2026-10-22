@@ -127,7 +127,10 @@ func TestHybridUsesConsensusAndReportsIt(t *testing.T) {
 			}
 			registry := &Registry{skipClients: clients, skipSettings: SkipSettings{Provider: "hybrid"}, skipCache: newTestSkipCache()}
 			media := model.ResolvedMedia{SeriesTitle: "Test", SeriesURL: "tt1234567", MediaType: "tv", SeasonNumber: 1, EpisodeNumber: 1}
-			info := registry.ResolveSkipInfo(media)
+			info, conclusive := registry.ResolveSkipInfo(media)
+			if !conclusive {
+				t.Fatal("ResolveSkipInfo() reported an incomplete lookup for mocked providers")
+			}
 			if got := info.String(); got != tc.wantInfo {
 				t.Fatalf("ResolveSkipInfo() = %q, want %q", got, tc.wantInfo)
 			}
@@ -172,6 +175,105 @@ func TestGetSkipArgs_EmptyTitle(t *testing.T) {
 	if args != nil || scriptPath != "" {
 		t.Fatalf("expected nil args for empty title, got args=%v path=%s", args, scriptPath)
 	}
+}
+
+func TestGetSkipArgs_RetriesAfterTransientFailure(t *testing.T) {
+	failAniList := true
+	var anilistRequests, aniskipRequests int
+	httpClient := &http.Client{Transport: mockRoundTripper(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Host {
+		case "graphql.anilist.co":
+			anilistRequests++
+			if failAniList {
+				return nil, fmt.Errorf("temporary anilist failure")
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"data":{"Media":{"id":105310,"idMal":38671}}}`)),
+				Header:     make(http.Header),
+			}, nil
+		case "api.aniskip.com":
+			aniskipRequests++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"found":true,"results":[{"interval":{"start_time":190.188,"end_time":280.188},"skip_type":"op"}]}`)),
+				Header:     make(http.Header),
+			}, nil
+		default:
+			t.Fatalf("unexpected skip source host: %s", req.URL.Host)
+			return nil, nil
+		}
+	})}
+	clients := SkipClients{AniSkip: aniskip.NewClient(httpClient), HTTP: httpClient}
+	settings := SkipSettings{Provider: "aniskip"}
+	cache := newTestSkipCache()
+	media := model.ResolvedMedia{SeriesTitle: "Fire Force", SeriesURL: "105310", MediaType: "anime", SeasonNumber: 1, EpisodeNumber: 9}
+
+	args, script := getSkipArgs(clients, settings, media, cache)
+	if len(args) != 0 || script != "" {
+		cleanupSkipScript(script)
+		t.Fatalf("failed lookup should not produce skip args, got %v", args)
+	}
+	if _, ok := cache.Get(skipCacheKey(media, settings.Provider)); ok {
+		t.Fatal("transient failure must not be cached as empty skip data")
+	}
+
+	failAniList = false
+	args, script = getSkipArgs(clients, settings, media, cache)
+	defer cleanupSkipScript(script)
+	if len(args) == 0 {
+		t.Fatal("expected a retry to recover skip args after the network recovers")
+	}
+	if anilistRequests != 2 || aniskipRequests != 1 {
+		t.Fatalf("requests = (anilist=%d, aniskip=%d), want (2, 1)", anilistRequests, aniskipRequests)
+	}
+}
+
+func TestResolveSkipInfoReportsWhetherLookupWasConclusive(t *testing.T) {
+	media := model.ResolvedMedia{
+		SeriesTitle:   "Fire Force",
+		SeriesURL:     "105310",
+		MediaType:     "anime",
+		SeasonNumber:  1,
+		EpisodeNumber: 9,
+	}
+	newRegistry := func(handler mockRoundTripper) *Registry {
+		httpClient := &http.Client{Transport: handler}
+		return &Registry{
+			skipClients:  SkipClients{AniSkip: aniskip.NewClient(httpClient), HTTP: httpClient},
+			skipSettings: SkipSettings{Provider: "aniskip"},
+			skipCache:    newTestSkipCache(),
+		}
+	}
+
+	t.Run("provider failure is inconclusive", func(t *testing.T) {
+		registry := newRegistry(func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("temporary network failure")
+		})
+		if _, conclusive := registry.ResolveSkipInfo(media); conclusive {
+			t.Fatal("failed lookup must be reported as inconclusive so callers can retry")
+		}
+	})
+
+	t.Run("confirmed absence is conclusive", func(t *testing.T) {
+		registry := newRegistry(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Host == "graphql.anilist.co" {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"data":{"Media":{"id":105310,"idMal":38671}}}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+		})
+		info, conclusive := registry.ResolveSkipInfo(media)
+		if !conclusive {
+			t.Fatal("confirmed absence must be reported as conclusive")
+		}
+		if info.String() != "none" {
+			t.Fatalf("SkipInfo.String() = %q, want none", info.String())
+		}
+	})
 }
 
 func TestBuildSkipArgsFromTimes(t *testing.T) {

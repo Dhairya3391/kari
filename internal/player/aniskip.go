@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -48,6 +49,12 @@ type SkipSettings struct {
 	SkipRecap      bool // Automatically skips recap segments.
 	SkipPreview    bool // Automatically skips preview segments.
 }
+
+// skipLookupTimeout bounds the whole skip fan-out. The AniSkip path needs
+// two sequential API calls (AniList ID resolution, then timings), so a
+// deadline tuned for a single request drops valid data on slow connections
+// and then caches the empty result for the rest of the session.
+const skipLookupTimeout = 6 * time.Second
 
 const skipLuaScript = `
 local opts = {
@@ -391,11 +398,11 @@ var (
 	imdbCache = util.NewBoundedCache[string](500)
 )
 
-func resolveIMDbID(ctx context.Context, media model.ResolvedMedia, keyPool *tmdb.KeyPool, httpClient *http.Client) string {
+func resolveIMDbID(ctx context.Context, media model.ResolvedMedia, keyPool *tmdb.KeyPool, httpClient *http.Client) (string, error) {
 	// 1. Direct regex match on URLs or titles
 	for _, candidate := range []string{media.SeriesURL, media.EpisodeURL, media.MediaURL, media.SeriesTitle} {
 		if m := imdbRegex.FindString(candidate); m != "" {
-			return strings.ToLower(m)
+			return strings.ToLower(m), nil
 		}
 	}
 
@@ -404,43 +411,53 @@ func resolveIMDbID(ctx context.Context, media model.ResolvedMedia, keyPool *tmdb
 	}
 
 	// 2. Resolve from TMDBID if available
-	if media.TMDBID > 0 && keyPool != nil {
-		cacheKey := fmt.Sprintf("tmdb:%d:%s", media.TMDBID, media.MediaType)
-		if cached, ok := imdbCache.Get(cacheKey); ok {
-			return cached
-		}
-
-		apiKey, err := keyPool.NextKey()
-		if err == nil && apiKey != "" {
-			mediaType := "tv"
-			if media.MediaType == "movie" || (media.MediaType != "tv" && media.MediaType != "anime" && media.MediaType != "cartoon" && media.SeasonNumber == 0 && media.EpisodeNumber <= 1) {
-				mediaType = "movie"
-			}
-			endpoint := fmt.Sprintf("%s/%s/%d/external_ids?api_key=%s",
-				config.TMDBAPIBase, mediaType, media.TMDBID, url.QueryEscape(apiKey))
-			req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-			if rerr == nil {
-				req.Header.Set("Accept", "application/json")
-				req.Header.Set("User-Agent", config.DesktopUserAgent)
-				resp, derr := httpClient.Do(req)
-				if derr == nil {
-					defer resp.Body.Close()
-					if resp.StatusCode == http.StatusOK {
-						var res struct {
-							IMDbID string `json:"imdb_id"`
-						}
-						if jerr := json.NewDecoder(resp.Body).Decode(&res); jerr == nil && strings.TrimSpace(res.IMDbID) != "" {
-							id := strings.ToLower(strings.TrimSpace(res.IMDbID))
-							imdbCache.Set(cacheKey, id)
-							return id
-						}
-					}
-				}
-			}
-		}
+	if media.TMDBID <= 0 || keyPool == nil {
+		return "", nil
+	}
+	cacheKey := fmt.Sprintf("tmdb:%d:%s", media.TMDBID, media.MediaType)
+	if cached, ok := imdbCache.Get(cacheKey); ok {
+		return cached, nil
 	}
 
-	return ""
+	apiKey, err := keyPool.NextKey()
+	if err != nil {
+		return "", fmt.Errorf("tmdb api key: %w", err)
+	}
+	if apiKey == "" {
+		return "", nil
+	}
+	mediaType := "tv"
+	if media.MediaType == "movie" || (media.MediaType != "tv" && media.MediaType != "anime" && media.MediaType != "cartoon" && media.SeasonNumber == 0 && media.EpisodeNumber <= 1) {
+		mediaType = "movie"
+	}
+	endpoint := fmt.Sprintf("%s/%s/%d/external_ids?api_key=%s",
+		config.TMDBAPIBase, mediaType, media.TMDBID, url.QueryEscape(apiKey))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("tmdb external ids request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", config.DesktopUserAgent)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("tmdb external ids fetch: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("tmdb external ids status: %d", resp.StatusCode)
+	}
+	var res struct {
+		IMDbID string `json:"imdb_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return "", fmt.Errorf("tmdb external ids decode: %w", err)
+	}
+	id := strings.ToLower(strings.TrimSpace(res.IMDbID))
+	if id == "" {
+		return "", nil
+	}
+	imdbCache.Set(cacheKey, id)
+	return id, nil
 }
 
 // getSkipArgs resolves skip intervals according to settings and writes a
@@ -470,7 +487,7 @@ func getSkipArgs(
 		return buildSkipArgsFromTimes(cached, settings)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), skipLookupTimeout)
 	defer cancel()
 
 	// 1. Resolve AniList ID from media metadata if available
@@ -492,12 +509,13 @@ func getSkipArgs(
 	}
 
 	var (
-		g          errgroup.Group
-		imdbID     string
-		askipTimes *animeskip.SkipTimes
-		aniskipRes *aniskip.SkipTimes
-		skipdbRes  *skipdb.SkipTimes
-		introdbRes *introdb.SkipTimes
+		g            errgroup.Group
+		lookupFailed atomic.Bool
+		imdbID       string
+		askipTimes   *animeskip.SkipTimes
+		aniskipRes   *aniskip.SkipTimes
+		skipdbRes    *skipdb.SkipTimes
+		introdbRes   *introdb.SkipTimes
 	)
 
 	// Anime-Skip
@@ -509,6 +527,7 @@ func getSkipArgs(
 			}
 			t, err := clients.AnimeSkip.GetTimestamps(ctx, aniIDStr, media.SeasonNumber, media.EpisodeNumber, media.SeriesTitle, media.EpisodeTitle)
 			if err != nil {
+				lookupFailed.Store(true)
 				skipLog.Debug("anime-skip lookup error", "err", err)
 			} else {
 				askipTimes = t
@@ -528,12 +547,14 @@ func getSkipArgs(
 				_, malID, err = clients.AniSkip.GetIDs(ctx, media.SeriesTitle)
 			}
 			if err != nil {
+				lookupFailed.Store(true)
 				skipLog.Debug("aniskip id lookup error", "err", err)
 				return nil
 			}
 			if malID > 0 {
 				t, err := clients.AniSkip.GetSkipTimes(ctx, malID, media.EpisodeNumber)
 				if err != nil {
+					lookupFailed.Store(true)
 					skipLog.Debug("aniskip lookup error", "err", err)
 				} else {
 					aniskipRes = t
@@ -548,7 +569,12 @@ func getSkipArgs(
 		(clients.SkipDB != nil || clients.IntroDB != nil)
 	if needIMDb {
 		g.Go(func() error {
-			id := resolveIMDbID(ctx, media, clients.TMDB, clients.HTTP)
+			id, err := resolveIMDbID(ctx, media, clients.TMDB, clients.HTTP)
+			if err != nil {
+				lookupFailed.Store(true)
+				skipLog.Debug("imdb id lookup error", "err", err)
+				return nil
+			}
 			if id == "" {
 				return nil
 			}
@@ -558,6 +584,7 @@ func getSkipArgs(
 				subG.Go(func() error {
 					t, err := clients.SkipDB.GetSegments(ctx, imdbID, media.SeasonNumber, media.EpisodeNumber, isMovie)
 					if err != nil {
+						lookupFailed.Store(true)
 						skipLog.Debug("skipdb lookup error", "err", err)
 					} else {
 						skipdbRes = t
@@ -569,6 +596,7 @@ func getSkipArgs(
 				subG.Go(func() error {
 					t, err := clients.IntroDB.GetSegments(ctx, imdbID, media.SeasonNumber, media.EpisodeNumber, isMovie)
 					if err != nil {
+						lookupFailed.Store(true)
 						skipLog.Debug("introdb lookup error", "err", err)
 					} else {
 						introdbRes = t
@@ -722,6 +750,10 @@ func getSkipArgs(
 	}
 
 	if times.OpStart < 0 && times.EdStart < 0 && times.RecapStart < 0 && times.PreviewStart < 0 {
+		if lookupFailed.Load() || ctx.Err() != nil {
+			skipLog.Debug("skip lookup incomplete; not caching empty result", "title", media.SeriesTitle, "episode", media.EpisodeNumber, "imdb", imdbID, "err", ctx.Err())
+			return nil, ""
+		}
 		cache.Set(cacheKey, times)
 		skipLog.Debug("no skip intervals found", "title", media.SeriesTitle, "episode", media.EpisodeNumber, "imdb", imdbID)
 		return nil, ""

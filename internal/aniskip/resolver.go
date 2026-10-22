@@ -41,6 +41,15 @@ type graphqlResponse struct {
 // GetIDs resolves an anime series title to its AniList ID and MyAnimeList ID
 // in one request. Either may be zero if the API does not return it.
 func (c *Client) GetIDs(ctx context.Context, title string) (anilistID int, malID int, err error) {
+	cleanTitle := normalizeTitle(title)
+	titleKey := ""
+	if cleanTitle != "" {
+		titleKey = "title:" + cleanTitle
+		if cached, ok := c.ids.Get(titleKey); ok {
+			return cached.anilistID, cached.malID, nil
+		}
+	}
+
 	query := `
 	query ($search: String) {
 		Media (search: $search, type: ANIME) {
@@ -54,13 +63,14 @@ func (c *Client) GetIDs(ctx context.Context, title string) (anilistID int, malID
 	if err != nil {
 		return 0, 0, err
 	}
-	cleanTitle := normalizeTitle(title)
 	if cleanTitle == "" || (normalizeTitle(resData.Data.Media.Title.English) != cleanTitle &&
 		normalizeTitle(resData.Data.Media.Title.Romaji) != cleanTitle &&
 		normalizeTitle(resData.Data.Media.Title.Native) != cleanTitle) {
 		return 0, 0, nil
 	}
-	return resData.Data.Media.ID, resData.Data.Media.IDMal, nil
+	ids := cachedIDs{anilistID: resData.Data.Media.ID, malID: resData.Data.Media.IDMal}
+	c.rememberIDs(ids, titleKey, fmt.Sprintf("anilist:%d", ids.anilistID))
+	return ids.anilistID, ids.malID, nil
 }
 
 // GetIDsByAniListID resolves the MyAnimeList ID for an exact AniList ID.
@@ -68,6 +78,11 @@ func (c *Client) GetIDsByAniListID(ctx context.Context, anilistID int) (int, int
 	if anilistID <= 0 {
 		return 0, 0, nil
 	}
+	key := fmt.Sprintf("anilist:%d", anilistID)
+	if cached, ok := c.ids.Get(key); ok {
+		return cached.anilistID, cached.malID, nil
+	}
+
 	query := `
 	query ($id: Int) {
 		Media (id: $id, type: ANIME) {
@@ -80,7 +95,23 @@ func (c *Client) GetIDsByAniListID(ctx context.Context, anilistID int) (int, int
 	if err != nil {
 		return 0, 0, err
 	}
-	return resData.Data.Media.ID, resData.Data.Media.IDMal, nil
+	ids := cachedIDs{anilistID: resData.Data.Media.ID, malID: resData.Data.Media.IDMal}
+	c.rememberIDs(ids, key)
+	return ids.anilistID, ids.malID, nil
+}
+
+// rememberIDs memoizes a resolved ID pair under any supplied lookup keys.
+// Zero-valued results are not cached: they signal a missing media entry, and
+// a later lookup may succeed once AniList's catalog catches up.
+func (c *Client) rememberIDs(ids cachedIDs, keys ...string) {
+	if ids.anilistID <= 0 {
+		return
+	}
+	for _, key := range keys {
+		if key != "" {
+			c.ids.Set(key, ids)
+		}
+	}
 }
 
 func (c *Client) queryIDs(ctx context.Context, query string, variables graphqlVariables) (graphqlResponse, error) {

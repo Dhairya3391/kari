@@ -157,6 +157,57 @@ func TestGetIDsByAniListID(t *testing.T) {
 	}
 }
 
+func TestGetIDsByAniListID_CachesLookup(t *testing.T) {
+	var requests int
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewBufferString(`{"data":{"Media":{"id":105310,"idMal":38671}}}`)),
+			Header:     make(http.Header),
+		}, nil
+	})})
+
+	for range 2 {
+		_, malID, err := client.GetIDsByAniListID(context.Background(), 105310)
+		if err != nil {
+			t.Fatalf("GetIDsByAniListID() error = %v", err)
+		}
+		if malID != 38671 {
+			t.Fatalf("malID = %d, want 38671", malID)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("AniList requests = %d, want 1 cached lookup", requests)
+	}
+}
+
+func TestGetIDs_PopulatesAniListCache(t *testing.T) {
+	var requests int
+	client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewBufferString(`{"data":{"Media":{"id":105310,"idMal":38671,"title":{"english":"Fire Force","romaji":"Enen no Shouboutai","native":"炎炎ノ消防隊"}}}}`)),
+			Header:     make(http.Header),
+		}, nil
+	})})
+
+	if _, _, err := client.GetIDs(context.Background(), "Fire Force"); err != nil {
+		t.Fatalf("GetIDs() error = %v", err)
+	}
+	_, malID, err := client.GetIDsByAniListID(context.Background(), 105310)
+	if err != nil {
+		t.Fatalf("GetIDsByAniListID() error = %v", err)
+	}
+	if malID != 38671 {
+		t.Fatalf("malID = %d, want 38671", malID)
+	}
+	if requests != 1 {
+		t.Fatalf("AniList requests = %d, want the title lookup to seed the AniList cache", requests)
+	}
+}
+
 func TestGetMALID(t *testing.T) {
 	jsonBody := `{
 		"data": {

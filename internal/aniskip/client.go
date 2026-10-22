@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"kari/internal/util"
 )
 
 // SkipTimes holds intro/outro boundaries in seconds, used to feed
@@ -16,14 +18,27 @@ type SkipTimes struct {
 	EdEnd   float64
 }
 
-// Client queries the aniskip API for episode skip times.
+// cachedIDs is the AniList/MyAnimeList ID pair resolved for one title.
+type cachedIDs struct {
+	anilistID int
+	malID     int
+}
+
+// Client queries the aniskip API for episode skip times. Resolved ID pairs
+// are memoized because AniSkip only accepts MyAnimeList IDs while anime
+// media carries AniList IDs: without the cache every episode would spend a
+// round-trip on the AniList GraphQL API before it could ask for timings.
 type Client struct {
 	http *http.Client
+	ids  *util.BoundedCache[cachedIDs]
 }
 
 // NewClient constructs a client around the shared HTTP client.
 func NewClient(httpClient *http.Client) *Client {
-	return &Client{http: httpClient}
+	return &Client{
+		http: httpClient,
+		ids:  util.NewBoundedCache[cachedIDs](500),
+	}
 }
 
 type skipResponse struct {

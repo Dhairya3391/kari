@@ -173,29 +173,32 @@ func (r *Registry) SetSkipSettings(s SkipSettings) {
 }
 
 // ResolveSkipInfo loads the selected skip timings and returns their provenance.
-func (r *Registry) ResolveSkipInfo(media model.ResolvedMedia) SkipInfo {
+// The boolean is false when the lookup was incomplete (a provider errored or
+// the deadline expired), so the caller may retry; a confirmed absence of skip
+// data is cached and reported as true.
+func (r *Registry) ResolveSkipInfo(media model.ResolvedMedia) (SkipInfo, bool) {
 	if r == nil || r.skipCache == nil {
-		return SkipInfo{}
+		return SkipInfo{}, true
 	}
 	mode := strings.ToLower(strings.TrimSpace(r.skipSettings.Provider))
 	if mode == "" {
 		mode = "hybrid"
 	}
 	if mode == "off" || mode == "none" {
-		return SkipInfo{}
+		return SkipInfo{}, true
 	}
 	_, script := getSkipArgs(r.skipClients, r.skipSettings, media, r.skipCache)
 	cleanupSkipScript(script)
 	cached, ok := r.skipCache.Get(skipCacheKey(media, mode))
 	if !ok {
-		return SkipInfo{}
+		return SkipInfo{}, false
 	}
 	return SkipInfo{
 		Opening: infoText(cached.OpSource),
 		Ending:  infoText(cached.EdSource),
 		Recap:   infoText(cached.RecapSource),
 		Preview: infoText(cached.PrevSource),
-	}
+	}, true
 }
 
 // NewRegistry constructs and populates the platform's player set with the
