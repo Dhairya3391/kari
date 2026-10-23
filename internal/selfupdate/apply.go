@@ -14,6 +14,7 @@ import (
 
 	"kari/internal/httpclient"
 	"kari/internal/logging"
+	"kari/internal/man"
 )
 
 var updateLog = logging.With("component", "selfupdate")
@@ -167,6 +168,13 @@ func ApplyURL(url string, onProgress ProgressFunc) error {
 	// to next startup cleanup because the running process holds an active lock.
 	if err := os.Remove(oldPath); err != nil {
 		updateLog.Debug("old binary removal deferred to next run", "file", oldPath, "err", err)
+	}
+
+	// Best-effort man page installation/update on Unix systems.
+	if manPath, err := man.EnsureInstalled(); err != nil {
+		updateLog.Debug("man page update skipped", "err", err)
+	} else if manPath != "" {
+		updateLog.Info("updated manual page", "path", manPath)
 	}
 
 	return nil

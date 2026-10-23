@@ -18,6 +18,7 @@ import (
 	"kari/internal/introdb"
 	"kari/internal/logging"
 	"kari/internal/manga"
+	"kari/internal/man"
 	"kari/internal/player"
 	"kari/internal/poster"
 	"kari/internal/presence"
@@ -44,7 +45,39 @@ var (
 	Commit  = "dev"
 )
 
-func getArgs() (args []string, version bool, update bool) {
+// helpText is printed by -h/--help. It intentionally stays brief; the full
+// reference is in the man page (man kari).
+const helpText = `Usage: kari [OPTIONS] [QUERY]
+
+Stream anime, movies, and TV shows from your terminal.
+
+OPTIONS
+  -v, --version   Print version and exit.
+  -u, --update    Self-update to the latest release and exit.
+  -h, --help      Show this message and exit.
+
+QUERY
+  Optional search term. When provided, kari pre-fills the search
+  input and executes the search immediately on launch.
+
+KEYS (inside TUI)
+  Space           Search        Tab/Shift+Tab   Switch category
+  Enter           Select/Play   Esc             Go back
+  j/k or ↑/↓     Navigate      h/H             History
+  n               Next episode  A               Toggle auto-play
+  a               Sub/Dub       s/S             Settings
+  d               Download      r               Restart episode
+  Ctrl+P          Switch player q/Ctrl+C        Quit
+
+For the full reference including all environment variables and
+configuration options, run:
+
+  man kari
+
+Source and issue tracker: https://github.com/Dhairya3391/kari
+`
+
+func getArgs() (args []string, version bool, update bool, help bool) {
 	for _, arg := range os.Args[1:] {
 		if arg == "-v" || arg == "--version" {
 			version = true
@@ -54,16 +87,24 @@ func getArgs() (args []string, version bool, update bool) {
 			update = true
 			continue
 		}
+		if arg == "-h" || arg == "--help" {
+			help = true
+			continue
+		}
 		args = append(args, arg)
 	}
-	return args, version, update
+	return args, version, update, help
 }
 
 // Run boots the whole application: parse args, load config, wire every
 // component in internal/provider/defaults and app, then hand control to the
 // bubbletea program. It is the only place concrete components meet.
 func Run() error {
-	args, showVersion, showUpdate := getArgs()
+	args, showVersion, showUpdate, showHelp := getArgs()
+	if showHelp {
+		fmt.Print(helpText)
+		return nil
+	}
 	if showVersion {
 		fmt.Printf("Kari version %s (%s)\n", Version, Commit)
 		return nil
@@ -74,6 +115,11 @@ func Run() error {
 	query := strings.TrimSpace(strings.Join(args, " "))
 	logging.Info("starting app", "query", query)
 	selfupdate.CleanupOldExecutables()
+	go func() {
+		if _, err := man.EnsureInstalled(); err != nil {
+			logging.Debug("man page ensure install", "err", err)
+		}
+	}()
 	if p := logging.Path(); p != "" {
 		logging.Info("log file ready", "path", p)
 	}

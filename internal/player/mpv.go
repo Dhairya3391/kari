@@ -18,6 +18,7 @@ import (
 	"kari/internal/provider"
 	"kari/internal/util"
 	"os"
+	"path/filepath"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -102,10 +103,55 @@ var _ Player = (*MPVPlayer)(nil)
 // Name implements Player.
 func (p *MPVPlayer) Name() string { return "mpv" }
 
-// Available implements Player.
+// Available implements Player. It checks for native mpv on PATH first, then
+// falls back to Flatpak (io.mpv.Mpv) on Linux.
 func (p *MPVPlayer) Available() bool {
-	_, err := exec.LookPath("mpv")
-	return err == nil
+	bin, _ := mpvCommand()
+	return bin != ""
+}
+
+// mpvCommand returns the binary name and any prefix arguments required to
+// execute mpv. On desktop Linux where mpv was installed through Flatpak, it
+// returns ("flatpak", []string{"run", "io.mpv.Mpv"}). Returns empty string
+// when mpv is unavailable.
+func mpvCommand() (string, []string) {
+	if _, err := exec.LookPath("mpv"); err == nil {
+		return "mpv", nil
+	}
+	if isFlatpakMPVAvailable() {
+		return "flatpak", []string{"run", "io.mpv.Mpv"}
+	}
+	return "", nil
+}
+
+// isFlatpakMPVAvailable detects whether Flatpak MPV (io.mpv.Mpv) is installed
+// on Linux desktop environments.
+func isFlatpakMPVAvailable() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	if _, err := exec.LookPath("flatpak"); err != nil {
+		return false
+	}
+	if _, err := exec.LookPath("io.mpv.Mpv"); err == nil {
+		return true
+	}
+
+	candidates := []string{
+		"/var/lib/flatpak/app/io.mpv.Mpv",
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates, filepath.Join(home, ".local", "share", "flatpak", "app", "io.mpv.Mpv"))
+	}
+	for _, dir := range candidates {
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			return true
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "flatpak", "info", "io.mpv.Mpv").Run() == nil
 }
 
 func (p *MPVPlayer) setSkipSettings(s SkipSettings) {
@@ -139,9 +185,13 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	socketPath := DefaultMPVSocketPath()
 
 	// Strategy 1: direct MPV playback (primary).
-	directArgs := buildMPVArgs(source, media, socketPath, aniskipArgs)
+	bin, prefix := mpvCommand()
+	if bin == "" {
+		return PlaybackResult{}, fmt.Errorf("mpv player is not available")
+	}
+	directArgs := append(prefix, buildMPVArgs(source, media, socketPath, aniskipArgs)...)
 	direct := startPlayerWithStartupCheck(startupCheck{
-		binary:     "mpv",
+		binary:     bin,
 		args:       directArgs,
 		socketPath: socketPath,
 		sourceURL:  source.URL,
@@ -658,8 +708,14 @@ func waitForPlaybackReadiness(
 func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err error) {
 	_ = os.Remove(check.socketPath)
 
+	bin, prefix := mpvCommand()
+	if bin == "" {
+		return launchResult{exitCode: 1}, fmt.Errorf("mpv player is not available")
+	}
+
 	curl := exec.Command("curl", check.curlArgs...)
-	mpv := exec.Command("mpv", check.mpvArgs...)
+	mpvArgs := append(prefix, check.mpvArgs...)
+	mpv := exec.Command(bin, mpvArgs...)
 	stdout, err := curl.StdoutPipe()
 	if err != nil {
 		return launchResult{exitCode: 1}, err

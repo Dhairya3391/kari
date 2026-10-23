@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"kari/internal/logging"
+	"kari/internal/man"
 	"kari/internal/selfupdate"
 )
 
@@ -71,6 +72,9 @@ func update(quiet bool) error {
 
 	if !quiet {
 		fmt.Print("\r  Downloading... done\n")
+		if manPath, _ := man.EnsureInstalled(); manPath != "" {
+			fmt.Printf("Updated manual page at %s (run 'man kari')\n", manPath)
+		}
 		fmt.Printf("Successfully updated to %s! Please restart Kari.\n", latest.TagName)
 	} else {
 		updateLog.Info("update downloaded; active on next restart", "version", latest.TagName)

@@ -1,0 +1,457 @@
+.\" kari.1 — manual page for kari
+.\" Man page for kari: terminal media player frontend.
+.\"
+.\" Conventions:
+.\"   .B  bold (commands, options, key names)
+.\"   .I  italic (arguments, placeholders)
+.\"   .BR mixed bold/roman (option + argument on same line)
+.\"   .PP new paragraph
+.\"   .TP tagged paragraph (option lists)
+.\"   .RS/.RE relative indent for sub-lists
+.\"
+.TH KARI 1 "October 2026" "kari" "User Commands"
+.\" ────────────────────────────────────────────────
+.SH NAME
+kari \- terminal frontend for streaming anime, movies, and TV shows
+.\" ────────────────────────────────────────────────
+.SH SYNOPSIS
+.B kari
+.RI [ OPTIONS ]
+.RI [ QUERY ]
+.\" ────────────────────────────────────────────────
+.SH DESCRIPTION
+.B kari
+(狩り, \fIhunt\fR) is an interactive terminal user interface that searches
+multiple streaming sources in parallel and plays media through an external
+player (MPV, IINA, or VLC).
+.PP
+Invoking
+.B kari
+without arguments opens the interactive TUI.
+Passing a
+.I QUERY
+string pre-fills the search input and executes the search immediately, e.g.
+.RS
+.B kari "frieren"
+.RE
+.PP
+Kari tracks watch history and resume positions automatically via MPV's local
+IPC socket.
+It scrobbles to AniList (anime) and Trakt.tv (movies, TV) when authorized,
+selects subtitles from provider-embedded tracks and falls back to
+OpenSubtitles, and injects skip chapters (opening, ending, recap, preview)
+into MPV for supported titles.
+.\" ────────────────────────────────────────────────
+.SH OPTIONS
+.TP
+.BR \-v ", " \-\-version
+Print the version string and commit hash, then exit.
+.TP
+.BR \-u ", " \-U ", " \-\-update
+Fetch the latest release from GitHub and replace the running binary
+in-place, then exit.
+Requires write permission to the directory containing the
+.B kari
+binary.
+.TP
+.BR \-h ", " \-\-help
+Print a short usage summary and exit.
+.\" ────────────────────────────────────────────────
+.SH INTERACTIVE KEYS
+All keybindings are active inside the TUI.
+Keys are context-sensitive; some bindings are only available on specific
+screens (e.g. episode list, history, settings).
+.SS Navigation
+.TP
+.BR "↑ / ↓" " or " "j / k"
+Move selection up or down.
+.TP
+.B Enter
+Confirm selection: open series → select episode → launch player.
+.TP
+.BR Esc " / " Backspace
+Go back to the previous screen.
+.TP
+.B Space
+Execute a search for the current input text.
+.TP
+.BR Tab " / " Shift+Tab
+Cycle the active content category forward or backward:
+.B Anime → Movies → TV → Cartoons → Jellyfin\c
+\&.
+.TP
+.B /
+Enter filter mode to narrow the current list.
+.TP
+.B Ctrl+H
+Return to the home / search screen from any depth.
+.TP
+.BR g " / " G
+Jump to the first / last item in the current list.
+.TP
+.B ?
+Toggle the in-TUI keybinding help overlay.
+.SS Playback
+.TP
+.B n
+Play the next episode in the series.
+.TP
+.B A
+Toggle auto-play (automatically advance to the next episode on completion).
+.TP
+.B a
+Toggle Sub / Dub audio mode (Anime mode only).
+.TP
+.B r
+Restart the current episode from the beginning, discarding the saved
+resume position.
+.TP
+.B Ctrl+P
+Switch the active media player (cycles through detected players).
+.SS Downloads
+.TP
+.B d
+Download the selected episode via
+.BR yt-dlp (1),
+with optional
+.BR aria2c (1)
+acceleration.
+.TP
+.B x
+Stop or cancel the active download.
+.TP
+.B Space
+Toggle selection of an episode for batch download (download list screen).
+.TP
+.B Ctrl+A
+Select all episodes for batch download.
+.TP
+.B Ctrl+D
+Deselect all episodes.
+.TP
+.B D
+Batch-download all selected episodes.
+.SS History & Settings
+.TP
+.BR h " / " H
+Open the watch history screen.
+.TP
+.B m
+Mark the current entry as fully watched.
+.TP
+.BR s " / " S
+Open the settings screen (Trakt, AniList, subtitles, theme, language
+filters, skip behavior).
+.TP
+.B t
+Show the anime status overlay (airing status, episode count).
+.SS Application
+.TP
+.B Ctrl+D
+Toggle the real-time debug log panel.
+.TP
+.BR q " / " Ctrl+C
+Quit kari.
+.\" ────────────────────────────────────────────────
+.SH CONTENT CATEGORIES
+Pressing
+.B Tab
+cycles through five categories.
+.TP
+.B Anime
+Searched via Anikoto (primary) and AniVault (secondary, AniList-indexed).
+Supports Sub/Dub audio selection and AniList scrobbling.
+.TP
+.B Movies
+Searched via Movy.sx (primary) and Pengu (secondary, TMDB-indexed).
+Supports Trakt scrobbling.
+.TP
+.B TV
+Same providers as Movies.
+Supports Trakt scrobbling.
+.TP
+.B Cartoons
+Same providers as Movies.
+.TP
+.B Jellyfin
+Your personal Jellyfin server.
+Requires
+.B JELLYFIN_URL
+and
+.B JELLYFIN_API_KEY
+to be set.
+.\" ────────────────────────────────────────────────
+.SH ENVIRONMENT
+.TP
+.B KARI_PLAYER
+Force a specific player.
+Accepted values:
+.BR mpv ", " iina ", " vlc .
+Default: auto-detected from
+.BR PATH .
+.TP
+.B KARI_DOWNLOAD_DIR
+Directory where downloaded episodes are saved.
+Default:
+.I ./downloads
+(relative to the working directory at launch).
+.TP
+.B KARI_LOG_FILE
+Path for the application log file.
+Default:
+.IR ~/.config/kari/kari.log .
+The log rotates automatically at 10\ MB.
+.TP
+.B KARI_LOG_DEBUG
+Enable verbose debug logging.
+Set to
+.B true
+or
+.BR 1 .
+Default:
+.BR false .
+.TP
+.B KARI_LOG_STDERR
+Write logs to standard error instead of the log file.
+Set to
+.B true
+or
+.BR 1 .
+Default:
+.BR false .
+.TP
+.B JELLYFIN_URL
+Your Jellyfin server base URL, e.g.\&
+.IR https://jellyfin.example.com .
+Setting this activates the Jellyfin category.
+.TP
+.B JELLYFIN_API_KEY
+Jellyfin API key generated from the Jellyfin dashboard
+(Dashboard → API Keys).
+.TP
+.B TMDB_API_KEY
+Custom TMDB v3 API key.
+Kari uses a built-in rotating key pool when this is unset.
+.TP
+.B OPENSUBTITLES_API_KEY
+OpenSubtitles REST API key for fallback subtitle lookup.
+.TP
+.B OPENSUBTITLES_USERNAME
+OpenSubtitles account username.
+Required when
+.B OPENSUBTITLES_API_KEY
+is set.
+.TP
+.B OPENSUBTITLES_PASSWORD
+OpenSubtitles account password.
+Required when
+.B OPENSUBTITLES_API_KEY
+is set.
+.TP
+.BR TRAKT_CLIENT_ID " / " TRAKT_ID
+Custom Trakt.tv OAuth client ID.
+A bundled default is used when unset.
+.TP
+.BR TRAKT_CLIENT_SECRET " / " TRAKT_SECRET
+Custom Trakt.tv OAuth client secret.
+.TP
+.BR ANILIST_CLIENT_ID " / " ANILIST_ID
+Custom AniList OAuth client ID.
+A bundled default is used when unset.
+.TP
+.BR ANILIST_CLIENT_SECRET " / " ANILIST_SECRET
+Custom AniList OAuth client secret.
+.TP
+.B KARI_ANIME_SKIP_CLIENT_ID
+Custom Anime-Skip API client ID.
+A bundled default is provided automatically.
+.TP
+.BR PENGU_AUTH_TOKEN " / " PENGU_TOKEN
+Custom PenguPlay access token (obtain from
+.I https://pengu.uk
+or the PenguPlay Telegram / Discord bot).
+A bundled default is provided automatically.
+.TP
+.B KARI_DISCORD_APP_ID
+Override the Discord Rich Presence application ID.
+Intended for forks and development builds.
+.\" ────────────────────────────────────────────────
+.SH FILES
+.TP
+.I ~/.config/kari/kari.log
+Default application log file (rotates at 10\ MB).
+.TP
+.I ~/.config/kari/settings.json
+Persisted user settings: active media category, theme, accent color,
+subtitle language preference, enabled providers, scrobble tokens, skip
+behavior.
+.TP
+.I ~/.config/kari/history.json
+Watch history database (series, episode, timestamp, resume position,
+audio mode).
+.TP
+.I /usr/local/share/man/man1/kari.1
+Default man page installation path (macOS / Linux).
+.\" ────────────────────────────────────────────────
+.SH MEDIA PLAYERS
+kari communicates with the media player via a local Unix IPC socket
+(MPV / IINA) to track the playback position for accurate resume support.
+VLC is supported for playback but does not report position back.
+.TP
+.B mpv
+Recommended.
+Full IPC position tracking, smart skip chapters injected as seekbar
+chapters, custom HTTP headers (Referer, Origin, cookies), and subtitle
+track injection.
+Supported on Linux, macOS, Windows, and Android (Termux + MPV Android).
+.TP
+.B iina
+macOS only.
+MPV-based; position tracking supported via the same IPC protocol.
+.TP
+.B vlc
+Linux, macOS, Windows.
+Playback supported; no IPC position tracking (resume is approximate).
+.TP
+.B MX Player
+Android only.
+Launched via Android intents through Termux.
+.\" ────────────────────────────────────────────────
+.SH SKIP ENGINE
+kari's hybrid skip engine queries four sources in parallel for each episode:
+.PP
+.RS
+.PD 0
+.IP \(bu 2
+.B SkipDB
+.IP \(bu 2
+.B IntroDB
+.IP \(bu 2
+.B Anime-Skip
+(GraphQL)
+.IP \(bu 2
+.B AniSkip
+.PD
+.RE
+.PP
+When skip data is found, virtual chapters (Opening, Ending, Recap, Preview)
+are injected into MPV's seekbar, and a context-aware OSD prompt
+(\fIPress Enter to Skip\fR) appears at the appropriate playback position.
+Skip behavior can be toggled in the settings screen (\fBs\fR).
+.\" ────────────────────────────────────────────────
+.SH DOWNLOADS
+The
+.B d
+key downloads the selected episode using
+.BR yt-dlp (1).
+When
+.BR aria2c (1)
+is available on
+.BR PATH ,
+kari automatically enables 16-connection acceleration for significantly
+faster downloads.
+Files are saved to
+.B KARI_DOWNLOAD_DIR
+(default
+.IR ./downloads ).
+.\" ────────────────────────────────────────────────
+.SH SCROBBLING
+Kari supports native device-flow OAuth authorization for two services.
+No API tokens need to be copied manually; the TUI guides you through the
+device-flow URL and code.
+.TP
+.B AniList
+Tracks anime watch progress.
+Authorize from the Settings screen (\fBs\fR → AniList).
+.TP
+.B Trakt.tv
+Tracks movie and TV watch history.
+Authorize from the Settings screen (\fBs\fR → Trakt).
+.\" ────────────────────────────────────────────────
+.SH EXAMPLES
+.TP
+Open kari interactively:
+.B kari
+.TP
+Search for "Attack on Titan" immediately on launch:
+.B kari "Attack on Titan"
+.TP
+Print the installed version:
+.B kari --version
+.TP
+Self-update to the latest release:
+.B kari --update
+.TP
+Enable verbose debug logging for a session:
+.RS
+.B KARI_LOG_DEBUG=true kari
+.RE
+.TP
+Force MPV as the media player:
+.RS
+.B KARI_PLAYER=mpv kari
+.RE
+.TP
+Use a custom download directory:
+.RS
+.B KARI_DOWNLOAD_DIR=~/Videos kari
+.RE
+.\" ────────────────────────────────────────────────
+.SH DIAGNOSTICS
+Logs are written to
+.I ~/.config/kari/kari.log
+and rotate automatically at 10\ MB.
+.PP
+To stream logs to standard error in real time:
+.RS
+.B KARI_LOG_STDERR=true kari
+.RE
+.PP
+To enable verbose debug logging:
+.RS
+.B KARI_LOG_DEBUG=true kari
+.RE
+.PP
+The debug log panel can also be toggled at runtime with
+.B Ctrl+D
+without restarting kari.
+.\" ────────────────────────────────────────────────
+.SH EXIT STATUS
+.TP
+.B 0
+Normal exit.
+.TP
+.B 1
+Startup failure (logging init failed, fatal configuration error) or the
+application exited with an internal error.
+.\" ────────────────────────────────────────────────
+.SH SEE ALSO
+.BR mpv (1),
+.BR yt-dlp (1),
+.BR aria2c (1),
+.BR iina (1)
+.PP
+Project home page and source:
+.I https://github.com/Dhairya3391/kari
+.PP
+Media providers documentation:
+.I https://github.com/Dhairya3391/kari/blob/main/docs/PROVIDERS.md
+.\" ────────────────────────────────────────────────
+.SH BUGS
+Report bugs at:
+.I https://github.com/Dhairya3391/kari/issues
+.\" ────────────────────────────────────────────────
+.SH AUTHORS
+Developed by Dhairya Adroja and contributors.
+.PP
+Built with
+.I Bubble Tea
+and
+.I Lip Gloss
+by Charm.
+.\" ────────────────────────────────────────────────
+.SH LICENSE
+MIT License.
+See
+.I https://github.com/Dhairya3391/kari/blob/main/LICENSE
+for the full text.
