@@ -86,8 +86,8 @@ func TestNormalizeAudioMode(t *testing.T) {
 // BenchmarkNormalizeQuality measures the hot quality-folding path.
 func BenchmarkNormalizeQuality(b *testing.B) {
 	qualities := []string{"1080p [4KHDHub] (Hindi)", "4K [VegaMovies]", "Auto (HD1)", "FHD", "720p", "unknown"}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for i := 0; b.Loop(); i++ {
 		NormalizeQuality(qualities[i%len(qualities)])
 	}
 }
@@ -98,8 +98,8 @@ func BenchmarkDedupeSources(b *testing.B) {
 	for i := range in {
 		in[i] = provider.MediaSource{URL: "https://cdn.example.com/x.m3u8", Quality: "1080p"}
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+
+	for b.Loop() {
 		DedupeSources(in)
 	}
 }

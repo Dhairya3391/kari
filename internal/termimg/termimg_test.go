@@ -326,9 +326,9 @@ func BenchmarkToPaletted(b *testing.B) {
 			img.SetRGBA(x, y, color.RGBA{uint8(x % 256), uint8(y % 256), 128, 255})
 		}
 	}
-	b.ResetTimer()
+
 	b.ReportAllocs()
-	for range b.N {
+	for b.Loop() {
 		_ = toPaletted(img)
 	}
 }
@@ -340,9 +340,9 @@ func BenchmarkAutocontrastPage(b *testing.B) {
 			img.SetRGBA(x, y, color.RGBA{uint8(50 + x%150), uint8(50 + y%150), 128, 255})
 		}
 	}
-	b.ResetTimer()
+
 	b.ReportAllocs()
-	for range b.N {
+	for b.Loop() {
 		_ = autocontrastPage(img)
 	}
 }

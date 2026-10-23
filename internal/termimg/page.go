@@ -66,7 +66,9 @@ func RenderPage(img image.Image, protocol Protocol, boxW, boxH int, imageID uint
 	out.WriteString(block)
 	for r := rows; r < boxH; r++ {
 		out.WriteByte('\n')
-		out.WriteString(readerBGOn + strings.Repeat(" ", boxW) + readerReset)
+		out.WriteString(readerBGOn)
+		out.WriteString(strings.Repeat(" ", boxW))
+		out.WriteString(readerReset)
 	}
 	return out.String(), nil
 }
@@ -133,7 +135,9 @@ func bgPlaceholders(cols, rows, boxW, xOff int) string {
 	fill := max(0, boxW-xOff-cols)
 	var b strings.Builder
 	for row := 0; row < rows; row++ {
-		b.WriteString(readerBGOn + strings.Repeat(" ", xOff+cols+fill) + readerReset)
+		b.WriteString(readerBGOn)
+		b.WriteString(strings.Repeat(" ", xOff+cols+fill))
+		b.WriteString(readerReset)
 		if row < rows-1 {
 			b.WriteByte('\n')
 		}
