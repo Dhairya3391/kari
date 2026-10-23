@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"kari/internal/config"
@@ -45,12 +46,21 @@ const (
 	StatusRepeating MediaListStatus = "REPEATING"
 )
 
-// MediaListEntry contains the user's tracking entry details for an anime on AniList.
+// MediaListEntry contains the user's tracking entry details on AniList.
 type MediaListEntry struct {
 	ID       int             `json:"id"`
 	Status   MediaListStatus `json:"status"`
 	Progress int             `json:"progress"`
 	Repeat   int             `json:"repeat"`
+}
+
+// MangaProgress is one completed manga chapter to report to AniList.
+// AniList tracks whole chapters only, so Chapter must already be floored
+// from any fractional provider numbering.
+type MangaProgress struct {
+	Title     string
+	AniListID int
+	Chapter   int
 }
 
 // AniListClient updates anime watch progress via the AniList GraphQL API.
@@ -64,6 +74,11 @@ type AniListClient struct {
 	// apiBase overrides the GraphQL endpoint (tests point it at an
 	// httptest server); empty selects config.AniListAPIBase.
 	apiBase string
+
+	// mangaMu serializes manga progress reads and writes so two fast
+	// chapter completions cannot race a stale progress check into a
+	// backwards update.
+	mangaMu sync.Mutex
 }
 
 // resolveTokenPath resolves the token path under ~/.config/kari/tokens/<name>,
@@ -192,6 +207,100 @@ func (c *AniListClient) UpdateProgress(ctx context.Context, media model.Resolved
 
 	aniLog.Debug("media resolved", "mediaID", mediaID, "series", media.SeriesTitle)
 
+	return c.saveProgress(ctx, mediaID, media.EpisodeNumber)
+}
+
+// UpdateMangaProgress advances the authenticated user's manga list entry to
+// the completed chapter, never moving progress backwards. It resolves the
+// media by AniList id when known, falling back to a MANGA-typed title search,
+// and skips the mutation when AniList is already at or beyond the chapter.
+func (c *AniListClient) UpdateMangaProgress(ctx context.Context, p MangaProgress) error {
+	if !c.IsAuthenticated() {
+		return fmt.Errorf("anilist client not authenticated")
+	}
+	if p.Chapter <= 0 {
+		return fmt.Errorf("manga chapter must be positive")
+	}
+	p.Title = strings.TrimSpace(p.Title)
+	if p.AniListID <= 0 && p.Title == "" {
+		return fmt.Errorf("media id or title required")
+	}
+
+	// Serialize read-then-write so concurrent completions cannot both see
+	// stale progress and apply out of order.
+	c.mangaMu.Lock()
+	defer c.mangaMu.Unlock()
+
+	media, err := c.fetchMangaEntry(ctx, p.AniListID, p.Title)
+	if err != nil {
+		return err
+	}
+	if media.ID == 0 && p.AniListID > 0 && p.Title != "" {
+		// Stale or mismatched id: retry by title before giving up.
+		media, err = c.fetchMangaEntry(ctx, 0, p.Title)
+		if err != nil {
+			return err
+		}
+	}
+	if media.ID == 0 {
+		return fmt.Errorf("manga not found on anilist")
+	}
+	if media.MediaListEntry != nil && media.MediaListEntry.Progress >= p.Chapter {
+		aniLog.Debug("manga progress already current",
+			"title", p.Title, "chapter", p.Chapter, "remote", media.MediaListEntry.Progress)
+		return nil
+	}
+
+	if err := c.saveProgress(ctx, media.ID, p.Chapter); err != nil {
+		return err
+	}
+	aniLog.Debug("manga progress updated", "title", p.Title, "chapter", p.Chapter, "mediaID", media.ID)
+	return nil
+}
+
+// mangaMedia is the AniList media shape needed to guard a manga progress
+// update: the resolved id and the user's current list position.
+type mangaMedia struct {
+	ID             int             `json:"id"`
+	MediaListEntry *MediaListEntry `json:"mediaListEntry"`
+}
+
+// fetchMangaEntry resolves one manga entry by id or title. A null Media
+// response yields a zero mangaMedia so callers can fall back by title.
+func (c *AniListClient) fetchMangaEntry(ctx context.Context, mediaID int, title string) (mangaMedia, error) {
+	query := `
+	query ($id: Int, $search: String) {
+		Media (id: $id, search: $search, type: MANGA) {
+			id
+			mediaListEntry {
+				progress
+			}
+		}
+	}
+	`
+	vars := make(map[string]interface{})
+	if mediaID > 0 {
+		vars["id"] = mediaID
+	} else {
+		vars["search"] = title
+	}
+
+	var res struct {
+		Data struct {
+			Media *mangaMedia `json:"Media"`
+		} `json:"data"`
+	}
+	if err := c.doGraphQL(ctx, query, vars, &res); err != nil {
+		return mangaMedia{}, fmt.Errorf("fetch anilist manga: %w", err)
+	}
+	if res.Data.Media == nil {
+		return mangaMedia{}, nil
+	}
+	return *res.Data.Media, nil
+}
+
+// saveProgress writes one list entry's progress, leaving its status alone.
+func (c *AniListClient) saveProgress(ctx context.Context, mediaID, progress int) error {
 	query := `
 	mutation ($mediaId: Int, $progress: Int) {
 		SaveMediaListEntry (mediaId: $mediaId, progress: $progress) {
@@ -202,13 +311,12 @@ func (c *AniListClient) UpdateProgress(ctx context.Context, media model.Resolved
 	`
 	vars := map[string]interface{}{
 		"mediaId":  mediaID,
-		"progress": media.EpisodeNumber,
+		"progress": progress,
 	}
 
 	if err := c.doGraphQL(ctx, query, vars, nil); err != nil {
 		return fmt.Errorf("failed to save progress to anilist: %w", err)
 	}
-
 	return nil
 }
 

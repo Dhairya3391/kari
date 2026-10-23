@@ -199,6 +199,133 @@ func TestAniListClient_DeleteMediaListEntry(t *testing.T) {
 	}
 }
 
+func TestAniListClient_UpdateMangaProgressAdvances(t *testing.T) {
+	var mutations []map[string]interface{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string                 `json:"query"`
+			Variables map[string]interface{} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "SaveMediaListEntry") {
+			mutations = append(mutations, req.Variables)
+			_, _ = w.Write([]byte(`{"data":{"SaveMediaListEntry":{"id":42,"progress":351}}}`))
+			return
+		}
+		if !strings.Contains(req.Query, "type: MANGA") {
+			t.Errorf("manga lookup must filter type MANGA: %s", req.Query)
+		}
+		_, _ = w.Write([]byte(`{"data":{"Media":{"id":42,"mediaListEntry":{"progress":350}}}}`))
+	}))
+	defer ts.Close()
+
+	client := testAnilistClient(ts)
+	err := client.UpdateMangaProgress(context.Background(), MangaProgress{
+		Title:   "Blue Lock",
+		Chapter: 351,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mutations) != 1 {
+		t.Fatalf("mutations = %d, want 1", len(mutations))
+	}
+	if mutations[0]["mediaId"] != float64(42) {
+		t.Errorf("mediaId = %v, want 42", mutations[0]["mediaId"])
+	}
+	if mutations[0]["progress"] != float64(351) {
+		t.Errorf("progress = %v, want 351", mutations[0]["progress"])
+	}
+}
+
+func TestAniListClient_UpdateMangaProgressDoesNotRegress(t *testing.T) {
+	var mutated bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "SaveMediaListEntry") {
+			mutated = true
+			_, _ = w.Write([]byte(`{"data":{"SaveMediaListEntry":{"id":42,"progress":350}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"Media":{"id":42,"mediaListEntry":{"progress":351}}}}`))
+	}))
+	defer ts.Close()
+
+	client := testAnilistClient(ts)
+	err := client.UpdateMangaProgress(context.Background(), MangaProgress{
+		AniListID: 42,
+		Chapter:   350,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mutated {
+		t.Error("progress must not move backwards")
+	}
+}
+
+func TestAniListClient_UpdateMangaProgressFallsBackToTitle(t *testing.T) {
+	var lookupByID, lookupByTitle, mutated bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string                 `json:"query"`
+			Variables map[string]interface{} `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "SaveMediaListEntry") {
+			mutated = true
+			_, _ = w.Write([]byte(`{"data":{"SaveMediaListEntry":{"id":42,"progress":5}}}`))
+			return
+		}
+		if req.Variables["id"] == float64(999) {
+			lookupByID = true
+			_, _ = w.Write([]byte(`{"data":{"Media":null}}`))
+			return
+		}
+		if req.Variables["search"] == "Blue Lock" {
+			lookupByTitle = true
+			_, _ = w.Write([]byte(`{"data":{"Media":{"id":42,"mediaListEntry":null}}}`))
+			return
+		}
+		t.Errorf("unexpected request: %+v", req.Variables)
+		_, _ = w.Write([]byte(`{"data":{"Media":null}}`))
+	}))
+	defer ts.Close()
+
+	client := testAnilistClient(ts)
+	err := client.UpdateMangaProgress(context.Background(), MangaProgress{
+		Title:     "Blue Lock",
+		AniListID: 999,
+		Chapter:   5,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !lookupByID || !lookupByTitle {
+		t.Errorf("lookups: byID=%v byTitle=%v, want both", lookupByID, lookupByTitle)
+	}
+	if !mutated {
+		t.Error("expected progress mutation after title fallback")
+	}
+}
+
+func TestAniListClient_UpdateMangaProgressRequiresAuth(t *testing.T) {
+	client := &AniListClient{}
+	if err := client.UpdateMangaProgress(context.Background(), MangaProgress{Title: "Blue Lock", Chapter: 1}); err == nil {
+		t.Error("expected error for unauthenticated client")
+	}
+}
+
 func TestAniListClient_UpdateProgressDoesNotForceCurrent(t *testing.T) {
 	var lastQuery string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

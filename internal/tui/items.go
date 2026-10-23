@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"kari/internal/history"
 	"kari/internal/provider"
+	"strconv"
 	"strings"
 	"time"
 
@@ -139,17 +140,106 @@ func episodesToItems(items []provider.Episode, historyStore *history.Store, seri
 
 // chaptersToItems renders manga/comic chapters as selectable rows using
 // the provider-stamped display label (fractional numbers included).
-func chaptersToItems(items []provider.MangaChapter) []list.Item {
+// progress is the series' saved resume entry (zero when there is none):
+// chapters before it read as finished, the saved chapter shows its page
+// position, and later chapters stay blank. Manga history keeps one
+// resume point per series, so this is a read-through marker rather than
+// an exact per-chapter completion record.
+func chaptersToItems(items []provider.MangaChapter, progress history.Entry) []list.Item {
 	out := make([]list.Item, 0, len(items))
 	for idx, it := range items {
+		marker := lipgloss.NewStyle().Foreground(colorMuted).Render(chapterMarker(it, progress))
 		out = append(out, rowItem{
-			title: it.DisplayLabel(),
+			title: marker + it.DisplayLabel(),
 			desc:  "",
 			key:   it.ID,
 			index: idx,
 		})
 	}
 	return out
+}
+
+// chapterMarker renders the left-hand status cell for one chapter row:
+// a checkmark below the saved chapter, the page position on it, and a
+// blank cell above it.
+func chapterMarker(chapter provider.MangaChapter, progress history.Entry) string {
+	const blank = "[    ] "
+	number := strings.TrimSpace(chapter.Number)
+	saved := mangaEntryChapter(progress)
+	if number == "" || saved == "" {
+		return blank
+	}
+
+	cmp, numeric := compareChapterNumbers(number, saved)
+	if !numeric {
+		if number != saved {
+			return blank
+		}
+		return chapterPositionMarker(progress)
+	}
+	switch {
+	case cmp < 0:
+		return "[  ✓ ] "
+	case cmp == 0:
+		return chapterPositionMarker(progress)
+	default:
+		return blank
+	}
+}
+
+// chapterPositionMarker renders the saved chapter's own row: finished
+// once effectively through it, its page count while partway, and an
+// arrow when only the chapter (not a page) is known.
+func chapterPositionMarker(entry history.Entry) string {
+	page, pages := mangaEntryPage(entry)
+	switch {
+	case entry.Complete || (pages > 0 && page >= pages):
+		return "[  ✓ ] "
+	case pages > 0:
+		return fmt.Sprintf("[%2d/%2d] ", page, pages)
+	default:
+		return "[  → ] "
+	}
+}
+
+// mangaEntryChapter reads the chapter a manga entry points at, preferring
+// the explicit v2 field over the legacy EpisodeTitle slot.
+func mangaEntryChapter(entry history.Entry) string {
+	if c := strings.TrimSpace(entry.MangaChapter); c != "" {
+		return c
+	}
+	return strings.TrimSpace(entry.EpisodeTitle)
+}
+
+// mangaEntryPage reads the page position, preferring the v2 fields over
+// the legacy Position/Duration encoding.
+func mangaEntryPage(entry history.Entry) (page, pages int) {
+	if entry.MangaPages > 0 {
+		return entry.MangaPage, entry.MangaPages
+	}
+	return int(entry.PositionSecs), int(entry.DurationSecs)
+}
+
+// compareChapterNumbers orders numeric chapter labels, fractional ones
+// included. ok is false for labels like specials ("12a") that cannot be
+// compared without provider-specific ordering knowledge.
+func compareChapterNumbers(a, b string) (cmp int, ok bool) {
+	af, err := strconv.ParseFloat(strings.TrimSpace(a), 64)
+	if err != nil {
+		return 0, false
+	}
+	bf, err := strconv.ParseFloat(strings.TrimSpace(b), 64)
+	if err != nil {
+		return 0, false
+	}
+	switch {
+	case af < bf:
+		return -1, true
+	case af > bf:
+		return 1, true
+	default:
+		return 0, true
+	}
 }
 
 // splitHistoryGroups divides groups into in-progress (including

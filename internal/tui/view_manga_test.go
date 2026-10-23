@@ -37,7 +37,7 @@ func TestChaptersScreenOrdering(t *testing.T) {
 		{ID: "c1", Number: "1", Title: "Start"},
 		{ID: "c2", Number: "2", Title: "Next"},
 	}
-	m.chapterList.SetItems(chaptersToItems(m.chapters))
+	m.chapterList.SetItems(chaptersToItems(m.chapters, history.Entry{}))
 
 	out := RenderChaptersScreen(m.collectChaptersData(100, 24, ResolveAccent(model.KindManga, "Auto")))
 	titleIdx := strings.Index(out, "Kingdom")
@@ -95,8 +95,9 @@ func TestReaderFullscreenPageLines(t *testing.T) {
 }
 
 // TestSaveMangaProgressRoundtrip pins the history mapping: one entry
-// per series keyed by title, chapter number in EpisodeTitle, page and
-// page count in Position/Duration.
+// per series keyed by title, chapter number and page in the v2 manga
+// fields, legacy mirrors for older readers, and the AniList id kept
+// across page turns so scrobbles stay id-based.
 func TestSaveMangaProgressRoundtrip(t *testing.T) {
 	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
 	if err != nil {
@@ -105,6 +106,18 @@ func TestSaveMangaProgressRoundtrip(t *testing.T) {
 	// Saves run on a background goroutine: Close before TempDir cleanup
 	// or the async write races the directory removal (flaky unlinkat).
 	defer store.Close()
+	const anilistID = 12345
+	key := history.EntryKey{Title: "One Piece", Mode: "manga", MediaType: "manga"}
+	if err := store.Upsert(history.Entry{
+		Key:       key,
+		Title:     "One Piece",
+		Mode:      string(provider.ModeManga),
+		MediaType: provider.MediaTypeManga,
+		AniListID: anilistID,
+	}); err != nil {
+		t.Fatalf("seed history entry: %v", err)
+	}
+
 	m := mangaTestModel()
 	m.historyStore = store
 	m.selectedSeries = &provider.SearchResult{Title: "One Piece", Provider: "weebcentral"}
@@ -112,15 +125,53 @@ func TestSaveMangaProgressRoundtrip(t *testing.T) {
 
 	m.saveMangaProgress(7, 24)
 
-	entry, ok := store.Get(history.EntryKey{Title: "One Piece", Mode: "manga", MediaType: "manga"})
+	entry, ok := store.Get(key)
 	if !ok {
 		t.Fatalf("no history entry recorded")
 	}
 	if entry.EpisodeTitle != "5" || entry.PositionSecs != 7 || entry.DurationSecs != 24 {
 		t.Errorf("entry = %+v, want chapter 5 page 7/24", entry)
 	}
+	if entry.MangaChapter != "5" || entry.MangaPage != 7 || entry.MangaPages != 24 {
+		t.Errorf("v2 manga fields = %+v, want chapter 5 page 7/24", entry)
+	}
+	if entry.AniListID != anilistID {
+		t.Errorf("AniListID = %d, want %d", entry.AniListID, anilistID)
+	}
 	if entry.Mode != string(provider.ModeManga) || entry.MediaType != provider.MediaTypeManga {
 		t.Errorf("entry typing = %+v", entry)
+	}
+}
+
+// TestGotoReaderPageCachedLastPageRecordsProgress pins the prefetch path:
+// a cached page is shown without a new render message, so navigation
+// itself must record the page and run the last-page completion hook.
+func TestGotoReaderPageCachedLastPageRecordsProgress(t *testing.T) {
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+	defer store.Close()
+
+	m := mangaTestModel()
+	m.imagesEnabled = true
+	m.historyStore = store
+	m.selectedSeries = &provider.SearchResult{Title: "One Piece", Provider: "weebcentral"}
+	m.selectedChapter = &provider.MangaChapter{ID: "c5", Number: "5", Provider: "weebcentral"}
+	m.pages = []provider.MangaPage{{URL: "p1"}, {URL: "p2"}, {URL: "p3"}}
+	m.readerCols, m.readerRows = m.readerDims()
+	last := len(m.pages) - 1
+	m.readerRender[last] = "cached"
+
+	if cmd := m.gotoReaderPage(last); cmd != nil {
+		t.Fatalf("cached page should not schedule a render command")
+	}
+	entry, ok := store.Get(history.EntryKey{Title: "One Piece", Mode: "manga", MediaType: "manga"})
+	if !ok {
+		t.Fatalf("no history entry recorded")
+	}
+	if entry.MangaPage != len(m.pages) || entry.MangaPages != len(m.pages) {
+		t.Errorf("page = %d/%d, want %d/%d", entry.MangaPage, entry.MangaPages, len(m.pages), len(m.pages))
 	}
 }
 
@@ -183,6 +234,59 @@ func TestMangaChapterIndex(t *testing.T) {
 	}
 }
 
+// TestMangaScrobbleChapter pins AniList's whole-chapter progress mapping:
+// fractional chapters floor, whitespace is tolerated, and specials or
+// non-positive numbers are skipped rather than guessed.
+func TestMangaScrobbleChapter(t *testing.T) {
+	tests := []struct {
+		number string
+		want   int
+		ok     bool
+	}{
+		{"351", 351, true},
+		{"12.5", 12, true},
+		{"12.9", 12, true},
+		{" 7 ", 7, true},
+		{"0", 0, false},
+		{"0.5", 0, false},
+		{"-3", 0, false},
+		{"12a", 0, false},
+		{"", 0, false},
+	}
+	for _, tt := range tests {
+		got, ok := mangaScrobbleChapter(tt.number)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("mangaScrobbleChapter(%q) = %d, %v; want %d, %v", tt.number, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+// TestChaptersToItemsResumeMarkers pins the read-through watermark:
+// numeric chapters before the saved chapter read as finished, the saved
+// chapter shows page progress, and later chapters stay blank.
+func TestChaptersToItemsResumeMarkers(t *testing.T) {
+	items := chaptersToItems([]provider.MangaChapter{
+		{ID: "c1", Number: "349"},
+		{ID: "c2", Number: "350"},
+		{ID: "c3", Number: "351"},
+		{ID: "c4", Number: "352"},
+	}, history.Entry{
+		Mode:         string(provider.ModeManga),
+		MediaType:    provider.MediaTypeManga,
+		MangaChapter: "351",
+		MangaPage:    5,
+		MangaPages:   19,
+	})
+
+	want := []string{"[  ✓ ] ", "[  ✓ ] ", "[ 5/19] ", "[    ] "}
+	for i, item := range items {
+		title := item.(rowItem).title
+		if !strings.Contains(title, want[i]) {
+			t.Errorf("row %d title = %q, want marker %q", i, title, want[i])
+		}
+	}
+}
+
 // TestOnChaptersDoneConsumesResume pins the resume jump: with a stashed
 // target the listing opens the saved chapter and preserves the page
 // for onPagesDone, then clears the stash.
@@ -211,6 +315,33 @@ func TestOnChaptersDoneConsumesResume(t *testing.T) {
 	}
 }
 
+// TestResumeMangaSeriesDuringHistorySearch pins the history-resume
+// continuation contract: the chapter fetch must start while the history
+// search still owns the loading state, not be refused by guardLoad.
+func TestResumeMangaSeriesDuringHistorySearch(t *testing.T) {
+	m := mangaTestModel()
+	m.loading = true
+	m.loadingText = "Finding Blue Lock..."
+
+	_, cmd := m.resumeMangaSeries(history.Entry{
+		Title:        "Blue Lock",
+		EpisodeTitle: "351",
+		PositionSecs: 1,
+		Mode:         string(provider.ModeManga),
+		MediaType:    provider.MediaTypeManga,
+	}, provider.SearchResult{Title: "Blue Lock", Provider: "weebcentral"})
+
+	if cmd == nil {
+		t.Fatal("resumeMangaSeries returned no command; chapter fetch was blocked")
+	}
+	if m.loadingText != "Loading chapters..." {
+		t.Errorf("loadingText = %q, want Loading chapters...", m.loadingText)
+	}
+	if m.pendingMangaResume == nil || m.pendingMangaResume.number != "351" || m.pendingMangaResume.page != 1 {
+		t.Errorf("pendingMangaResume = %+v, want chapter 351 page 1", m.pendingMangaResume)
+	}
+}
+
 func TestSelectChapter_FilteredIndexRegression(t *testing.T) {
 	m := mangaTestModel()
 	m.chapters = []provider.MangaChapter{
@@ -218,7 +349,7 @@ func TestSelectChapter_FilteredIndexRegression(t *testing.T) {
 		{ID: "ch-2", Number: "2", Title: "Second"},
 		{ID: "ch-3", Number: "3", Title: "Third"},
 	}
-	m.chapterList.SetItems(chaptersToItems(m.chapters))
+	m.chapterList.SetItems(chaptersToItems(m.chapters, history.Entry{}))
 
 	// Simulate user filtering for "Third": list contains only the filtered rowItem
 	items := []list.Item{

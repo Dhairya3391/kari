@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 
 	"kari/internal/history"
 	"kari/internal/provider"
+	"kari/internal/scrobble"
 	"kari/internal/termimg"
 )
 
@@ -75,6 +78,23 @@ func (m *modelImpl) chaptersCmd(opID int, series provider.SearchResult) tea.Cmd 
 	}
 }
 
+// mangaResumeEntry returns the saved reading position for the selected
+// series, or the zero entry when history is unavailable or has no record.
+func (m *modelImpl) mangaResumeEntry() history.Entry {
+	if m.historyStore == nil || m.selectedSeries == nil {
+		return history.Entry{}
+	}
+	entry, ok := m.historyStore.Get(history.EntryKey{
+		Title:     m.selectedSeries.Title,
+		Mode:      string(provider.ModeManga),
+		MediaType: provider.MediaTypeManga,
+	})
+	if !ok {
+		return history.Entry{}
+	}
+	return entry
+}
+
 // onChaptersDone installs the chapter listing or reports the failure.
 func (m *modelImpl) onChaptersDone(msg chaptersDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.chaptersOpID {
@@ -87,7 +107,7 @@ func (m *modelImpl) onChaptersDone(msg chaptersDoneMsg) (tea.Model, tea.Cmd) {
 		return m, m.setStatusTimed(statusError, "Chapters failed: "+msg.err.Error())
 	}
 	m.chapters = msg.results
-	m.chapterList.SetItems(chaptersToItems(m.chapters))
+	m.chapterList.SetItems(chaptersToItems(m.chapters, m.mangaResumeEntry()))
 	m.chapterList.Select(0)
 	// A history resume stashed its chapter/page before the listing
 	// arrived: jump straight in, keeping the saved page. A renamed or
@@ -132,11 +152,10 @@ func mangaChapterIndex(chapters []provider.MangaChapter, number string) (int, bo
 
 // resumeMangaSeries enters the chapters screen for a history-resumed
 // manga title, stashing the saved chapter/page for onChaptersDone. It
-// mirrors selectMangaSeries without a result-list index.
+// mirrors selectMangaSeries without a result-list index. No load guard
+// here: this continues the history search that already passed it, and
+// that search's in-flight state must not block the chapter fetch.
 func (m *modelImpl) resumeMangaSeries(entry history.Entry, series provider.SearchResult) (tea.Model, tea.Cmd) {
-	if !m.guardLoad() {
-		return m, nil
-	}
 	m.selectedSeries = &series
 	m.chapters = nil
 	m.selectedChapter = nil
@@ -285,7 +304,7 @@ func (m *modelImpl) onFallbackDone(msg fallbackDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.selectedSeries = &msg.readable.Series
 	m.chapters = msg.readable.Chapters
-	m.chapterList.SetItems(chaptersToItems(m.chapters))
+	m.chapterList.SetItems(chaptersToItems(m.chapters, m.mangaResumeEntry()))
 	m.selectedChapter = &msg.readable.Chapters[msg.readable.Index]
 	m.chapterIndex = msg.readable.Index
 	m.chapterList.Select(msg.readable.Index)
@@ -319,6 +338,17 @@ func (m *modelImpl) readerDims() (cols, rows int) {
 	return max(20, m.width), max(5, m.height-readerChromeRows)
 }
 
+// markMangaPageViewed records the page the reader is now on and reports
+// chapter completion when it is the chapter's last. Fresh renders arrive
+// from onReaderPage; cached pages arrive through gotoReaderPage, so both
+// navigation paths share the same progress semantics.
+func (m *modelImpl) markMangaPageViewed(idx int) {
+	m.saveMangaProgress(idx+1, len(m.pages))
+	if idx+1 >= len(m.pages) {
+		m.triggerMangaScrobble()
+	}
+}
+
 // gotoReaderPage moves to page idx, rendering it (and prefetching ahead)
 // when not already cached.
 func (m *modelImpl) gotoReaderPage(idx int) tea.Cmd {
@@ -343,6 +373,11 @@ func (m *modelImpl) gotoReaderPage(idx int) tea.Cmd {
 		m.readerRender = make(map[int]string)
 		m.readerCols, m.readerRows = cols, rows
 	}
+	// A prefetched page is displayed without a new render message, so
+	// record it here instead of relying on onReaderPage.
+	if _, cached := m.readerRender[idx]; cached {
+		m.markMangaPageViewed(idx)
+	}
 	var cmds []tea.Cmd
 	for i := idx; i <= min(idx+readerPrefetch, len(m.pages)-1); i++ {
 		if _, ok := m.readerRender[i]; !ok {
@@ -360,28 +395,101 @@ func (m *modelImpl) gotoReaderPage(idx int) tea.Cmd {
 }
 
 // saveMangaProgress records the viewed page for resume as one entry
-// per series: chapter numbers are fractional strings ("12.5"), so the
-// number rides EpisodeTitle while Position/Duration carry page and
-// page count. Fire-and-forget; a nil store means history is
-// unavailable this session.
+// per series. The v2 manga fields hold the chapter number and page
+// position; EpisodeTitle/Position/Duration mirror them for older readers
+// of the history file and for the shared history-row formatter.
+// Fire-and-forget; a nil store means history is unavailable this session.
 func (m *modelImpl) saveMangaProgress(page, total int) {
 	if m.historyStore == nil || m.selectedSeries == nil || m.selectedChapter == nil || total <= 0 {
 		return
 	}
+	key := history.EntryKey{
+		Title:     m.selectedSeries.Title,
+		Mode:      string(provider.ModeManga),
+		MediaType: provider.MediaTypeManga,
+	}
+	// AniList import stores the catalog id on the entry; a page turn must
+	// not drop it, or later scrobbles lose the reliable id and fall back to
+	// ambiguous title matching.
+	anilistID := m.selectedSeries.AniListID
+	if existing, ok := m.historyStore.Get(key); ok && anilistID == 0 {
+		anilistID = existing.AniListID
+	}
+	chapter := strings.TrimSpace(m.selectedChapter.Number)
 	_ = m.historyStore.Upsert(history.Entry{
-		Key: history.EntryKey{
-			Title:     m.selectedSeries.Title,
-			Mode:      string(provider.ModeManga),
-			MediaType: provider.MediaTypeManga,
-		},
+		Key:          key,
 		Title:        m.selectedSeries.Title,
-		EpisodeTitle: strings.TrimSpace(m.selectedChapter.Number),
+		EpisodeTitle: chapter,
+		MangaChapter: chapter,
+		MangaPage:    page,
+		MangaPages:   total,
 		PositionSecs: float64(page),
 		DurationSecs: float64(total),
 		WatchedAt:    time.Now(),
 		Mode:         string(provider.ModeManga),
 		MediaType:    provider.MediaTypeManga,
+		AniListID:    anilistID,
 	})
+}
+
+// mangaScrobbleChapter converts a chapter label to AniList's whole-chapter
+// progress. Fractional chapters floor because AniList cannot represent them;
+// non-numeric labels (specials) are skipped rather than guessed.
+func mangaScrobbleChapter(number string) (int, bool) {
+	f, err := strconv.ParseFloat(strings.TrimSpace(number), 64)
+	if err != nil {
+		return 0, false
+	}
+	chapter := int(math.Floor(f))
+	if chapter < 1 {
+		return 0, false
+	}
+	return chapter, true
+}
+
+// triggerMangaScrobble reports a just-finished chapter to AniList. Like
+// triggerScrobble, it snapshots the state on the Update goroutine and lets
+// the network call run in the background so reading never waits on the
+// tracker. AniList counts chapters read, so callers invoke this only after
+// the chapter's last page.
+func (m *modelImpl) triggerMangaScrobble() {
+	if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() ||
+		m.selectedSeries == nil || m.selectedChapter == nil {
+		return
+	}
+	chapter, ok := mangaScrobbleChapter(m.selectedChapter.Number)
+	if !ok {
+		return
+	}
+	title := strings.TrimSpace(m.selectedSeries.Title)
+	anilistID := m.selectedSeries.AniListID
+	if anilistID == 0 {
+		anilistID = m.mangaResumeEntry().AniListID
+	}
+	if title == "" && anilistID == 0 {
+		return
+	}
+
+	client := m.anilistClient
+	appCtx := m.appCtx
+	if appCtx == nil {
+		appCtx = context.Background()
+	}
+	progress := scrobble.MangaProgress{
+		Title:     title,
+		AniListID: anilistID,
+		Chapter:   chapter,
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(appCtx, 15*time.Second)
+		defer cancel()
+		if err := client.UpdateMangaProgress(ctx, progress); err != nil {
+			tuiLog.Debug("anilist manga scrobble failed",
+				"title", progress.Title, "chapter", progress.Chapter, "err", err)
+			return
+		}
+		tuiLog.Info("anilist manga scrobble success", "title", progress.Title, "chapter", progress.Chapter)
+	}()
 }
 
 // readerPageCmd fetches, decodes, and terminal-renders one page.
@@ -442,7 +550,7 @@ func (m *modelImpl) onReaderPage(msg readerPageMsg) (tea.Model, tea.Cmd) {
 		m.loadingText = ""
 		// Only the viewed page counts as progress: prefetched renders
 		// landing early must not bookmark pages the user never saw.
-		m.saveMangaProgress(msg.index+1, len(m.pages))
+		m.markMangaPageViewed(msg.index)
 	}
 	// Keep the prefetch window full as pages land.
 	next := msg.index + 1
