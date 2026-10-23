@@ -83,32 +83,52 @@ func RenderPreviewScreen(data PreviewData) string {
 }
 
 func renderPreviewHeader(data PreviewData, st Styles) string {
+	// posterW is the total columns reserved by the poster block (image + gutter).
+	// Only count it when the poster is actually shown (same condition as the
+	// side-by-side layout below).
+	posterW := 0
+	if data.PosterBlock != "" && data.Width >= 80 {
+		posterW = lipgloss.Width(data.PosterBlock) + 4 // 4-char gutter
+	}
+	// metaW is the maximum columns available for the metadata text block.
+	// Every line appended to metaRows must fit within this so that the
+	// horizontal join never produces a line wider than data.Width — if it
+	// did, Bubble Tea's renderer would omit the end-of-line erase (\x1b[K)
+	// for that row, leaving old image cells visible on screen.
+	metaW := max(20, data.Width-posterW)
+
 	var metaRows []string
 
 	// Series Title
-	metaRows = append(metaRows, st.Bold.Render(data.SeriesTitle))
+	metaRows = append(metaRows, st.Bold.Render(truncate(data.SeriesTitle, metaW)))
 
 	// Episode code & title
 	if data.EpisodeInfo != "" {
-		metaRows = append(metaRows, data.EpisodeInfo)
+		metaRows = append(metaRows, truncate(data.EpisodeInfo, metaW))
 	}
 
-	// Genres & Rating
+	// Genres & Rating — build as plain text first, then truncate styled pieces.
 	var tagParts []string
+	ratingW := 0
+	if data.Rating != "" && data.Rating != "—" {
+		// "★ " + rating + " · " separator = reserve space for rating badge.
+		ratingW = lipgloss.Width("★ " + data.Rating + " · ")
+	}
 	if len(data.Genres) > 0 {
-		tagParts = append(tagParts, st.Dim.Render(strings.Join(data.Genres, " · ")))
+		availGenreW := max(10, metaW-ratingW)
+		tagParts = append(tagParts, st.Dim.Render(truncate(strings.Join(data.Genres, " · "), availGenreW)))
 	}
 	if data.Rating != "" && data.Rating != "—" {
 		tagParts = append(tagParts, st.Current.Render("★ ")+data.Rating)
 	}
 	if len(tagParts) > 0 {
-		metaRows = append(metaRows, strings.Join(tagParts, st.Dim.Render(" · ")))
+		metaRows = append(metaRows, truncate(strings.Join(tagParts, st.Dim.Render(" · ")), metaW))
 	}
 
 	// Plot synopsis
 	if data.Overview != "" {
 		metaRows = append(metaRows, "")
-		wrapped := wrapText(data.Overview, max(30, data.Width-34), 4)
+		wrapped := wrapText(data.Overview, metaW, 4)
 		metaRows = append(metaRows, st.Dim.Render(wrapped))
 	}
 
@@ -148,11 +168,11 @@ func renderPreviewHeader(data PreviewData, st Styles) string {
 		if subType != "" {
 			subFmt += st.Dim.Render(" · " + subType)
 		}
-		metaRows = append(metaRows, st.Dim.Render("subtitles  ")+subFmt)
+		metaRows = append(metaRows, truncate(st.Dim.Render("subtitles  ")+subFmt, metaW))
 	}
 	metaRows = append(metaRows, st.Dim.Render("autoplay   ")+st.Current.Render(autoVal))
 	if data.SkipInfo != "" {
-		metaRows = append(metaRows, st.Dim.Render("skip data  ")+st.Current.Render(data.SkipInfo))
+		metaRows = append(metaRows, truncate(st.Dim.Render("skip data  ")+st.Current.Render(data.SkipInfo), metaW))
 	}
 	if data.ResumePosition != "" {
 		metaRows = append(metaRows, st.Dim.Render("resume     ")+st.Current.Render(data.ResumePosition))

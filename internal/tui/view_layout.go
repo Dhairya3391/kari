@@ -692,11 +692,26 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		if len(m.episodeResults) > 0 {
 			totalStr = fmt.Sprintf("  (%d of %d)", m.selectedEpisodeIndex()+1, len(m.episodeResults))
 		}
-		if m.selectedEpisode.Season > 0 {
-			epInfo = fmt.Sprintf("S%02d E%02d · %s%s", m.selectedEpisode.Season, m.selectedEpisode.Episode, epTitle, totalStr)
-		} else {
-			epInfo = fmt.Sprintf("EP %02d · %s%s", m.selectedEpisode.Episode, epTitle, totalStr)
+		// Compute available metadata width so the episode title can be
+		// truncated before the (X of Y) count is appended. This prevents
+		// the combined line from exceeding the screen width, which would
+		// cause Bubble Tea to skip the end-of-line erase and leave old
+		// image cells visible — the root cause of issue #35.
+		metaW := max(20, width-previewPosterMaxCols-4)
+		if width < 80 {
+			metaW = max(20, width)
 		}
+		var prefix string
+		if m.selectedEpisode.Season > 0 {
+			prefix = fmt.Sprintf("S%02d E%02d · ", m.selectedEpisode.Season, m.selectedEpisode.Episode)
+		} else {
+			prefix = fmt.Sprintf("EP %02d · ", m.selectedEpisode.Episode)
+		}
+		availTitleW := metaW - lipgloss.Width(prefix) - lipgloss.Width(totalStr)
+		if availTitleW > 10 && lipgloss.Width(epTitle) > availTitleW {
+			epTitle = truncate(epTitle, availTitleW)
+		}
+		epInfo = prefix + epTitle + totalStr
 	}
 
 	audioText := ""

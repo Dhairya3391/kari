@@ -381,3 +381,68 @@ func TestStartEpisodeResolutionSyncsState(t *testing.T) {
 		t.Errorf("EpisodeInfo = %q, want %q", data.EpisodeInfo, wantInfo)
 	}
 }
+
+// TestRenderPreviewHeader_LongEpisodeTitleBounded verifies that a very long
+// episode title — the kind that gets truncated with an ellipsis in the episode
+// selection screen — does not cause any line in the preview header or the full
+// screen to exceed data.Width. A line wider than data.Width triggers Bubble
+// Tea to skip the end-of-line erase (\x1b[K), leaving old image cells visible
+// on screen (issue #35).
+func TestRenderPreviewHeader_LongEpisodeTitleBounded(t *testing.T) {
+	// Exact title from issue #35 reports.
+	longTitle := "The Vice President Doesn't Say Anything About the Possibility of Him Being the Main Character"
+	// Use a placeholder poster of the same visual width as a real rendered one.
+	posterBlock := strings.Repeat(" ", 26)
+	for _, width := range []int{80, 100, 120, 140} {
+		data := PreviewData{
+			SeriesTitle: "Baccano!",
+			EpisodeInfo: fmt.Sprintf("S01 E01 · %s  (1 of 13)", longTitle),
+			Genres:      []string{"Action", "Mystery", "Supernatural"},
+			Rating:      "81%",
+			Overview:    "During the early 1930s in Chicago, the transcontinental train, Flying Pussyfoot, begins a legendary journey.",
+			AudioText:   "sub · Japanese",
+			PosterBlock: posterBlock,
+			Width:       width,
+		}
+		// Full screen check — every row must fit.
+		screen := RenderPreviewScreen(data)
+		for i, line := range strings.Split(screen, "\n") {
+			if w := lipgloss.Width(line); w > width {
+				t.Errorf("width=%d: line %d width=%d exceeds limit: %q", width, i+1, w, line)
+			}
+		}
+	}
+}
+
+// TestCollectPreviewData_LongTitlePreservesCount verifies that when an episode
+// title is long enough to be truncated to fit the available metadata width, the
+// trailing (X of Y) episode count is still present in EpisodeInfo.
+func TestCollectPreviewData_LongTitlePreservesCount(t *testing.T) {
+	longTitle := "The Vice President Doesn't Say Anything About the Possibility of Him Being the Main Character"
+	episodes := make([]provider.Episode, 13)
+	for i := range episodes {
+		episodes[i] = provider.Episode{Season: 1, Episode: i + 1, Title: longTitle}
+	}
+	m := &modelImpl{
+		keys:           defaultKeyMap(),
+		activeView:     viewPreview,
+		episodeResults: episodes,
+		selectedSeries: &provider.SearchResult{Title: "Baccano!", Type: provider.ModeAnime},
+	}
+	m.selectedEpisode = &episodes[0]
+	m.episodeIndex = 0
+
+	// Test at a representative width where the full title would overflow.
+	data := m.collectPreviewData(140, 40, lipgloss.AdaptiveColor{})
+	if !strings.Contains(data.EpisodeInfo, "(1 of 13)") {
+		t.Errorf("EpisodeInfo missing episode count: %q", data.EpisodeInfo)
+	}
+	if !strings.Contains(data.EpisodeInfo, "…") {
+		t.Errorf("EpisodeInfo expected truncation ellipsis for long title: %q", data.EpisodeInfo)
+	}
+	// The info line itself must fit within the metadata column width.
+	metaW := max(20, 140-previewPosterMaxCols-4)
+	if w := lipgloss.Width(data.EpisodeInfo); w > metaW {
+		t.Errorf("EpisodeInfo width %d exceeds metaW %d: %q", w, metaW, data.EpisodeInfo)
+	}
+}

@@ -253,6 +253,53 @@ func TestSnapshot_Preview(t *testing.T) {
 	}
 }
 
+// TestSnapshot_PreviewLongTitle checks that a very long episode title with a
+// poster block present never produces a line that exceeds the terminal width
+// at any standard viewport size (regression for issue #35).
+func TestSnapshot_PreviewLongTitle(t *testing.T) {
+	accent := ResolveAccent(model.KindAnime, "Auto")
+	sources := []provider.MediaSource{
+		{Quality: "FHD", Resolver: "miruro"},
+	}
+	ranked := ranking.RankSources(sources, ranking.Criteria{Mode: provider.ModeAnime})
+	// Exact title from issue #35 reports.
+	longTitle := "The Vice President Doesn't Say Anything About the Possibility of Him Being the Main Character"
+	for _, sz := range snapshotSizes {
+		dims := ComputeDims(sz.cols, sz.rows)
+		// Placeholder block width matches posterPlaceholderWidth (26 col dim text).
+		posterBlock := strings.Repeat(" ", 26)
+		data := PreviewData{
+			SeriesTitle:   "Baccano!",
+			EpisodeInfo:   "S01 E01 · " + longTitle + "  (1 of 13)",
+			Genres:        []string{"Action", "Mystery", "Supernatural"},
+			Rating:        "81%",
+			Overview:      "During the early 1930s in Chicago, the transcontinental train, Flying Pussyfoot, begins a legendary journey that will leave a trail of blood all over the country.",
+			AudioText:     "sub · Japanese",
+			SubtitlesText: "en ✓",
+			SubtitleType:  "hard subs",
+			PosterBlock:   posterBlock,
+			Sources:       sources,
+			RankedSources: ranked,
+			SelectedIndex: 0,
+			PlayerName:    "mpv",
+			Autoplay:      false,
+			Width:         dims.ContentWidth,
+			Height:        dims.BodyHeight,
+			Accent:        accent,
+			Mode:          provider.ModeAnime,
+		}
+		body := RenderPreviewScreen(data)
+		header := RenderHeader([]string{"kari", "anime", "baccano!", "s01e01"}, accent, dims.ContentWidth)
+		footer := RenderFooter([]KeyBinding{
+			{Key: "enter", Action: "play"},
+			{Key: "↑↓", Action: "source"},
+			{Key: "esc", Action: "back"},
+		}, nil, accent, dims.ContentWidth)
+		frame := RenderFrame(dims, header, body, "", footer)
+		verifyLinesWidth(t, "PreviewLongTitle", frame, sz.cols)
+	}
+}
+
 func TestSnapshot_Chapters(t *testing.T) {
 	accent := ResolveAccent(model.KindManga, "Auto")
 	for _, sz := range snapshotSizes {
