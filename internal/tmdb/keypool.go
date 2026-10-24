@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 // KeyPool rotates through TMDB API keys round-robin, skipping keys marked
 // failed after auth errors. It is safe for concurrent use; a nil *KeyPool
 // behaves like an empty pool, so components that work without TMDB don't
 // need nil-guards at call sites.
+const keyFailureCooldown = 30 * time.Second
+
 type KeyPool struct {
 	mu     sync.Mutex
 	keys   []string
-	failed map[string]struct{}
+	failed map[string]time.Time
 	next   int
 }
 
@@ -26,7 +29,7 @@ func NewKeyPool(keys []string) *KeyPool {
 			cleaned = append(cleaned, k)
 		}
 	}
-	return &KeyPool{keys: cleaned, failed: make(map[string]struct{})}
+	return &KeyPool{keys: cleaned, failed: make(map[string]time.Time)}
 }
 
 // NextKey returns the next working key, rotating through the pool and
@@ -44,9 +47,9 @@ func (p *KeyPool) MarkFailed(key string) {
 	}
 	p.mu.Lock()
 	if p.failed == nil {
-		p.failed = make(map[string]struct{})
+		p.failed = make(map[string]time.Time)
 	}
-	p.failed[key] = struct{}{}
+	p.failed[key] = time.Now()
 	p.mu.Unlock()
 }
 
@@ -66,8 +69,11 @@ func (p *KeyPool) nextKey() (string, error) {
 	for i := 0; i < len(p.keys); i++ {
 		idx := (start + i) % len(p.keys)
 		key := p.keys[idx]
-		if _, failed := p.failed[key]; failed {
-			continue
+		if failedAt, failed := p.failed[key]; failed {
+			if time.Since(failedAt) < keyFailureCooldown {
+				continue
+			}
+			delete(p.failed, key)
 		}
 		p.next = (idx + 1) % len(p.keys)
 		return key, nil

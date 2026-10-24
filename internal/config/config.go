@@ -86,7 +86,13 @@ func Load() (*Config, error) {
 	}
 
 	if envKey := strings.TrimSpace(os.Getenv("TMDB_API_KEY")); envKey != "" {
-		cfg.TMDBAPIKeys = []string{envKey}
+		keys := []string{envKey}
+		for _, k := range DefaultTMDBAPIKeys {
+			if k != envKey {
+				keys = append(keys, k)
+			}
+		}
+		cfg.TMDBAPIKeys = keys
 	}
 
 	openSubsSet := cfg.OpenSubtitlesKey != "" || cfg.OpenSubtitlesUser != "" || cfg.OpenSubtitlesPass != ""

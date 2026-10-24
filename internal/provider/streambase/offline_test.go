@@ -209,6 +209,76 @@ func TestFetchTMDBJSON500(t *testing.T) {
 		t.Errorf("err = %v, want typed 500", err)
 	}
 }
+func TestSearchTMDBFallbackWhenNoobsearchDown(t *testing.T) {
+	fake := &hostFake{t: t, routes: map[string]func() (int, string){
+		"noobsearch.broggl.farm/tv": func() (int, string) {
+			return 502, `Bad Gateway`
+		},
+		"api.themoviedb.org/3/search/multi": func() (int, string) {
+			return 200, `{"page":1,"total_pages":1,"total_results":1,"results":[
+				{"id":1622,"name":"Supernatural","media_type":"tv","first_air_date":"2005-09-13","genre_ids":[18]}
+			]}`
+		},
+	}}
+	hc := &http.Client{Transport: fake}
+	b, err := newForTest(tmdb.NewKeyPool([]string{"k"}),
+		hc, NewClientWithHTTPClient(&http.Client{Transport: fake}))
+	if err != nil {
+		t.Fatalf("newForTest: %v", err)
+	}
+
+	results, err := b.Search(context.Background(), "supernatural", provider.ModeTV)
+	if err != nil {
+		t.Fatalf("Search failed on noobsearch 502: %v", err)
+	}
+	if len(results) != 1 || results[0].Title != "Supernatural" || results[0].TMDBID != 1622 {
+		t.Errorf("expected 1 fallback result for Supernatural, got: %+v", results)
+	}
+}
+
+func TestFetchEpisodesTVAppendedSeasonsBatch(t *testing.T) {
+	fake := &hostFake{t: t, routes: map[string]func() (int, string){
+		"api.themoviedb.org/3/tv/1622": func() (int, string) {
+			return 200, `{
+				"id": 1622,
+				"name": "Supernatural",
+				"number_of_seasons": 2,
+				"seasons": [{"season_number": 1}, {"season_number": 2}],
+				"season/1": {
+					"season_number": 1,
+					"episodes": [{"episode_number": 1, "season_number": 1, "name": "Pilot"}]
+				},
+				"season/2": {
+					"season_number": 2,
+					"episodes": [{"episode_number": 1, "season_number": 2, "name": "In My Time of Dying"}]
+				}
+			}`
+		},
+	}}
+	hc := &http.Client{Transport: fake}
+	b, err := newForTest(tmdb.NewKeyPool([]string{"k"}),
+		hc, NewClientWithHTTPClient(&http.Client{Transport: fake}))
+	if err != nil {
+		t.Fatalf("newForTest: %v", err)
+	}
+
+	eps, err := b.FetchEpisodes(context.Background(), provider.SearchResult{
+		ID:        "1622",
+		TMDBID:    1622,
+		MediaType: provider.MediaTypeTV,
+		Title:     "Supernatural",
+	})
+	if err != nil {
+		t.Fatalf("FetchEpisodes failed: %v", err)
+	}
+	if len(eps) != 2 {
+		t.Fatalf("expected 2 episodes, got %d: %+v", len(eps), eps)
+	}
+	if eps[0].Title != "Pilot" || eps[1].Title != "In My Time of Dying" {
+		t.Errorf("unexpected episode titles: %+v", eps)
+	}
+}
+
 
 func isHTTP500(err error) bool {
 	if err == nil {

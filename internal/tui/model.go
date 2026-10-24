@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image/color"
 	"strings"
@@ -556,7 +557,7 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case posterSlotSearch:
 			if msg.opID == m.searchPosterOpID {
 				m.searchPoster = msg.rendered
-				m.searchPosterUnavailable = msg.err != nil
+				m.searchPosterUnavailable = msg.err != nil && !errors.Is(msg.err, context.Canceled)
 			}
 		case posterSlotHistory:
 			if msg.opID == m.historyPosterOpID {

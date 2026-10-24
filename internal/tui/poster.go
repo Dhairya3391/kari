@@ -22,7 +22,7 @@ const (
 	historyPosterMaxCols = 26
 	historyPosterMaxRows = 16
 
-	posterFetchTimeout = 8 * time.Second
+	posterFetchTimeout = 15 * time.Second
 
 	// Stable per-slot image ids. Kept distinct (and never reused for
 	// anything else) so Cleanup can target exactly one slot's placement

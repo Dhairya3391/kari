@@ -250,7 +250,7 @@ func (s *MediaService) searchProviders(ctx context.Context, mode provider.Conten
 			defer pCancel()
 			results, err := p.Search(pCtx, query, mode)
 			if err != nil {
-				if provider.BreakerFailure(err) {
+				if provider.BreakerFailure(err) && !strings.Contains(err.Error(), "streambase") {
 					s.health.RecordFailure(p.Name())
 				}
 			} else {
@@ -332,7 +332,11 @@ collectResults:
 			return nil, warnings, provider.ErrNoResults
 		}
 		if len(warnings) > 0 {
-			return nil, warnings, errors.New(warnings[0])
+			errStr := warnings[0]
+			if idx := strings.Index(errStr, "streambase search:"); idx != -1 {
+				errStr = errStr[idx:]
+			}
+			return nil, warnings, errors.New(errStr)
 		}
 		return nil, warnings, provider.ErrNoResults
 	}

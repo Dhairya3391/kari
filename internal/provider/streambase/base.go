@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-
+	"sync"
 	"golang.org/x/sync/errgroup"
 
 	"kari/internal/config"
@@ -83,6 +83,15 @@ func (b *Base) Search(ctx context.Context, query string, mode provider.ContentTy
 	}
 	results, err := searcher.SearchWithMode(ctx, query, mode)
 	if err != nil {
+		if errors.Is(err, provider.ErrNoResults) {
+			return nil, err
+		}
+		logging.Debug("stream search index failed, falling back to direct TMDB search", "mode", mode, "query", query, "err", err)
+		fallbackResults, fallbackErr := b.searchTMDB(ctx, query, mode)
+		if fallbackErr == nil && len(fallbackResults) > 0 {
+			logging.Debug("stream search fallback to TMDB succeeded", "mode", mode, "query", query, "results", len(fallbackResults))
+			return fallbackResults, nil
+		}
 		logging.Debug("stream search failed", "mode", mode, "query", query, "err", err)
 		return nil, fmt.Errorf("streambase search: %w", err)
 	}
@@ -122,6 +131,74 @@ type tmdbMultiSearchHit struct {
 	FirstAirDate string  `json:"first_air_date"`
 	GenreIDs     []int   `json:"genre_ids"`
 	Popularity   float64 `json:"popularity"`
+}
+
+// searchTMDB queries TMDB multi-search directly when the search index is unreachable.
+func (b *Base) searchTMDB(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("empty query")
+	}
+
+	page1, err := b.fetchTMDBMultiSearchPage(ctx, query, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	hits := page1.Results
+	if page1.TotalPages > 1 && len(hits) < 10 {
+		page2, err := b.fetchTMDBMultiSearchPage(ctx, query, 2)
+		if err == nil && len(page2.Results) > 0 {
+			hits = append(hits, page2.Results...)
+		}
+	}
+
+	var results []provider.SearchResult
+	seen := make(map[int]bool)
+
+	targetMediaType := "movie"
+	expectedMode := provider.ModeMovies
+	if mode == provider.ModeTV {
+		targetMediaType = "tv"
+		expectedMode = provider.ModeTV
+	}
+
+	for _, h := range hits {
+		if h.ID <= 0 || seen[h.ID] {
+			continue
+		}
+		if h.MediaType != targetMediaType {
+			continue
+		}
+
+		seen[h.ID] = true
+		title := util.NormalizeSpace(h.Title)
+		mediaType := provider.MediaTypeMovie
+		yearStr := extractYear(h.ReleaseDate)
+
+		if h.MediaType == "tv" {
+			title = util.NormalizeSpace(h.Name)
+			mediaType = provider.MediaTypeTV
+			yearStr = extractYear(h.FirstAirDate)
+		}
+		if title == "" {
+			continue
+		}
+
+		results = append(results, provider.SearchResult{
+			Title:     title,
+			ID:        strconv.Itoa(h.ID),
+			Type:      expectedMode,
+			Year:      yearStr,
+			TMDBID:    h.ID,
+			MediaType: mediaType,
+		})
+	}
+
+	if len(results) == 0 {
+		return nil, provider.ErrNoResults
+	}
+	return results, nil
 }
 
 // searchTMDBCartoons queries the TMDB multi-search endpoint directly and filters
@@ -280,49 +357,82 @@ func (b *Base) FetchEpisodes(ctx context.Context, series provider.SearchResult) 
 		return nil, fmt.Errorf("streambase fetch episodes: %w", err)
 	}
 
-	g, gCtx := errgroup.WithContext(ctx)
-	results := make([][]provider.Episode, len(details.Seasons))
-	sem := make(chan struct{}, 5)
-
-	for i, season := range details.Seasons {
-		if season.SeasonNumber <= 0 {
-			continue
+	seasonMap := make(map[int]tmdbSeasonDetails)
+	var positiveSeasons []int
+	for _, season := range details.Seasons {
+		if season.SeasonNumber > 0 {
+			positiveSeasons = append(positiveSeasons, season.SeasonNumber)
 		}
-		i, season := i, season
-		g.Go(func() error {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			seasonDetails, err := b.fetchTMDBSeasonDetails(gCtx, tmdbID, season.SeasonNumber)
-			if err != nil {
-				return err
-			}
-			seasonEps := make([]provider.Episode, 0, len(seasonDetails.Episodes))
-			for _, ep := range seasonDetails.Episodes {
-				title := util.NormalizeSpace(ep.Name)
-				if title == "" {
-					title = fmt.Sprintf("Episode %d", ep.EpisodeNumber)
-				}
-				seasonEps = append(seasonEps, provider.Episode{
-					Title:   title,
-					ID:      series.ID,
-					Season:  ep.SeasonNumber,
-					Episode: ep.EpisodeNumber,
-					TMDBID:  tmdbID,
-				})
-			}
-			results[i] = seasonEps
-			return nil
-		})
 	}
 
-	if err := g.Wait(); err != nil {
-		return nil, fmt.Errorf("streambase fetch episodes: %w", err)
+	// Batch fetch up to 20 seasons per call using append_to_response
+	const maxAppendPerCall = 20
+	for i := 0; i < len(positiveSeasons); i += maxAppendPerCall {
+		end := i + maxAppendPerCall
+		if end > len(positiveSeasons) {
+			end = len(positiveSeasons)
+		}
+		chunk := positiveSeasons[i:end]
+		batchRes, berr := b.fetchTMDBTVSeasonsBatch(ctx, tmdbID, chunk)
+		if berr == nil {
+			for k, v := range batchRes {
+				seasonMap[k] = v
+			}
+		}
+	}
+
+	// For any season not returned in the batch, fall back to individual season fetch
+	var missingSeasons []int
+	for _, s := range positiveSeasons {
+		if _, ok := seasonMap[s]; !ok {
+			missingSeasons = append(missingSeasons, s)
+		}
+	}
+
+	if len(missingSeasons) > 0 {
+		g, gCtx := errgroup.WithContext(ctx)
+		var mu sync.Mutex
+		sem := make(chan struct{}, 5)
+		for _, seasonNum := range missingSeasons {
+			seasonNum := seasonNum
+			g.Go(func() error {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				seasonDetails, ferr := b.fetchTMDBSeasonDetails(gCtx, tmdbID, seasonNum)
+				if ferr != nil {
+					return ferr
+				}
+				mu.Lock()
+				seasonMap[seasonNum] = seasonDetails
+				mu.Unlock()
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return nil, fmt.Errorf("streambase fetch episodes: %w", err)
+		}
 	}
 
 	episodes := make([]provider.Episode, 0, 256)
-	for _, res := range results {
-		episodes = append(episodes, res...)
+	for _, s := range positiveSeasons {
+		sd, ok := seasonMap[s]
+		if !ok {
+			continue
+		}
+		for _, ep := range sd.Episodes {
+			title := util.NormalizeSpace(ep.Name)
+			if title == "" {
+				title = fmt.Sprintf("Episode %d", ep.EpisodeNumber)
+			}
+			episodes = append(episodes, provider.Episode{
+				Title:   title,
+				ID:      series.ID,
+				Season:  ep.SeasonNumber,
+				Episode: ep.EpisodeNumber,
+				TMDBID:  tmdbID,
+			})
+		}
 	}
 
 	sortEpisodesAscending(episodes)
@@ -401,6 +511,54 @@ func (b *Base) fetchTMDBSeasonDetails(ctx context.Context, tmdbID, season int) (
 		lastAuthErr = err
 	}
 }
+func (b *Base) fetchTMDBTVSeasonsBatch(ctx context.Context, tmdbID int, seasons []int) (map[int]tmdbSeasonDetails, error) {
+	if len(seasons) == 0 {
+		return nil, nil
+	}
+	parts := make([]string, len(seasons))
+	for i, s := range seasons {
+		parts[i] = fmt.Sprintf("season/%d", s)
+	}
+	appendToResponse := strings.Join(parts, ",")
+
+	var lastAuthErr error
+	for {
+		apiKey, err := b.keyPool.NextKey()
+		if err != nil {
+			if lastAuthErr != nil {
+				return nil, fmt.Errorf("tmdb tv seasons batch auth failed after key rotation: %w", lastAuthErr)
+			}
+			return nil, err
+		}
+		target := fmt.Sprintf("%s/tv/%d?api_key=%s&append_to_response=%s",
+			config.TMDBAPIBase,
+			tmdbID,
+			url.QueryEscape(apiKey),
+			url.QueryEscape(appendToResponse),
+		)
+		rawMap, err := fetchTMDBJSON[map[string]json.RawMessage](b, ctx, target)
+		if err == nil {
+			out := make(map[int]tmdbSeasonDetails, len(seasons))
+			for _, s := range seasons {
+				key := fmt.Sprintf("season/%d", s)
+				if raw, ok := rawMap[key]; ok {
+					var sd tmdbSeasonDetails
+					if uerr := json.Unmarshal(raw, &sd); uerr == nil && len(sd.Episodes) > 0 {
+						out[s] = sd
+					}
+				}
+			}
+			return out, nil
+		}
+		if !isAuthError(err) {
+			return nil, err
+		}
+		logging.Debug("tmdb tv seasons batch unauthorized, rotating key", "tmdbID", tmdbID, "err", err)
+		b.keyPool.MarkFailed(apiKey)
+		lastAuthErr = err
+	}
+}
+
 
 func fetchTMDBJSON[T any](b *Base, ctx context.Context, target string) (T, error) {
 	var zero T

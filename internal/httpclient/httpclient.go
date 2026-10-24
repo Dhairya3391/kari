@@ -223,30 +223,27 @@ func newResilientDialer() *net.Dialer {
 			raceCtx, raceCancel := context.WithCancel(ctx)
 			defer raceCancel()
 
-			total := len(publicDNSServers) * 2
+			total := len(publicDNSServers)
 			ch := make(chan dialResult, total)
-			for _, proto := range []string{"tcp", "udp"} {
-				for _, server := range publicDNSServers {
-					proto, server := proto, server
-					go func() {
-						d := net.Dialer{Timeout: 4 * time.Second}
-						conn, err := d.DialContext(raceCtx, proto, server)
-						if err == nil {
-							select {
-							case ch <- dialResult{conn: conn}:
-							default:
-								conn.Close()
-							}
-							return
-						}
+			for _, server := range publicDNSServers {
+				server := server
+				go func() {
+					d := net.Dialer{Timeout: 4 * time.Second}
+					conn, err := d.DialContext(raceCtx, network, server)
+					if err == nil {
 						select {
-						case ch <- dialResult{err: err}:
-						case <-raceCtx.Done():
+						case ch <- dialResult{conn: conn}:
+						default:
+							conn.Close()
 						}
-					}()
-				}
+						return
+					}
+					select {
+					case ch <- dialResult{err: err}:
+					case <-raceCtx.Done():
+					}
+				}()
 			}
-
 			var lastErr error
 			for range total {
 				select {
@@ -265,7 +262,7 @@ func newResilientDialer() *net.Dialer {
 	}
 
 	dualResolver := &net.Resolver{
-		PreferGo:     true,
+		PreferGo:     false,
 		StrictErrors: false,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 			if runtime.GOOS == "android" {
