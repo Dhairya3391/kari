@@ -472,6 +472,9 @@ func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 }
 
 func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
+	if len(resolved.Subtitles) == 0 && len(m.rawSubtitles) > 0 {
+		resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(m.appCtx)
 		outputDir, title := m.downloadService.OrganizedPath(resolved)

@@ -347,6 +347,9 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			break
 		}
 	}
+	if model.downloadService != nil {
+		model.downloadService.SetSubtitleLanguage(model.subtitleLanguage)
+	}
 	tuiLog.Info("image protocol detected", "protocol", model.imgProtocol.String())
 	if historyLoadErr != nil {
 		// historyStore is nil in this case, silently disabling watch

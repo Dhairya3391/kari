@@ -192,8 +192,8 @@ func Run() error {
 	mangaService := service.NewMangaService(registry)
 	mangaClient := manga.NewClient()
 	players := player.NewRegistry(cfg.PreferredPlayer, skipClients, skipSettings)
-	downloadService := service.NewDownloadService(cfg.DownloadDir, downloader.NewYTDLPDownloader(), mediaService)
 	subtitleService := service.NewSubtitleService(cfg)
+	downloadService := service.NewDownloadService(cfg.DownloadDir, downloader.NewYTDLPDownloader(), mediaService, subtitleService)
 
 	traktClient := scrobble.NewTraktClient(cfg.TraktClientID, cfg.TraktClientSecret)
 	anilistClient := scrobble.NewAniListClient(cfg.AniListClientID, cfg.AniListClientSecret)

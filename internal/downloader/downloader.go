@@ -116,6 +116,11 @@ func splitTitleExt(title string) (string, string) {
 	return baseTitle, ext
 }
 
+// SplitTitleExt sanitizes title and returns its base title and media extension.
+func SplitTitleExt(title string) (string, string) {
+	return splitTitleExt(title)
+}
+
 func ensureOutputDir(dir string) error {
 	if strings.TrimSpace(dir) == "" {
 		return fmt.Errorf("output directory is empty")

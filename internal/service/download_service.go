@@ -6,11 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"kari/internal/downloader"
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/util"
 )
 
 // log scopes every line from this package/component.
@@ -19,18 +21,40 @@ var batchLog = logging.With("component", "service.download.batch")
 // DownloadService resolves media through MediaService and hands the chosen
 // sources to the downloader engine with organized output paths.
 type DownloadService struct {
-	downloadDir  string
-	dl           downloader.Downloader
-	mediaService *MediaService
+	downloadDir     string
+	dl              downloader.Downloader
+	mediaService    *MediaService
+	subtitleService *SubtitleService
+	subLangMu       sync.RWMutex
+	subLang         string
 }
 
-// NewDownloadService wires the service to a download directory and engine.
-func NewDownloadService(downloadDir string, dl downloader.Downloader, mediaService *MediaService) *DownloadService {
+// NewDownloadService wires the service to a download directory, engine, and subtitle service.
+func NewDownloadService(downloadDir string, dl downloader.Downloader, mediaService *MediaService, subtitleService *SubtitleService) *DownloadService {
 	return &DownloadService{
-		downloadDir:  downloadDir,
-		dl:           dl,
-		mediaService: mediaService,
+		downloadDir:     downloadDir,
+		dl:              dl,
+		mediaService:    mediaService,
+		subtitleService: subtitleService,
+		subLang:         "en",
 	}
+}
+
+// SetSubtitleLanguage configures the preferred subtitle language for downloads.
+func (s *DownloadService) SetSubtitleLanguage(lang string) {
+	s.subLangMu.Lock()
+	s.subLang = lang
+	s.subLangMu.Unlock()
+}
+
+// SubtitleLanguage returns the preferred subtitle language for downloads.
+func (s *DownloadService) SubtitleLanguage() string {
+	s.subLangMu.RLock()
+	defer s.subLangMu.RUnlock()
+	if s.subLang == "" {
+		return "en"
+	}
+	return s.subLang
 }
 
 // OutputDir returns the configured base download directory.
@@ -116,14 +140,134 @@ func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.Reso
 	}
 
 	logging.Debug("download service: start", "title", title, "outputDir", outputDir)
-	return s.dl.Download(ctx, req)
+	if err := s.dl.Download(ctx, req); err != nil {
+		return err
+	}
+
+	s.saveSidecarSubtitle(ctx, resolved, outputDir, title)
+	return nil
+}
+
+func (s *DownloadService) saveSidecarSubtitle(ctx context.Context, resolved model.ResolvedMedia, outputDir, title string) {
+	if s.subtitleService == nil {
+		return
+	}
+	subLang := s.SubtitleLanguage()
+	if strings.EqualFold(strings.TrimSpace(subLang), "off") {
+		return
+	}
+	isAnime := resolved.MediaType == provider.MediaTypeAnime || resolved.ContentMode == provider.ModeAnime
+	if isAnime && s.subtitleService.AnimeSubtitlesDisabled() {
+		return
+	}
+	if len(resolved.Playback) == 0 {
+		return
+	}
+
+	source := resolved.Playback[0]
+	if isAnimeHardSub(resolved, source) {
+		logging.Debug("download service: skipping sidecar subtitles for hardsub anime", "title", title, "quality", source.Quality)
+		return
+	}
+
+	var track model.SubtitleTrack
+	var err error
+
+	if resolved.SelectedSubtitle != nil && usableCachedTrack(*resolved.SelectedSubtitle) {
+		selectedLang := resolved.SelectedSubtitle.Language
+		if selectedLang == "" || strings.EqualFold(selectedLang, subLang) {
+			track = *resolved.SelectedSubtitle
+		}
+	}
+
+	if track.Path == "" {
+		track, err = s.subtitleService.FetchForSource(ctx, resolved, subLang, source.Resolver, source.TransportIdentity())
+		if err != nil {
+			logging.Warn("download service: fetch sidecar subtitle failed", "title", title, "err", err)
+			return
+		}
+	}
+
+	if track.Path == "" {
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(track.Path))
+	if ext == "" {
+		ext = ".srt"
+	}
+	langCode := track.Language
+	if langCode == "" {
+		langCode = subLang
+	}
+	if langCode == "" {
+		langCode = "en"
+	}
+
+	baseTitle, _ := downloader.SplitTitleExt(title)
+	subFilename := fmt.Sprintf("%s.%s%s", baseTitle, langCode, ext)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		logging.Warn("download service: create output dir for subtitle failed", "dir", outputDir, "err", err)
+		return
+	}
+	destPath := filepath.Join(outputDir, subFilename)
+	data, err := os.ReadFile(track.Path)
+	if err != nil {
+		logging.Warn("download service: read cached subtitle failed", "path", track.Path, "err", err)
+		return
+	}
+	if err := util.AtomicWriteFile(destPath, data, 0o644); err != nil {
+		logging.Warn("download service: write sidecar subtitle failed", "dest", destPath, "err", err)
+		return
+	}
+	logging.Info("download service: saved sidecar subtitle", "path", destPath)
+}
+
+// isAnimeHardSub reports whether media is anime and the primary playback source
+// carries burned-in subtitles, making a sidecar track redundant.
+func isAnimeHardSub(resolved model.ResolvedMedia, source provider.MediaSource) bool {
+	isAnime := resolved.MediaType == provider.MediaTypeAnime || resolved.ContentMode == provider.ModeAnime
+	if !isAnime {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(source.SubType), provider.SubTypeHard) {
+		return true
+	}
+	lowerQuality := strings.ToLower(source.Quality)
+	return strings.Contains(lowerQuality, "hard sub") ||
+		strings.Contains(lowerQuality, "hardsub") ||
+		strings.Contains(lowerQuality, "hsub")
 }
 
 // CleanupPartial removes partial artifacts of an interrupted download and
 // prunes now-empty directories under the download root.
 func (s *DownloadService) CleanupPartial(outputDir, title string) {
 	s.dl.CleanupPartial(outputDir, title)
+	s.cleanupSidecarSubtitles(outputDir, title)
 	removeEmptyDirs(outputDir, s.downloadDir)
+}
+
+func (s *DownloadService) cleanupSidecarSubtitles(outputDir, title string) {
+	baseTitle, _ := downloader.SplitTitleExt(title)
+	for _, ext := range []string{".mp4", ".mkv", ".webm", ".m4v", ".mov", ".avi", ".ts"} {
+		if _, err := os.Stat(filepath.Join(outputDir, baseTitle+ext)); err == nil {
+			return
+		}
+	}
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return
+	}
+	prefix := baseTitle + "."
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if ext == ".srt" || ext == ".ass" || ext == ".vtt" {
+			_ = os.Remove(filepath.Join(outputDir, entry.Name()))
+		}
+	}
 }
 
 // removeEmptyDirs removes outputDir and any parent directories up to (but not

@@ -53,6 +53,14 @@ func (s *SubtitleService) SetDisableAnimeSubtitles(disable bool) {
 	s.disableMu.Unlock()
 }
 
+// AnimeSubtitlesDisabled reports whether anime-specific subtitle suppression is enabled.
+func (s *SubtitleService) AnimeSubtitlesDisabled() bool {
+	s.disableMu.RLock()
+	disabled := s.disableAnime
+	s.disableMu.RUnlock()
+	return disabled
+}
+
 // ClearCache removes cached subtitle selections so the next fetch resolves
 // tracks again from the current provider results.
 func (s *SubtitleService) ClearCache() {
@@ -214,10 +222,7 @@ func subtitleFallbackReady(media model.ResolvedMedia) bool {
 }
 
 func (s *SubtitleService) areAnimeSubtitlesDisabled() bool {
-	s.disableMu.RLock()
-	disabled := s.disableAnime
-	s.disableMu.RUnlock()
-	return disabled
+	return s.AnimeSubtitlesDisabled()
 }
 
 func usableCachedTrack(track model.SubtitleTrack) bool {

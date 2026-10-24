@@ -323,6 +323,9 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			if len(lang.SubtitleOptions) > 0 {
 				m.subtitleLanguageIndex = (m.subtitleLanguageIndex + delta + len(lang.SubtitleOptions)) % len(lang.SubtitleOptions)
 				m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
+				if m.downloadService != nil {
+					m.downloadService.SetSubtitleLanguage(m.subtitleLanguage)
+				}
 			}
 		}
 
