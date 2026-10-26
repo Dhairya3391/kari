@@ -417,35 +417,36 @@ type modelImpl struct {
 	discordPresence      bool
 	// presenceSession tags the current now-playing card so a late background
 	// artwork lookup can't revive a card that was already cleared or replaced.
-	presenceSession       atomic.Int64
-	settingsIndex         int
-	searchCache           *util.BoundedCache[searchCacheEntry]
-	audioMode             string
-	qualityMode           int
-	downloadQuality       int
-	languageFilter        map[string]bool
-	subtitleLanguage      string
-	subtitleLanguageIndex int
-	disableAnimeSubtitles bool
-	accentIndex           int
-	customAccentHex       string
-	editingAccentHex      bool
-	hexInput              textinput.Model
-	skipProvider          string
-	autoSkipIntro         bool
-	autoSkipEnding        bool
-	skipRecap             bool
-	skipPreview           bool
-	selectedEpisodes      map[int]struct{}
-	batchInProgress       bool
-	batchCurrent          int
-	batchTotal            int
-	batchEpisodeProgress  float64
-	batchCancel           context.CancelFunc
-	batchChan             chan tea.Msg
-	batchEpisodes         []provider.Episode
-	batchSeries           provider.SearchResult
-	batchMode             provider.ContentType
+	presenceSession             atomic.Int64
+	settingsIndex               int
+	searchCache                 *util.BoundedCache[searchCacheEntry]
+	audioMode                   string
+	qualityMode                 int
+	downloadQuality             int
+	disableDownloadVerification bool
+	languageFilter              map[string]bool
+	subtitleLanguage            string
+	subtitleLanguageIndex       int
+	disableAnimeSubtitles       bool
+	accentIndex                 int
+	customAccentHex             string
+	editingAccentHex            bool
+	hexInput                    textinput.Model
+	skipProvider                string
+	autoSkipIntro               bool
+	autoSkipEnding              bool
+	skipRecap                   bool
+	skipPreview                 bool
+	selectedEpisodes            map[int]struct{}
+	batchInProgress             bool
+	batchCurrent                int
+	batchTotal                  int
+	batchEpisodeProgress        float64
+	batchCancel                 context.CancelFunc
+	batchChan                   chan tea.Msg
+	batchEpisodes               []provider.Episode
+	batchSeries                 provider.SearchResult
+	batchMode                   provider.ContentType
 	// batchActiveDir/Title locate the episode being written right now so
 	// x (cancel single) removes exactly its partial files.
 	batchActiveDir   string

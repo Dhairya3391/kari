@@ -251,6 +251,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		if s.DownloadQuality >= downloadQualityAuto && s.DownloadQuality <= downloadQualitySD {
 			model.downloadQuality = s.DownloadQuality
 		}
+		model.disableDownloadVerification = s.DisableDownloadVerification
 		if len(s.LanguageFilter) > 0 {
 			// Saved filters only ever record overrides (a language the user
 			// explicitly disabled) — anything absent from the map is still
@@ -349,6 +350,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 	}
 	if model.downloadService != nil {
 		model.downloadService.SetSubtitleLanguage(model.subtitleLanguage)
+		model.downloadService.SetVerifyDownloads(!model.disableDownloadVerification)
 	}
 	tuiLog.Info("image protocol detected", "protocol", model.imgProtocol.String())
 	if historyLoadErr != nil {
@@ -356,6 +358,8 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		// history/resume for the whole session — surface it instead of
 		// leaving the user to wonder why "Continue Watching" is empty.
 		model.setStatus(statusWarn, "Watch history unavailable: "+historyLoadErr.Error())
+	} else if logging.StderrSuppressed() {
+		model.setStatus(statusWarn, "Stderr logging disabled in terminal (redirect via tty e.g. kari 2> /dev/pts/X)")
 	}
 	return model
 }

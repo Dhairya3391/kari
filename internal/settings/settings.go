@@ -27,10 +27,12 @@ var settingsLog = logging.With("component", "settings")
 // Data is the persisted user-settings document (settings.json). Fields are
 // additive and zero-value friendly so older files never need migration.
 type Data struct {
-	QualityMode      int             `json:"quality_mode"`
-	DownloadQuality  int             `json:"download_quality"`
-	LanguageFilter   map[string]bool `json:"language_filter"`
-	SubtitleLanguage string          `json:"subtitle_language"`
+	QualityMode     int `json:"quality_mode"`
+	DownloadQuality int `json:"download_quality"`
+	// DisableDownloadVerification turns off post-download video integrity checks.
+	DisableDownloadVerification bool            `json:"disable_download_verification,omitempty"`
+	LanguageFilter              map[string]bool `json:"language_filter"`
+	SubtitleLanguage            string          `json:"subtitle_language"`
 	// DisableAnimeSubtitles suppresses subtitles specifically for anime content,
 	// while keeping them active in the preferred language for movies and TV.
 	DisableAnimeSubtitles bool `json:"disable_anime_subtitles"`

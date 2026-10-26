@@ -17,8 +17,8 @@ import (
 	"kari/internal/httpclient"
 	"kari/internal/introdb"
 	"kari/internal/logging"
-	"kari/internal/manga"
 	"kari/internal/man"
+	"kari/internal/manga"
 	"kari/internal/player"
 	"kari/internal/poster"
 	"kari/internal/presence"
@@ -194,6 +194,9 @@ func Run() error {
 	players := player.NewRegistry(cfg.PreferredPlayer, skipClients, skipSettings)
 	subtitleService := service.NewSubtitleService(cfg)
 	downloadService := service.NewDownloadService(cfg.DownloadDir, downloader.NewYTDLPDownloader(), mediaService, subtitleService)
+	if savedSettings != nil && savedSettings.DisableDownloadVerification {
+		downloadService.SetVerifyDownloads(false)
+	}
 
 	traktClient := scrobble.NewTraktClient(cfg.TraktClientID, cfg.TraktClientSecret)
 	anilistClient := scrobble.NewAniListClient(cfg.AniListClientID, cfg.AniListClientSecret)

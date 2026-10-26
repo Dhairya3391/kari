@@ -27,6 +27,8 @@ type DownloadService struct {
 	subtitleService *SubtitleService
 	subLangMu       sync.RWMutex
 	subLang         string
+	verifyMu        sync.RWMutex
+	verifyDownloads bool
 }
 
 // NewDownloadService wires the service to a download directory, engine, and subtitle service.
@@ -37,7 +39,22 @@ func NewDownloadService(downloadDir string, dl downloader.Downloader, mediaServi
 		mediaService:    mediaService,
 		subtitleService: subtitleService,
 		subLang:         "en",
+		verifyDownloads: true,
 	}
+}
+
+// SetVerifyDownloads enables or disables integrity verification for completed downloads.
+func (s *DownloadService) SetVerifyDownloads(verify bool) {
+	s.verifyMu.Lock()
+	s.verifyDownloads = verify
+	s.verifyMu.Unlock()
+}
+
+// VerifyDownloads reports whether downloaded video files are checked for corruption.
+func (s *DownloadService) VerifyDownloads() bool {
+	s.verifyMu.RLock()
+	defer s.verifyMu.RUnlock()
+	return s.verifyDownloads
 }
 
 // SetSubtitleLanguage configures the preferred subtitle language for downloads.
@@ -137,6 +154,7 @@ func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.Reso
 		OutputDir: outputDir,
 		Sources:   resolved.Playback,
 		Progress:  progress,
+		Verify:    s.VerifyDownloads(),
 	}
 
 	logging.Debug("download service: start", "title", title, "outputDir", outputDir)

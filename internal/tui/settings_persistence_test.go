@@ -31,6 +31,7 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	m.startupSearchActive = false
 	m.disabledProviders = map[string]bool{"pengu": true, "anivault": true}
 	m.autoUpdate = true
+	m.disableDownloadVerification = true
 
 	m.saveSettings()
 
@@ -61,6 +62,9 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	if !saved.Autoplay {
 		t.Errorf("saved.Autoplay = false, want true")
 	}
+	if !saved.DisableDownloadVerification {
+		t.Errorf("saved.DisableDownloadVerification = false, want true")
+	}
 	if !saved.StartupSync {
 		t.Errorf("saved.StartupSync = false, want true")
 	}
@@ -79,6 +83,37 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	wantDisabledProviders := []string{"anivault", "pengu"}
 	if !reflect.DeepEqual(saved.DisabledProviders, wantDisabledProviders) {
 		t.Errorf("saved.DisabledProviders = %v, want %v", saved.DisabledProviders, wantDisabledProviders)
+	}
+}
+
+func TestSettings_VerifyDownloadsToggle(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := newTestSwitchModel()
+	m.settingsCategory = CategoryPlayback
+	m.settingsIndex = 4
+
+	if m.disableDownloadVerification {
+		t.Fatalf("expected disableDownloadVerification to be false initially")
+	}
+
+	m.cycleCurrentSetting(1)
+	if !m.disableDownloadVerification {
+		t.Fatalf("expected disableDownloadVerification to be true after cycling")
+	}
+
+	data := m.collectSettingsData(80, 24)
+	if data.VerifyDownloads {
+		t.Fatalf("expected SettingsData.VerifyDownloads to be false when disabled")
+	}
+
+	m.cycleCurrentSetting(-1)
+	if m.disableDownloadVerification {
+		t.Fatalf("expected disableDownloadVerification to be false after cycling back")
+	}
+
+	data2 := m.collectSettingsData(80, 24)
+	if !data2.VerifyDownloads {
+		t.Fatalf("expected SettingsData.VerifyDownloads to be true when enabled")
 	}
 }
 

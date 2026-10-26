@@ -206,7 +206,7 @@ Kari works with zero configuration. You can optionally customize its behavior wi
 | `KARI_DOWNLOAD_DIR` | Directory where downloaded episodes are saved | `./downloads` |
 | `KARI_LOG_FILE` | File destination for logs | `~/.config/kari/kari.log` |
 | `KARI_LOG_DEBUG` | Enable verbose debug logging (`true` or `1`) | `false` |
-| `KARI_LOG_STDERR` | Write logs to standard error (`true` or `1`) | `false` |
+| `KARI_LOG_STDERR` | Mirror logs to standard error when redirected or sent to a separate TTY (`true` or `1`) | `false` |
 
 ### Integrations & Custom API Keys
 
@@ -301,14 +301,27 @@ which mpv
 
 ### Logs & Diagnostics
 
-Logs are written to `~/.config/kari/kari.log` (automatically rotates at 10 MB). For detailed real-time logs, start Kari with:
+Logs are written to `~/.config/kari/kari.log` (automatically rotates at 10 MB).
+
+To stream real-time logs while using Kari without corrupting the TUI, the suggested method is to redirect standard error to a separate terminal window or tmux pane using its TTY device:
+
+1. In **Terminal 1** (or tmux pane 1), find its TTY device path:
+   ```bash
+   tty
+   # Example output: /dev/pts/2 (Linux) or /dev/ttys002 (macOS)
+   ```
+
+2. In **Terminal 2**, launch Kari with `KARI_LOG_STDERR=1` redirected to that device:
+   ```bash
+   KARI_LOG_STDERR=1 kari 2> /dev/pts/2
+   ```
+   *(Add `KARI_LOG_DEBUG=1` for verbose debug logs).*
+
+Alternatively, stream the log file directly in another terminal:
 
 ```bash
-KARI_LOG_DEBUG=true kari
+tail -f ~/.config/kari/kari.log
 ```
-
-Or press `Ctrl+D` inside the TUI to toggle the debug panel.
-
 ---
 
 ## Development

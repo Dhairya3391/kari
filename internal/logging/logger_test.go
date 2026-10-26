@@ -53,3 +53,56 @@ func TestRotateIfOversized_MissingFileIsNoop(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "does-not-exist.log")
 	rotateIfOversized(path) // must not panic
 }
+func TestShouldMirrorStderr_NilStderr(t *testing.T) {
+	if ShouldMirrorStderr(os.Stdout, nil) {
+		t.Fatal("expected nil stderr to return false")
+	}
+}
+
+func TestShouldMirrorStderr_FileStderr(t *testing.T) {
+	tmpFile, err := os.CreateTemp(t.TempDir(), "stderr-test")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer tmpFile.Close()
+
+	if !ShouldMirrorStderr(os.Stdout, tmpFile) {
+		t.Fatal("expected file stderr to return true (safe to mirror)")
+	}
+}
+
+func TestShouldMirrorStderr_PipeStderr(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	if !ShouldMirrorStderr(os.Stdout, w) {
+		t.Fatal("expected pipe stderr to return true (safe to mirror)")
+	}
+}
+
+func TestInit_KariLogStderr_RedirectedFile(t *testing.T) {
+	ResetForTesting()
+	defer ResetForTesting()
+
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "kari.log")
+	t.Setenv("KARI_LOG_FILE", logPath)
+	t.Setenv("KARI_LOG_STDERR", "1")
+
+	if err := Init(false); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	defer Close()
+
+	// In `go test`, stdout/stderr is normally redirected to a test runner pipe/buffer.
+	// Regardless of whether stderr is a pipe in `go test` or a terminal, StderrSuppressed
+	// must match whether shouldMirrorStderr was false.
+	expectedSuppressed := !ShouldMirrorStderr(os.Stdout, os.Stderr)
+	if StderrSuppressed() != expectedSuppressed {
+		t.Fatalf("StderrSuppressed() = %v, want %v", StderrSuppressed(), expectedSuppressed)
+	}
+}

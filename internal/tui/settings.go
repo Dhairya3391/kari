@@ -66,6 +66,7 @@ type SettingsData struct {
 	QualityName         string // "Highest", "All", "Data Saver", "Lowest"
 	DownloadQualityName string // "Same as stream", "Highest", "Data Saver", "Lowest"
 	Autoplay            bool   // on / off
+	VerifyDownloads     bool   // on / off
 	// Languages values
 	AudioSummary     string // e.g. "English · Hindi · Japanese"
 	SubtitleLanguage string // e.g. "English"
@@ -150,11 +151,12 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 
 	switch data.ActiveCategory {
 	case CategoryPlayback:
-		// 0: Preferred player, 1: Stream quality, 2: Download quality, 3: Autoplay next episode
+		// 0: Preferred player, 1: Stream quality, 2: Download quality, 3: Autoplay next episode, 4: Verify downloads
 		rows = append(rows, renderSettingRow("Preferred player", formatVal(data.PlayerName, data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))
 		rows = append(rows, renderSettingRow("Stream quality", formatVal(data.QualityName, data.FocusedRowIndex == 1, st), data.FocusedRowIndex == 1, width, st))
 		rows = append(rows, renderSettingRow("Download quality", formatVal(data.DownloadQualityName, data.FocusedRowIndex == 2, st), data.FocusedRowIndex == 2, width, st))
 		rows = append(rows, renderSettingRow("Autoplay next episode", formatVal(boolOnOff(data.Autoplay), data.FocusedRowIndex == 3, st), data.FocusedRowIndex == 3, width, st))
+		rows = append(rows, renderSettingRow("Verify downloads", formatVal(boolOnOff(data.VerifyDownloads), data.FocusedRowIndex == 4, st), data.FocusedRowIndex == 4, width, st))
 
 		switch data.FocusedRowIndex {
 		case 0:
@@ -165,6 +167,8 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 			desc = "Target download resolution: 4K (2160p), FHD (1080p), HD (720p), SD (480p), or Auto (same as stream)."
 		case 3:
 			desc = "Autoplay picks the best source and skips the preview."
+		case 4:
+			desc = "Verify downloaded media integrity with ffmpeg before completing."
 		}
 
 	case CategoryLanguages:

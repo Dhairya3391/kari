@@ -279,7 +279,6 @@ func TestFetchEpisodesTVAppendedSeasonsBatch(t *testing.T) {
 	}
 }
 
-
 func isHTTP500(err error) bool {
 	if err == nil {
 		return false

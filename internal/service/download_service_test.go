@@ -420,3 +420,36 @@ func TestCleanupPartialRemovesSidecarSubtitles(t *testing.T) {
 		t.Fatal("bracketed orphaned sidecar subtitle was not cleaned up")
 	}
 }
+
+func TestDownloadService_VerifyForwarding(t *testing.T) {
+	dl := &fakeDownloader{}
+	svc := testDownloadService(t.TempDir(), dl)
+
+	if !svc.VerifyDownloads() {
+		t.Fatalf("expected VerifyDownloads to default to true")
+	}
+
+	resolved := model.ResolvedMedia{
+		SeriesTitle: "Movie",
+		Playback:    []provider.MediaSource{{URL: "https://example.com/video.mp4", Quality: "1080p"}},
+	}
+
+	if err := svc.Download(context.Background(), resolved, nil); err != nil {
+		t.Fatalf("Download failed: %v", err)
+	}
+	if len(dl.requests) != 1 || !dl.requests[0].Verify {
+		t.Fatalf("expected dl.requests[0].Verify == true, got %+v", dl.requests)
+	}
+
+	svc.SetVerifyDownloads(false)
+	if svc.VerifyDownloads() {
+		t.Fatalf("expected VerifyDownloads to be false after SetVerifyDownloads(false)")
+	}
+
+	if err := svc.Download(context.Background(), resolved, nil); err != nil {
+		t.Fatalf("Download failed: %v", err)
+	}
+	if len(dl.requests) != 2 || dl.requests[1].Verify {
+		t.Fatalf("expected dl.requests[1].Verify == false, got %+v", dl.requests)
+	}
+}

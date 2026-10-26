@@ -41,6 +41,7 @@ type DownloadRequest struct {
 	Title     string
 	OutputDir string
 	Progress  func(p DownloadProgress)
+	Verify    bool
 }
 
 // Downloader is the engine contract for fetching media to disk.
@@ -187,6 +188,22 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 			"resolver", source.Resolver, "quality", source.Quality,
 			"strategy", downloadStrategy(source))
 		if err := d.downloadSource(ctx, req, source); err == nil {
+			if req.Verify {
+				if req.Progress != nil {
+					finalSize := d.findOutputSize(req.OutputDir, baseTitle)
+					req.Progress(DownloadProgress{Percent: 1.0, TotalSize: finalSize, Speed: "verifying", ETA: "verifying..."})
+				}
+				if err := d.verifyFile(ctx, req.OutputDir, baseTitle); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					d.removeDownloadedFile(req.OutputDir, baseTitle)
+					d.CleanupPartial(req.OutputDir, req.Title)
+					errs = append(errs, fmt.Errorf("source %d (%s): integrity check failed: %w", i+1, source.Quality, err))
+					ytdlpLog.Warn("source failed integrity check; trying next", "index", i+1, "total", len(req.Sources), "err", err)
+					continue
+				}
+			}
 			if req.Progress != nil {
 				finalSize := d.findOutputSize(req.OutputDir, baseTitle)
 				req.Progress(DownloadProgress{Percent: 1.0, TotalSize: finalSize})
@@ -211,19 +228,69 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 	return fmt.Errorf("ytdlp: all %d usable sources failed: %w", len(errs), errors.Join(errs...))
 }
 
-func (d *YTDLPDownloader) findOutputSize(outputDir, baseTitle string) string {
+func (d *YTDLPDownloader) findOutputPath(outputDir, baseTitle string) string {
 	for ext := range knownMediaExts {
 		path := filepath.Join(outputDir, baseTitle+ext)
-		if info, err := os.Stat(path); err == nil && info.Size() > 1024*1024 {
+		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
 			// A .aria2 control file next to the media file means the
 			// download was interrupted and the file is incomplete.
 			if _, err := os.Stat(path + ".aria2"); err == nil {
 				continue
 			}
-			return formatFileSize(info.Size())
+			return path
 		}
 	}
 	return ""
+}
+
+func (d *YTDLPDownloader) findOutputSize(outputDir, baseTitle string) string {
+	path := d.findOutputPath(outputDir, baseTitle)
+	if path == "" {
+		return ""
+	}
+	if info, err := os.Stat(path); err == nil && info.Size() > 1024*1024 {
+		return formatFileSize(info.Size())
+	}
+	return ""
+}
+
+func (d *YTDLPDownloader) removeDownloadedFile(outputDir, baseTitle string) {
+	if path := d.findOutputPath(outputDir, baseTitle); path != "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			ytdlpLog.Debug("remove corrupt download failed", "file", path, "err", err)
+		}
+	}
+}
+
+func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle string) error {
+	path := d.findOutputPath(outputDir, baseTitle)
+	if path == "" {
+		return fmt.Errorf("output file not found for verification")
+	}
+
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		ytdlpLog.Debug("ffmpeg not found in PATH; skipping video integrity check", "path", path)
+		return nil
+	}
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-xerror", "-threads", "0", "-nostdin", "-i", path, "-f", "null", "-")
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	trimmedStderr := strings.TrimSpace(stderrBuf.String())
+	if err != nil || len(trimmedStderr) > 0 {
+		errMsg := trimmedStderr
+		if errMsg == "" && err != nil {
+			errMsg = err.Error()
+		}
+		return fmt.Errorf("video integrity check failed: %s", errMsg)
+	}
+	return nil
 }
 
 func formatFileSize(bytes int64) string {

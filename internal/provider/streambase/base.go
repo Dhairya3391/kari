@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/errgroup"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -12,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"golang.org/x/sync/errgroup"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
@@ -558,7 +558,6 @@ func (b *Base) fetchTMDBTVSeasonsBatch(ctx context.Context, tmdbID int, seasons 
 		lastAuthErr = err
 	}
 }
-
 
 func fetchTMDBJSON[T any](b *Base, ctx context.Context, target string) (T, error) {
 	var zero T

@@ -212,7 +212,13 @@ Default:
 .BR false .
 .TP
 .B KARI_LOG_STDERR
-Write logs to standard error instead of the log file.
+Mirror logs to standard error in addition to the log file.
+When standard error is connected to an interactive terminal, output is
+automatically suppressed to prevent corrupting the TUI.
+Redirect standard error
+(e.g.\&
+.BR "kari 2> kari.err" )
+or stream from another terminal to capture logs.
 Set to
 .B true
 or
@@ -402,19 +408,29 @@ Logs are written to
 .I ~/.config/kari/kari.log
 and rotate automatically at 10\ MB.
 .PP
-To stream logs to standard error in real time:
+The suggested way to stream logs in real time without corrupting the TUI
+is redirecting standard error to a separate terminal using its TTY device
+(run
+.B tty
+in Terminal 1 to obtain its path, e.g.\&
+.IR /dev/pts/2 ):
 .RS
-.B KARI_LOG_STDERR=true kari
+.B KARI_LOG_STDERR=true kari 2> /dev/pts/2
 .RE
 .PP
+Alternatively, stream the log file from another terminal:
+.RS
+.B tail -f ~/.config/kari/kari.log
+.RE
+.PP
+To capture logs to a file:
+.RS
+.B KARI_LOG_STDERR=true kari 2> kari.err
+.RE
 To enable verbose debug logging:
 .RS
 .B KARI_LOG_DEBUG=true kari
 .RE
-.PP
-The debug log panel can also be toggled at runtime with
-.B Ctrl+D
-without restarting kari.
 .\" ────────────────────────────────────────────────
 .SH EXIT STATUS
 .TP

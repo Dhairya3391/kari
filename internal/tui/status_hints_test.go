@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/logging"
 	"kari/internal/player"
 	"kari/internal/provider"
 )
@@ -143,5 +145,27 @@ func TestPlaybackDoneSchedulesTimerAndClearsOnEsc(t *testing.T) {
 
 	if m3.statusText != "" {
 		t.Fatalf("expected statusText to be cleared on ESC, got %q", m3.statusText)
+	}
+}
+func TestNewModel_StderrSuppressedStatus(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+
+	logging.SetStderrSuppressedForTesting(true)
+	defer logging.SetStderrSuppressedForTesting(false)
+
+	reg := &provider.Registry{}
+	players := player.NewRegistry("", player.SkipClients{}, player.SkipSettings{})
+	mdl := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0", "")
+	m, ok := mdl.(*modelImpl)
+	if !ok {
+		t.Fatal("expected *modelImpl")
+	}
+
+	if !strings.Contains(m.statusText, "Stderr logging disabled") {
+		t.Fatalf("expected statusText to warn about Stderr logging, got %q", m.statusText)
+	}
+	if m.statusType != statusWarn {
+		t.Fatalf("expected statusType to be statusWarn, got %v", m.statusType)
 	}
 }

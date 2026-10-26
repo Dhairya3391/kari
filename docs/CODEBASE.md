@@ -252,9 +252,9 @@ mpvLog.Warn("direct playback failed", "exitCode", rc, "stderr", errText)
     (subtitle fetch failed, all providers failed, retry gave up).
   - `Error` — failures aborting the current operation.
 - Output: `~/.config/kari/kari.log`, rotated at 10 MB with one backup.
-  Env toggles: `KARI_LOG_DEBUG` (level), `KARI_LOG_STDERR` (mirror),
-  `KARI_LOG_FORMAT_JSON` (machine-readable output). Source locations are
-  attached automatically while debugging.
+  Env toggles: `KARI_LOG_DEBUG` (level), `KARI_LOG_STDERR` (mirror to stderr
+  when redirected), `KARI_LOG_FORMAT_JSON` (machine-readable output). Source
+  locations are attached automatically while debugging.
 - Never `fmt.Printf` / `log.Printf` for application logic — those are
   reserved for CLI stdout UX (`--version`, update progress bars).
 

@@ -19,12 +19,14 @@
 //
 // Output goes to ~/.config/kari/kari.log (rotated at 10 MB, one backup).
 // Environment overrides: KARI_LOG_DEBUG forces debug level, KARI_LOG_STDERR
-// mirrors to stderr, KARI_LOG_FORMAT_JSON emits machine-readable JSON.
+// mirrors to stderr (suppressed when stderr shares the terminal with stdout to
+// avoid corrupting the TUI), KARI_LOG_FORMAT_JSON emits machine-readable JSON.
 package logging
 
 import (
 	"context"
 	"fmt"
+	"golang.org/x/term"
 	"io"
 	"log/slog"
 	"os"
@@ -35,12 +37,13 @@ import (
 )
 
 var (
-	logger      atomic.Pointer[slog.Logger]
-	logFile     *os.File
-	logPath     string
-	mu          sync.Mutex
-	isDebug     bool
-	initialized bool
+	logger           atomic.Pointer[slog.Logger]
+	logFile          *os.File
+	logPath          string
+	mu               sync.Mutex
+	isDebug          bool
+	initialized      bool
+	stderrSuppressed bool
 )
 
 const (
@@ -102,7 +105,11 @@ func Init(debug bool) error {
 
 	var writer io.Writer = f
 	if envBool("KARI_LOG_STDERR") {
-		writer = io.MultiWriter(f, os.Stderr)
+		if shouldMirrorStderr(os.Stdout, os.Stderr) {
+			writer = io.MultiWriter(f, os.Stderr)
+		} else {
+			stderrSuppressed = true
+		}
 	}
 
 	var l *slog.Logger
@@ -117,6 +124,9 @@ func Init(debug bool) error {
 	logPath = path
 
 	logStartup(f)
+	if stderrSuppressed {
+		l.Warn("KARI_LOG_STDERR suppressed: stderr is attached to the terminal (writing to it would overwrite the TUI); redirect to a separate terminal via tty (e.g. kari 2> /dev/pts/X) or inspect " + path)
+	}
 	initialized = true
 
 	return nil
@@ -125,6 +135,45 @@ func Init(debug bool) error {
 // Logger returns the active base logger. Prefer the package-level
 // Debug/Info/Warn/Error helpers or a With-scoped handle over holding this.
 func Logger() *slog.Logger { return logger.Load() }
+
+// StderrSuppressed reports whether KARI_LOG_STDERR was requested but disabled
+// because stderr was attached to the same interactive terminal as stdout, which
+// would overwrite the TUI.
+func StderrSuppressed() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return stderrSuppressed
+}
+
+// SetStderrSuppressedForTesting overrides the stderrSuppressed flag for unit tests.
+func SetStderrSuppressedForTesting(v bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	stderrSuppressed = v
+}
+
+// shouldMirrorStderr reports whether logs should be mirrored to stderr when
+// KARI_LOG_STDERR is enabled. If stderr is connected to the same terminal device
+// as stdout, writing to stderr will directly clobber the fullscreen TUI, so
+// mirroring must be suppressed. Mirroring is allowed if stderr is redirected to
+// a file, pipe, or a distinct terminal device.
+func shouldMirrorStderr(stdout, stderr *os.File) bool {
+	if stderr == nil {
+		return false
+	}
+	if !term.IsTerminal(int(stderr.Fd())) {
+		return true
+	}
+	if stdout == nil || !term.IsTerminal(int(stdout.Fd())) {
+		return true
+	}
+	outInfo, errOut := stdout.Stat()
+	errInfo, errErr := stderr.Stat()
+	if errOut != nil || errErr != nil {
+		return false
+	}
+	return !os.SameFile(outInfo, errInfo)
+}
 
 // dynamicHandler delegates log evaluation to the active root logger at call time,
 // ensuring package-level loggers created via logging.With during package init

@@ -1037,6 +1037,7 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		QualityName:         qualityName,
 		DownloadQualityName: downloadQualityName,
 		Autoplay:            m.autoplay,
+		VerifyDownloads:     !m.disableDownloadVerification,
 		AudioSummary:        audioSummary,
 		SubtitleLanguage:    lang.Name(m.subtitleLanguage),
 		AudioPickerOpen:     m.audioPickerOpen,

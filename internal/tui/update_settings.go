@@ -280,7 +280,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *modelImpl) maxRowsForCategory(cat SettingsCategory) int {
 	switch cat {
 	case CategoryPlayback:
-		return 4
+		return 5
 	case CategoryLanguages:
 		return 2
 	case CategoryAnime:
@@ -312,6 +312,11 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.downloadQuality = (m.downloadQuality + delta + 5) % 5
 		case 3: // Autoplay next episode
 			m.autoplay = !m.autoplay
+		case 4: // Verify downloads
+			m.disableDownloadVerification = !m.disableDownloadVerification
+			if m.downloadService != nil {
+				m.downloadService.SetVerifyDownloads(!m.disableDownloadVerification)
+			}
 		}
 
 	case CategoryLanguages:
