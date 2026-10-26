@@ -4,6 +4,7 @@
 ![License](https://img.shields.io/github/license/Dhairya3391/kari?style=flat-square)
 ![Go Version](https://img.shields.io/github/go-mod/go-version/Dhairya3391/kari?style=flat-square&label=go)
 ![Last Commit](https://img.shields.io/github/last-commit/Dhairya3391/kari?style=flat-square)
+[![kari on The Terminal Index](https://cli.masoko.net/badge/kari.svg)](https://cli.masoko.net/tools/kari/)
 
 Stream anime, movies, TV shows, and cartoons directly from your terminal. External media player playback (MPV, IINA, VLC), automatic watch history, Trakt/AniList scrobbling, smart subtitle selection, and zero browser tabs.
 
