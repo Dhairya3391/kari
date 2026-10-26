@@ -165,15 +165,34 @@ func (p *MPVPlayer) setProgressObserver(obs ProgressObserver) {
 // Play implements Player.
 func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
 	mpvLog.Debug("playback starting", "media", media.DisplayTitle(), "sources", len(sources))
-	skipArgs, skipPath := getSkipArgs(
-		p.skipClients,
-		p.skipSettings,
-		media,
-		p.skipCache,
-	)
-	defer cleanupSkipScript(skipPath)
+	var defaultSkipArgs []string
+	var defaultSkipScript string
+	var defaultResolved bool
+	getDefaultSkipArgs := func() ([]string, string) {
+		if !defaultResolved {
+			defaultSkipArgs, defaultSkipScript = getSkipArgs(
+				p.skipClients,
+				p.skipSettings,
+				media,
+				p.skipCache,
+			)
+			defaultResolved = true
+		}
+		return defaultSkipArgs, defaultSkipScript
+	}
+	defer func() {
+		if defaultSkipScript != "" {
+			cleanupSkipScript(defaultSkipScript)
+		}
+	}()
 
 	return attemptSources("mpv", sources, func(source provider.MediaSource) (PlaybackResult, error) {
+		skipArgs, skipPath, isMiruro := resolveSourceSkipArgs(source, p.skipSettings, media)
+		if isMiruro {
+			defer cleanupSkipScript(skipPath)
+		} else {
+			skipArgs, _ = getDefaultSkipArgs()
+		}
 		return playSingleSource(source, media, skipArgs, p.progressObserver)
 	})
 }

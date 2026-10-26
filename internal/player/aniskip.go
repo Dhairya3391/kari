@@ -23,6 +23,7 @@ import (
 	"kari/internal/introdb"
 	"kari/internal/logging"
 	"kari/internal/model"
+	"kari/internal/provider"
 	"kari/internal/skipdb"
 	"kari/internal/tmdb"
 	"kari/internal/util"
@@ -458,6 +459,51 @@ func resolveIMDbID(ctx context.Context, media model.ResolvedMedia, keyPool *tmdb
 	}
 	imdbCache.Set(cacheKey, id)
 	return id, nil
+}
+
+// resolveSourceSkipArgs builds skip arguments for source when it is a Miruro source
+// that declares its own segment boundaries. Returns whether Miruro segments were used.
+func resolveSourceSkipArgs(source provider.MediaSource, settings SkipSettings, media model.ResolvedMedia) ([]string, string, bool) {
+	providerMode := strings.ToLower(strings.TrimSpace(settings.Provider))
+	if providerMode == "off" || providerMode == "none" {
+		return nil, "", false
+	}
+	if !strings.EqualFold(source.Resolver, "miruro") {
+		return nil, "", false
+	}
+	if source.SkipTimes == nil || !source.SkipTimes.HasSegments() {
+		return nil, "", false
+	}
+
+	times := combinedSkipTimes{
+		OpStart:      -1,
+		OpEnd:        -1,
+		EdStart:      -1,
+		EdEnd:        -1,
+		RecapStart:   -1,
+		RecapEnd:     -1,
+		PreviewStart: -1,
+		PreviewEnd:   -1,
+		IsLive:       media.IsLive(),
+	}
+	if source.SkipTimes.OpStart >= 0 && source.SkipTimes.OpEnd > source.SkipTimes.OpStart {
+		times.OpStart, times.OpEnd = source.SkipTimes.OpStart, source.SkipTimes.OpEnd
+		times.OpSource = "Miruro"
+	}
+	if source.SkipTimes.EdStart >= 0 && source.SkipTimes.EdEnd > source.SkipTimes.EdStart {
+		times.EdStart, times.EdEnd = source.SkipTimes.EdStart, source.SkipTimes.EdEnd
+		times.EdSource = "Miruro"
+	}
+	if source.SkipTimes.RecapStart >= 0 && source.SkipTimes.RecapEnd > source.SkipTimes.RecapStart {
+		times.RecapStart, times.RecapEnd = source.SkipTimes.RecapStart, source.SkipTimes.RecapEnd
+		times.RecapSource = "Miruro"
+	}
+	if source.SkipTimes.PreviewStart >= 0 && source.SkipTimes.PreviewEnd > source.SkipTimes.PreviewStart {
+		times.PreviewStart, times.PreviewEnd = source.SkipTimes.PreviewStart, source.SkipTimes.PreviewEnd
+		times.PrevSource = "Miruro"
+	}
+	args, scriptPath := buildSkipArgsFromTimes(times, settings)
+	return args, scriptPath, true
 }
 
 // getSkipArgs resolves skip intervals according to settings and writes a

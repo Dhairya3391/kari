@@ -12,6 +12,7 @@ import (
 	"kari/internal/aniskip"
 	"kari/internal/introdb"
 	"kari/internal/model"
+	"kari/internal/provider"
 	"kari/internal/skipdb"
 	"kari/internal/util"
 )
@@ -659,5 +660,185 @@ func TestGetSkipArgs_LongOutroDoesNotSynthesizePreview(t *testing.T) {
 	}
 	if !foundOpts {
 		t.Fatal("expected --script-opts in args")
+	}
+}
+
+func TestResolveSourceSkipArgs_MiruroSource(t *testing.T) {
+	source := provider.MediaSource{
+		Resolver: "miruro",
+		SkipTimes: &provider.SkipTimes{
+			OpStart: 15.5,
+			OpEnd:   105.5,
+			EdStart: 1420.0,
+			EdEnd:   1510.0,
+		},
+	}
+	settings := SkipSettings{
+		Provider:      "hybrid",
+		AutoSkipIntro: true,
+	}
+	media := model.ResolvedMedia{
+		SeriesTitle:   "Frieren",
+		EpisodeNumber: 1,
+	}
+
+	args, scriptPath, isMiruro := resolveSourceSkipArgs(source, settings, media)
+	defer cleanupSkipScript(scriptPath)
+	if !isMiruro {
+		t.Fatal("expected resolveSourceSkipArgs to report true for miruro source")
+	}
+	if scriptPath == "" {
+		t.Fatal("expected non-empty scriptPath")
+	}
+
+	found := false
+	for _, a := range args {
+		if strings.HasPrefix(a, "--script-opts=") {
+			found = true
+			if !strings.Contains(a, "skip-op_start=15.500000") || !strings.Contains(a, "skip-op_end=105.500000") {
+				t.Errorf("expected op 15.5-105.5, got: %s", a)
+			}
+			if !strings.Contains(a, "skip-ed_start=1420.000000") || !strings.Contains(a, "skip-ed_end=1510.000000") {
+				t.Errorf("expected ed 1420-1510, got: %s", a)
+			}
+			if !strings.Contains(a, "skip-auto_intro=1") {
+				t.Errorf("expected auto_intro=1, got: %s", a)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected --script-opts in args")
+	}
+}
+
+func TestResolveSourceSkipArgs_NonMiruroSourceIgnored(t *testing.T) {
+	source := provider.MediaSource{
+		Resolver: "anikoto",
+		SkipTimes: &provider.SkipTimes{
+			OpStart: 15.5,
+			OpEnd:   105.5,
+		},
+	}
+	settings := SkipSettings{Provider: "hybrid"}
+	media := model.ResolvedMedia{SeriesTitle: "Frieren", EpisodeNumber: 1}
+
+	args, scriptPath, isMiruro := resolveSourceSkipArgs(source, settings, media)
+	if isMiruro || len(args) != 0 || scriptPath != "" {
+		cleanupSkipScript(scriptPath)
+		t.Fatalf("non-miruro source must be ignored, got isMiruro=%t, args=%v", isMiruro, args)
+	}
+}
+
+func TestResolveSourceSkipArgs_MiruroSourceWithoutSegments(t *testing.T) {
+	source := provider.MediaSource{
+		Resolver:  "miruro",
+		SkipTimes: nil,
+	}
+	settings := SkipSettings{Provider: "hybrid"}
+	media := model.ResolvedMedia{SeriesTitle: "Frieren", EpisodeNumber: 1}
+
+	args, scriptPath, isMiruro := resolveSourceSkipArgs(source, settings, media)
+	if isMiruro || len(args) != 0 || scriptPath != "" {
+		cleanupSkipScript(scriptPath)
+		t.Fatalf("miruro source without segments must be ignored, got isMiruro=%t, args=%v", isMiruro, args)
+	}
+}
+
+func TestResolveSourceSkipArgs_OffProvider(t *testing.T) {
+	source := provider.MediaSource{
+		Resolver: "miruro",
+		SkipTimes: &provider.SkipTimes{
+			OpStart: 10,
+			OpEnd:   100,
+		},
+	}
+	settings := SkipSettings{Provider: "off"}
+	media := model.ResolvedMedia{SeriesTitle: "Frieren", EpisodeNumber: 1}
+
+	args, scriptPath, isMiruro := resolveSourceSkipArgs(source, settings, media)
+	if isMiruro || len(args) != 0 || scriptPath != "" {
+		cleanupSkipScript(scriptPath)
+		t.Fatalf("off provider must yield no skip args, got isMiruro=%t, args=%v", isMiruro, args)
+	}
+}
+
+func TestResolveSkipInfo_MiruroSourceSegments(t *testing.T) {
+	registry := NewRegistry("", SkipClients{}, SkipSettings{Provider: "hybrid"})
+	media := model.ResolvedMedia{
+		SeriesTitle:   "Sousou no Frieren",
+		EpisodeNumber: 1,
+		Playback: []provider.MediaSource{
+			{
+				Resolver: "miruro",
+				SkipTimes: &provider.SkipTimes{
+					OpStart: 0,
+					OpEnd:   89,
+					EdStart: 1460,
+					EdEnd:   1549,
+				},
+			},
+		},
+	}
+
+	info, conclusive := registry.ResolveSkipInfo(media)
+	if !conclusive {
+		t.Fatal("expected conclusive = true for miruro source with segments")
+	}
+	if info.Opening != "Miruro" || info.Ending != "Miruro" {
+		t.Errorf("info = %+v, want Opening=Miruro, Ending=Miruro", info)
+	}
+	if got := info.String(); got != "Miruro" {
+		t.Errorf("info.String() = %q, want Miruro", got)
+	}
+	if info.Recap != "" || info.Preview != "" {
+		t.Errorf("expected absent recap and preview to be empty, got Recap=%q Preview=%q", info.Recap, info.Preview)
+	}
+
+	// If active resolver is anikoto, miruro segments are not used
+	mediaAnikoto := model.ResolvedMedia{
+		SeriesTitle:   "Sousou no Frieren",
+		EpisodeNumber: 1,
+		Resolver:      "anikoto",
+		Playback: []provider.MediaSource{
+			{
+				Resolver: "miruro",
+				SkipTimes: &provider.SkipTimes{
+					OpStart: 0,
+					OpEnd:   89,
+				},
+			},
+		},
+	}
+	infoAnikoto, _ := registry.ResolveSkipInfo(mediaAnikoto)
+	if infoAnikoto.Opening == "Miruro" {
+		t.Errorf("anikoto resolver should not report Miruro skips, got %+v", infoAnikoto)
+	}
+
+	// Zero-valued optional segments (e.g. RecapStart=0, RecapEnd=0) are not treated as valid segments
+	zeroOptionalsSource := provider.MediaSource{
+		Resolver: "miruro",
+		SkipTimes: &provider.SkipTimes{
+			OpStart:      10,
+			OpEnd:        100,
+			RecapStart:   0,
+			RecapEnd:     0,
+			PreviewStart: 0,
+			PreviewEnd:   0,
+		},
+	}
+	args, scriptPath, isMiruro := resolveSourceSkipArgs(zeroOptionalsSource, SkipSettings{Provider: "hybrid"}, media)
+	defer cleanupSkipScript(scriptPath)
+	if !isMiruro {
+		t.Fatal("expected isMiruro=true for valid op")
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "--script-opts=") {
+			if !strings.Contains(a, "skip-recap_start=-1.000000") {
+				t.Errorf("zero-valued recap must be sent as -1.000000, got: %s", a)
+			}
+			if !strings.Contains(a, "skip-preview_start=-1.000000") {
+				t.Errorf("zero-valued preview must be sent as -1.000000, got: %s", a)
+			}
+		}
 	}
 }

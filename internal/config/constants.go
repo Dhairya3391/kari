@@ -53,10 +53,9 @@ const (
 
 	// MiruroBase is the Miruro anime site (SvelteKit, no public API):
 	// search, episode listings, and per-episode streams all come from
-	// its __data.json endpoints. Shapes were verified live; the
-	// barelystarted host is the current deployment while miruro.tv
-	// rotates domains.
-	MiruroBase = "https://barelystarted.miruro.tv"
+	// its __data.json endpoints. The miruro.cx host is the current
+	// SvelteKit deployment while www.miruro.cx hosts the React/API v1 SPA.
+	MiruroBase = "https://miruro.cx"
 
 	// AniVaultAPIBase is AniVault's public scraper API. The anivault.tv
 	// frontend is Cloudflare-challenged for non-browser clients; this

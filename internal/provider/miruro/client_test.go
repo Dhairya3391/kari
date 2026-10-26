@@ -295,3 +295,122 @@ func TestRedirectSlug(t *testing.T) {
 		t.Errorf("slug = %q, want empty for data docs", slug)
 	}
 }
+
+func TestDecodeSkipTimes(t *testing.T) {
+	t.Run("skipTimes array", func(t *testing.T) {
+		m := map[string]any{
+			"skipTimes": []any{
+				map[string]any{"kind": "intro", "start": 0.0, "end": 89.5},
+				map[string]any{"kind": "outro", "start": 1460.0, "end": 1549.0},
+			},
+		}
+		st := decodeSkipTimes(m)
+		if st == nil {
+			t.Fatal("expected non-nil SkipTimes")
+		}
+		if st.OpStart != 0.0 || st.OpEnd != 89.5 {
+			t.Errorf("Op times = (%f, %f), want (0, 89.5)", st.OpStart, st.OpEnd)
+		}
+		if st.EdStart != 1460.0 || st.EdEnd != 1549.0 {
+			t.Errorf("Ed times = (%f, %f), want (1460, 1549)", st.EdStart, st.EdEnd)
+		}
+	})
+
+	t.Run("skip_times array with ints", func(t *testing.T) {
+		m := map[string]any{
+			"skip_times": []any{
+				map[string]any{"kind": "op", "start": 10, "end": 100},
+				map[string]any{"kind": "ed", "start": 1300, "end": 1390},
+				map[string]any{"kind": "recap", "start": 0, "end": 10},
+				map[string]any{"kind": "preview", "start": 1390, "end": 1420},
+			},
+		}
+		st := decodeSkipTimes(m)
+		if st == nil {
+			t.Fatal("expected non-nil SkipTimes")
+		}
+		if st.OpStart != 10 || st.OpEnd != 100 {
+			t.Errorf("Op = (%f, %f)", st.OpStart, st.OpEnd)
+		}
+		if st.EdStart != 1300 || st.EdEnd != 1390 {
+			t.Errorf("Ed = (%f, %f)", st.EdStart, st.EdEnd)
+		}
+		if st.RecapStart != 0 || st.RecapEnd != 10 {
+			t.Errorf("Recap = (%f, %f)", st.RecapStart, st.RecapEnd)
+		}
+		if st.PreviewStart != 1390 || st.PreviewEnd != 1420 {
+			t.Errorf("Preview = (%f, %f)", st.PreviewStart, st.PreviewEnd)
+		}
+	})
+
+	t.Run("intro and outro map", func(t *testing.T) {
+		m := map[string]any{
+			"intro": map[string]any{"start": 5.0, "end": 95.0},
+			"outro": map[string]any{"start": 1200.0, "end": 1290.0},
+		}
+		st := decodeSkipTimes(m)
+		if st == nil {
+			t.Fatal("expected non-nil SkipTimes")
+		}
+		if st.OpStart != 5.0 || st.OpEnd != 95.0 {
+			t.Errorf("Op = (%f, %f)", st.OpStart, st.OpEnd)
+		}
+		if st.EdStart != 1200.0 || st.EdEnd != 1290.0 {
+			t.Errorf("Ed = (%f, %f)", st.EdStart, st.EdEnd)
+		}
+	})
+
+	t.Run("empty or invalid", func(t *testing.T) {
+		if st := decodeSkipTimes(nil); st != nil {
+			t.Errorf("nil map = %+v, want nil", st)
+		}
+		m := map[string]any{
+			"intro": map[string]any{"start": 100, "end": 50}, // invalid: end <= start
+		}
+		if st := decodeSkipTimes(m); st != nil {
+			t.Errorf("invalid segment = %+v, want nil", st)
+		}
+	})
+}
+
+func TestMiruroResolveSourceWithSkipTimes(t *testing.T) {
+	tracksWithSkipsChunk := `{"type":"chunk","id":2,"data":[{"episodeNumber":1,"tracks":1,"providerOrder":2},[3],["bee"],{"track":4,"providers":5},"ssub",[6],{"provider":7,"skipTimes":8,"servers":9,"subtitles":20},"bee",[26,30],[10],{"server":11,"headers":12,"streams":14,"embed":19},"Vidstream-1",{"Referer":13},"https://megaplay.buzz/",[15],{"url":16,"format":17,"quality":18},"https://cdn.example.com/master.m3u8?token=abc","hls","",null,[21],{"language":22,"label":23,"file":24,"default":25},"en","English","https://cdn.example.com/en.vtt",true,{"kind":27,"start":28,"end":29},"intro",12.5,102.5,{"kind":31,"start":32,"end":33},"outro",1350,1440]}`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/search/__data.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, searchFixture)
+	})
+	mux.HandleFunc("/watch/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/x/") {
+			fmt.Fprint(w, `{"type":"redirect","location":"/watch/SHOWID/naruto?ep=1"}`)
+			return
+		}
+		fmt.Fprint(w, `{"type":"data","nodes":[{"type":"data","data":[0]}]}`+"\n"+episodesChunk+"\n"+tracksWithSkipsChunk+"\n")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c, err := NewClientWithBases(srv.URL, srv.URL+"/graphql")
+	if err != nil {
+		t.Fatalf("NewClientWithBases: %v", err)
+	}
+
+	sources, err := c.ResolveSource(context.Background(), "20", provider.Episode{ID: "watch/miruro/SHOWID/naruto/1/sub", Episode: 1, Audio: provider.AudioSub})
+	if err != nil {
+		t.Fatalf("ResolveSource: %v", err)
+	}
+	if len(sources) == 0 {
+		t.Fatal("expected at least 1 source")
+	}
+	src := sources[0]
+	if src.SkipTimes == nil {
+		t.Fatal("expected SkipTimes on resolved source")
+	}
+	if src.SkipTimes.OpStart != 12.5 || src.SkipTimes.OpEnd != 102.5 {
+		t.Errorf("OpStart/OpEnd = (%f, %f), want (12.5, 102.5)", src.SkipTimes.OpStart, src.SkipTimes.OpEnd)
+	}
+	if src.SkipTimes.EdStart != 1350 || src.SkipTimes.EdEnd != 1440 {
+		t.Errorf("EdStart/EdEnd = (%f, %f), want (1350, 1440)", src.SkipTimes.EdStart, src.SkipTimes.EdEnd)
+	}
+}

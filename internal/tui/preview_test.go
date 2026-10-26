@@ -446,3 +446,71 @@ func TestCollectPreviewData_LongTitlePreservesCount(t *testing.T) {
 		t.Errorf("EpisodeInfo width %d exceeds metaW %d: %q", w, metaW, data.EpisodeInfo)
 	}
 }
+
+func TestCollectPreviewDataMiruroSkipInfo(t *testing.T) {
+	miruroSrcWithSkips := provider.MediaSource{
+		URL:      "https://cdn.example.com/miruro.m3u8",
+		Resolver: "miruro",
+		Quality:  "1080p",
+		SkipTimes: &provider.SkipTimes{
+			OpStart: 0,
+			OpEnd:   89,
+			EdStart: 1400,
+			EdEnd:   1490,
+		},
+	}
+	anikotoSrc := provider.MediaSource{
+		URL:      "https://cdn.example.com/anikoto.m3u8",
+		Resolver: "anikoto",
+		Quality:  "1080p",
+	}
+	miruroSrcWithoutSkips := provider.MediaSource{
+		URL:      "https://cdn.example.com/miruro2.m3u8",
+		Resolver: "miruro",
+		Quality:  "720p",
+	}
+
+	m := unavailableTestModel()
+	m.appMode = provider.ModeAnime
+	m.activeView = viewPreview
+	m.previewSkipInfo = "AniSkip"
+	m.resolved = &model.ResolvedMedia{
+		SeriesTitle: "Frieren",
+		Playback:    []provider.MediaSource{miruroSrcWithSkips, anikotoSrc, miruroSrcWithoutSkips},
+	}
+	m.rankedSources = []ranking.ScoredSource{
+		{Source: miruroSrcWithSkips},
+		{Source: anikotoSrc},
+		{Source: miruroSrcWithoutSkips},
+	}
+	m.previewSelectedIndex = 0
+
+	// Index 0: miruro source with segments -> "Miruro"
+	data := m.collectPreviewData(100, 30, lipgloss.AdaptiveColor{})
+	if data.SkipInfo != "Miruro" {
+		t.Errorf("SkipInfo for miruro source with segments = %q, want 'Miruro'", data.SkipInfo)
+	}
+
+	// Index 1: anikoto source -> falls back to m.previewSkipInfo ("AniSkip")
+	m.previewSelectedIndex = 1
+	data = m.collectPreviewData(100, 30, lipgloss.AdaptiveColor{})
+	if data.SkipInfo != "AniSkip" {
+		t.Errorf("SkipInfo for anikoto source = %q, want 'AniSkip'", data.SkipInfo)
+	}
+
+	// Index 2: miruro source without segments -> falls back to m.previewSkipInfo ("AniSkip")
+	m.previewSelectedIndex = 2
+	data = m.collectPreviewData(100, 30, lipgloss.AdaptiveColor{})
+	if data.SkipInfo != "AniSkip" {
+		t.Errorf("SkipInfo for miruro source without segments = %q, want 'AniSkip'", data.SkipInfo)
+	}
+
+	// Index 0 with skipProvider = "off" -> stays "none" (m.previewSkipInfo), not "Miruro"
+	m.previewSelectedIndex = 0
+	m.skipProvider = "off"
+	m.previewSkipInfo = "none"
+	data = m.collectPreviewData(100, 30, lipgloss.AdaptiveColor{})
+	if data.SkipInfo != "none" {
+		t.Errorf("SkipInfo with skipProvider=off = %q, want 'none'", data.SkipInfo)
+	}
+}

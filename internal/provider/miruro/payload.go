@@ -190,6 +190,7 @@ type providerEntry struct {
 	track     string
 	servers   []serverEntry
 	subtitles []subtitleEntry
+	skipTimes *provider.SkipTimes
 }
 
 // subtitleEntry is one external subtitle track of a provider.
@@ -200,10 +201,10 @@ type subtitleEntry struct {
 	def      bool
 }
 
-// trackEntry is one audio track (sub/ssub/dub) of an episode.
 type trackEntry struct {
 	track     string
 	providers []providerEntry
+	skipTimes *provider.SkipTimes
 }
 
 // watchTracks extracts the episode's audio tracks plus the upstream
@@ -229,14 +230,18 @@ func watchTracks(body []byte) ([]trackEntry, []string, error) {
 					continue
 				}
 				track, _ := asString(tm["track"])
-				te := trackEntry{track: track}
+				te := trackEntry{track: track, skipTimes: decodeSkipTimes(tm)}
 				if pl, ok := asList(tm["providers"]); ok {
 					for _, praw := range pl {
 						pm, ok := asMap(praw)
 						if !ok {
 							continue
 						}
-						te.providers = append(te.providers, decodeProvider(pm))
+						pe := decodeProvider(pm)
+						if pe.skipTimes == nil {
+							pe.skipTimes = te.skipTimes
+						}
+						te.providers = append(te.providers, pe)
 					}
 				}
 				tracks = append(tracks, te)
@@ -283,10 +288,87 @@ func hydratedChunk(body []byte, key string) ([]any, error) {
 	return nil, fmt.Errorf("miruro: no %s chunk in response: %w", key, provider.ErrUpstreamChanged)
 }
 
+
+// decodeSkipTimes extracts intro/outro skip intervals from a hydrated provider or track map.
+// Supports both list-of-kinds (`skipTimes` / `skip_times`) and object-per-kind (`intro`, `outro`).
+func decodeSkipTimes(m map[string]any) *provider.SkipTimes {
+	if len(m) == 0 {
+		return nil
+	}
+	st := &provider.SkipTimes{
+		OpStart:      -1,
+		OpEnd:        -1,
+		EdStart:      -1,
+		EdEnd:        -1,
+		RecapStart:   -1,
+		RecapEnd:     -1,
+		PreviewStart: -1,
+		PreviewEnd:   -1,
+	}
+
+	parseSegment := func(v any) (float64, float64, bool) {
+		sm, ok := asMap(v)
+		if !ok {
+			return -1, -1, false
+		}
+		start, ok1 := asFloat(sm["start"])
+		end, ok2 := asFloat(sm["end"])
+		if !ok1 || !ok2 || start < 0 || end <= start {
+			return -1, -1, false
+		}
+		return start, end, true
+	}
+
+	for _, key := range []string{"skipTimes", "skip_times"} {
+		if list, ok := asList(m[key]); ok {
+			for _, item := range list {
+				im, ok := asMap(item)
+				if !ok {
+					continue
+				}
+				kind, _ := asString(im["kind"])
+				kind = strings.ToLower(strings.TrimSpace(kind))
+				start, end, valid := parseSegment(im)
+				if !valid {
+					continue
+				}
+				switch kind {
+				case "intro", "op":
+					st.OpStart, st.OpEnd = start, end
+				case "outro", "ed":
+					st.EdStart, st.EdEnd = start, end
+				case "recap":
+					st.RecapStart, st.RecapEnd = start, end
+				case "preview":
+					st.PreviewStart, st.PreviewEnd = start, end
+				}
+			}
+		}
+	}
+
+	if start, end, ok := parseSegment(m["intro"]); ok && st.OpStart < 0 {
+		st.OpStart, st.OpEnd = start, end
+	}
+	if start, end, ok := parseSegment(m["outro"]); ok && st.EdStart < 0 {
+		st.EdStart, st.EdEnd = start, end
+	}
+	if start, end, ok := parseSegment(m["recap"]); ok && st.RecapStart < 0 {
+		st.RecapStart, st.RecapEnd = start, end
+	}
+	if start, end, ok := parseSegment(m["preview"]); ok && st.PreviewStart < 0 {
+		st.PreviewStart, st.PreviewEnd = start, end
+	}
+
+	if !st.HasSegments() {
+		return nil
+	}
+	return st
+}
 // decodeProvider maps one hydrated provider group by key name.
 func decodeProvider(pm map[string]any) providerEntry {
 	pe := providerEntry{}
 	pe.name, _ = asString(pm["provider"])
+	pe.skipTimes = decodeSkipTimes(pm)
 	if sl, ok := asList(pm["servers"]); ok {
 		for _, sraw := range sl {
 			sm, ok := asMap(sraw)

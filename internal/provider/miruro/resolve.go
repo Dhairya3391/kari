@@ -268,7 +268,7 @@ func rankStreams(tracks []trackEntry, order []string, category string) []provide
 			if strings.TrimSpace(p.name) == "" {
 				continue
 			}
-			byProvider[p.name] = append(byProvider[p.name], providerEntry{name: p.name, servers: p.servers, subtitles: p.subtitles, track: name})
+			byProvider[p.name] = append(byProvider[p.name], providerEntry{name: p.name, servers: p.servers, subtitles: p.subtitles, track: name, skipTimes: p.skipTimes})
 		}
 	}
 	// Upstream ranking first, then any provider the order list omits.
@@ -383,6 +383,7 @@ func serverSources(pe providerEntry) []provider.MediaSource {
 				SubType:        subType,
 				ExtraArgs:      demuxerQuirk(st.url, typ),
 				SuppressOrigin: suppressOrigin,
+				SkipTimes:      pe.skipTimes,
 			})
 		}
 	}

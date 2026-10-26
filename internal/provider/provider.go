@@ -133,6 +133,30 @@ type SubtitleOption struct {
 	Referer  string
 }
 
+// SkipTimes holds provider-embedded skip segment boundaries in seconds.
+// A value of -1 means the segment is absent or not declared by the provider.
+type SkipTimes struct {
+	OpStart      float64
+	OpEnd        float64
+	EdStart      float64
+	EdEnd        float64
+	RecapStart   float64
+	RecapEnd     float64
+	PreviewStart float64
+	PreviewEnd   float64
+}
+
+// HasSegments reports whether any valid skip segment is defined.
+func (s *SkipTimes) HasSegments() bool {
+	if s == nil {
+		return false
+	}
+	return (s.OpStart >= 0 && s.OpEnd > s.OpStart) ||
+		(s.EdStart >= 0 && s.EdEnd > s.EdStart) ||
+		(s.RecapStart >= 0 && s.RecapEnd > s.RecapStart) ||
+		(s.PreviewStart >= 0 && s.PreviewEnd > s.PreviewStart)
+}
+
 // MediaSource is one playable stream. Providers fill everything except
 // Resolver, which MediaService stamps with the producing provider's name.
 type MediaSource struct {
@@ -154,6 +178,9 @@ type MediaSource struct {
 	// from Referer. Some CDNs reject any Origin (or reject a full-path one);
 	// providers that validate Referer only should set this.
 	SuppressOrigin bool
+	// SkipTimes holds provider-embedded skip segment boundaries in seconds.
+	// When absent or empty, the player layer falls back to external skip providers.
+	SkipTimes *SkipTimes
 }
 
 // TransportIdentity returns the canonical identity used to deduplicate a

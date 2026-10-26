@@ -187,6 +187,22 @@ func (r *Registry) ResolveSkipInfo(media model.ResolvedMedia) (SkipInfo, bool) {
 	if mode == "off" || mode == "none" {
 		return SkipInfo{}, true
 	}
+	targetResolver := media.Resolver
+	if targetResolver == "" && len(media.Playback) > 0 {
+		targetResolver = media.Playback[0].Resolver
+	}
+	if strings.EqualFold(targetResolver, "miruro") {
+		for _, src := range media.Playback {
+			if strings.EqualFold(src.Resolver, "miruro") && src.SkipTimes != nil && src.SkipTimes.HasSegments() {
+				return SkipInfo{
+					Opening: miruroInfoText(src.SkipTimes.OpStart, src.SkipTimes.OpEnd),
+					Ending:  miruroInfoText(src.SkipTimes.EdStart, src.SkipTimes.EdEnd),
+					Recap:   miruroInfoText(src.SkipTimes.RecapStart, src.SkipTimes.RecapEnd),
+					Preview: miruroInfoText(src.SkipTimes.PreviewStart, src.SkipTimes.PreviewEnd),
+				}, true
+			}
+		}
+	}
 	_, script := getSkipArgs(r.skipClients, r.skipSettings, media, r.skipCache)
 	cleanupSkipScript(script)
 	cached, ok := r.skipCache.Get(skipCacheKey(media, mode))
@@ -199,6 +215,13 @@ func (r *Registry) ResolveSkipInfo(media model.ResolvedMedia) (SkipInfo, bool) {
 		Recap:   infoText(cached.RecapSource),
 		Preview: infoText(cached.PrevSource),
 	}, true
+}
+
+func miruroInfoText(start, end float64) string {
+	if start >= 0 && end > start {
+		return "Miruro"
+	}
+	return ""
 }
 
 // NewRegistry constructs and populates the platform's player set with the

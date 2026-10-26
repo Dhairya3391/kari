@@ -801,6 +801,14 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 			providers[src.Resolver] = m.registry.DisplayName(src.Resolver)
 		}
 	}
+	skipInfo := m.previewSkipInfo
+	if src, ok := m.selectedPlaybackSource(); ok {
+		if !strings.EqualFold(m.skipProvider, "off") && !strings.EqualFold(m.skipProvider, "none") &&
+			strings.EqualFold(src.Resolver, "miruro") && src.SkipTimes != nil && src.SkipTimes.HasSegments() {
+			skipInfo = "Miruro"
+		}
+	}
+
 	return PreviewData{
 		SeriesTitle:      seriesTitle,
 		EpisodeInfo:      epInfo,
@@ -821,7 +829,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		SelectedIndex:    m.previewSelectedIndex,
 		PlayerName:       m.selectedPlayerName(),
 		Autoplay:         m.autoplay,
-		SkipInfo:         m.previewSkipInfo,
+		SkipInfo:         skipInfo,
 		LoadingProviders: m.loadingProviders,
 		TotalProviders:   m.totalProviders,
 		FailedProvider:   m.failedProviderName,

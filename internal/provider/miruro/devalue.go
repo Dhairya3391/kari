@@ -120,6 +120,19 @@ func toInt(v any) (int, bool) {
 	return 0, false
 }
 
+// asFloat converts JSON numbers (float64 or int) to float64.
+func asFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	}
+	return 0, false
+}
+
 // asMap returns v when it decoded to an object.
 func asMap(v any) (map[string]any, bool) {
 	m, ok := v.(map[string]any)

@@ -150,15 +150,34 @@ func (p *IINAPlayer) Play(sources []provider.MediaSource, media model.ResolvedMe
 	if bin == "" {
 		return PlaybackResult{}, errors.New("iina playback failed: iina-cli not found")
 	}
-	skipArgs, skipPath := getSkipArgs(
-		p.skipClients,
-		p.skipSettings,
-		media,
-		p.skipCache,
-	)
-	defer cleanupSkipScript(skipPath)
+	var defaultSkipArgs []string
+	var defaultSkipScript string
+	var defaultResolved bool
+	getDefaultSkipArgs := func() ([]string, string) {
+		if !defaultResolved {
+			defaultSkipArgs, defaultSkipScript = getSkipArgs(
+				p.skipClients,
+				p.skipSettings,
+				media,
+				p.skipCache,
+			)
+			defaultResolved = true
+		}
+		return defaultSkipArgs, defaultSkipScript
+	}
+	defer func() {
+		if defaultSkipScript != "" {
+			cleanupSkipScript(defaultSkipScript)
+		}
+	}()
 
 	return attemptSources("iina", sources, func(source provider.MediaSource) (PlaybackResult, error) {
+		skipArgs, skipPath, isMiruro := resolveSourceSkipArgs(source, p.skipSettings, media)
+		if isMiruro {
+			defer cleanupSkipScript(skipPath)
+		} else {
+			skipArgs, _ = getDefaultSkipArgs()
+		}
 		return playSingleSourceWithIINA(bin, source, media, skipArgs, p.progressObserver)
 	})
 }
