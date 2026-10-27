@@ -33,7 +33,7 @@ var DefaultProviders = []provider.Descriptor{
 	{
 		ID: "movysx",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return movysx.NewClient(d.KeyPool)
+			return movysx.NewClientWithLanguageFilter(d.KeyPool, d.LanguageFilter)
 		},
 	},
 	{

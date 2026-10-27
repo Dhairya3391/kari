@@ -221,6 +221,42 @@ func TestHardsubFirstLeadsAnimeTable(t *testing.T) {
 	}
 }
 
+func TestRankAndSelectSourcesFiltersDisabledAudioLanguages(t *testing.T) {
+	m := rankingTestModel()
+	m.appMode = provider.ModeMovies
+	m.qualityMode = qualityAll
+	m.languageFilter = map[string]bool{
+		"Tamil":    false,
+		"ta":       false,
+		"Telugu":   false,
+		"te":       false,
+		"Japanese": true,
+		"ja":       true,
+		"Hindi":    true,
+		"hi":       true,
+	}
+
+	en := provider.MediaSource{URL: "https://cdn.example.com/en.m3u8", Quality: "FHD", Resolver: "movysx", Language: ""}
+	hi := provider.MediaSource{URL: "https://cdn.example.com/hi.m3u8", Quality: "FHD", Resolver: "movysx", Language: "hi"}
+	ta := provider.MediaSource{URL: "https://cdn.example.com/ta.m3u8", Quality: "FHD", Resolver: "movysx", Language: "ta"}
+	te := provider.MediaSource{URL: "https://cdn.example.com/te.m3u8", Quality: "FHD", Resolver: "movysx", Language: "te"}
+
+	m.resolved = &model.ResolvedMedia{
+		SeriesTitle: "The Housemaid",
+		Playback:    []provider.MediaSource{en, hi, ta, te},
+	}
+	m.rankAndSelectSources()
+
+	if len(m.rankedSources) != 2 {
+		t.Fatalf("expected 2 ranked sources (en, hi), got %d: %+v", len(m.rankedSources), m.rankedSources)
+	}
+	for _, s := range m.rankedSources {
+		if s.Source.Language == "ta" || s.Source.Language == "te" {
+			t.Errorf("disabled language %q must not be in rankedSources", s.Source.Language)
+		}
+	}
+}
+
 func urls(s []ranking.ScoredSource) []string {
 	out := make([]string, 0, len(s))
 	for _, v := range s {

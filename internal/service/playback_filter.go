@@ -3,6 +3,7 @@ package service
 import (
 	"strings"
 
+	"kari/internal/lang"
 	"kari/internal/provider"
 	"kari/internal/ranking"
 )
@@ -182,12 +183,23 @@ func caseInsensitiveLangLookup(tag string, languages map[string]bool) (enabled, 
 	if languages == nil {
 		return true, false
 	}
-	if v, ok := languages[tag]; ok {
-		return v, true
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return true, false
 	}
-	for k, v := range languages {
-		if strings.EqualFold(k, tag) {
+	code := lang.Normalize(tag)
+	display := lang.Name(code)
+	for _, c := range []string{tag, code, display} {
+		if c == "" {
+			continue
+		}
+		if v, ok := languages[c]; ok {
 			return v, true
+		}
+		for k, v := range languages {
+			if strings.EqualFold(k, c) {
+				return v, true
+			}
 		}
 	}
 	return true, false

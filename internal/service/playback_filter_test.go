@@ -118,6 +118,20 @@ func TestFilterPlaybackIndicesMatchesPenguLanguageCodes(t *testing.T) {
 	}
 }
 
+func TestFilterPlaybackIndicesCodeAndDisplayCrossMatch(t *testing.T) {
+	playback := []provider.MediaSource{
+		{URL: "tamil", Quality: "1080p", Language: "ta"},
+		{URL: "telugu", Quality: "1080p", Language: "Telugu"},
+		{URL: "english", Quality: "1080p", Language: "English"},
+	}
+
+	// Filter with full English display name for ta and 2-letter code for Telugu
+	got := FilterPlaybackIndices(playback, 0, map[string]bool{"Tamil": false, "te": false})
+	if len(got) != 1 || playback[got[0]].URL != "english" {
+		t.Fatalf("cross-match filter wrong, got: %v", got)
+	}
+}
+
 func TestFilterPlaybackIndicesQualityModes(t *testing.T) {
 	playback := []provider.MediaSource{
 		{URL: "hi", Quality: "1080p"},

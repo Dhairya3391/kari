@@ -261,3 +261,37 @@ func TestResolveSourceSeedCached(t *testing.T) {
 		t.Error("seed must be cached after first resolve")
 	}
 }
+
+func TestResolveSourceLanguageFilter(t *testing.T) {
+	fx := newMovyFixture(t, func() string {
+		return `{"sources":[
+			{"url":"https://cdn.example.com/en.m3u8","quality":"1080p"},
+			{"url":"https://cdn.example.com/hi.m3u8","quality":"Hindi"},
+			{"url":"https://cdn.example.com/ta.m3u8","quality":"Tamil"},
+			{"url":"https://cdn.example.com/te.m3u8","quality":"Telugu"}
+		],"subtitles":[]}`
+	})
+	c := fx.client()
+	c.langFilter = map[string]bool{"ta": false, "Tamil": false, "te": false, "Telugu": false}
+
+	sources, err := c.ResolveSource(context.Background(), "1396", provider.Episode{TMDBID: 1396, Season: 1, Episode: 1})
+	if err != nil {
+		t.Fatalf("ResolveSource failed: %v", err)
+	}
+	if len(sources) != 2 {
+		t.Fatalf("want 2 sources (main + Hindi), got %d: %+v", len(sources), sources)
+	}
+	for _, s := range sources {
+		if s.Language == "ta" || s.Language == "te" {
+			t.Errorf("disabled language %q should not be present", s.Language)
+		}
+	}
+}
+
+func TestMovyAudioLanguages(t *testing.T) {
+	c := &Client{}
+	langs := c.AudioLanguages()
+	if len(langs) == 0 {
+		t.Fatal("AudioLanguages must not be empty")
+	}
+}

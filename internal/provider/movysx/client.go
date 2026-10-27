@@ -35,16 +35,28 @@ type Client struct {
 	streamBase string
 	tmdbBase   string
 	seedCache  sync.Map // key: int tmdbID → seedEntry
+	langFilter map[string]bool
 }
 
 // NewClient constructs the Movy.sx provider over the shared TMDB search base.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
-	return NewClientWithBaseURL(keyPool, defaultStreamBase)
+	return NewClientWithLanguageFilter(keyPool, nil)
+}
+
+// NewClientWithLanguageFilter constructs Movy.sx with an explicit language filter.
+func NewClientWithLanguageFilter(keyPool *tmdb.KeyPool, langFilter map[string]bool) (*Client, error) {
+	return NewClientWithBaseURLAndLanguageFilter(keyPool, defaultStreamBase, langFilter)
 }
 
 // NewClientWithBaseURL constructs the provider against a custom source
 // service base URL (used in tests).
 func NewClientWithBaseURL(keyPool *tmdb.KeyPool, apiBase string) (*Client, error) {
+	return NewClientWithBaseURLAndLanguageFilter(keyPool, apiBase, nil)
+}
+
+// NewClientWithBaseURLAndLanguageFilter constructs the provider against a custom
+// source service base URL and explicit language filter.
+func NewClientWithBaseURLAndLanguageFilter(keyPool *tmdb.KeyPool, apiBase string, langFilter map[string]bool) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
 		return nil, err
@@ -55,6 +67,7 @@ func NewClientWithBaseURL(keyPool *tmdb.KeyPool, apiBase string) (*Client, error
 		keyPool:    keyPool,
 		streamBase: strings.TrimRight(apiBase, "/"),
 		tmdbBase:   config.TMDBAPIBase,
+		langFilter: langFilter,
 	}, nil
 }
 
@@ -133,7 +146,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	if err != nil {
 		return nil, err
 	}
-	sources := provider.FilterDirectSources(mapMerged(merged))
+	sources := provider.FilterDirectSources(c.mapMerged(merged))
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources
 	}
@@ -143,7 +156,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 // mapMerged converts merged shard results into media sources: dedupe by
 // URL, direct CDN addresses with the Movy referer, dubbed audio rows as
 // language-tagged sources.
-func mapMerged(m *mergedResults) []provider.MediaSource {
+func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 	subs := make([]provider.SubtitleOption, 0, len(m.subtitles))
 	for _, s := range m.subtitles {
 		subs = append(subs, provider.SubtitleOption{URL: s.url, Language: s.lang})
@@ -169,6 +182,9 @@ func mapMerged(m *mergedResults) []provider.MediaSource {
 			continue
 		}
 		seen[a.url] = struct{}{}
+		if !c.languageEnabled(a.lang) {
+			continue
+		}
 		quality := "Auto"
 		if a.lang != "" && a.lang != "en" {
 			quality = fmt.Sprintf("Auto (%s)", lang.Name(a.lang))
@@ -220,7 +236,52 @@ func streamType(rawURL, declared string) string {
 	}
 }
 
+var movyAudioLanguages = []provider.AudioLanguage{
+	{Code: "en", Display: "English"},
+	{Code: "hi", Display: "Hindi"},
+	{Code: "ta", Display: "Tamil"},
+	{Code: "te", Display: "Telugu"},
+	{Code: "es", Display: "Spanish"},
+	{Code: "fr", Display: "French"},
+	{Code: "pt", Display: "Portuguese"},
+	{Code: "de", Display: "German"},
+	{Code: "it", Display: "Italian"},
+	{Code: "ar", Display: "Arabic"},
+	{Code: "ru", Display: "Russian"},
+	{Code: "ja", Display: "Japanese"},
+	{Code: "ko", Display: "Korean"},
+	{Code: "zh", Display: "Chinese"},
+	{Code: "id", Display: "Indonesian"},
+	{Code: "tr", Display: "Turkish"},
+}
+
+// AudioLanguages implements provider.AudioLanguagesSource.
+func (c *Client) AudioLanguages() []provider.AudioLanguage {
+	return movyAudioLanguages
+}
+
+func (c *Client) languageEnabled(tag string) bool {
+	if c.langFilter == nil {
+		return true
+	}
+	code := lang.Normalize(tag)
+	display := lang.Name(code)
+	for _, k := range []string{tag, code, display} {
+		if k == "" {
+			continue
+		}
+		if v, ok := c.langFilter[k]; ok {
+			return v
+		}
+		if v, ok := c.langFilter[strings.ToLower(k)]; ok {
+			return v
+		}
+	}
+	return true
+}
+
 var (
-	_ provider.Provider  = (*Client)(nil)
-	_ provider.Presenter = (*Client)(nil)
+	_ provider.Provider             = (*Client)(nil)
+	_ provider.Presenter            = (*Client)(nil)
+	_ provider.AudioLanguagesSource = (*Client)(nil)
 )

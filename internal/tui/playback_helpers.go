@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"kari/internal/lang"
 	"kari/internal/provider"
 	"kari/internal/ranking"
 )
@@ -14,13 +15,12 @@ func (m *modelImpl) rankAndSelectSources() {
 		return
 	}
 
-	sources := m.resolved.Playback
+	sources := m.filterSourcesByLanguage(m.resolved.Playback)
 	// Highest shows FHD/4K rows only, falling back to the best available
 	// tier when nothing reaches FHD. Other modes order every row.
 	if m.qualityMode == qualityHighest {
 		sources = ranking.KeepHighestVisible(sources)
 	}
-
 	scored := make([]ranking.ScoredSource, len(sources))
 	for i, s := range sources {
 		scored[i] = ranking.ScoredSource{
@@ -33,6 +33,40 @@ func (m *modelImpl) rankAndSelectSources() {
 	m.previewSelectedIndex = 0
 }
 
+func (m *modelImpl) filterSourcesByLanguage(sources []provider.MediaSource) []provider.MediaSource {
+	if m.appMode == provider.ModeAnime || len(m.languageFilter) == 0 {
+		return sources
+	}
+	var kept []provider.MediaSource
+	for _, s := range sources {
+		if m.sourceLanguageEnabled(s) {
+			kept = append(kept, s)
+		}
+	}
+	if len(kept) > 0 {
+		return kept
+	}
+	return sources
+}
+
+func (m *modelImpl) sourceLanguageEnabled(src provider.MediaSource) bool {
+	raw := strings.TrimSpace(src.Language)
+	if raw == "" {
+		// Sources with no explicit language tag are considered primary/original (English).
+		return m.languageEnabled("en") && m.languageEnabled("English")
+	}
+	code := lang.Normalize(raw)
+	display := lang.Name(code)
+	for _, k := range []string{raw, code, display} {
+		if k == "" {
+			continue
+		}
+		if !m.languageEnabled(k) || !m.languageEnabled(strings.ToLower(k)) {
+			return false
+		}
+	}
+	return true
+}
 // hardsubFirst stable-sorts hard-subtitled rows before soft-subtitled rows
 // within each provider itself, preserving the overall provider arrival order.
 func hardsubFirst(mode provider.ContentType, qualityMode int, subsEnabled bool, sources []ranking.ScoredSource) []ranking.ScoredSource {
