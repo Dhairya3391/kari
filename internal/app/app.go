@@ -63,7 +63,7 @@ QUERY
 KEYS (inside TUI)
   Space           Search        Tab/Shift+Tab   Switch category
   Enter           Select/Play   Esc             Go back
-  j/k or ↑/↓     Navigate      h/H             History
+  j/k or ↑/↓      Navigate      h/H             History
   n               Next episode  A               Toggle auto-play
   a               Sub/Dub       s/S             Settings
   d               Download      r               Restart episode
