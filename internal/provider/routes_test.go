@@ -53,10 +53,10 @@ func TestDemoteRankWeakBackends(t *testing.T) {
 // silently fall back to defaults.
 func TestRoutesCoverKnownProviders(t *testing.T) {
 	known := map[ContentType][]string{
-		ModeAnime:    {"anicine", "anipm", "anikoto", "miruro", "pengu"},
-		ModeMovies:   {"movysx", "pengu", "moovie", "solis", "cinecat"},
-		ModeTV:       {"movysx", "pengu", "moovie", "solis", "cinecat"},
-		ModeCartoon:  {"movysx", "pengu", "moovie", "solis", "cinecat"},
+		ModeAnime:    {"anicine", "anipm", "anikoto", "miruro", "vidrift", "bingr", "pengu"},
+		ModeMovies:   {"movysx", "pengu", "moovie", "solis", "cinecat", "vidrift", "bingr"},
+		ModeTV:       {"movysx", "pengu", "moovie", "solis", "cinecat", "vidrift", "bingr"},
+		ModeCartoon:  {"movysx", "pengu", "moovie", "solis", "cinecat", "bingr"},
 		ModeLive:     {"pengu"},
 		ModeManga:    {"weebcentral"},
 		ModeJellyfin: {"jellyfin"},

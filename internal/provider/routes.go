@@ -89,6 +89,8 @@ func defaultRoutes() map[ContentType][]Route {
 		{Provider: "anipm", Search: StrategyMerge, Sources: StrategyFallback},
 		{Provider: "anikoto", Search: StrategyMerge, Sources: StrategyFallback},
 		{Provider: "miruro", Search: StrategyMerge, Sources: StrategyFallback},
+		{Provider: "vidrift", Search: StrategyMerge, Sources: StrategyFallback},
+		{Provider: "bingr", Search: StrategyMerge, Sources: StrategyFallback},
 		{Provider: "pengu", Search: StrategyMerge, Sources: StrategyFallback, SourceTimeout: 40 * time.Second},
 	}
 	movies := []Route{
@@ -97,12 +99,22 @@ func defaultRoutes() map[ContentType][]Route {
 		{Provider: "moovie", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "solis", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "cinecat", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "vidrift", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "bingr", Search: StrategyMerge, Sources: StrategyRace},
+	}
+	cartoons := []Route{
+		{Provider: "movysx", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "pengu", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "moovie", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "solis", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "cinecat", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "bingr", Search: StrategyMerge, Sources: StrategyRace},
 	}
 	return map[ContentType][]Route{
 		ModeAnime:   anime,
 		ModeMovies:  movies,
 		ModeTV:      movies,
-		ModeCartoon: movies,
+		ModeCartoon: cartoons,
 		ModeLive: {
 			{Provider: "pengu", Search: StrategySingle, Sources: StrategySingle},
 		},

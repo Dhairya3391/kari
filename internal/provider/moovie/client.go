@@ -173,6 +173,9 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 	sources := make([]provider.MediaSource, 0, len(m.sources)+len(m.audio))
 	seen := make(map[string]struct{}, len(m.sources)+len(m.audio))
 	for _, s := range m.sources {
+		if !isPlayableHTTPURL(s.url) {
+			continue
+		}
 		if _, ok := seen[s.url]; ok {
 			continue
 		}
@@ -191,6 +194,9 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 		})
 	}
 	for _, a := range m.audio {
+		if !isPlayableHTTPURL(a.url) {
+			continue
+		}
 		if _, ok := seen[a.url]; ok {
 			continue
 		}
@@ -203,7 +209,7 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 			quality = fmt.Sprintf("Auto (%s)", lang.Name(a.lang))
 		}
 		sources = append(sources, provider.MediaSource{
-			URL: a.url,
+			URL:       a.url,
 			Quality:   quality,
 			Type:      a.typ,
 			Referer:   a.referer,
@@ -213,6 +219,11 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 		})
 	}
 	return sources
+}
+
+func isPlayableHTTPURL(rawURL string) bool {
+	u := strings.ToLower(strings.TrimSpace(rawURL))
+	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
 }
 
 var (

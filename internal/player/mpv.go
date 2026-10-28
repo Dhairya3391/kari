@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"kari/internal/config"
 	"kari/internal/lang"
 	"kari/internal/model"
 	"kari/internal/provider"
@@ -230,16 +229,12 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	)
 
 	// Strategy 2: curl-to-MPV pipe.
-	userAgent := config.AndroidUA()
-	if strings.TrimSpace(source.UserAgent) != "" {
-		userAgent = source.UserAgent
-	}
 	headers := []string{
 		"Accept: */*",
 		"Connection: keep-alive",
 	}
-	if userAgent != "" {
-		headers = append(headers, "User-Agent: "+userAgent)
+	if ua := strings.TrimSpace(source.UserAgent); ua != "" {
+		headers = append(headers, "User-Agent: "+ua)
 	}
 	if strings.TrimSpace(source.Referer) != "" {
 		headers = append(headers, "Referer: "+source.Referer)
@@ -361,12 +356,8 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 		args = append(args, fmt.Sprintf("--start=%d", int(media.StartTime)))
 	}
 
-	userAgent := source.UserAgent
-	if strings.TrimSpace(userAgent) == "" {
-		userAgent = config.AndroidUA()
-	}
-	if userAgent != "" {
-		args = append(args, "--user-agent="+userAgent)
+	if ua := strings.TrimSpace(source.UserAgent); ua != "" {
+		args = append(args, "--user-agent="+ua)
 	}
 	if strings.TrimSpace(source.Referer) != "" {
 		args = append(args, "--referrer="+source.Referer)

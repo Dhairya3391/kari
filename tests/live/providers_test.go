@@ -51,7 +51,13 @@ func TestProviderPipeline(t *testing.T) {
 					// rule the TUI applies via MovieEpisodeFlow.
 					var sources []provider.MediaSource
 					if pick.MediaType == provider.MediaTypeMovie && !reg.RequiresEpisodeListForMovies(p.Name()) {
-						sources, err = p.ResolveSource(ctx, pick.ID, provider.Episode{TMDBID: pick.TMDBID})
+						ep := provider.Episode{TMDBID: pick.TMDBID}
+						// Direct anime movie resolves still need the picked
+						// audio lane; search-result IDs alone are ambiguous.
+						if mode == provider.ModeAnime {
+							ep.Audio = provider.AudioSub
+						}
+						sources, err = p.ResolveSource(ctx, pick.ID, ep)
 						skipOnCatalogDrift(t, "resolve(movie)", err)
 						requireSources(t, p.Name(), sources)
 						t.Logf("direct movie resolve ok: %d sources", len(sources))
@@ -88,7 +94,19 @@ func TestRegistryCapabilitiesLive(t *testing.T) {
 			t.Errorf("audio language missing code/display: %+v", l)
 		}
 	}
-	if got := reg.AudioLanguages(provider.ModeAnime); len(got) != 0 {
-		t.Errorf("anime providers do not tag audio languages, got %+v", got)
+	// Anime providers may declare audio languages too (VidRift and Pengu
+	// tag per-lane audio), so only require that the anime slice is valid
+	// and part of the registry-wide union rather than empty.
+	all := make(map[string]bool, len(reg.AudioLanguages()))
+	for _, l := range reg.AudioLanguages() {
+		all[l.Code] = true
+	}
+	for _, l := range reg.AudioLanguages(provider.ModeAnime) {
+		if l.Code == "" || l.Display == "" {
+			t.Errorf("anime audio language missing code/display: %+v", l)
+		}
+		if !all[l.Code] {
+			t.Errorf("anime audio language %q missing from registry union", l.Code)
+		}
 	}
 }

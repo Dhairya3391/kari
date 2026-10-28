@@ -78,9 +78,25 @@ const (
 	// CinecatReferer satisfies the hotlink protection on Cinecat stream requests.
 	CinecatReferer = "https://beta.cinecat.eu/"
 	// CinecatCDNBase is the primary multi-quality HLS streaming backend for Cinecat.
-	CinecatCDNBase = "https://zcdn1.iamwatchingyou.site"
+	CinecatCDNBase  = "https://zcdn1.iamwatchingyou.site"
 	CinecatSubsBase = "https://sub.vdrk.site"
 
+	// VidRiftSiteBase is the VidRift landing site used as the embed request
+	// referer. VidRiftEmbedBase is the TMDB/AniList-keyed player origin that
+	// serves both the embed document and its /api/source lanes.
+	VidRiftSiteBase  = "https://vidrift.net"
+	VidRiftEmbedBase = "https://embed.vidrift.net"
+
+	// BingrAPIBase is the REST API endpoint for Bingr (https://bingr.one).
+	BingrAPIBase = "https://api.bingr.one/api"
+	// BingrOrigin is the Origin header sent to Bingr API endpoints.
+	BingrOrigin = "https://bingr.one"
+	// BingrReferer satisfies hotlink and referer requirements on Bingr API requests.
+	BingrReferer = "https://bingr.one/"
+	// FilmuAPIBase is the HiAnime/MegaPlay token and stream gateway used by Bingr for anime.
+	FilmuAPIBase = "https://hianime.filmu.in"
+	// MegaPlayReferer satisfies hotlink protection on MegaPlay stream and subtitle requests.
+	MegaPlayReferer = "https://megaplay.buzz/"
 	// DefaultDiscordAppID is the Kari Discord application used for Rich
 	// Presence. Its registered name is what users see as the activity verb
 	// ("Watching Kari"); the KARI_DISCORD_APP_ID env var overrides it for

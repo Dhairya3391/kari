@@ -72,6 +72,7 @@ func (m *modelImpl) sourceLanguageEnabled(src provider.MediaSource) bool {
 	}
 	return true
 }
+
 // hardsubFirst stable-sorts hard-subtitled rows before soft-subtitled rows
 // within each provider itself, preserving the overall provider arrival order.
 func hardsubFirst(mode provider.ContentType, qualityMode int, subsEnabled bool, sources []ranking.ScoredSource) []ranking.ScoredSource {

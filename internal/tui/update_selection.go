@@ -50,6 +50,12 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 			Title: m.selectedSeries.Title,
 			ID:    m.selectedSeries.ID,
 		}
+		// Direct-resolve skips the episode list, but anime providers still
+		// need the picked sub/dub track: search-result IDs alone do not say
+		// which audio lane to open.
+		if m.appMode == provider.ModeAnime {
+			m.selectedEpisode.Audio = m.audioMode
+		}
 		m.loadingText = "Preparing playback..."
 		m.resolved = nil
 		m.resetPreviewSkipInfo()

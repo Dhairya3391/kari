@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -709,24 +710,29 @@ type resolveCandidate struct {
 // rows sharing backend, height, language, container, and a known nonzero
 // size keep the most capable container (progressive mp4 over manifests).
 func collapseMirrors(candidates []resolveCandidate) []provider.MediaSource {
+	// Stable-sort candidates so progressive MP4 (rank 0) and HLS (rank 1)
+	// precede fragile DASH manifests (rank 2), preserving upstream order
+	// within each container tier.
+	slices.SortStableFunc(candidates, func(a, b resolveCandidate) int {
+		return containerRank(streamContainer(a.source)) - containerRank(streamContainer(b.source))
+	})
+
 	type mirrorKey struct {
-		backend   string
-		height    int
-		lang      string
-		subType   string
-		container string
-		size      int64
+		backend string
+		height  int
+		lang    string
+		subType string
+		size    int64
 	}
 	bestIdx := make(map[mirrorKey]int)
 	sources := make([]provider.MediaSource, 0, len(candidates))
 	for _, cand := range candidates {
 		key := mirrorKey{
-			backend:   mirrorBackend(cand.source.Quality),
-			height:    qualityHeight(cand.source.Quality),
-			lang:      cand.source.Language,
-			subType:   cand.source.SubType,
-			container: streamContainer(cand.source),
-			size:      cand.stream.BehaviorHints.VideoSize,
+			backend: mirrorBackend(cand.source.Quality),
+			height:  qualityHeight(cand.source.Quality),
+			lang:    cand.source.Language,
+			subType: cand.source.SubType,
+			size:    cand.stream.BehaviorHints.VideoSize,
 		}
 		if key.size <= 0 {
 			sources = append(sources, cand.source)
@@ -1307,7 +1313,7 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 
 	// 5. Headers (Referer, User-Agent, Cookie)
 	referer := ""
-	userAgent := penguUA
+	userAgent := ""
 	cookie := ""
 
 	extractHeaders := func(h map[string]string) {
@@ -1329,9 +1335,6 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 	if stream.BehaviorHints.ProxyHeaders != nil && stream.BehaviorHints.ProxyHeaders.Request != nil {
 		extractHeaders(stream.BehaviorHints.ProxyHeaders.Request)
 	}
-	if referer == "" {
-		referer = "https://pengu.uk/"
-	}
 
 	// 6. Subtitles
 	subtitles := []provider.SubtitleOption{}
@@ -1339,10 +1342,14 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 		if sub.URL == "" {
 			continue
 		}
+		subRef := referer
+		if subRef == "" && strings.Contains(sub.URL, "pengu.uk") {
+			subRef = "https://pengu.uk/"
+		}
 		subtitles = append(subtitles, provider.SubtitleOption{
 			URL:      sub.URL,
 			Language: lang.Normalize(sub.Lang),
-			Referer:  referer,
+			Referer:  subRef,
 		})
 	}
 

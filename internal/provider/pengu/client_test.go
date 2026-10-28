@@ -991,3 +991,43 @@ func TestFetchEpisodesLive(t *testing.T) {
 		t.Errorf("unexpected episodes: %+v", eps)
 	}
 }
+
+func TestParseStreamItemBareHeaders(t *testing.T) {
+	item := penguStreamItem{
+		Name: "🐧 PenguPlay 🧊 1080p • VidLink",
+		URL:  "https://pengu.uk/direct/external/abc/video.mp4",
+		BehaviorHints: penguBehaviorHints{
+			Filename: "video.mp4",
+		},
+	}
+	src := parseStreamItem(item)
+	if src.Referer != "" {
+		t.Errorf("Referer = %q, want empty for bare stream", src.Referer)
+	}
+	if src.UserAgent != "" {
+		t.Errorf("UserAgent = %q, want empty for bare stream", src.UserAgent)
+	}
+	if src.Type != provider.SourceTypeMP4 {
+		t.Errorf("Type = %q, want mp4", src.Type)
+	}
+}
+
+func TestCollapseMirrorsPrefersMP4OverDASH(t *testing.T) {
+	cands := []resolveCandidate{
+		{
+			source: provider.MediaSource{Quality: "1080p [MovieBox]", URL: "https://example.com/dash.mpd", Type: provider.SourceTypeHLS},
+			stream: penguStreamItem{BehaviorHints: penguBehaviorHints{VideoSize: 1000}},
+		},
+		{
+			source: provider.MediaSource{Quality: "1080p [MovieBox]", URL: "https://example.com/video.mp4", Type: provider.SourceTypeMP4},
+			stream: penguStreamItem{BehaviorHints: penguBehaviorHints{VideoSize: 1000}},
+		},
+	}
+	sources := collapseMirrors(cands)
+	if len(sources) != 1 {
+		t.Fatalf("expected 1 source, got %d: %+v", len(sources), sources)
+	}
+	if sources[0].URL != "https://example.com/video.mp4" {
+		t.Errorf("URL = %q, want progressive mp4 over dash", sources[0].URL)
+	}
+}

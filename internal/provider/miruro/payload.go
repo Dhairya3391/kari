@@ -288,7 +288,6 @@ func hydratedChunk(body []byte, key string) ([]any, error) {
 	return nil, fmt.Errorf("miruro: no %s chunk in response: %w", key, provider.ErrUpstreamChanged)
 }
 
-
 // decodeSkipTimes extracts intro/outro skip intervals from a hydrated provider or track map.
 // Supports both list-of-kinds (`skipTimes` / `skip_times`) and object-per-kind (`intro`, `outro`).
 func decodeSkipTimes(m map[string]any) *provider.SkipTimes {
@@ -364,6 +363,7 @@ func decodeSkipTimes(m map[string]any) *provider.SkipTimes {
 	}
 	return st
 }
+
 // decodeProvider maps one hydrated provider group by key name.
 func decodeProvider(pm map[string]any) providerEntry {
 	pe := providerEntry{}

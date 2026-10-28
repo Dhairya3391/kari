@@ -163,3 +163,23 @@ func TestStreamType(t *testing.T) {
 		t.Errorf("mpd = %q", streamType("https://x/y.mpd", ""))
 	}
 }
+
+func TestMoovieExcludesNonHTTP(t *testing.T) {
+	c := &Client{}
+	merged := &mergedResults{
+		sources: []mergedSource{
+			{url: "magnet:?xt=urn:btih:abc123", quality: "4K", typ: "mp4"},
+			{url: "https://example.com/stream.mp4", quality: "1080p", typ: "mp4"},
+		},
+		audio: []mergedAudio{
+			{url: "magnet:?xt=urn:btih:def456", lang: "en", typ: "mp4"},
+		},
+	}
+	sources := c.mapMerged(merged)
+	if len(sources) != 1 {
+		t.Fatalf("expected 1 source, got %d: %+v", len(sources), sources)
+	}
+	if sources[0].URL != "https://example.com/stream.mp4" {
+		t.Errorf("URL = %q, want https://example.com/stream.mp4", sources[0].URL)
+	}
+}

@@ -531,7 +531,7 @@ func playableEntry(item sseItem, p upstreamProvider) []candidateRow {
 		if u == "" {
 			u = strings.TrimSpace(rawURL)
 		}
-		if u == "" {
+		if u == "" || !isPlayableHTTPURL(u) {
 			return
 		}
 		out = append(out, candidateRow{
@@ -729,7 +729,7 @@ func (c *Client) resolveAudioVariant(ctx context.Context, v variantEntry, mediaT
 		if u == "" {
 			u = strings.TrimSpace(rawURL)
 		}
-		if u == "" {
+		if u == "" || !isPlayableHTTPURL(u) {
 			return candidateRow{}, false
 		}
 		if language == "" {

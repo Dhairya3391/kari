@@ -8,6 +8,7 @@ import (
 	"kari/internal/provider/anikoto"
 	"kari/internal/provider/anipm"
 	"kari/internal/provider/anivault"
+	"kari/internal/provider/bingr"
 	"kari/internal/provider/cinecat"
 	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/miruro"
@@ -15,6 +16,7 @@ import (
 	"kari/internal/provider/movysx"
 	"kari/internal/provider/pengu"
 	"kari/internal/provider/solis"
+	"kari/internal/provider/vidrift"
 	"kari/internal/provider/weebcentral"
 	"kari/internal/tmdb"
 )
@@ -76,6 +78,18 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "cinecat",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return cinecat.NewClient(d.KeyPool)
+		},
+	},
+	{
+		ID: "vidrift",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return vidrift.NewClientWithLanguageFilter(d.KeyPool, d.LanguageFilter)
+		},
+	},
+	{
+		ID: "bingr",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return bingr.NewClientWithLanguageFilter(d.KeyPool, d.LanguageFilter)
 		},
 	},
 	{

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"kari/internal/config"
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/util"
@@ -90,11 +89,7 @@ func buildVLCArgs(source provider.MediaSource, media model.ResolvedMedia) []stri
 		"--no-video-title-show",
 	}
 
-	ua := strings.TrimSpace(source.UserAgent)
-	if ua == "" {
-		ua = strings.TrimSpace(config.AndroidUA())
-	}
-	if ua != "" {
+	if ua := strings.TrimSpace(source.UserAgent); ua != "" {
 		args = append(args, "--http-user-agent="+ua)
 	}
 	if strings.TrimSpace(source.Referer) != "" {
@@ -248,12 +243,8 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 		args = append(args, fmt.Sprintf("--start=%d", int(media.StartTime)))
 	}
 
-	userAgent := config.AndroidUA()
-	if strings.TrimSpace(source.UserAgent) != "" {
-		userAgent = source.UserAgent
-	}
-	if userAgent != "" {
-		args = append(args, "--user-agent="+userAgent)
+	if ua := strings.TrimSpace(source.UserAgent); ua != "" {
+		args = append(args, "--user-agent="+ua)
 	}
 	if strings.TrimSpace(source.Referer) != "" {
 		args = append(args, "--referrer="+source.Referer)

@@ -120,11 +120,9 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	if source.Referer != "" {
 		confBuilder.WriteString(fmt.Sprintf("referrer=%s\n", source.Referer))
 	}
-	userAgent := source.UserAgent
-	if userAgent == "" {
-		userAgent = "Mozilla/5.0"
+	if source.UserAgent != "" {
+		confBuilder.WriteString(fmt.Sprintf("user-agent=%s\n", source.UserAgent))
 	}
-	confBuilder.WriteString(fmt.Sprintf("user-agent=%s\n", userAgent))
 
 	// UA and Referer arrive via the user-agent=/referrer= conf lines; do NOT
 	// repeat them in http-header-fields — that is a comma-split mpv list and
