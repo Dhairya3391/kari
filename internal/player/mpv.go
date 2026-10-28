@@ -249,7 +249,6 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		"--msg-level=all=error",
 		"--vo=gpu-next,gpu",
 		"--gpu-context=auto",
-		"--focus-on=open",
 		"--cache=yes",
 		"--demuxer-seekable-cache=yes",
 		"--demuxer-max-bytes=500M",
@@ -284,6 +283,9 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	pipeMpvArgs = appendAudioLangArgs(pipeMpvArgs, source.Language)
 	pipeMpvArgs = append(pipeMpvArgs, aniskipArgs...)
 	pipeMpvArgs = appendExtraArgsWithBracket(pipeMpvArgs, source.ExtraArgs, media.SubtitlePath())
+	if runtime.GOOS == "darwin" {
+		pipeMpvArgs = append(pipeMpvArgs, "--focus-on=open")
+	}
 	if runtime.GOOS == "windows" {
 		pipeMpvArgs = append(pipeMpvArgs, "--terminal=no")
 	}
@@ -336,7 +338,6 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 		"--msg-level=all=warn",
 		"--vo=gpu-next,gpu",
 		"--gpu-context=auto",
-		"--focus-on=open",
 		hwdecOptionArg(),
 		"--network-timeout=8",
 		"--cache=yes",
@@ -350,6 +351,9 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 	}
 	if runtime.GOOS == "windows" {
 		args = append(args, "--terminal=no")
+	}
+	if runtime.GOOS == "darwin" {
+		args = append(args, "--focus-on=open")
 	}
 
 	if media.StartTime > 5 {

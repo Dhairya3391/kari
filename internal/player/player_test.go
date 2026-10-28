@@ -537,3 +537,23 @@ func TestAttemptSourcesSkipsShortWarningVideo(t *testing.T) {
 		t.Errorf("expected good source result (1440s), got %.1f", res.DurationSecs)
 	}
 }
+
+func TestBuildMPVArgsFocusOnDarwinOnly(t *testing.T) {
+	source := provider.MediaSource{URL: "https://example.com/video.mp4"}
+	media := model.ResolvedMedia{EpisodeTitle: "Test"}
+	args := buildMPVArgs(source, media, "/tmp/sock", nil)
+
+	hasOption := false
+	for _, arg := range args {
+		if arg == "--focus-on=open" {
+			hasOption = true
+			break
+		}
+	}
+	if runtime.GOOS == "darwin" && !hasOption {
+		t.Errorf("expected --focus-on=open on darwin, but not found in %v", args)
+	}
+	if runtime.GOOS != "darwin" && hasOption {
+		t.Errorf("--focus-on=open must only be added on darwin, but found in %v", args)
+	}
+}
