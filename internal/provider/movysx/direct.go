@@ -32,9 +32,9 @@ const defaultStreamBase = "https://api.wecollege.net"
 // sourceEndpoints returns the current city shards serving encrypted payloads.
 func sourceEndpoints() []string {
 	return []string{
-		"miami", "boise", "vegas", "reno", "oakland", "seattle",
-		"phoenix", "atlanta", "portland", "austin", "dallas", "tampa",
-		"orlando", "munich", "berlin", "paris", "delhi", "cancun",
+		"miami", "boise", "vegas", "chicago", "reno", "oakland", "seattle",
+		"phoenix", "atlanta", "portland", "austin", "dallas",
+		"munich", "berlin", "paris", "delhi", "cancun",
 	}
 }
 
@@ -181,6 +181,7 @@ type upstreamSubtitle struct {
 	Lang     string `json:"lang"`
 	Language string `json:"language"`
 	Name     string `json:"name"`
+	Type     string `json:"type"`
 }
 
 type upstreamPayload struct {
@@ -209,6 +210,15 @@ type tmdbMeta struct {
 
 func (m tmdbMeta) title() string {
 	for _, s := range []string{m.Title, m.Name, m.OriginalTitle, m.OriginalName} {
+		if strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
+}
+
+func (m tmdbMeta) originalTitle() string {
+	for _, s := range []string{m.OriginalTitle, m.OriginalName} {
 		if strings.TrimSpace(s) != "" {
 			return strings.TrimSpace(s)
 		}
@@ -318,8 +328,14 @@ func (c *Client) refreshSeed(ctx context.Context, tmdbID int) (string, error) {
 // fetchEndpointSources queries one city shard and decrypts its payload,
 // refreshing the seed once on a 401 like the web player does.
 func (c *Client) fetchEndpointSources(ctx context.Context, endpoint string, params url.Values, seed string, tmdbID int) (*upstreamPayload, error) {
-	target := fmt.Sprintf("%s/%s/sources?%s", strings.TrimRight(c.streamBase, "/"), endpoint, params.Encode())
 	attempt := func(s string) (*upstreamPayload, error) {
+		q := make(url.Values, len(params)+2)
+		for k, vs := range params {
+			q[k] = vs
+		}
+		q.Set("enc", "2")
+		q.Set("seed", s)
+		target := fmt.Sprintf("%s/%s/sources?%s", strings.TrimRight(c.streamBase, "/"), endpoint, q.Encode())
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
@@ -379,7 +395,7 @@ func isHTTPErrorCode(err error, code int) bool {
 // fetchSourcesDirect fans out to every city shard with quorum/grace timing:
 // once sourceQuorum shards deliver, stragglers get sourceGraceMS to land;
 // the soft deadline fires only while sources are already held.
-func (c *Client) fetchSourcesDirect(ctx context.Context, mediaType string, tmdbID, season, episode int, title, year, imdbID string, totalSeasons int, seed string) (*mergedResults, error) {
+func (c *Client) fetchSourcesDirect(ctx context.Context, mediaType string, tmdbID, season, episode int, title, altTitle, year, imdbID string, totalSeasons int, seed string) (*mergedResults, error) {
 	fanoutCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -391,8 +407,9 @@ func (c *Client) fetchSourcesDirect(ctx context.Context, mediaType string, tmdbI
 	params.Set("imdbId", imdbID)
 	params.Set("episodeId", fmt.Sprintf("%d", max(episode, 1)))
 	params.Set("seasonId", fmt.Sprintf("%d", max(season, 1)))
-	params.Set("enc", "2")
-	params.Set("seed", seed)
+	if altTitle != "" && altTitle != title {
+		params.Set("altTitle", altTitle)
+	}
 	if totalSeasons > 0 {
 		params.Set("totalSeasons", fmt.Sprintf("%d", totalSeasons))
 	}
@@ -595,7 +612,8 @@ func mergeProviderResults(payloads []*upstreamPayload) *mergedResults {
 			if u == "" {
 				continue
 			}
-			if !kit.IsSubtitleURL(u) {
+			isVTTorSRT := strings.EqualFold(strings.TrimSpace(sub.Type), "vtt") || strings.EqualFold(strings.TrimSpace(sub.Type), "srt")
+			if !kit.IsSubtitleURL(u) && !isVTTorSRT {
 				continue
 			}
 			if _, ok := subSet[u]; ok {

@@ -41,7 +41,7 @@ const (
 	DefaultIntroDBAPIKey = "idb_Cbx3JSk4-MLeS8iOXQGFY0hXvM06XdFs"
 
 	// DefaultPenguAuthToken is the bundled fallback token for PenguPlay (https://pengu.uk).
-	DefaultPenguAuthToken = "QrorVNGPLcKqQNDKYHlRWbkXMizhtq2fX7iWZ7TXOzs"
+	DefaultPenguAuthToken = "fJDLLgJTS0ASMne0HsUILe4284c5A_FlRKI9xW8qYpk"
 
 	// WeebCentralBase is the WeebCentral site (HTMX HTML, no API):
 	// series search, full chapter listings, and chapter page images.
@@ -78,8 +78,7 @@ const (
 	// CinecatReferer satisfies the hotlink protection on Cinecat stream requests.
 	CinecatReferer = "https://beta.cinecat.eu/"
 	// CinecatCDNBase is the primary multi-quality HLS streaming backend for Cinecat.
-	CinecatCDNBase = "https://zcdn.bluevelvet.space"
-	// CinecatSubsBase is the Granite subtitle backend used by Cinecat.
+	CinecatCDNBase = "https://zcdn1.iamwatchingyou.site"
 	CinecatSubsBase = "https://sub.vdrk.site"
 
 	// DefaultDiscordAppID is the Kari Discord application used for Rich

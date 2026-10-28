@@ -69,12 +69,18 @@ func TestBuildConfigSegment(t *testing.T) {
 	}
 	// These backends play via Kari's header handling (verified with live
 	// mpv probes), so they stay enabled.
-	for _, key := range []string{"source_moviebox", "source_2peckle", "source_4khdhub", "source_vegamovies", "source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy", "source_kisskh", "source_hdhub4u", "source_moviesdrives", "source_vidy", "source_toonworld4all"} {
+	for _, key := range []string{
+		"source_moviebox", "source_2peckle", "source_4khdhub", "source_vegamovies",
+		"source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy",
+		"source_kisskh", "source_hdhub4u", "source_moviesdrives", "source_vidy",
+		"source_toonworld4all", "source_vidlink", "source_obejrzyj",
+		"source_lamovie", "source_sololatino", "source_moflix", "source_premiumsmart",
+	} {
 		if parsed[key] != "on" {
 			t.Errorf("%s = %v, want on", key, parsed[key])
 		}
 	}
-	for _, key := range []string{"source_vidlink", "source_arctic", "source_reanime", "source_miruro", "source_anikoto", "source_anipm"} {
+	for _, key := range []string{"source_arctic", "source_reanime", "source_miruro", "source_anikoto", "source_anipm"} {
 		if parsed[key] != "off" {
 			t.Errorf("%s = %v, want off", key, parsed[key])
 		}
@@ -189,6 +195,11 @@ func TestParseStreamItemNewBackends(t *testing.T) {
 		{"🐧 PenguPlay 🧊 1080p • Anipm · HD-1 · Sub", "Ani.pm"},
 		{"🐧 PenguPlay 🧊 1080p • MoviesDrives · PixelDrain", "MoviesDrives"},
 		{"🐧 PenguPlay 🐧 360p • PlayFy · Fallback", "PlayFy"},
+		{"🐧 PenguPlay 🧊 1080p • Obejrzyj", "Obejrzyj"},
+		{"🐧 PenguPlay 🧊 1080p • LaMovie", "LaMovie"},
+		{"🐧 PenguPlay 🧊 1080p • SoloLatino", "SoloLatino"},
+		{"🐧 PenguPlay 🧊 1080p • Moflix", "Moflix"},
+		{"🐧 PenguPlay 🧊 1080p • PremiumSmart", "PremiumSmart"},
 	} {
 		src := parseStreamItem(penguStreamItem{Name: tc.name, URL: "https://example.com/stream.m3u8"})
 		want := "1080p [" + tc.backend + "]"

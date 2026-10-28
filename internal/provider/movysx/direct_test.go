@@ -124,3 +124,29 @@ func TestMergeProviderResults(t *testing.T) {
 		t.Errorf("video m3u8 must be filtered from subtitles: %+v", m.subtitles)
 	}
 }
+
+func TestMergeProviderResultsAllowsVTTTypeWithM3U8URL(t *testing.T) {
+	payloads := []*upstreamPayload{
+		{
+			Subtitles: []upstreamSubtitle{
+				{
+					URL:  "https://worker.example.workers.dev/video.m3u8?q=encrypted",
+					Lang: "en",
+					Type: "vtt",
+				},
+				{
+					URL:  "https://cdn.example.com/video.m3u8",
+					Lang: "en",
+					Type: "",
+				},
+			},
+		},
+	}
+	m := mergeProviderResults(payloads)
+	if len(m.subtitles) != 1 {
+		t.Fatalf("expected 1 subtitle (type=vtt allowed), got %d", len(m.subtitles))
+	}
+	if m.subtitles[0].url != "https://worker.example.workers.dev/video.m3u8?q=encrypted" {
+		t.Errorf("unexpected subtitle URL: %s", m.subtitles[0].url)
+	}
+}

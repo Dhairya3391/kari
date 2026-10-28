@@ -39,6 +39,7 @@ type Client struct {
 	base       *streambase.Base
 	httpClient *http.Client
 	apiBase    string
+	langFilter map[string]bool
 
 	mu            sync.Mutex
 	providerCache []upstreamProvider
@@ -79,12 +80,23 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 
 // NewClient constructs the Moovie provider over the shared TMDB search base.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
-	return NewClientWithBaseURL(keyPool, streamAPIBase)
+	return NewClientWithLanguageFilter(keyPool, nil)
+}
+
+// NewClientWithLanguageFilter constructs Moovie with an explicit language filter.
+func NewClientWithLanguageFilter(keyPool *tmdb.KeyPool, langFilter map[string]bool) (*Client, error) {
+	return NewClientWithBaseURLAndLanguageFilter(keyPool, streamAPIBase, langFilter)
 }
 
 // NewClientWithBaseURL constructs the provider against a custom source
 // service base URL (used in tests).
 func NewClientWithBaseURL(keyPool *tmdb.KeyPool, apiBase string) (*Client, error) {
+	return NewClientWithBaseURLAndLanguageFilter(keyPool, apiBase, nil)
+}
+
+// NewClientWithBaseURLAndLanguageFilter constructs the provider against a custom
+// source service base URL and explicit language filter.
+func NewClientWithBaseURLAndLanguageFilter(keyPool *tmdb.KeyPool, apiBase string, langFilter map[string]bool) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
 		return nil, err
@@ -93,7 +105,26 @@ func NewClientWithBaseURL(keyPool *tmdb.KeyPool, apiBase string) (*Client, error
 		base:       base,
 		httpClient: httpclient.New(),
 		apiBase:    strings.TrimRight(apiBase, "/"),
+		langFilter: langFilter,
 	}, nil
+}
+
+func (c *Client) languageEnabled(tag string) bool {
+	if c.langFilter == nil {
+		return true
+	}
+	for _, key := range []string{tag, lang.Name(tag)} {
+		if key == "" {
+			continue
+		}
+		if v, ok := c.langFilter[key]; ok {
+			return v
+		}
+		if v, ok := c.langFilter[strings.ToLower(key)]; ok {
+			return v
+		}
+	}
+	return true
 }
 
 // ResolveSource resolves playable sources for a TMDB id directly from the
@@ -124,13 +155,13 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	if err != nil {
 		return nil, err
 	}
-	return mapMerged(merged), nil
+	return c.mapMerged(merged), nil
 }
 
 // mapMerged converts merged shard results into media sources: dedupe by
 // URL, direct CDN addresses with per-stream headers for mpv, dubbed audio
 // rows as language-tagged sources.
-func mapMerged(m *mergedResults) []provider.MediaSource {
+func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 	subs := make([]provider.SubtitleOption, 0, len(m.subtitles))
 	for _, subtitle := range m.subtitles {
 		subs = append(subs, provider.SubtitleOption{
@@ -146,12 +177,16 @@ func mapMerged(m *mergedResults) []provider.MediaSource {
 			continue
 		}
 		seen[s.url] = struct{}{}
+		if !c.languageEnabled("en") {
+			continue
+		}
 		sources = append(sources, provider.MediaSource{
 			URL:       s.url,
 			Quality:   s.quality,
 			Type:      s.typ,
 			Referer:   s.referer,
 			UserAgent: config.DesktopUserAgent,
+			Language:  "en",
 			Subtitles: subs,
 		})
 	}
@@ -160,12 +195,15 @@ func mapMerged(m *mergedResults) []provider.MediaSource {
 			continue
 		}
 		seen[a.url] = struct{}{}
+		if !c.languageEnabled(a.lang) {
+			continue
+		}
 		quality := "Auto"
 		if a.lang != "" && a.lang != "en" {
 			quality = fmt.Sprintf("Auto (%s)", lang.Name(a.lang))
 		}
 		sources = append(sources, provider.MediaSource{
-			URL:       a.url,
+			URL: a.url,
 			Quality:   quality,
 			Type:      a.typ,
 			Referer:   a.referer,

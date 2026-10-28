@@ -142,7 +142,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		return nil, fmt.Errorf("movysx resolve: empty title: %w", provider.ErrNotFound)
 	}
 	merged, err := c.fetchSourcesDirect(ctx, mediaType, tmdbID, episode.Season, episode.Episode,
-		title, meta.year(), meta.imdbID(), meta.NumberOfSeasons, seed)
+		title, meta.originalTitle(), meta.year(), meta.imdbID(), meta.NumberOfSeasons, seed)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,11 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 	subs := make([]provider.SubtitleOption, 0, len(m.subtitles))
 	for _, s := range m.subtitles {
-		subs = append(subs, provider.SubtitleOption{URL: s.url, Language: s.lang})
+		subs = append(subs, provider.SubtitleOption{
+			URL:      s.url,
+			Language: s.lang,
+			Referer:  movyReferer,
+		})
 	}
 	sources := make([]provider.MediaSource, 0, len(m.sources)+len(m.audio))
 	seen := make(map[string]struct{}, len(m.sources)+len(m.audio))
@@ -168,12 +172,16 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 			continue
 		}
 		seen[s.url] = struct{}{}
+		if !c.languageEnabled("en") {
+			continue
+		}
 		sources = append(sources, provider.MediaSource{
 			URL:       s.url,
 			Quality:   s.quality,
 			Type:      streamType(s.url, s.typ),
 			Referer:   movyReferer,
 			UserAgent: config.DesktopUserAgent,
+			Language:  "en",
 			Subtitles: subs,
 		})
 	}

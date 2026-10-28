@@ -46,7 +46,7 @@ const penguUA = config.DesktopUserAgent
 
 var (
 	reResolution = regexp.MustCompile(`(?i)\b(4k|2160p|1440p|1080p|720p|480p|360p)\b`)
-	reSourceTag  = regexp.MustCompile(`(?i)\b(4khdhub|moviebox|vegamovies|moviesdrives|miruro|cinefreak|vaplayer|vidlink|vidfast|cinejoy|hdghartv|kisskh|hdhub4u|anipm|ani\.pm|2peckle|debridscloud|5clover|daddylive|binged|streamedpk|cdnlive|timstreams|arctic|vixsrc|vidy|toonworld4all|toonworld|reanime|playfy)\b`)
+	reSourceTag  = regexp.MustCompile(`(?i)\b(4khdhub|moviebox|vegamovies|moviesdrives|miruro|cinefreak|vaplayer|vidlink|vidfast|cinejoy|hdghartv|kisskh|hdhub4u|anipm|ani\.pm|2peckle|debridscloud|5clover|daddylive|binged|streamedpk|cdnlive|timstreams|arctic|vixsrc|vidy|toonworld4all|toonworld|reanime|playfy|obejrzyj|lamovie|sololatino|moflix|premiumsmart)\b`)
 	reAudioLang  = regexp.MustCompile(`(?i)(?:audio|language|languages):\s*([a-zA-Z, /]+)`)
 	// reDubSubMarker matches MovieBox-style audio markers in filenames:
 	// "{lang}dubaudio" (dubbed audio) vs "{lang}subaudio" (original audio
@@ -592,7 +592,11 @@ func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string
 		// Foreign-language audio the user didn't enable is dropped here
 		// so it never floods the picker; original-audio, English, enabled
 		// languages, and undetectable tracks always pass.
-		if trackLang := streamAudioLanguage(stream); trackLang != "" && trackLang != "en" && (!isAnime || trackLang != "ja") && !c.languageEnabled(trackLang, lang.Name(trackLang)) {
+		trackLang := streamAudioLanguage(stream)
+		if trackLang == "" {
+			trackLang = "en"
+		}
+		if (!isAnime || trackLang != "ja") && !c.languageEnabled(trackLang, lang.Name(trackLang)) {
 			dropped = append(dropped, resolveCandidate{source: source, stream: stream})
 			continue
 		}
@@ -601,8 +605,6 @@ func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string
 
 	candidates := kept
 	if len(candidates) == 0 && len(dropped) > 0 {
-		// Everything was disabled foreign audio: serve it anyway rather
-		// than failing the title outright.
 		candidates = dropped
 	}
 	sources := collapseMirrors(candidates)
@@ -1054,7 +1056,7 @@ func buildConfigSegment(token string) (string, error) {
 		"source_moviesdrives":  "on",
 		"source_vaplayer":      "on",
 		"source_miruro":        "off",
-		"source_vidlink":       "off",
+		"source_vidlink":       "on",
 		"source_vidfast":       "on",
 		"source_cinefreak":     "on",
 		"source_cinejoy":       "on",
@@ -1064,9 +1066,14 @@ func buildConfigSegment(token string) (string, error) {
 		"source_anipm":         "off",
 		"source_2peckle":       "on",
 		"source_vidy":          "on",
+		"source_obejrzyj":      "on",
+		"source_arctic":        "off",
 		"source_toonworld4all": "on",
 		"source_reanime":       "off",
-		"source_arctic":        "off",
+		"source_lamovie":       "on",
+		"source_sololatino":    "on",
+		"source_moflix":        "on",
+		"source_premiumsmart":  "on",
 		"source_live-sports":   "on",
 		"res_2160":             "on",
 		"res_1080":             "on",
@@ -1161,6 +1168,10 @@ func (c *Client) fetchPenguStreams(ctx context.Context, mediaType, stremioID str
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		if strings.Contains(err.Error(), "giving up after") || strings.Contains(err.Error(), "429") {
+			pgLog.Warn("pengu rate limited", "mediaType", mediaType, "id", stremioID)
+			return nil, fmt.Errorf("pengu: %w", provider.ErrRateLimited)
+		}
 		return nil, fmt.Errorf("pengu do request: %w", redactRequestError(err, segment))
 	}
 	defer resp.Body.Close()
@@ -1397,6 +1408,7 @@ func canonProviderName(token string) string {
 		"VidFast", "Cinejoy", "HDGharTV", "KissKH", "HDHub4u",
 		"Ani.pm", "2Peckle", "DebridsCloud", "5Clover", "DaddyLive", "Binged", "StreamedPK", "CDNLIVE", "TimStreams",
 		"Arctic", "VixSrc", "Vidy", "ToonWorld4All", "Reanime", "PlayFy",
+		"Obejrzyj", "LaMovie", "SoloLatino", "Moflix", "PremiumSmart",
 	} {
 		if strings.EqualFold(canon, token) {
 			return canon

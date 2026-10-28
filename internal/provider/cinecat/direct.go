@@ -30,6 +30,7 @@ type zcdnResponse struct {
 	Ready  bool   `json:"ready"`
 	URL    string `json:"url"`
 	Status string `json:"status,omitempty"`
+	RB     string `json:"rb,omitempty"`
 }
 
 type variantStream struct {
@@ -192,9 +193,16 @@ func (c *Client) fetchZCDN(ctx context.Context, tmdbID int, mediaType string, se
 	if !data.Ready || strings.TrimSpace(data.URL) == "" {
 		return "", provider.ErrNoSources
 	}
-	return data.URL, nil
+	masterURL := strings.TrimSpace(data.URL)
+	if rb := strings.TrimSpace(data.RB); rb != "" {
+		sep := "?"
+		if strings.Contains(masterURL, "?") {
+			sep = "&"
+		}
+		masterURL += sep + "_rb=" + url.QueryEscape(rb)
+	}
+	return masterURL, nil
 }
-
 func resolutionLabel(height int) string {
 	switch {
 	case height >= 2160:

@@ -43,15 +43,20 @@ func (m *modelImpl) filterSourcesByLanguage(sources []provider.MediaSource) []pr
 			kept = append(kept, s)
 		}
 	}
-	if len(kept) > 0 {
-		return kept
-	}
-	return sources
+	return kept
 }
 
 func (m *modelImpl) sourceLanguageEnabled(src provider.MediaSource) bool {
 	raw := strings.TrimSpace(src.Language)
 	if raw == "" {
+		if idx := strings.Index(src.Quality, "("); idx >= 0 {
+			if end := strings.Index(src.Quality[idx:], ")"); end >= 0 {
+				tag := strings.TrimSpace(src.Quality[idx+1 : idx+end])
+				if code := lang.Normalize(tag); code != "" {
+					raw = code
+				}
+			}
+		}
 		// Sources with no explicit language tag are considered primary/original (English).
 		return m.languageEnabled("en") && m.languageEnabled("English")
 	}

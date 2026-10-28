@@ -63,7 +63,7 @@ var DefaultProviders = []provider.Descriptor{
 	{
 		ID: "moovie",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return moovie.NewClient(d.KeyPool)
+			return moovie.NewClientWithLanguageFilter(d.KeyPool, d.LanguageFilter)
 		},
 	},
 	{

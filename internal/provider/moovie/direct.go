@@ -721,6 +721,9 @@ func (c *Client) resolveAudioVariant(ctx context.Context, v variantEntry, mediaT
 	if language == "" {
 		language = lang.Normalize(strings.TrimSpace(v.label))
 	}
+	if language != "" && !c.languageEnabled(language) {
+		return candidateRow{}, false
+	}
 	mkRow := func(rawURL, proxyURL string, headers map[string]string, typeHint string) (candidateRow, bool) {
 		u := strings.TrimSpace(proxyURL)
 		if u == "" {
