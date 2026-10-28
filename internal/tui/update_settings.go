@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/history"
 	"kari/internal/lang"
@@ -639,7 +640,7 @@ func (m *modelImpl) startAniListAuth() (tea.Model, tea.Cmd) {
 	m.anilistAuthURL = url
 	m.authInput.Focus()
 	m.authInput.SetValue("")
-	util.OpenBrowser(url)
+	_ = util.OpenBrowser(url)
 	return m, tea.Batch(m.setStatusTimed(statusInfo, "Browser opened — authorize Kari and paste code"), textinput.Blink)
 }
 

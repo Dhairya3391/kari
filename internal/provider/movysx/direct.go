@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/bits"
 	"net/http"
@@ -388,8 +389,8 @@ func (c *Client) fetchEndpointSources(ctx context.Context, endpoint string, para
 }
 
 func isHTTPErrorCode(err error, code int) bool {
-	httpErr, ok := err.(*provider.HTTPError)
-	return ok && httpErr.Code == code
+	var httpErr *provider.HTTPError
+	return errors.As(err, &httpErr) && httpErr.Code == code
 }
 
 // fetchSourcesDirect fans out to every city shard with quorum/grace timing:
@@ -686,6 +687,6 @@ func fetchJSON[T any](ctx context.Context, hc *http.Client, target string) (T, e
 
 // isAuthError reports TMDB key auth failures worth rotating over.
 func isAuthError(err error) bool {
-	httpErr, ok := err.(*provider.HTTPError)
-	return ok && (httpErr.Code == http.StatusUnauthorized || httpErr.Code == http.StatusTooManyRequests)
+	var httpErr *provider.HTTPError
+	return errors.As(err, &httpErr) && (httpErr.Code == http.StatusUnauthorized || httpErr.Code == http.StatusTooManyRequests)
 }

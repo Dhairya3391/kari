@@ -60,15 +60,15 @@ func ApplyURL(url string, onProgress ProgressFunc) error {
 	// Verify target directory is writable before downloading large payload
 	dir := filepath.Dir(exePath)
 	testFile := filepath.Join(dir, fmt.Sprintf(".kari-write-test-%d", time.Now().UnixNano()))
-	if tf, err := os.OpenFile(testFile, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600); err != nil {
+	tf, err := os.OpenFile(testFile, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	if err != nil {
 		if os.IsPermission(err) {
 			return fmt.Errorf("permission denied writing to %s (run with sudo or install in a user-writable directory): %w", dir, err)
 		}
 		return fmt.Errorf("update directory %s is not writable: %w", dir, err)
-	} else {
-		_ = tf.Close()
-		_ = os.Remove(testFile)
 	}
+	_ = tf.Close()
+	_ = os.Remove(testFile)
 
 	client := httpclient.NewWithTimeout(120 * time.Second)
 	resp, err := client.Get(url)

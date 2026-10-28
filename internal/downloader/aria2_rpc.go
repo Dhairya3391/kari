@@ -371,7 +371,7 @@ func computeAria2Progress(status *aria2TellStatusResult) DownloadProgress {
 
 		if total > 0 && completed < total {
 			remaining := total - completed
-			etaSecs := int64(remaining / speed)
+			etaSecs := remaining / speed
 			if etaSecs < 3600 {
 				etaStr = fmt.Sprintf("%02d:%02d", etaSecs/60, etaSecs%60)
 			} else {

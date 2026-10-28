@@ -612,8 +612,8 @@ func TestFilterSourcesByLanguage(t *testing.T) {
 
 func sourceURLs(sources []provider.MediaSource) []string {
 	urls := make([]string, 0, len(sources))
-	for _, source := range sources {
-		urls = append(urls, source.URL)
+	for i := range sources {
+		urls = append(urls, sources[i].URL)
 	}
 	return urls
 }

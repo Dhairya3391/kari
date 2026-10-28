@@ -153,7 +153,7 @@ func renderHistoryList(data HistoryData, width int, st Styles) string {
 	return strings.Join(applyWindow(rows, selPos, data.Height, 3, st), "\n")
 }
 
-func renderHistoryRow(g history.Group, index int, isFocused bool, data HistoryData, width int, st Styles) string {
+func renderHistoryRow(g history.Group, _ int, isFocused bool, data HistoryData, width int, st Styles) string {
 	entry := g.ContinueEntry
 	if data.ActiveTab == HistoryTabFinished {
 		entry = g.FarthestComplete
@@ -171,7 +171,7 @@ func renderHistoryRow(g history.Group, index int, isFocused bool, data HistoryDa
 
 	kind := strings.ToLower(entry.MediaType)
 	if entry.Mode != "" {
-		kind = strings.ToLower(string(entry.Mode))
+		kind = strings.ToLower(entry.Mode)
 	}
 	if kind == "" {
 		kind = "title"
@@ -241,7 +241,7 @@ func renderHistoryDetails(data HistoryData, width int, st Styles) string {
 	// 3. Kind · position line
 	kind := strings.ToLower(entry.MediaType)
 	if entry.Mode != "" {
-		kind = strings.ToLower(string(entry.Mode))
+		kind = strings.ToLower(entry.Mode)
 	}
 	pos := formatContinuePosition(entry)
 	meta := fmt.Sprintf("%s · %s", kind, pos)
@@ -307,7 +307,7 @@ func formatLongRelativeTime(t time.Time) string {
 	}
 }
 
-func renderInlineConfirm(prompt string, width int, st Styles) string {
+func renderInlineConfirm(prompt string, _ int, st Styles) string {
 	return "\n\n" + st.Dim.Render("  "+prompt)
 }
 

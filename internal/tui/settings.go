@@ -309,7 +309,7 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 
 	return strings.Join(rows, "\n")
 }
-func renderModeSettingRow(row ModeRow, isFocused bool, width int, st Styles) string {
+func renderModeSettingRow(row ModeRow, isFocused bool, _ int, st Styles) string {
 	cursor := "  "
 	if isFocused {
 		cursor = st.Cursor.Render("▌ ")
@@ -345,7 +345,7 @@ func renderModeSettingRow(row ModeRow, isFocused bool, width int, st Styles) str
 	return fmt.Sprintf("%s%s  %s", cursor, labelPart, statusStr)
 }
 
-func renderProviderSettingRow(row ProviderRow, isFocused bool, width int, st Styles) string {
+func renderProviderSettingRow(row ProviderRow, isFocused bool, _ int, st Styles) string {
 	cursor := "  "
 	if isFocused {
 		cursor = st.Cursor.Render("▌ ")
@@ -376,7 +376,7 @@ func renderProviderSettingRow(row ProviderRow, isFocused bool, width int, st Sty
 	return fmt.Sprintf("%s%s  %s", cursor, labelPart, statusStr)
 }
 
-func renderSettingRow(label, value string, isFocused bool, width int, st Styles) string {
+func renderSettingRow(label, value string, isFocused bool, _ int, st Styles) string {
 	cursor := "  "
 	if isFocused {
 		cursor = st.Cursor.Render("▌ ")
@@ -392,7 +392,7 @@ func renderSettingRow(label, value string, isFocused bool, width int, st Styles)
 	return fmt.Sprintf("%s%s  %s", cursor, labelPadded, value)
 }
 
-func renderAccountRow(name string, connected bool, isFocused bool, width int, st Styles) string {
+func renderAccountRow(name string, connected bool, isFocused bool, _ int, st Styles) string {
 	cursor := "  "
 	if isFocused {
 		cursor = st.Cursor.Render("▌ ")
@@ -421,7 +421,7 @@ func renderAccountRow(name string, connected bool, isFocused bool, width int, st
 	return fmt.Sprintf("%s%s  %s  %s", cursor, namePadded, statusPadded, actionHint)
 }
 
-func renderAccountSettingRow(label, value string, isFocused bool, width int, st Styles) string {
+func renderAccountSettingRow(label, value string, isFocused bool, _ int, st Styles) string {
 	cursor := "  "
 	if isFocused {
 		cursor = st.Cursor.Render("▌ ")

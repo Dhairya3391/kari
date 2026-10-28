@@ -68,7 +68,7 @@ func newMovyFixture(t *testing.T, shardPayload func() string) *movyFixture {
 // tmdbIDOf extracts tmdbId from shard query params for fixture encryption.
 func tmdbIDOf(r *http.Request) uint32 {
 	var id int
-	fmt.Sscanf(r.URL.Query().Get("tmdbId"), "%d", &id)
+	_, _ = fmt.Sscanf(r.URL.Query().Get("tmdbId"), "%d", &id)
 	return uint32(id)
 }
 
@@ -180,7 +180,7 @@ func TestResolveSourceNoSources(t *testing.T) {
 	fx := newMovyFixture(t, func() string { return `{"sources":[],"subtitles":[]}` })
 	c := fx.client()
 
-	if _, err := c.ResolveSource(context.Background(), "27205", provider.Episode{TMDBID: 27205}); err != provider.ErrNoSources {
+	if _, err := c.ResolveSource(context.Background(), "27205", provider.Episode{TMDBID: 27205}); !errors.Is(err, provider.ErrNoSources) {
 		t.Errorf("err = %v, want ErrNoSources", err)
 	}
 }

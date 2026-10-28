@@ -88,7 +88,7 @@ func TestBingrLanguageFilter(t *testing.T) {
 
 func TestBingrResolveMovieDirect(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/details/movie/550", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/details/movie/550", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(detailsResponse{
 			ID:    550,
@@ -188,7 +188,7 @@ func TestBingrResolveMovieDirect(t *testing.T) {
 
 func TestBingrResolveTVAphelion(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/details/tv/1396", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/details/tv/1396", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(detailsResponse{
 			ID:    1396,
@@ -197,7 +197,7 @@ func TestBingrResolveTVAphelion(t *testing.T) {
 			Year:  2008,
 		})
 	})
-	mux.HandleFunc("/stream/aphelion-tv/1396/1/1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/stream/aphelion-tv/1396/1/1", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(streamResponse{
 			ScraperName: "DarkMatter",
@@ -210,7 +210,7 @@ func TestBingrResolveTVAphelion(t *testing.T) {
 			},
 		})
 	})
-	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/stream", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(streamResponse{})
 	})
@@ -243,7 +243,7 @@ func TestBingrResolveTVAphelion(t *testing.T) {
 func TestBingrResolveAnime(t *testing.T) {
 	mux := http.NewServeMux()
 	// Bingr anime metadata
-	mux.HandleFunc("/anime/154587", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/anime/154587", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(animeMetaResponse{
 			ID:       154587,
@@ -256,7 +256,7 @@ func TestBingrResolveAnime(t *testing.T) {
 	})
 
 	// HiAnime / MegaPlay token endpoint
-	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"token": "test-filmu-token",
@@ -389,7 +389,7 @@ func TestBingrResolveAnime(t *testing.T) {
 
 func TestBingrFetchAnimeEpisodes(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/anime/154587", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/anime/154587", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(animeMetaResponse{
 			ID:       154587,
@@ -426,7 +426,7 @@ func TestBingrFetchAnimeEpisodes(t *testing.T) {
 
 func TestBingrSearchAnimeFallback(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/anime/search", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/anime/search", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(animeSearchResponse{
 			Results: []animeSearchItem{
@@ -504,16 +504,16 @@ func TestUnwrapProxyURL(t *testing.T) {
 func TestBingrDirectAnimeFallback(t *testing.T) {
 	mux := http.NewServeMux()
 	// Details returns 404 (not a TMDB movie)
-	mux.HandleFunc("/details/movie/199", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/details/movie/199", func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	})
 	// Stream returns 404/empty
-	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/stream", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(streamResponse{})
 	})
 	// Anime metadata returns valid Spirited Away (AniList 199, MAL 199)
-	mux.HandleFunc("/anime/199", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/anime/199", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(animeMetaResponse{
 			ID:       199,
@@ -523,11 +523,11 @@ func TestBingrDirectAnimeFallback(t *testing.T) {
 			Episodes: 1,
 		})
 	})
-	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": "tok"})
 	})
-	mux.HandleFunc("/hianime/megaplay", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/hianime/megaplay", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(megaplayResponse{
 			Streams: []megaplayStream{

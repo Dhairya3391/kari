@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -163,8 +164,8 @@ func ReadCapped(resp *http.Response) ([]byte, error) {
 	return body, nil
 }
 
-// kariClientRoundTripper tags every outgoing request as coming from this app.
-// Our own Cloudflare-fronted APIs (broggl.farm) use it to bypass bot
+// kariClientRoundTripper tags outgoing requests destined for our own
+// Cloudflare-fronted APIs (broggl.farm) as coming from this app to bypass bot
 // challenges that otherwise intermittently misclassify the app's non-browser
 // TLS fingerprint and return an HTML challenge page instead of JSON.
 type kariClientRoundTripper struct {
@@ -172,7 +173,9 @@ type kariClientRoundTripper struct {
 }
 
 func (t *kariClientRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.Header.Set(config.KariClientHeader, config.KariClientToken)
+	if strings.Contains(req.URL.Host, "broggl.farm") {
+		req.Header.Set(config.KariClientHeader, config.KariClientToken)
+	}
 	return t.next.RoundTrip(req)
 }
 
@@ -226,7 +229,6 @@ func newResilientDialer() *net.Dialer {
 			total := len(publicDNSServers)
 			ch := make(chan dialResult, total)
 			for _, server := range publicDNSServers {
-				server := server
 				go func() {
 					d := net.Dialer{Timeout: 4 * time.Second}
 					conn, err := d.DialContext(raceCtx, network, server)

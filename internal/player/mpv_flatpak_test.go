@@ -22,11 +22,12 @@ func TestMPVCommandAvailable(t *testing.T) {
 		t.Errorf("p.Available() = false when mpvCommand() returned %q", bin)
 	}
 
-	if bin == "mpv" {
+	switch bin {
+	case "mpv":
 		if len(prefix) != 0 {
 			t.Errorf("native mpv should not have prefix args, got: %v", prefix)
 		}
-	} else if bin == "flatpak" {
+	case "flatpak":
 		if len(prefix) != 2 || prefix[0] != "run" || prefix[1] != "io.mpv.Mpv" {
 			t.Errorf("flatpak mpv expected ['run', 'io.mpv.Mpv'], got: %v", prefix)
 		}

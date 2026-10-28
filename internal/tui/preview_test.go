@@ -281,9 +281,10 @@ func TestPreviewEpisodeIndexAndCount(t *testing.T) {
 		season := (i / 22) + 1
 		epNum := (i % 22) + 1
 		title := fmt.Sprintf("Episode %d", epNum)
-		if i == 0 {
+		switch i {
+		case 0:
 			title = "Pilot"
-		} else if i == 1 {
+		case 1:
 			title = "Wendigo"
 		}
 		episodes[i] = provider.Episode{

@@ -144,12 +144,12 @@ func HotAddSubtitle(path string) error {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		if err := client.Connect(500 * time.Millisecond); err == nil {
+		err := client.Connect(500 * time.Millisecond)
+		if err == nil {
 			defer client.Close()
 			return client.AddSubtitle(path)
-		} else {
-			lastErr = err
 		}
+		lastErr = err
 		time.Sleep(200 * time.Millisecond)
 	}
 	return lastErr

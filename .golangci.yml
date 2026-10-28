@@ -1,0 +1,88 @@
+version: "2"
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - durationcheck
+    - errorlint
+    - gocritic
+    - misspell
+    - nilerr
+    - revive
+    - unconvert
+
+  settings:
+    errcheck:
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - (*net/http.Response).Body.Close
+        - io.Closer.Close
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (*compress/gzip.Reader).Close
+        - (*compress/gzip.Writer).Close
+        - (*kari/internal/player.IPCClient).Close
+        - os.Remove
+        - os.RemoveAll
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Sscanf
+        - kari/internal/logging.Close
+        - kari/internal/util.OpenBrowser
+
+    revive:
+      rules:
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-strings
+        - name: error-naming
+        - name: if-return
+        - name: increment-decrement
+        - name: var-declaration
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unreachable-code
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+      disabled-checks:
+        - hugeParam
+        - rangeValCopy
+        - evalOrder
+        - deferInLoop
+        - appendAssign
+        - appendCombine
+        - exitAfterDefer
+        - singleCaseSwitch
+        - ifElseChain
+        - commentedOutCode
+        - assignOp
+        - argOrder
+        - stringXbytes
+        - truncateCmp
+        - rangeExprCopy
+        - elseif
+
+  exclusions:
+    presets:
+      - std-error-handling
+      - common-false-positives
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

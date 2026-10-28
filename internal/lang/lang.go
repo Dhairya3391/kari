@@ -7,7 +7,7 @@
 // same title have been observed mixing clean codes ("en", "fr") with full
 // English names ("English", "French"), nonstandard codes ("in_id" for
 // Indonesian), region variants ("zh-cn", "zh-tw"), and typos
-// ("Protuguese (BR)") — all in one response. Normalize exists to fold all
+// ("Portuguese (BR)") — all in one response. Normalize exists to fold all
 // of that down to one canonical code so language-preference matching and
 // display both work regardless of which form a given provider used.
 package lang
@@ -88,8 +88,8 @@ var aliases = map[string]string{
 	"portuguese":      "pt",
 	"por":             "pt",
 	"portuguese (br)": "pt",
-	"protuguese (br)": "pt", // upstream subtitle typo
-	"protuguese":      "pt", // same typo without the region tag
+	"protuguese (br)": "pt", //nolint:misspell // upstream subtitle typo
+	"protuguese":      "pt", //nolint:misspell // same typo without the region tag
 	"pt-br":           "pt",
 	"brazilian":       "pt",
 	"russian":         "ru",

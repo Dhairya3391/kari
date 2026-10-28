@@ -336,7 +336,7 @@ func (c *Client) searchAnikotoAJAX(ctx context.Context, title string) ([]anikoto
 	body, err := httpclient.ReadCapped(resp)
 	_ = resp.Body.Close()
 	if err != nil || resp.StatusCode != http.StatusOK {
-		return nil, nil
+		return nil, nil //nolint:nilerr // graceful fallback when AJAX search fails
 	}
 
 	// The AJAX response contains {result: {html: "..."}} with rendered HTML.
@@ -346,7 +346,7 @@ func (c *Client) searchAnikotoAJAX(ctx context.Context, title string) ([]anikoto
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(body, &ajaxResp); err != nil {
-		return nil, nil
+		return nil, nil //nolint:nilerr // graceful fallback on unparseable AJAX
 	}
 
 	var out []anikotoCandidate

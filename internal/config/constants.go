@@ -81,6 +81,15 @@ const (
 	CinecatCDNBase  = "https://zcdn1.iamwatchingyou.site"
 	CinecatSubsBase = "https://sub.vdrk.site"
 
+	// CnoBase is the main web and API base for Cno (https://cno.to).
+	CnoBase = "https://cno.to"
+	// CnoReferer satisfies hotlink and header protection on Cno API and stream requests.
+	CnoReferer = "https://cno.to/"
+
+	// MappleBase is the main web and API base for Mapple (https://mapple.fun).
+	MappleBase = "https://mapple.fun"
+	// MappleReferer satisfies hotlink and header protection on Mapple API and stream requests.
+	MappleReferer = "https://mapple.fun/"
 	// VidRiftSiteBase is the VidRift landing site used as the embed request
 	// referer. VidRiftEmbedBase is the TMDB/AniList-keyed player origin that
 	// serves both the embed document and its /api/source lanes.

@@ -89,6 +89,9 @@ func TestChaosFaults(t *testing.T) {
 	c429 := &Chaos{Fault: Chaos429, RetryAfter: "1"}
 	req, _ := http.NewRequest("GET", "https://upstream.example.com/x", nil)
 	resp, err := c429.RoundTrip(req)
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
 	if err != nil || resp.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("429 = %v, %v", resp, err)
 	}
@@ -100,7 +103,11 @@ func TestChaosFaults(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	req2, _ := http.NewRequestWithContext(ctx, "GET", "https://upstream.example.com/x", nil)
-	if _, err := cTimeout.RoundTrip(req2); !errors.Is(err, context.DeadlineExceeded) {
+	resp2, err := cTimeout.RoundTrip(req2)
+	if resp2 != nil && resp2.Body != nil {
+		defer resp2.Body.Close()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("timeout fault = %v, want DeadlineExceeded", err)
 	}
 }

@@ -195,7 +195,7 @@ func Headers(st Stream, pol ArgPolicy) (referer, userAgent string, extraArgs []s
 			if userAgent == "" {
 				userAgent = strings.TrimPrefix(arg, "--user-agent=")
 			}
-		case arg != "" && !(pol.SkipURLArgs && (strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://"))):
+		case arg != "" && (!pol.SkipURLArgs || (!strings.HasPrefix(arg, "http://") && !strings.HasPrefix(arg, "https://"))):
 			extraArgs = append(extraArgs, arg)
 		}
 	}

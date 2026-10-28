@@ -282,6 +282,39 @@ func TestTriggerSubtitleSyncKeepsSecuredTrackOnPoolGrowth(t *testing.T) {
 	}
 }
 
+func TestTriggerSubtitleSyncReplacesOpenSubtitlesWhenProviderSubsArrive(t *testing.T) {
+	m := readySourceModel()
+	m.subtitleService = service.NewSubtitleService(&config.Config{})
+	m.subtitleLanguage = "en"
+	m.rawSubtitles = []model.SubtitleTrack{}
+	m.resolved.Subtitles = []model.SubtitleTrack{}
+
+	// Simulate OpenSubtitles track was secured first
+	m.subtitleOpID = 0
+	m.resolved.SelectedSubtitle = &model.SubtitleTrack{
+		Path:     "/tmp/opensub.srt",
+		Language: "en",
+		Resolver: "opensubtitles",
+	}
+	m.subtitlePoolSize = 0
+	m.subtitleResolverUsed = "mapple"
+	m.subtitleLangUsed = "en"
+	src, _ := m.selectedPlaybackSource()
+	m.subtitleSourceUsed = src.URL
+
+	// Later, provider subtitles arrive on concurrent resolution
+	m.rawSubtitles = append(m.rawSubtitles, model.SubtitleTrack{
+		URL:      "https://cdn.example.com/mapple_sub.vtt",
+		Language: "en",
+		Resolver: "mapple",
+	})
+
+	// Pool growth with provider subtitles must re-trigger sync to replace OpenSubtitles
+	if cmd := m.triggerSubtitleSync(); cmd == nil {
+		t.Fatal("provider subtitles arrival must re-trigger subtitle fetch to replace OpenSubtitles")
+	}
+}
+
 func TestTriggerSubtitleSyncSkipsWhileFetchInFlight(t *testing.T) {
 	m := readySourceModel()
 	m.subtitleService = service.NewSubtitleService(&config.Config{})

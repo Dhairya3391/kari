@@ -541,3 +541,43 @@ func TestSubtitleServiceProviderSubsNotPoisonedByOpenSubtitles(t *testing.T) {
 		t.Errorf("expected anikoto provider track, got resolver %q (path %q)", track.Resolver, track.Path)
 	}
 }
+
+func TestSubtitleServiceProviderSubsOverrideCachedOpenSubtitles(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/vtt")
+		_, _ = w.Write([]byte("WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nProvider sub\n"))
+	}))
+	defer srv.Close()
+
+	svc := NewSubtitleService(&config.Config{})
+	svc.httpClient = srv.Client()
+
+	openSubPath := t.TempDir() + "/opensub.srt"
+	if err := os.WriteFile(openSubPath, []byte("1\n00:00,000 --> 00:01,000\nopensub\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cache OpenSubtitles track under mapple's cache key
+	cacheKey := "550:0:0:Fight Club:en:mapple::movie:movies:1"
+	svc.cache.Set(cacheKey, model.SubtitleTrack{Path: openSubPath, Resolver: "opensubtitles"})
+
+	// Media now arrives with provider subtitles from mapple
+	media := model.ResolvedMedia{
+		SeriesTitle: "Fight Club",
+		TMDBID:      550,
+		MediaType:   provider.MediaTypeMovie,
+		ContentMode: provider.ModeMovies,
+		Subtitles: []model.SubtitleTrack{
+			{URL: srv.URL + "/provider.vtt", Language: "en", Resolver: "mapple"},
+		},
+	}
+
+	// Fetch must prefer the newly arrived provider subtitles over the cached OpenSubtitles
+	track, err := svc.Fetch(context.Background(), media, "en", "mapple")
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if track.Resolver != "mapple" {
+		t.Errorf("expected mapple provider track, got resolver %q", track.Resolver)
+	}
+}

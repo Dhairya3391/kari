@@ -10,7 +10,9 @@ import (
 	"kari/internal/provider/anivault"
 	"kari/internal/provider/bingr"
 	"kari/internal/provider/cinecat"
+	"kari/internal/provider/cno"
 	"kari/internal/provider/jellyfin"
+	"kari/internal/provider/mapple"
 	"kari/internal/provider/miruro"
 	"kari/internal/provider/moovie"
 	"kari/internal/provider/movysx"
@@ -78,6 +80,18 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "cinecat",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return cinecat.NewClient(d.KeyPool)
+		},
+	},
+	{
+		ID: "cno",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return cno.NewClient(d.KeyPool)
+		},
+	},
+	{
+		ID: "mapple",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return mapple.NewClient(d.KeyPool)
 		},
 	},
 	{

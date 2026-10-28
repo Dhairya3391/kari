@@ -86,7 +86,8 @@ func TestSemaphoreRespectsContext(t *testing.T) {
 	cancelled, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	req = req.WithContext(cancelled)
-	if _, err := client.Do(req); err == nil {
+	if resp, err := client.Do(req); err == nil {
+		resp.Body.Close()
 		t.Error("queued acquire must fail on context cancel")
 	}
 }

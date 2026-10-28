@@ -304,15 +304,17 @@ func (c *Client) resolveAnime(
 
 func filterAnimeAudioSources(sources []provider.MediaSource, category string) []provider.MediaSource {
 	var kept []provider.MediaSource
-	for _, s := range sources {
+	for i := range sources {
+		s := &sources[i]
 		langCode := strings.ToLower(s.Language)
-		if category == provider.AudioSub {
+		switch category {
+		case provider.AudioSub:
 			if langCode == "" || langCode == "ja" {
-				kept = append(kept, s)
+				kept = append(kept, *s)
 			}
-		} else if category == provider.AudioDub {
+		case provider.AudioDub:
 			if langCode != "" && langCode != "ja" {
-				kept = append(kept, s)
+				kept = append(kept, *s)
 			}
 		}
 	}

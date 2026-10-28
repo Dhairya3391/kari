@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+
 	"kari/internal/history"
 	"kari/internal/model"
 	"kari/internal/provider"

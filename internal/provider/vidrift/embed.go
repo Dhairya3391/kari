@@ -182,13 +182,14 @@ func decodeInlineJSON[T any](body []byte, marker string) (T, error) {
 func buildSources(page embedPage, results []laneResult, base string) []provider.MediaSource {
 	generic := subtitleOptions(page.Subtitles, base)
 	var sources []provider.MediaSource
-	for _, result := range results {
+	for i := range results {
+		result := &results[i]
 		subtitles := make([]provider.SubtitleOption, 0, len(generic)+len(result.subtitles))
 		subtitles = append(subtitles, generic...)
 		subtitles = append(subtitles, subtitleOptions(result.subtitles, base)...)
 		subtitles = dedupeSubtitles(subtitles)
-		for _, stream := range result.streams {
-			sources = append(sources, mediaSource(stream, result, base, subtitles, page.Meta.isAnime()))
+		for j := range result.streams {
+			sources = append(sources, mediaSource(result.streams[j], *result, base, subtitles, page.Meta.isAnime()))
 		}
 	}
 	return sources
@@ -416,16 +417,16 @@ func dedupeSubtitles(tracks []provider.SubtitleOption) []provider.SubtitleOption
 func dedupeSources(sources []provider.MediaSource) []provider.MediaSource {
 	seen := make(map[string]bool, len(sources))
 	out := sources[:0]
-	for _, source := range sources {
-		if source.URL == "" {
+	for i := range sources {
+		if sources[i].URL == "" {
 			continue
 		}
-		key := source.URL + "\x00" + source.Language
+		key := sources[i].URL + "\x00" + sources[i].Language
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		out = append(out, source)
+		out = append(out, sources[i])
 	}
 	return out
 }

@@ -259,8 +259,10 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 	}
 	episodes := make([]provider.Episode, 0, count*2)
 	for number := 1; number <= count; number++ {
-		episodes = append(episodes, animeEpisode(series, number, provider.AudioSub, season))
-		episodes = append(episodes, animeEpisode(series, number, provider.AudioDub, season))
+		episodes = append(episodes,
+			animeEpisode(series, number, provider.AudioSub, season),
+			animeEpisode(series, number, provider.AudioDub, season),
+		)
 	}
 	logging.Debug("fetch episodes done", "provider", c.Name(), "count", len(episodes))
 	return episodes, nil
@@ -396,7 +398,6 @@ func (c *Client) fetchLanes(ctx context.Context, route, token string, lanes []st
 	results := make([]laneResult, len(lanes))
 	var wg sync.WaitGroup
 	for i, lane := range lanes {
-		i, lane := i, lane
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -474,9 +475,10 @@ func (c *Client) fetchLane(ctx context.Context, route, token, lane string) (lane
 // fields are the only reliable signal once a lookup succeeds.
 func filterAnimeLanes(results []laneResult, dubbed bool) []laneResult {
 	filtered := make([]laneResult, 0, len(results))
-	for _, result := range results {
+	for i := range results {
+		result := &results[i]
 		if result.err != nil {
-			filtered = append(filtered, result)
+			filtered = append(filtered, *result)
 			continue
 		}
 		// A fallback means the requested lane did not answer; its audio
@@ -493,7 +495,7 @@ func filterAnimeLanes(results []laneResult, dubbed bool) []laneResult {
 			// A sub request must not accept dubbed rows.
 			continue
 		}
-		filtered = append(filtered, result)
+		filtered = append(filtered, *result)
 	}
 	return filtered
 }
@@ -503,9 +505,9 @@ func filterAnimeLanes(results []laneResult, dubbed bool) []laneResult {
 // partial success normally wins, but a timeout or transport error must be
 // surfaced rather than reported as a missing audio track.
 func firstLaneError(results []laneResult) error {
-	for _, result := range results {
-		if result.err != nil {
-			return result.err
+	for i := range results {
+		if results[i].err != nil {
+			return results[i].err
 		}
 	}
 	return nil
@@ -525,9 +527,9 @@ func (c *Client) filterSourcesByLanguage(sources []provider.MediaSource, anime, 
 			want = "en"
 		}
 		kept := make([]provider.MediaSource, 0, len(sources))
-		for _, source := range sources {
-			if code := strings.TrimSpace(source.Language); code == "" || code == want {
-				kept = append(kept, source)
+		for i := range sources {
+			if code := strings.TrimSpace(sources[i].Language); code == "" || code == want {
+				kept = append(kept, sources[i])
 			}
 		}
 		return kept
@@ -535,12 +537,12 @@ func (c *Client) filterSourcesByLanguage(sources []provider.MediaSource, anime, 
 
 	kept := make([]provider.MediaSource, 0, len(sources))
 	var dropped []provider.MediaSource
-	for _, source := range sources {
-		if strings.TrimSpace(source.Language) == "" || c.languageEnabled(source.Language) {
-			kept = append(kept, source)
+	for i := range sources {
+		if strings.TrimSpace(sources[i].Language) == "" || c.languageEnabled(sources[i].Language) {
+			kept = append(kept, sources[i])
 			continue
 		}
-		dropped = append(dropped, source)
+		dropped = append(dropped, sources[i])
 	}
 	if len(kept) == 0 {
 		return dropped

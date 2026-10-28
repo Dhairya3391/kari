@@ -158,7 +158,7 @@ func autocontrastPage(img image.Image) image.Image {
 		for y := b.Min.Y; y < b.Max.Y; y += 4 {
 			for x := b.Min.X; x < b.Max.X; x += 4 {
 				r, g, bl, _ := img.At(x, y).RGBA()
-				lum := (19595*uint32(r>>8) + 38470*uint32(g>>8) + 7471*uint32(bl>>8)) >> 16
+				lum := (19595*(r>>8) + 38470*(g>>8) + 7471*(bl>>8)) >> 16
 				hist[lum*buckets/256]++
 				total++
 			}

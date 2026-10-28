@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/sync/errgroup"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -13,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
@@ -286,7 +287,7 @@ func (b *Base) fetchTMDBMultiSearchPage(ctx context.Context, query string, page 
 			url.QueryEscape(query),
 			page,
 		)
-		resp, err := fetchTMDBJSON[tmdbMultiSearchResponse](b, ctx, target)
+		resp, err := fetchTMDBJSON[tmdbMultiSearchResponse](ctx, b, target)
 		if err == nil {
 			return resp, nil
 		}
@@ -394,7 +395,6 @@ func (b *Base) FetchEpisodes(ctx context.Context, series provider.SearchResult) 
 		var mu sync.Mutex
 		sem := make(chan struct{}, 5)
 		for _, seasonNum := range missingSeasons {
-			seasonNum := seasonNum
 			g.Go(func() error {
 				sem <- struct{}{}
 				defer func() { <-sem }()
@@ -475,7 +475,7 @@ func (b *Base) fetchTMDBTVDetails(ctx context.Context, tmdbID int) (tmdbTVDetail
 			return tmdbTVDetails{}, err
 		}
 		target := fmt.Sprintf("%s/tv/%d?api_key=%s", config.TMDBAPIBase, tmdbID, url.QueryEscape(apiKey))
-		details, err := fetchTMDBJSON[tmdbTVDetails](b, ctx, target)
+		details, err := fetchTMDBJSON[tmdbTVDetails](ctx, b, target)
 		if err == nil {
 			return details, nil
 		}
@@ -499,7 +499,7 @@ func (b *Base) fetchTMDBSeasonDetails(ctx context.Context, tmdbID, season int) (
 			return tmdbSeasonDetails{}, err
 		}
 		target := fmt.Sprintf("%s/tv/%d/season/%d?api_key=%s", config.TMDBAPIBase, tmdbID, season, url.QueryEscape(apiKey))
-		details, err := fetchTMDBJSON[tmdbSeasonDetails](b, ctx, target)
+		details, err := fetchTMDBJSON[tmdbSeasonDetails](ctx, b, target)
 		if err == nil {
 			return details, nil
 		}
@@ -536,7 +536,7 @@ func (b *Base) fetchTMDBTVSeasonsBatch(ctx context.Context, tmdbID int, seasons 
 			url.QueryEscape(apiKey),
 			url.QueryEscape(appendToResponse),
 		)
-		rawMap, err := fetchTMDBJSON[map[string]json.RawMessage](b, ctx, target)
+		rawMap, err := fetchTMDBJSON[map[string]json.RawMessage](ctx, b, target)
 		if err == nil {
 			out := make(map[int]tmdbSeasonDetails, len(seasons))
 			for _, s := range seasons {
@@ -559,7 +559,7 @@ func (b *Base) fetchTMDBTVSeasonsBatch(ctx context.Context, tmdbID int, seasons 
 	}
 }
 
-func fetchTMDBJSON[T any](b *Base, ctx context.Context, target string) (T, error) {
+func fetchTMDBJSON[T any](ctx context.Context, b *Base, target string) (T, error) {
 	var zero T
 	headers := map[string]string{"Accept": "application/json"}
 	resp, err := b.doRequest(ctx, target, headers)

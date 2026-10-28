@@ -189,7 +189,7 @@ func FilterEpisodesByText(episodes []provider.Episode, idxs []int, query string)
 }
 
 // filterToSeason returns the episodes for the active season and their original indices.
-func filterToSeason(episodes []provider.Episode, seasonCount, activeSeason int) ([]provider.Episode, []int) {
+func filterToSeason(episodes []provider.Episode, _ int, activeSeason int) ([]provider.Episode, []int) {
 	seasons := distinctSeasonNumbers(episodes)
 	if len(seasons) <= 1 {
 		idxs := make([]int, len(episodes))
@@ -344,7 +344,7 @@ func episodeDisplayTitle(ep provider.Episode, index int) string {
 
 // episodeRightCol renders the trailing status: progress bar plus time
 // left for in-progress episodes, runtime when known, else empty.
-func episodeRightCol(ep provider.Episode, historyEntry *history.Entry, isFocused bool, accent lipgloss.AdaptiveColor, st Styles) string {
+func episodeRightCol(_ provider.Episode, historyEntry *history.Entry, isFocused bool, accent lipgloss.AdaptiveColor, st Styles) string {
 	if historyEntry != nil {
 		if historyEntry.Complete || historyEntry.PercentComplete >= 0.95 || (historyEntry.DurationSecs > 0 && (historyEntry.PositionSecs/historyEntry.DurationSecs) >= 0.95) {
 			return ""

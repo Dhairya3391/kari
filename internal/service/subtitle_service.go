@@ -155,10 +155,6 @@ func (s *SubtitleService) fetch(
 		media.ContentMode,
 		cacheVersion,
 	)
-	if track, ok := s.cache.Get(cacheKey); ok && usableCachedTrack(track) {
-		return track, nil
-	}
-
 	originalSubtitles := media.Subtitles
 	exactSourceCandidates, otherMirrorCandidates := selectProviderCandidates(
 		originalSubtitles,
@@ -166,6 +162,14 @@ func (s *SubtitleService) fetch(
 		preferredResolver,
 		preferredSourceID,
 	)
+
+	if track, ok := s.cache.Get(cacheKey); ok && usableCachedTrack(track) {
+		isOpenSub := strings.EqualFold(strings.TrimSpace(track.Resolver), "opensubtitles")
+		hasProviderCandidates := len(exactSourceCandidates) > 0 || len(otherMirrorCandidates) > 0
+		if !isOpenSub || !hasProviderCandidates {
+			return track, nil
+		}
+	}
 
 	attempted := make(map[string]struct{})
 	var failures []error
@@ -351,7 +355,6 @@ func (s *SubtitleService) downloadProviderCandidates(
 
 	ch := make(chan subResult, len(toProbe))
 	for _, track := range toProbe {
-		track := track
 		go func() {
 			downloaded, err := s.downloadProviderSubtitle(downloadCtx, media, track)
 			ch <- subResult{track: downloaded, err: err}

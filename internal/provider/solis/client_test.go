@@ -3,6 +3,7 @@ package solis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -118,7 +119,7 @@ func TestResolveSourceNoSources(t *testing.T) {
 	}
 
 	_, err = c.ResolveSource(context.Background(), "550", provider.Episode{TMDBID: 550})
-	if err != provider.ErrNoSources {
+	if !errors.Is(err, provider.ErrNoSources) {
 		t.Errorf("err = %v, want ErrNoSources", err)
 	}
 }

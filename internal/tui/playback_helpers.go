@@ -57,8 +57,10 @@ func (m *modelImpl) sourceLanguageEnabled(src provider.MediaSource) bool {
 				}
 			}
 		}
-		// Sources with no explicit language tag are considered primary/original (English).
-		return m.languageEnabled("en") && m.languageEnabled("English")
+		if raw == "" {
+			// Sources with no explicit language tag are considered primary/original (English).
+			return m.languageEnabled("en") && m.languageEnabled("English")
+		}
 	}
 	code := lang.Normalize(raw)
 	display := lang.Name(code)

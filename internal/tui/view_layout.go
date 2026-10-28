@@ -979,7 +979,7 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		qualityName = "Lowest"
 	}
 
-	downloadQualityName := "Auto (same as stream)"
+	var downloadQualityName string
 	switch m.downloadQuality {
 	case downloadQuality4K:
 		downloadQualityName = "4K (2160p)"

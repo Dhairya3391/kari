@@ -684,13 +684,15 @@ func waitForPlaybackReadiness(
 			}
 		case <-readinessTimer.C:
 			_ = cmd.Process.Kill()
-			<-done
+			drainErr := <-done
+			_ = drainErr
 			mpvLog.Warn("readiness timeout; killed process", "stderr", summarizeErr("", stderr.String()))
 			return launchResult{mpvStderr: stderr.String(), exitCode: 1, launched: true}
 		case <-ticker.C:
 			if isShort, dur := stats.isShortWarning(); isShort {
 				_ = cmd.Process.Kill()
-				<-done
+				drainErr := <-done
+				_ = drainErr
 				return launchResult{
 					mpvStderr:    fmt.Sprintf("filtered short warning video (duration: %.1fs <= %.0fs)", dur, ShortWarningVideoMaxDuration),
 					exitCode:     2,
@@ -804,10 +806,12 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 			}, nil
 		case <-readinessTimer.C:
 			_ = mpv.Process.Kill()
-			<-mpvDone
+			drainErr := <-mpvDone
+			_ = drainErr
 			if curlDone != nil {
 				_ = curl.Process.Kill()
-				<-curlDone
+				drainCurl := <-curlDone
+				_ = drainCurl
 			}
 			return launchResult{
 				mpvStderr:  mpvStderr.String(),
@@ -818,10 +822,12 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 		case <-ticker.C:
 			if isShort, dur := stats.isShortWarning(); isShort {
 				_ = mpv.Process.Kill()
-				<-mpvDone
+				drainMPV := <-mpvDone
+				_ = drainMPV
 				if curlDone != nil {
 					_ = curl.Process.Kill()
-					<-curlDone
+					drainCurl := <-curlDone
+					_ = drainCurl
 				}
 				return launchResult{
 					mpvStderr:    fmt.Sprintf("filtered short warning video (duration: %.1fs <= %.0fs)", dur, ShortWarningVideoMaxDuration),

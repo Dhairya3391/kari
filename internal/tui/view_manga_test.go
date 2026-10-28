@@ -46,7 +46,7 @@ func TestChaptersScreenOrdering(t *testing.T) {
 	if titleIdx < 0 || chIdx < 0 || storyIdx < 0 {
 		t.Fatalf("missing sections:\n%s", out)
 	}
-	if !(titleIdx < chIdx && chIdx < storyIdx) {
+	if titleIdx >= chIdx || chIdx >= storyIdx {
 		t.Errorf("wrong section order: title=%d chapters=%d story=%d", titleIdx, chIdx, storyIdx)
 	}
 	if strings.Contains(out, "\x1b_G") || strings.Contains(out, "\x1bP0;1q") {

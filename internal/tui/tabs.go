@@ -90,24 +90,23 @@ func RenderSeasonTabs(seasonCount int, activeSeasonIndex int, accent lipgloss.Ad
 	fits := func(lo, hi int) bool {
 		return maxWidth <= 0 || width(lo, hi) <= maxWidth
 	}
-	for (lo > 0 || hi < seasonCount-1) && func() bool {
+	for lo > 0 || hi < seasonCount-1 {
 		// Expand the side hiding more seasons first (ties: right),
 		// stopping when neither side fits.
 		leftHidden, rightHidden := lo, seasonCount-1-hi
 		if rightHidden >= leftHidden && hi < seasonCount-1 && fits(lo, hi+1) {
 			hi++
-			return true
+			continue
 		}
 		if lo > 0 && fits(lo-1, hi) {
 			lo--
-			return true
+			continue
 		}
 		if hi < seasonCount-1 && fits(lo, hi+1) {
 			hi++
-			return true
+			continue
 		}
-		return false
-	}() {
+		break
 	}
 
 	var labelParts []string

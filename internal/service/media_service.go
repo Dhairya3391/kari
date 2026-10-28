@@ -237,7 +237,6 @@ func (s *MediaService) searchProviders(ctx context.Context, mode provider.Conten
 
 	ch := make(chan providerSearchResult, len(providers))
 	for _, p := range providers {
-		p := p
 		if skipped, reason := s.health.Skipped(p.Name(), len(providers) == 1); skipped {
 			mediaLog.Debug("search skipping circuit-broken provider", "provider", p.Name(), "reason", reason)
 			ch <- providerSearchResult{provider: p.Name(), err: provider.Wrap(p.Name(), "search", provider.KindUpstream, fmt.Errorf("%s", reason))}
@@ -446,10 +445,10 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 			probeList = availSources
 			disabledAvail = nil
 		}
-		eps, lastErr, ok := s.firstAvailableEpisodes(ctx, probeList, series)
+		eps, ok, lastErr := s.firstAvailableEpisodes(ctx, probeList, series)
 		if !ok && len(disabledAvail) > 0 && ctx.Err() == nil {
 			mediaLog.Debug("episodes: enabled availability sources returned no episodes, attempting fallback to disabled sources")
-			eps, lastErr, ok = s.firstAvailableEpisodes(ctx, disabledAvail, series)
+			eps, ok, lastErr = s.firstAvailableEpisodes(ctx, disabledAvail, series)
 		}
 		if ok {
 			if mode == provider.ModeAnime {
@@ -572,9 +571,9 @@ func genericEpisodeTitle(number int) string {
 
 // firstAvailableEpisodes returns the first usable episode list and cancels
 // sibling lookups so catalog latency is bounded by the fastest source.
-func (s *MediaService) firstAvailableEpisodes(ctx context.Context, sources []provider.EpisodeAvailabilitySource, series provider.SearchResult) ([]provider.Episode, error, bool) {
+func (s *MediaService) firstAvailableEpisodes(ctx context.Context, sources []provider.EpisodeAvailabilitySource, series provider.SearchResult) ([]provider.Episode, bool, error) {
 	if len(sources) == 0 {
-		return nil, nil, false
+		return nil, false, nil
 	}
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -593,13 +592,13 @@ func (s *MediaService) firstAvailableEpisodes(ctx context.Context, sources []pro
 	for range sources {
 		result := <-results
 		if result.err == nil && len(result.episodes) > 0 {
-			return result.episodes, nil, true
+			return result.episodes, true, nil
 		}
 		if result.err != nil {
 			lastErr = result.err
 		}
 	}
-	return nil, lastErr, false
+	return nil, false, lastErr
 }
 
 func filterAvailableEpisodesByAudio(episodes []provider.Episode, audioMode string) []provider.Episode {
@@ -782,7 +781,6 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	runBatch := func(batch []provider.Provider) error {
 		g, _ := errgroup.WithContext(ctx)
 		for _, p := range batch {
-			p := p
 			g.Go(func() error {
 				defer func() {
 					mu.Lock()

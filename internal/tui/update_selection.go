@@ -395,13 +395,14 @@ func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
 		return nil
 	}
 
-	targetChanged := src.Resolver != m.subtitleResolverUsed ||
+	hasSecuredProviderTrack := m.resolved.SelectedSubtitle != nil && !strings.EqualFold(strings.TrimSpace(m.resolved.SelectedSubtitle.Resolver), "opensubtitles")
+	sourceOrTargetChanged := src.Resolver != m.subtitleResolverUsed ||
 		m.subtitleLanguage != m.subtitleLangUsed ||
-		src.URL != m.subtitleSourceUsed ||
-		(subtitleResolutionComplete(*m.resolved) && !m.subtitlePoolComplete) ||
-		(len(m.rawSubtitles) > m.subtitlePoolSize && m.subtitleOpID == 0 && m.resolved.SelectedSubtitle == nil)
-	if m.subtitleOpID != 0 && src.Resolver == m.subtitleResolverUsed &&
-		m.subtitleLanguage == m.subtitleLangUsed && src.URL == m.subtitleSourceUsed {
+		src.URL != m.subtitleSourceUsed
+	targetChanged := sourceOrTargetChanged ||
+		(subtitleResolutionComplete(*m.resolved) && !m.subtitlePoolComplete && !hasSecuredProviderTrack) ||
+		(len(m.rawSubtitles) > m.subtitlePoolSize && m.subtitleOpID == 0 && !hasSecuredProviderTrack)
+	if m.subtitleOpID != 0 && !sourceOrTargetChanged {
 		return nil
 	}
 	if !targetChanged {
@@ -409,7 +410,9 @@ func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
 	}
 
 	m.subtitleOpID = 0
-	m.resolved.SelectedSubtitle = nil
+	if sourceOrTargetChanged {
+		m.resolved.SelectedSubtitle = nil
+	}
 	m.subtitleResolverUsed = src.Resolver
 	m.subtitleLangUsed = m.subtitleLanguage
 	m.subtitleSourceUsed = src.URL

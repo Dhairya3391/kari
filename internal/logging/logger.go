@@ -26,7 +26,6 @@ package logging
 import (
 	"context"
 	"fmt"
-	"golang.org/x/term"
 	"io"
 	"log/slog"
 	"os"
@@ -34,6 +33,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/term"
 )
 
 var (

@@ -187,7 +187,8 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 			"index", i+1, "total", len(req.Sources),
 			"resolver", source.Resolver, "quality", source.Quality,
 			"strategy", downloadStrategy(source))
-		if err := d.downloadSource(ctx, req, source); err == nil {
+		err := d.downloadSource(ctx, req, source)
+		if err == nil {
 			if req.Verify {
 				if req.Progress != nil {
 					finalSize := d.findOutputSize(req.OutputDir, baseTitle)
@@ -210,14 +211,14 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 			}
 			ytdlpLog.Info("download complete", "title", req.Title, "source", i+1)
 			return nil
-		} else if ctx.Err() != nil {
-			return ctx.Err()
-		} else {
-			// Preserve .aria2 control files so the next source can resume.
-			d.CleanupPartial(req.OutputDir, req.Title)
-			errs = append(errs, fmt.Errorf("source %d (%s): %w", i+1, source.Quality, err))
-			ytdlpLog.Warn("source failed; trying next", "index", i+1, "total", len(req.Sources), "err", err)
 		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// Preserve .aria2 control files so the next source can resume.
+		d.CleanupPartial(req.OutputDir, req.Title)
+		errs = append(errs, fmt.Errorf("source %d (%s): %w", i+1, source.Quality, err))
+		ytdlpLog.Warn("source failed; trying next", "index", i+1, "total", len(req.Sources), "err", err)
 	}
 
 	if len(errs) == 0 {
@@ -270,7 +271,7 @@ func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle s
 
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		ytdlpLog.Debug("ffmpeg not found in PATH; skipping video integrity check", "path", path)
-		return nil
+		return nil //nolint:nilerr // optional check skipped when ffmpeg is not installed
 	}
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-xerror", "-threads", "0", "-nostdin", "-i", path, "-f", "null", "-")

@@ -402,6 +402,7 @@ func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", redactPath(path), err)
 	}
+	defer resp.Body.Close()
 	body, err := httpclient.ReadCapped(resp)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)

@@ -96,7 +96,7 @@ func TestInit_KariLogStderr_RedirectedFile(t *testing.T) {
 	if err := Init(false); err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
-	defer Close()
+	defer func() { _ = Close() }()
 
 	// In `go test`, stdout/stderr is normally redirected to a test runner pipe/buffer.
 	// Regardless of whether stderr is a pipe in `go test` or a terminal, StderrSuppressed
