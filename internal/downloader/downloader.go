@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"kari/internal/logging"
 	"kari/internal/model"
@@ -40,6 +41,10 @@ type DownloadRequest struct {
 	Sources   []provider.MediaSource
 	Title     string
 	OutputDir string
+	// TempDir is the directory where intermediate fragments and control
+	// files are stored during download. If empty, defaults to
+	// filepath.Join(OutputDir, ".tmp").
+	TempDir   string
 	Progress  func(p DownloadProgress)
 	Verify    bool
 }
@@ -48,7 +53,7 @@ type DownloadRequest struct {
 // CleanupPartial removes incomplete artifacts after a failed/cancelled run.
 type Downloader interface {
 	Download(ctx context.Context, req DownloadRequest) error
-	CleanupPartial(outputDir, title string)
+	CleanupPartial(outputDir, title string, tempDirs ...string)
 }
 
 var knownMediaExts = map[string]struct{}{
@@ -78,6 +83,14 @@ func downloadParallelism() int {
 	return n
 }
 
+var windowsReservedNames = map[string]struct{}{
+	"CON": {}, "PRN": {}, "AUX": {}, "NUL": {},
+	"COM1": {}, "COM2": {}, "COM3": {}, "COM4": {}, "COM5": {},
+	"COM6": {}, "COM7": {}, "COM8": {}, "COM9": {},
+	"LPT1": {}, "LPT2": {}, "LPT3": {}, "LPT4": {}, "LPT5": {},
+	"LPT6": {}, "LPT7": {}, "LPT8": {}, "LPT9": {},
+}
+
 func sanitizeDownloadTitle(title string) string {
 	var b strings.Builder
 	b.Grow(len(title))
@@ -92,7 +105,7 @@ func sanitizeDownloadTitle(title string) string {
 				b.WriteByte(' ')
 				inSpace = true
 			}
-		case r >= 32:
+		case r >= 32 && r != 127:
 			b.WriteRune(r)
 			inSpace = false
 		}
@@ -100,6 +113,10 @@ func sanitizeDownloadTitle(title string) string {
 	cleaned := strings.TrimSpace(b.String())
 	if cleaned == "" || cleaned == "." || cleaned == ".." {
 		return "download"
+	}
+	base := strings.TrimSuffix(cleaned, filepath.Ext(cleaned))
+	if _, isReserved := windowsReservedNames[strings.ToUpper(base)]; isReserved {
+		return "download_" + cleaned
 	}
 	return cleaned
 }
@@ -146,6 +163,10 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 		return fmt.Errorf("ytdlp: no sources provided")
 	}
 
+	if _, err := exec.LookPath("yt-dlp"); err != nil {
+		return fmt.Errorf("yt-dlp: binary not found in PATH: %w", err)
+	}
+
 	baseTitle, _ := splitTitleExt(req.Title)
 	existingSize := d.findOutputSize(req.OutputDir, baseTitle)
 	if existingSize != "" {
@@ -156,8 +177,17 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 		return nil
 	}
 
+	tempDir := req.TempDir
+	if tempDir == "" {
+		tempDir = filepath.Join(req.OutputDir, ".tmp")
+	}
+	req.TempDir = tempDir
+
 	if err := ensureOutputDir(req.OutputDir); err != nil {
 		return fmt.Errorf("ytdlp: create output directory: %w", err)
+	}
+	if err := ensureOutputDir(tempDir); err != nil {
+		return fmt.Errorf("ytdlp: create temp directory: %w", err)
 	}
 	if req.Progress != nil {
 		req.Progress(DownloadProgress{Percent: 0.0})
@@ -199,7 +229,7 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 						return ctx.Err()
 					}
 					d.removeDownloadedFile(req.OutputDir, baseTitle)
-					d.CleanupPartial(req.OutputDir, req.Title)
+					d.CleanupPartial(req.OutputDir, req.Title, req.TempDir)
 					errs = append(errs, fmt.Errorf("source %d (%s): integrity check failed: %w", i+1, source.Quality, err))
 					ytdlpLog.Warn("source failed integrity check; trying next", "index", i+1, "total", len(req.Sources), "err", err)
 					continue
@@ -216,7 +246,7 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 			return ctx.Err()
 		}
 		// Preserve .aria2 control files so the next source can resume.
-		d.CleanupPartial(req.OutputDir, req.Title)
+		d.CleanupPartial(req.OutputDir, req.Title, req.TempDir)
 		errs = append(errs, fmt.Errorf("source %d (%s): %w", i+1, source.Quality, err))
 		ytdlpLog.Warn("source failed; trying next", "index", i+1, "total", len(req.Sources), "err", err)
 	}
@@ -230,17 +260,35 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 }
 
 func (d *YTDLPDownloader) findOutputPath(outputDir, baseTitle string) string {
-	for ext := range knownMediaExts {
-		path := filepath.Join(outputDir, baseTitle+ext)
-		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
-			// A .aria2 control file next to the media file means the
-			// download was interrupted and the file is incomplete.
-			if _, err := os.Stat(path + ".aria2"); err == nil {
-				continue
-			}
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return ""
+	}
+
+	lowerBase := strings.ToLower(baseTitle)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if _, ok := knownMediaExts[ext]; !ok {
+			continue
+		}
+		nameWithoutExt := strings.TrimSuffix(name, filepath.Ext(name))
+		if strings.ToLower(nameWithoutExt) != lowerBase {
+			continue
+		}
+		path := filepath.Join(outputDir, name)
+		if _, err := os.Stat(path + ".aria2"); err == nil {
+			continue
+		}
+		info, err := entry.Info()
+		if err == nil && info.Size() > 0 {
 			return path
 		}
 	}
+
 	return ""
 }
 
@@ -274,23 +322,54 @@ func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle s
 		return nil //nolint:nilerr // optional check skipped when ffmpeg is not installed
 	}
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-xerror", "-threads", "0", "-nostdin", "-i", path, "-f", "null", "-")
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
+	// Bound verification time so it never hangs or freezes Kari (e.g. on WSL with slow I/O).
+	verifyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
-	err := cmd.Run()
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	trimmedStderr := strings.TrimSpace(stderrBuf.String())
-	if err != nil || len(trimmedStderr) > 0 {
-		errMsg := trimmedStderr
-		if errMsg == "" && err != nil {
+	// 1. Head sample verification: validate container headers, streams, and initial frames.
+	// Decoding a 3-second sample verifies codec initialization and container atoms in <150ms.
+	headCmd := exec.CommandContext(verifyCtx, "ffmpeg", "-v", "error", "-xerror", "-nostdin", "-i", path, "-t", "3", "-f", "null", "-")
+	var headStderr bytes.Buffer
+	headCmd.Stderr = &headStderr
+	if err := headCmd.Run(); err != nil {
+		if verifyCtx.Err() != nil {
+			return fmt.Errorf("video integrity check timed out: %w", verifyCtx.Err())
+		}
+		errMsg := strings.TrimSpace(headStderr.String())
+		if errMsg == "" {
 			errMsg = err.Error()
 		}
 		return fmt.Errorf("video integrity check failed: %s", errMsg)
 	}
+
+	// 2. Tail sample verification: seek to the end of the timeline and decode final frames.
+	// Detects truncated downloads (e.g. missing moov atoms, incomplete fragment stitching, premature EOF).
+	tailCmd := exec.CommandContext(verifyCtx, "ffmpeg", "-v", "error", "-xerror", "-nostdin", "-sseof", "-3", "-i", path, "-t", "3", "-f", "null", "-")
+	var tailStderr bytes.Buffer
+	tailCmd.Stderr = &tailStderr
+	if err := tailCmd.Run(); err != nil {
+		if verifyCtx.Err() != nil {
+			return fmt.Errorf("video integrity check timed out: %w", verifyCtx.Err())
+		}
+		errMsg := strings.TrimSpace(tailStderr.String())
+		// Some container formats (e.g. raw unindexed streams) cannot seek backwards with -sseof.
+		// If head passed and the failure is purely a seeking limitation, log and treat as valid.
+		if strings.Contains(errMsg, "does not support seeking") || strings.Contains(errMsg, "cannot seek") || strings.Contains(errMsg, "seek to position") {
+			ytdlpLog.Debug("container does not support tail seek; head verified successfully", "path", path, "err", errMsg)
+			return nil
+		}
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+		return fmt.Errorf("video integrity check failed: %s", errMsg)
+	}
+
+	// Certain container demuxers (e.g. Matroska/WebM) log premature EOF to stderr
+	// without returning a non-zero exit code when seek lands beyond available clusters.
+	if strings.Contains(tailStderr.String(), "File ended prematurely") {
+		return fmt.Errorf("video integrity check failed: file ended prematurely (truncated download)")
+	}
+
 	return nil
 }
 
@@ -318,7 +397,7 @@ func (d *YTDLPDownloader) downloadSource(ctx context.Context, req DownloadReques
 	// need yt-dlp's native request handling. Retry that same source natively
 	// before moving to the next provider URL.
 	ytdlpLog.Debug("aria2c strategy failed; retrying natively", "resolver", source.Resolver)
-	d.CleanupPartial(req.OutputDir, req.Title)
+	d.CleanupPartial(req.OutputDir, req.Title, req.TempDir)
 	return d.downloadWithStrategy(ctx, req, source, "native")
 }
 
@@ -337,13 +416,14 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 		}
 		baseTitle, _ := splitTitleExt(req.Title)
 		adl := &Aria2Downloader{}
-		return adl.Download(ctx, source, req.OutputDir, baseTitle, req.Progress)
+		return adl.Download(ctx, source, req.OutputDir, req.TempDir, baseTitle, req.Progress)
 	}
 
 	baseTitle, _ := splitTitleExt(req.Title)
-	outputPattern := filepath.Join(req.OutputDir, baseTitle+".%(ext)s")
 	args := []string{
-		"-o", outputPattern,
+		"-P", "home:" + req.OutputDir,
+		"-P", "temp:" + req.TempDir,
+		"-o", baseTitle + ".%(ext)s",
 		"--concurrent-fragments", strconv.Itoa(downloadParallelism()),
 		// Resume from .part files when a paused download restarts.
 		"--continue",
@@ -458,14 +538,15 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 						current := int64(p * 10000)
 						for {
 							old := maxProgress.Load()
-							if current <= old {
+							if current < old {
+								p = float64(old) / 10000.0
 								break
 							}
-							if maxProgress.CompareAndSwap(old, current) {
-								req.Progress(DownloadProgress{Percent: p, TotalSize: totalSize, Speed: speed, Downloaded: downloaded, ETA: eta})
+							if current == old || maxProgress.CompareAndSwap(old, current) {
 								break
 							}
 						}
+						req.Progress(DownloadProgress{Percent: p, TotalSize: totalSize, Speed: speed, Downloaded: downloaded, ETA: eta})
 					}
 				} else if matches := progressRe.FindStringSubmatch(line); len(matches) > 1 {
 					if val, err := strconv.ParseFloat(matches[1], 64); err == nil {
@@ -473,14 +554,15 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 						current := int64(p * 10000)
 						for {
 							old := maxProgress.Load()
-							if current <= old {
+							if current < old {
+								p = float64(old) / 10000.0
 								break
 							}
-							if maxProgress.CompareAndSwap(old, current) {
-								req.Progress(DownloadProgress{Percent: p})
+							if current == old || maxProgress.CompareAndSwap(old, current) {
 								break
 							}
 						}
+						req.Progress(DownloadProgress{Percent: p})
 					}
 				}
 			}
@@ -495,6 +577,9 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	if err != nil {
 		return fmt.Errorf("ytdlp: failed: %w, stderr: %s", err, stderrBuf.String())
 	}
+	if req.TempDir != "" && req.TempDir != req.OutputDir {
+		_ = os.Remove(req.TempDir)
+	}
 	return nil
 }
 
@@ -503,9 +588,30 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 // aria2 the .aria2 control file plus the media file it checkpoints — a media
 // file with a control file beside it is by definition incomplete. A pause
 // must NOT call this: the control file is the resume anchor.
-func (d *YTDLPDownloader) CleanupPartial(outputDir, title string) {
+// Additional directories (such as tempDir) can be passed in tempDirs.
+func (d *YTDLPDownloader) CleanupPartial(outputDir, title string, tempDirs ...string) {
+	cleanOutputDir := filepath.Clean(outputDir)
+	d.cleanupDir(cleanOutputDir, title)
+
+	dirs := make([]string, 0, 1+len(tempDirs))
+	dirs = append(dirs, filepath.Join(cleanOutputDir, ".tmp"))
+	dirs = append(dirs, tempDirs...)
+
+	seen := map[string]struct{}{cleanOutputDir: {}}
+	for _, dir := range dirs {
+		dir = filepath.Clean(dir)
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		seen[dir] = struct{}{}
+		d.cleanupDir(dir, title)
+		_ = os.Remove(dir)
+	}
+}
+
+func (d *YTDLPDownloader) cleanupDir(dir, title string) {
 	baseTitle, _ := splitTitleExt(title)
-	files, err := os.ReadDir(outputDir)
+	files, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
@@ -517,7 +623,7 @@ func (d *YTDLPDownloader) CleanupPartial(outputDir, title string) {
 		if !strings.HasPrefix(name, baseTitle) {
 			continue
 		}
-		full := filepath.Join(outputDir, name)
+		full := filepath.Join(dir, name)
 		switch {
 		case strings.HasSuffix(name, ".aria2"):
 			// Control file + the incomplete media it belongs to.
@@ -586,8 +692,9 @@ func downloadStrategy(source provider.MediaSource) string {
 
 	sourceType := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(source.Type)), ".")
 	if _, ok := knownMediaExts["."+sourceType]; ok {
-		return "aria2c"
+		if _, err := exec.LookPath("aria2c"); err == nil {
+			return "aria2c"
+		}
 	}
-
 	return "native"
 }

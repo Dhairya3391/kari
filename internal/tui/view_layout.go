@@ -11,6 +11,7 @@ import (
 	"kari/internal/lang"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/service"
 )
 
 func (m *modelImpl) currentKind() model.Kind {
@@ -199,6 +200,10 @@ func (m *modelImpl) activeDownloadBadge(st Styles) string {
 			info += " · " + m.downloadSpeed
 		}
 		return st.Current.Render("↓ ") + st.Dim.Render(info)
+	}
+
+	if m.pendingDownload != nil && m.downloadPaused && !m.batchInProgress && m.downloadOpID == 0 {
+		return st.Dim.Render("⏸ paused download · press d")
 	}
 
 	return ""
@@ -445,17 +450,39 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			{Key: "esc", Action: "back"},
 		}
 	case viewDownloads:
+		data := m.collectDownloadsData(m.width, m.height, m.currentAccent())
+		onActive := len(data.Active) > 0 && m.downloadsIndex < len(data.Active)
 		pAction := "pause"
 		if m.downloadPaused {
 			pAction = "resume"
 		}
-		return []KeyBinding{
-			{Key: "p", Action: pAction},
-			{Key: "x", Action: "cancel"},
-			{Key: "enter", Action: "open folder"},
-			{Key: "?", Action: "help"},
-			{Key: "esc", Action: "back"},
+		if onActive {
+			return []KeyBinding{
+				{Key: "p", Action: pAction},
+				{Key: "enter", Action: "open folder"},
+				{Key: "x", Action: "cancel"},
+				{Key: "X", Action: "cancel all"},
+				{Key: "?", Action: "help"},
+				{Key: "esc", Action: "back"},
+			}
 		}
+
+		var bindings []KeyBinding
+		if len(data.Active) > 0 || m.downloadPaused {
+			bindings = append(bindings, KeyBinding{Key: "p", Action: pAction})
+		}
+		if len(data.Done) > 0 {
+			bindings = append(bindings, KeyBinding{Key: "enter", Action: "play"})
+		}
+		bindings = append(bindings, KeyBinding{Key: "o", Action: "open folder"})
+		if len(data.Done) > 0 {
+			bindings = append(bindings, KeyBinding{Key: "x", Action: "delete"})
+		}
+		bindings = append(bindings,
+			KeyBinding{Key: "?", Action: "help"},
+			KeyBinding{Key: "esc", Action: "back"},
+		)
+		return bindings
 	default:
 		return []KeyBinding{
 			{Key: "esc", Action: "back"},
@@ -1085,15 +1112,7 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 func (m *modelImpl) collectDownloadsData(width, height int, accent lipgloss.AdaptiveColor) DownloadsData {
 	var active []ActiveDownload
 
-	qualityName := "All"
-	switch m.qualityMode {
-	case qualityHighest:
-		qualityName = "Highest"
-	case qualityDataSaver:
-		qualityName = "Data saver"
-	case qualityLowest:
-		qualityName = "Lowest"
-	}
+	qualityName := downloadQualityLabel(m.effectiveDownloadQuality())
 
 	if m.batchInProgress && m.batchTotal > 0 {
 		seriesTitle := "Batch Download"
@@ -1102,23 +1121,37 @@ func (m *modelImpl) collectDownloadsData(width, height int, accent lipgloss.Adap
 		}
 
 		currentTitle := fmt.Sprintf("%s (Ep %d/%d)", seriesTitle, m.batchCurrent, m.batchTotal)
-		if m.downloadTitle != "" {
-			currentTitle = fmt.Sprintf("%s — %s (%d/%d)", seriesTitle, m.downloadTitle, m.batchCurrent, m.batchTotal)
+		if m.batchCurrent > 0 && m.batchCurrent <= len(m.batchEpisodes) {
+			ep := m.batchEpisodes[m.batchCurrent-1]
+			if ep.Title != "" {
+				currentTitle = fmt.Sprintf("%s — %s (%d/%d)", seriesTitle, ep.Title, m.batchCurrent, m.batchTotal)
+			}
+		} else if m.batchActiveTitle != "" {
+			currentTitle = fmt.Sprintf("%s — %s (%d/%d)", seriesTitle, m.batchActiveTitle, m.batchCurrent, m.batchTotal)
 		}
 
 		active = append(active, ActiveDownload{
-			Title:    currentTitle,
-			Quality:  qualityName,
-			Progress: m.batchEpisodeProgress,
-			Speed:    m.downloadSpeed,
-			ETA:      m.downloadETA,
-			Queued:   false,
-			Paused:   m.downloadPaused,
+			Title:      currentTitle,
+			Quality:    qualityName,
+			Progress:   m.batchEpisodeProgress,
+			Speed:      m.downloadSpeed,
+			ETA:        m.downloadETA,
+			Downloaded: m.downloadDownloaded,
+			TotalSize:  m.downloadTotalSize,
+			Queued:     false,
+			Paused:     m.downloadPaused,
 		})
 
 		for i := m.batchCurrent + 1; i <= m.batchTotal; i++ {
+			queuedTitle := fmt.Sprintf("%s (Ep %d/%d)", seriesTitle, i, m.batchTotal)
+			if i > 0 && i <= len(m.batchEpisodes) {
+				ep := m.batchEpisodes[i-1]
+				if ep.Title != "" {
+					queuedTitle = fmt.Sprintf("%s — %s (%d/%d)", seriesTitle, ep.Title, i, m.batchTotal)
+				}
+			}
 			active = append(active, ActiveDownload{
-				Title:   fmt.Sprintf("%s (Ep %d/%d)", seriesTitle, i, m.batchTotal),
+				Title:   queuedTitle,
 				Quality: qualityName,
 				Queued:  true,
 			})
@@ -1137,21 +1170,62 @@ func (m *modelImpl) collectDownloadsData(width, height int, accent lipgloss.Adap
 		}
 
 		active = append(active, ActiveDownload{
-			Title:    title,
-			Quality:  qualityName,
-			Progress: m.downloadProgress / 100.0,
-			Speed:    m.downloadSpeed,
-			ETA:      m.downloadETA,
-			Queued:   false,
-			Paused:   m.downloadPaused,
+			Title:      title,
+			Quality:    qualityName,
+			Progress:   m.downloadProgress / 100.0,
+			Speed:      m.downloadSpeed,
+			ETA:        m.downloadETA,
+			Downloaded: m.downloadDownloaded,
+			TotalSize:  m.downloadTotalSize,
+			Queued:     false,
+			Paused:     m.downloadPaused,
 		})
 	}
 
 	active = append(active, m.activeDownloads...)
 
+	var done []DoneDownload
+	seenDone := make(map[string]bool)
+
+	var diskDone []service.CompletedDownload
+	if m.downloadService != nil {
+		diskDone = m.downloadService.CompletedDownloads()
+	}
+
+	diskPathMap := make(map[string]string, len(diskDone))
+	for _, cd := range diskDone {
+		diskPathMap[cd.Title] = cd.Path
+	}
+
+	for _, d := range m.doneDownloads {
+		if m.dismissedDoneDownloads[d.Title] {
+			continue
+		}
+		if d.Path == "" {
+			if p, ok := diskPathMap[d.Title]; ok {
+				d.Path = p
+			}
+		}
+		done = append(done, d)
+		seenDone[d.Title] = true
+	}
+
+	for _, cd := range diskDone {
+		if m.dismissedDoneDownloads[cd.Title] || seenDone[cd.Title] {
+			continue
+		}
+		done = append(done, DoneDownload{
+			Title:   cd.Title,
+			Quality: "-",
+			Size:    cd.Size,
+			Path:    cd.Path,
+		})
+		seenDone[cd.Title] = true
+	}
+
 	return DownloadsData{
 		Active:        active,
-		Done:          m.doneDownloads,
+		Done:          done,
 		SelectedIndex: m.downloadsIndex,
 		Width:         width,
 		Height:        height,
@@ -1191,9 +1265,9 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 		contextKeys = []KeyBinding{
 			{Key: "enter", Action: "open source preview"},
 			{Key: "space", Action: "toggle select mode"},
-			{Key: "m", Action: "toggle episode complete / unwatched"},
+			{Key: "m", Action: "toggle watched"},
 			{Key: "[ ]", Action: "switch season tabs"},
-			{Key: "/", Action: "filter by title or number"},
+			{Key: "/ / ctrl+f", Action: "filter by title or number"},
 			{Key: "g / G", Action: "first / last episode"},
 			{Key: "pgup / pgdn", Action: "page up / down"},
 			{Key: "ctrl+u / ctrl+d", Action: "half page (browse mode)"},
@@ -1207,29 +1281,29 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 	case viewPreview:
 		screenName = "Preview"
 		contextKeys = []KeyBinding{
-			{Key: "enter", Action: "play selected source"},
+			{Key: "enter / space", Action: "play selected source"},
 			{Key: "↑↓ j k", Action: "choose playback source"},
-			{Key: "enter / p", Action: "play selected source"},
-			{Key: "m", Action: "toggle complete / unwatched"},
+			{Key: "g / G", Action: "top / lowest source"},
+			{Key: "m", Action: "toggle watched"},
 			{Key: "n / ]", Action: "next episode"},
-			{Key: "[", Action: "previous episode"},
+			{Key: "p / [", Action: "previous episode"},
 			{Key: "D", Action: "download selected source"},
 			{Key: "d", Action: "open downloads screen"},
 			{Key: "A", Action: "toggle autoplay"},
 			{Key: "a", Action: "toggle sub/dub (anime)"},
 			{Key: "t", Action: "anime status / rewatch"},
-			{Key: "r", Action: "restart from the beginning"},
+			{Key: "r", Action: "restart from 00:00"},
 			{Key: "ctrl+p", Action: "switch external player"},
 		}
 	case viewHistory:
 		screenName = "History"
 		contextKeys = []KeyBinding{
-			{Key: "enter", Action: "open preview with resume"},
+			{Key: "enter", Action: "resume from timestamp"},
 			{Key: "tab", Action: "switch Continue / Finished tab"},
 			{Key: "d", Action: "delete title from history"},
 			{Key: "D", Action: "clear all history"},
 			{Key: "t", Action: "anime status / rewatch"},
-			{Key: "/", Action: "filter history list"},
+			{Key: "/ / ctrl+f", Action: "filter history list"},
 		}
 	case viewSettings:
 		screenName = "Settings"
@@ -1237,8 +1311,8 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 			{Key: "↑↓ j k", Action: "navigate setting rows"},
 			{Key: "←→ h l", Action: "change option value"},
 			{Key: "tab", Action: "switch settings category"},
-			{Key: "enter", Action: "edit value / open language picker"},
-			{Key: "c / r / i", Action: "connect / revoke / import watched"},
+			{Key: "enter", Action: "edit / open picker"},
+			{Key: "c / r / i", Action: "connect / revoke / import"},
 		}
 	case viewChapters:
 		screenName = "Chapters"
@@ -1263,11 +1337,15 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 	case viewDownloads:
 		screenName = "Downloads"
 		contextKeys = []KeyBinding{
+			{Key: "enter", Action: "play completed download"},
 			{Key: "p", Action: "pause / resume download"},
-			{Key: "x", Action: "cancel selected item (press twice; deletes partials)"},
-			{Key: "X", Action: "cancel all downloads (press twice)"},
-			{Key: "enter", Action: "open download folder"},
+			{Key: "o", Action: "open download folder"},
+			{Key: "x", Action: "cancel item / delete file (2×)"},
+			{Key: "X", Action: "cancel all downloads (2×)"},
 			{Key: "↑↓ j k", Action: "navigate items"},
+			{Key: "g / G", Action: "first / last item"},
+			{Key: "pgup / pgdn", Action: "page up / down"},
+			{Key: "ctrl+u / ctrl+d", Action: "half page scroll"},
 		}
 	}
 
@@ -1278,7 +1356,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 		{Key: "s", Action: "settings"},
 		{Key: "d", Action: "downloads"},
 		{Key: "ctrl+c", Action: "force quit"},
-		{Key: "q", Action: "quit (2× while downloading: pauses downloads)"},
+		{Key: "q", Action: "quit (2× if downloading)"},
 	}
 	return RenderHelpOverlay(HelpData{
 		ScreenName:  screenName,

@@ -13,9 +13,11 @@ import (
 // DownloadJob stores provider-independent selection data needed to resolve a
 // fresh media URL after Kari restarts.
 type DownloadJob struct {
-	Series  provider.SearchResult `json:"series"`
-	Episode provider.Episode      `json:"episode"`
-	Mode    provider.ContentType  `json:"mode"`
+	Series         provider.SearchResult `json:"series"`
+	Episode        provider.Episode      `json:"episode,omitempty"`
+	Episodes       []provider.Episode    `json:"episodes,omitempty"`
+	BatchCurrent   int                   `json:"batch_current,omitempty"`
+	Mode           provider.ContentType  `json:"mode"`
 	// SearchOnResume marks jobs discovered from old partial files that predate
 	// persisted provider selection data.
 	SearchOnResume bool `json:"search_on_resume,omitempty"`
@@ -91,9 +93,11 @@ func (s *DownloadService) findLegacyPartialJob() (*DownloadJob, error) {
 	if err != nil {
 		return nil, fmt.Errorf("locate interrupted download: %w", err)
 	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
+	slashRel := filepath.ToSlash(rel)
+	slashRel = strings.TrimPrefix(slashRel, ".tmp/")
+	parts := strings.Split(slashRel, "/")
 	seriesTitle := parts[0]
-	if seriesTitle == "." || seriesTitle == "" {
+	if seriesTitle == "." || seriesTitle == "" || seriesTitle == ".tmp" {
 		return nil, nil
 	}
 	job := DownloadJob{

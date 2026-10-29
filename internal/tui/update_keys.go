@@ -244,7 +244,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			m.autoPlayAfterResolve = false
 		}
 		return nil, true
-	case msg.String() == "?":
+	case msg.String() == "?" || msg.String() == "f1" || key.Matches(msg, m.keys.Help):
 		if m.queryInput.Focused() {
 			return nil, false
 		}

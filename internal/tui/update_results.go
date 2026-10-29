@@ -2,18 +2,20 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"errors"
-
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/downloader"
 	"kari/internal/history"
 	"kari/internal/logging"
 	"kari/internal/model"
@@ -821,7 +823,10 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Update history
+	if msg.provider == "local" {
+		tuiLog.Debug("local playback finished", "opID", msg.opID)
+		return m, nil
+	}
 	if m.historyStore != nil && m.resolved != nil {
 		audioMode := m.audioMode
 		if m.selectedEpisode != nil && m.selectedEpisode.Audio != "" {
@@ -931,6 +936,11 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 		statusMsg = fmt.Sprintf("downloaded %s", m.downloadTotalSize)
 	}
 
+	completedTitle := m.downloadTitle
+	completedSize := m.downloadTotalSize
+	qualityLabel := downloadQualityLabel(m.effectiveDownloadQuality())
+	outputDir := m.downloadOutputDir
+
 	m.downloadProgress = 0
 	m.downloadTotalSize = ""
 	m.downloadSpeed = ""
@@ -938,6 +948,8 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 	m.downloadETA = ""
 	m.cancelDownload = nil
 	m.downloadOpID = 0
+	m.downloadTitle = ""
+	m.downloadOutputDir = ""
 	if msg.err != nil {
 		logging.Error("download failed", "opID", msg.opID, "err", msg.err)
 		errMsg := fmt.Sprintf("Download failed: %v", msg.err)
@@ -950,6 +962,44 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 		return m, m.setStatusTimed(statusError, errMsg)
 	}
 
+
+	if completedTitle != "" {
+		displayTitle := completedTitle
+		if m.downloadService != nil && outputDir != "" {
+			rel, err := filepath.Rel(m.downloadService.OutputDir(), outputDir)
+			if err == nil {
+				parts := strings.Split(filepath.ToSlash(rel), "/")
+				if len(parts) > 0 && parts[0] != "." && parts[0] != "" && !strings.Contains(completedTitle, parts[0]) {
+					displayTitle = fmt.Sprintf("%s — %s", parts[0], completedTitle)
+				}
+			}
+		} else if m.selectedSeries != nil && m.selectedSeries.Title != "" && !strings.Contains(completedTitle, m.selectedSeries.Title) {
+			displayTitle = fmt.Sprintf("%s — %s", m.selectedSeries.Title, completedTitle)
+		}
+
+		if m.dismissedDoneDownloads != nil {
+			delete(m.dismissedDoneDownloads, displayTitle)
+		}
+
+		var filePath string
+		if outputDir != "" {
+			baseTitle, _ := downloader.SplitTitleExt(completedTitle)
+			for _, ext := range []string{".mp4", ".mkv", ".webm", ".m4v", ".mov", ".avi", ".ts"} {
+				candidate := filepath.Join(outputDir, baseTitle+ext)
+				if _, err := os.Stat(candidate); err == nil {
+					filePath = candidate
+					break
+				}
+			}
+		}
+
+		m.doneDownloads = append([]DoneDownload{{
+			Title:   displayTitle,
+			Quality: qualityLabel,
+			Size:    completedSize,
+			Path:    filePath,
+		}}, m.doneDownloads...)
+	}
 	if m.downloadService != nil {
 		if err := m.downloadService.ClearPendingJob(); err != nil {
 			tuiLog.Warn("clear pending download failed", "err", err)

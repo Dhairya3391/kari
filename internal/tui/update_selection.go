@@ -585,6 +585,19 @@ func (m *modelImpl) resumePendingDownloadCmd(opID int, job service.DownloadJob) 
 	}
 }
 
+func (m *modelImpl) playDownloadedFileCmd(opID int, filePath, title string) tea.Cmd {
+	playerName := m.selectedPlayerName()
+	return func() tea.Msg {
+		sources := []provider.MediaSource{{URL: filePath}}
+		resolved := model.ResolvedMedia{
+			SeriesTitle: title,
+			Playback:    sources,
+		}
+		result, err := m.players.PlayWithSources(sources, resolved, playerName)
+		return playDoneMsg{opID: opID, provider: "local", result: result, err: err}
+	}
+}
+
 func selectedSeriesTitle(series *provider.SearchResult) string {
 	if series == nil {
 		return ""

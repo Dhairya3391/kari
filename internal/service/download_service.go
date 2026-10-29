@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"kari/internal/downloader"
 	"kari/internal/logging"
@@ -79,6 +81,134 @@ func (s *DownloadService) OutputDir() string {
 	return s.downloadDir
 }
 
+// CompletedDownload represents a finished media file discovered on disk.
+type CompletedDownload struct {
+	Path    string
+	Title   string
+	Size    string
+	ModTime time.Time
+}
+
+// CompletedDownloads scans the download directory for finished media files,
+// excluding temporary staging directories (.tmp) and incomplete partial files,
+// ordered newest first.
+func (s *DownloadService) CompletedDownloads() []CompletedDownload {
+	if s == nil || strings.TrimSpace(s.downloadDir) == "" {
+		return nil
+	}
+
+	var completed []CompletedDownload
+	knownExts := map[string]struct{}{
+		".mp4":  {},
+		".mkv":  {},
+		".webm": {},
+		".m4v":  {},
+		".mov":  {},
+		".avi":  {},
+		".ts":   {},
+	}
+
+	err := filepath.WalkDir(s.downloadDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".tmp" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if _, ok := knownExts[ext]; !ok {
+			return nil
+		}
+
+		// Incomplete download check: .aria2, .part, or .ytdl control/partial files
+		// beside the target or staged in its temp directory.
+		if _, err := os.Stat(path + ".aria2"); err == nil {
+			return nil
+		}
+		if _, err := os.Stat(path + ".part"); err == nil {
+			return nil
+		}
+		if _, err := os.Stat(path + ".ytdl"); err == nil {
+			return nil
+		}
+		tempDir := s.tempDir(filepath.Dir(path))
+		if _, err := os.Stat(filepath.Join(tempDir, entry.Name()+".aria2")); err == nil {
+			return nil
+		}
+		if _, err := os.Stat(filepath.Join(tempDir, entry.Name()+".part")); err == nil {
+			return nil
+		}
+		if _, err := os.Stat(filepath.Join(tempDir, entry.Name()+".ytdl")); err == nil {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil || info.Size() <= 0 {
+			return nil
+		}
+
+		rel, err := filepath.Rel(s.downloadDir, path)
+		if err != nil {
+			return nil
+		}
+
+		slashRel := filepath.ToSlash(rel)
+		parts := strings.Split(slashRel, "/")
+		origExt := filepath.Ext(entry.Name())
+		fileName := strings.TrimSuffix(entry.Name(), origExt)
+		title := fileName
+		if len(parts) > 1 {
+			series := parts[0]
+			if series != "." && series != "" && !strings.Contains(fileName, series) {
+				title = fmt.Sprintf("%s — %s", series, fileName)
+			}
+		}
+
+		completed = append(completed, CompletedDownload{
+			Path:    path,
+			Title:   title,
+			Size:    formatDiskFileSize(info.Size()),
+			ModTime: info.ModTime(),
+		})
+		return nil
+	})
+
+	if err != nil {
+		logging.Debug("completed downloads scan error", "err", err)
+	}
+
+	slices.SortFunc(completed, func(a, b CompletedDownload) int {
+		if a.ModTime.After(b.ModTime) {
+			return -1
+		}
+		if a.ModTime.Before(b.ModTime) {
+			return 1
+		}
+		return 0
+	})
+
+	return completed
+}
+
+func formatDiskFileSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
 func sanitizePathName(name string) string {
 	cleaned := strings.Map(func(r rune) rune {
 		switch r {
@@ -144,24 +274,35 @@ func (s *DownloadService) Download(ctx context.Context, resolved model.ResolvedM
 	return s.downloadMedia(ctx, resolved, outputDir, title, progress)
 }
 
+func (s *DownloadService) tempDir(outputDir string) string {
+	rel, err := filepath.Rel(s.downloadDir, outputDir)
+	if err == nil && !strings.HasPrefix(rel, "..") {
+		return filepath.Join(s.downloadDir, ".tmp", rel)
+	}
+	return filepath.Join(outputDir, ".tmp")
+}
+
 func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.ResolvedMedia, outputDir, title string, progress func(downloader.DownloadProgress)) error {
 	if len(resolved.Playback) == 0 || resolved.Playback[0].URL == "" {
 		return fmt.Errorf("no playback URL")
 	}
 
+	tempDir := s.tempDir(outputDir)
 	req := downloader.DownloadRequest{
 		Title:     title,
 		OutputDir: outputDir,
+		TempDir:   tempDir,
 		Sources:   resolved.Playback,
 		Progress:  progress,
 		Verify:    s.VerifyDownloads(),
 	}
 
-	logging.Debug("download service: start", "title", title, "outputDir", outputDir)
+	logging.Debug("download service: start", "title", title, "outputDir", outputDir, "tempDir", tempDir)
 	if err := s.dl.Download(ctx, req); err != nil {
 		return err
 	}
 
+	removeEmptyDirs(tempDir, s.downloadDir)
 	s.saveSidecarSubtitle(ctx, resolved, outputDir, title)
 	return nil
 }
@@ -260,9 +401,11 @@ func isAnimeHardSub(resolved model.ResolvedMedia, source provider.MediaSource) b
 // CleanupPartial removes partial artifacts of an interrupted download and
 // prunes now-empty directories under the download root.
 func (s *DownloadService) CleanupPartial(outputDir, title string) {
-	s.dl.CleanupPartial(outputDir, title)
+	tempDir := s.tempDir(outputDir)
+	s.dl.CleanupPartial(outputDir, title, tempDir)
 	s.cleanupSidecarSubtitles(outputDir, title)
 	removeEmptyDirs(outputDir, s.downloadDir)
+	removeEmptyDirs(tempDir, s.downloadDir)
 }
 
 func (s *DownloadService) cleanupSidecarSubtitles(outputDir, title string) {
@@ -286,6 +429,12 @@ func (s *DownloadService) cleanupSidecarSubtitles(outputDir, title string) {
 			_ = os.Remove(filepath.Join(outputDir, entry.Name()))
 		}
 	}
+}
+
+// RemoveEmptyDirs removes dir and any parent directories up to (but not
+// including) the download directory if they are empty after cleanup.
+func (s *DownloadService) RemoveEmptyDirs(dir string) {
+	removeEmptyDirs(dir, s.downloadDir)
 }
 
 // removeEmptyDirs removes outputDir and any parent directories up to (but not
@@ -345,22 +494,31 @@ func (s *DownloadService) BatchDownloadWithActive(
 	// parallel connections (aria2c splits / yt-dlp fragments) remain the
 	// speed lever.
 	results := make([]BatchDownloadResult, len(episodes))
+	reportProgress := func(cur, tot int, title string, dp downloader.DownloadProgress) {
+		if onProgress != nil {
+			onProgress(cur, tot, title, dp)
+		}
+	}
 
 	for i, ep := range episodes {
+		results[i].Episode = ep
 		if ctx.Err() != nil {
-			results[i].Episode = ep
 			results[i].Err = ctx.Err()
 			continue
+		}
+
+		if onActive != nil {
+			onActive("", "")
 		}
 
 		current := i + 1
 		epTitle := episodeResultTitle(ep)
 		batchLog.Debug("batch episode starting", "current", current, "total", len(episodes), "episode", epTitle)
-		onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 0})
+		reportProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 0})
 
 		resolved, err := s.mediaService.Resolve(ctx, mode, series, ep, nil, ResolveOptions{})
 		if err != nil {
-			onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
+			reportProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 			results[i].Episode = ep
 			results[i].Err = fmt.Errorf("resolve %s: %w", epTitle, err)
 			continue
@@ -376,8 +534,7 @@ func (s *DownloadService) BatchDownloadWithActive(
 			}
 		}
 		if len(resolved.Playback) == 0 {
-			onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
-			results[i].Episode = ep
+			reportProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 			results[i].Err = fmt.Errorf("filter %s: no playback source available", epTitle)
 			continue
 		}
@@ -387,16 +544,14 @@ func (s *DownloadService) BatchDownloadWithActive(
 			onActive(outputDir, title)
 		}
 		if err := s.Download(ctx, resolved, func(dp downloader.DownloadProgress) {
-			onProgress(current, len(episodes), epTitle, dp)
+			reportProgress(current, len(episodes), epTitle, dp)
 		}); err != nil {
-			onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
-			results[i].Episode = ep
+			reportProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 			results[i].Err = fmt.Errorf("download %s: %w", epTitle, err)
 			continue
 		}
 
-		onProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
-		results[i].Episode = ep
+		reportProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 	}
 
 	return results

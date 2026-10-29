@@ -9,13 +9,15 @@ import (
 
 // ActiveDownload represents an in-progress or queued download job.
 type ActiveDownload struct {
-	Title    string
-	Quality  string
-	Progress float64 // 0.0 - 1.0
-	Speed    string  // e.g. "3.2 MB/s"
-	ETA      string  // e.g. "4m left"
-	Queued   bool
-	Paused   bool
+	Title      string
+	Quality    string
+	Progress   float64 // 0.0 - 1.0
+	Speed      string  // e.g. "3.2 MB/s"
+	ETA        string  // e.g. "4m left"
+	Downloaded string  // e.g. "450 MB"
+	TotalSize  string  // e.g. "1.2 GB"
+	Queued     bool
+	Paused     bool
 }
 
 // DoneDownload represents a successfully completed download.
@@ -23,6 +25,7 @@ type DoneDownload struct {
 	Title   string
 	Quality string
 	Size    string // e.g. "3.05 GB"
+	Path    string
 }
 
 // DownloadsData carries state needed to render the Downloads queue view.
@@ -80,8 +83,13 @@ func RenderDownloadsScreen(data DownloadsData) string {
 			} else {
 				bar := RenderProgressBar(item.Progress, 10, data.Accent)
 				pctStr := st.Current.Render(fmt.Sprintf("%3.0f%%", item.Progress*100))
-				speedStr := fmt.Sprintf("%-10s", item.Speed)
-				etaStr := fmt.Sprintf("%-8s", item.ETA)
+				speed := item.Speed
+				eta := item.ETA
+				if item.Progress == 0 && speed == "" && eta == "" {
+					speed = "connecting…"
+				}
+				speedStr := fmt.Sprintf("%-10s", speed)
+				etaStr := fmt.Sprintf("%-8s", eta)
 
 				rows = append(rows, fmt.Sprintf("%s%s  %s  %s   %s   %s   %s", cursor, titleStr, qualityStr, bar, pctStr, st.Dim.Render(speedStr), st.Dim.Render(etaStr)))
 			}
@@ -89,6 +97,7 @@ func RenderDownloadsScreen(data DownloadsData) string {
 		rows = append(rows, "")
 	}
 
+	doneHeaderIdx := len(rows)
 	// Done Section
 	rows = append(rows, st.Dim.Render("Done"))
 
@@ -119,6 +128,23 @@ func RenderDownloadsScreen(data DownloadsData) string {
 
 			rows = append(rows, fmt.Sprintf("%s%s  %s  %s %s", cursor, titleStr, qualityStr, checkStr, sizeStr))
 		}
+	}
+
+	flatCursor := -1
+	totalItems := len(data.Active) + len(data.Done)
+	if totalItems > 0 && data.SelectedIndex >= 0 {
+		if data.SelectedIndex < len(data.Active) {
+			flatCursor = 1 + data.SelectedIndex
+		} else {
+			doneIdx := data.SelectedIndex - len(data.Active)
+			if doneIdx < len(data.Done) {
+				flatCursor = doneHeaderIdx + 1 + doneIdx
+			}
+		}
+	}
+
+	if data.Height > 0 {
+		rows = applyWindow(rows, flatCursor, data.Height, 0, st)
 	}
 	return strings.Join(rows, "\n")
 }

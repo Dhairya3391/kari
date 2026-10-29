@@ -108,3 +108,19 @@ All keybindings are active inside the Kari TUI. Context-sensitive keys are avail
 | `Enter`, `Space` | Select / edit / activate toggle |
 | `J` / `K` (or `Shift+↓` / `Shift+↑`) | Reorder content modes (under Modes tab) |
 | `Esc` | Save and exit Settings |
+
+---
+
+## Downloads Screen (`d`)
+
+| Key | Action |
+| --- | --- |
+| `p` | Pause / resume active download |
+| `Enter` | Play completed download (or open folder if on active download) |
+| `o` | Open download directory in system file manager |
+| `x` | Cancel active download / Delete completed file from disk (2×) |
+| `X` | Cancel all downloads (2×) |
+| `j` / `k` or `↓` / `↑` | Move cursor between download items |
+| `g` / `G`, `Home` / `End` | Jump to first / last item |
+| `PgUp` / `PgDn`, `Ctrl+U` / `Ctrl+D` | Page up / down, half page scroll |
+| `Esc` | Return to previous screen |

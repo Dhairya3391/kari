@@ -47,7 +47,7 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("↑/↓", "move"),
 		),
 		Filter: key.NewBinding(
-			key.WithKeys("/"),
+			key.WithKeys("/", "ctrl+f"),
 			key.WithHelp("/", "filter"),
 		),
 		Search: key.NewBinding(
@@ -87,7 +87,7 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("A", "autoplay"),
 		),
 		Help: key.NewBinding(
-			key.WithKeys("?"),
+			key.WithKeys("?", "f1"),
 			key.WithHelp("?", "help"),
 		),
 		Back: key.NewBinding(
@@ -119,7 +119,7 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("s", "settings"),
 		),
 		Delete: key.NewBinding(
-			key.WithKeys("d"),
+			key.WithKeys("d", "delete", "backspace"),
 			key.WithHelp("d", "delete"),
 		),
 		Status: key.NewBinding(
@@ -151,11 +151,11 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("m", "mark complete"),
 		),
 		Top: key.NewBinding(
-			key.WithKeys("g"),
+			key.WithKeys("g", "home"),
 			key.WithHelp("g", "top"),
 		),
 		Bottom: key.NewBinding(
-			key.WithKeys("G"),
+			key.WithKeys("G", "end"),
 			key.WithHelp("G", "bottom"),
 		),
 		ReaderNext: key.NewBinding(

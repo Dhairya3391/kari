@@ -3,8 +3,11 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -14,6 +17,7 @@ import (
 	"kari/internal/history"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/service"
 )
 
 func (m *modelImpl) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -216,10 +220,10 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.seasonEpisodeIndex++
 				}
 				return m, nil
-			case keyMsg.String() == "g":
+			case keyMsg.String() == "g" || keyMsg.String() == "home":
 				m.seasonEpisodeIndex = 0
 				return m, nil
-			case keyMsg.String() == "G":
+			case keyMsg.String() == "G" || keyMsg.String() == "end":
 				if len(seasonEps) > 0 {
 					m.seasonEpisodeIndex = len(seasonEps) - 1
 				}
@@ -236,7 +240,7 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case keyMsg.String() == "pgdown":
 				m.pageEpisodes(m.pageStep())
 				return m, nil
-			case keyMsg.String() == "/":
+			case keyMsg.String() == "/" || keyMsg.String() == "ctrl+f" || key.Matches(keyMsg, m.keys.Filter):
 				m.episodeFiltering = true
 				m.episodeFilter = ""
 				m.seasonEpisodeIndex = 0
@@ -286,7 +290,50 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.downloadsIndex++
 			}
 			return m, nil
+		case "g", "home":
+			m.downloadsIndex = 0
+			return m, nil
+		case "G", "end":
+			if totalItems > 0 {
+				m.downloadsIndex = totalItems - 1
+			}
+			return m, nil
+		case "pgup", "ctrl+u":
+			step := m.pageStep()
+			if m.downloadsIndex > step {
+				m.downloadsIndex -= step
+			} else {
+				m.downloadsIndex = 0
+			}
+			return m, nil
+		case "pgdn", "pgdown", "ctrl+d":
+			step := m.pageStep()
+			if totalItems > 0 {
+				m.downloadsIndex = min(totalItems-1, m.downloadsIndex+step)
+			}
+			return m, nil
 		case "enter":
+			if m.downloadsIndex < len(data.Active) {
+				if m.downloadService != nil {
+					openFolder(m.downloadService.OutputDir())
+				}
+				return m, nil
+			}
+			doneIdx := m.downloadsIndex - len(data.Active)
+			if doneIdx >= 0 && doneIdx < len(data.Done) {
+				item := data.Done[doneIdx]
+				if item.Path != "" && m.players != nil {
+					opID := m.newOpID()
+					m.playOpID = opID
+					toastCmd := m.setToast("launching playback...", ToastInfo)
+					return m, tea.Batch(toastCmd, m.playDownloadedFileCmd(opID, item.Path, item.Title))
+				}
+				if m.downloadService != nil {
+					openFolder(m.downloadService.OutputDir())
+				}
+			}
+			return m, nil
+		case "o", "O":
 			if m.downloadService != nil {
 				openFolder(m.downloadService.OutputDir())
 			}
@@ -315,6 +362,20 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.downloadPaused = false
 					m.activeDownloads = nil
 					m.downloadOpID = m.newOpID()
+					if len(job.Episodes) > 0 {
+						remIdx := max(0, job.BatchCurrent-1)
+						if remIdx < len(job.Episodes) {
+							m.batchInProgress = true
+							m.batchCurrent = job.BatchCurrent
+							m.batchTotal = len(job.Episodes)
+							m.batchEpisodes = job.Episodes
+							m.batchSeries = job.Series
+							m.batchMode = job.Mode
+							toastCmd := m.setToast("download resumed", ToastSuccess)
+							cmd := m.batchDownloadCmd(m.downloadOpID, job.Episodes[remIdx:], job.Series, job.Mode, true, max(1, job.BatchCurrent), len(job.Episodes))
+							return m, tea.Batch(toastCmd, cmd)
+						}
+					}
 					toastCmd := m.setToast("resolving interrupted download", ToastInfo)
 					return m, tea.Batch(toastCmd, m.resumePendingDownloadCmd(m.downloadOpID, job))
 				}
@@ -328,7 +389,7 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if remIdx < len(m.batchEpisodes) {
 						rem := m.batchEpisodes[remIdx:]
 						toastCmd := m.setToast("download resumed", ToastSuccess)
-						cmd := m.batchDownloadCmd(opID, rem, m.batchSeries, m.batchMode, true)
+						cmd := m.batchDownloadCmd(opID, rem, m.batchSeries, m.batchMode, true, max(1, m.batchCurrent), len(m.batchEpisodes))
 						return m, tea.Batch(toastCmd, cmd)
 					}
 				} else if m.singleResolved != nil {
@@ -338,12 +399,16 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.setToast("download resumed", ToastSuccess)
 			}
-		case "x":
+		case "x", "delete", "backspace":
 			// Double-press confirmation for anything destructive, matching
 			// the x-stop and q-quit conventions elsewhere.
 			if !m.confirmStop {
 				m.confirmStop = true
-				m.setStatus(statusWarn, "Press x again to cancel (partials are deleted)")
+				prompt := "Press x again to cancel (partials are deleted)"
+				if m.downloadsIndex >= len(data.Active) {
+					prompt = "Press x again to delete file from disk"
+				}
+				m.setStatus(statusWarn, prompt)
 				return m, tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
 					return resetConfirmStopMsg{}
 				})
@@ -382,7 +447,7 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.downloadOpID = opID
 						m.batchInProgress = true
 						rem := m.batchEpisodes[curIdx:]
-						cmd := m.batchDownloadCmd(opID, rem, m.batchSeries, m.batchMode, true)
+						cmd := m.batchDownloadCmd(opID, rem, m.batchSeries, m.batchMode, true, curIdx+1, len(m.batchEpisodes))
 						return m, tea.Batch(toastCmd, cmd)
 					}
 					m.batchInProgress = false
@@ -409,9 +474,41 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.setToast("download cancelled", ToastInfo)
 			} else if m.downloadsIndex >= len(data.Active) && len(data.Done) > 0 {
 				doneIdx := m.downloadsIndex - len(data.Active)
-				if doneIdx >= 0 && doneIdx < len(m.doneDownloads) {
-					m.doneDownloads = append(m.doneDownloads[:doneIdx], m.doneDownloads[doneIdx+1:]...)
-					return m, m.setToast("removed from history", ToastInfo)
+				if doneIdx >= 0 && doneIdx < len(data.Done) {
+					item := data.Done[doneIdx]
+					if item.Path != "" {
+						_ = os.Remove(item.Path)
+						dir := filepath.Dir(item.Path)
+						baseTitle, _ := downloader.SplitTitleExt(filepath.Base(item.Path))
+						if entries, err := os.ReadDir(dir); err == nil {
+							for _, e := range entries {
+								if strings.HasPrefix(e.Name(), baseTitle+".") {
+									ext := strings.ToLower(filepath.Ext(e.Name()))
+									if ext == ".srt" || ext == ".ass" || ext == ".vtt" {
+										_ = os.Remove(filepath.Join(dir, e.Name()))
+									}
+								}
+							}
+						}
+						if m.downloadService != nil {
+							m.downloadService.RemoveEmptyDirs(dir)
+						}
+					}
+					if m.dismissedDoneDownloads == nil {
+						m.dismissedDoneDownloads = make(map[string]bool)
+					}
+					m.dismissedDoneDownloads[item.Title] = true
+					for i, d := range m.doneDownloads {
+						if d.Title == item.Title {
+							m.doneDownloads = append(m.doneDownloads[:i], m.doneDownloads[i+1:]...)
+							break
+						}
+					}
+					totalRemaining := len(data.Active) + len(data.Done) - 1
+					if m.downloadsIndex >= totalRemaining && m.downloadsIndex > 0 {
+						m.downloadsIndex--
+					}
+					return m, m.setToast("file deleted from disk", ToastInfo)
 				}
 			}
 			return m, nil
@@ -468,6 +565,7 @@ func openFolder(dir string) {
 	if dir == "" {
 		return
 	}
+	_ = os.MkdirAll(dir, 0o755)
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
@@ -690,10 +788,23 @@ func (m *modelImpl) startBatchDownload() (tea.Model, tea.Cmd) {
 	m.batchSeries = series
 	m.batchMode = mode
 
-	cmd := m.batchDownloadCmd(opID, selected, series, mode, hasSeries)
+	if m.downloadService != nil && hasSeries {
+		job := service.DownloadJob{
+			Series:       series,
+			Episodes:     selected,
+			BatchCurrent: 1,
+			Mode:         mode,
+		}
+		if err := m.downloadService.SavePendingJob(job); err != nil {
+			tuiLog.Warn("save pending batch download failed", "err", err)
+		} else {
+			m.pendingDownload = &job
+		}
+	}
+
+	cmd := m.batchDownloadCmd(opID, selected, series, mode, hasSeries, 1, len(selected))
 	return m, tea.Batch(toastCmd, cmd)
 }
-
 func (m *modelImpl) orderedSelectedEpisodes() []provider.Episode {
 	out := make([]provider.Episode, 0, len(m.selectedEpisodes))
 	for i := range m.episodeResults {
@@ -718,8 +829,42 @@ func (m *modelImpl) effectiveDownloadQuality() int {
 		return m.qualityMode
 	}
 }
+func downloadQualityLabel(effectiveQuality int) string {
+	switch effectiveQuality {
+	case 10:
+		return "4K"
+	case 11:
+		return "1080p"
+	case 12:
+		return "720p"
+	case 13:
+		return "480p"
+	case qualityHighest:
+		return "1080p"
+	case qualityDataSaver:
+		return "720p"
+	case qualityLowest:
+		return "480p"
+	default:
+		return "Auto"
+	}
+}
 
-func (m *modelImpl) batchDownloadCmd(opID int, episodes []provider.Episode, series provider.SearchResult, mode provider.ContentType, hasSeries bool) tea.Cmd {
+
+func (m *modelImpl) batchDownloadCmd(
+	opID int,
+	episodes []provider.Episode,
+	series provider.SearchResult,
+	mode provider.ContentType,
+	hasSeries bool,
+	startIndex, totalBatchCount int,
+) tea.Cmd {
+	if startIndex <= 0 {
+		startIndex = 1
+	}
+	if totalBatchCount <= 0 {
+		totalBatchCount = len(episodes)
+	}
 	qualityMode := m.effectiveDownloadQuality()
 	languageFilter := make(map[string]bool, len(m.languageFilter))
 	for lang, enabled := range m.languageFilter {
@@ -730,7 +875,7 @@ func (m *modelImpl) batchDownloadCmd(opID int, episodes []provider.Episode, seri
 
 		if !hasSeries {
 			cancel()
-			return batchDoneMsg{opID: opID, completed: 0, total: len(episodes)}
+			return batchDoneMsg{opID: opID, completed: 0, total: totalBatchCount}
 		}
 
 		go func() {
@@ -744,11 +889,12 @@ func (m *modelImpl) batchDownloadCmd(opID int, episodes []provider.Episode, seri
 			}
 
 			onProgress := func(current, total int, epTitle string, dp downloader.DownloadProgress) {
+				actualCurrent := (startIndex - 1) + current
 				select {
 				case m.batchChan <- batchProgressMsg{
 					opID:            opID,
-					current:         current,
-					total:           total,
+					current:         actualCurrent,
+					total:           totalBatchCount,
 					episodeTitle:    epTitle,
 					episodeProgress: dp.Percent,
 					totalSize:       dp.TotalSize,
@@ -789,14 +935,14 @@ func (m *modelImpl) batchDownloadCmd(opID int, episodes []provider.Episode, seri
 			select {
 			case m.batchChan <- batchDoneMsg{
 				opID:      opID,
-				completed: completed,
-				total:     len(episodes),
+				completed: (startIndex - 1) + completed,
+				total:     totalBatchCount,
 			}:
 			case <-ctx.Done():
 			}
 		}()
 
-		return batchStartedMsg{opID: opID, cancel: cancel, total: len(episodes)}
+		return batchStartedMsg{opID: opID, cancel: cancel, total: totalBatchCount}
 	}
 }
 
@@ -815,9 +961,14 @@ func (m *modelImpl) onBatchProgress(msg batchProgressMsg) (tea.Model, tea.Cmd) {
 		m.batchActiveDir = msg.outputDir
 		m.batchActiveTitle = msg.fileTitle
 	}
+	if m.pendingDownload != nil && m.downloadService != nil && len(m.pendingDownload.Episodes) > 0 {
+		if m.pendingDownload.BatchCurrent != msg.current {
+			m.pendingDownload.BatchCurrent = msg.current
+			_ = m.downloadService.SavePendingJob(*m.pendingDownload)
+		}
+	}
 	return m, m.batchSubscription()
 }
-
 func (m *modelImpl) onBatchDone(msg batchDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.downloadOpID {
 		return m, nil
@@ -830,6 +981,10 @@ func (m *modelImpl) onBatchDone(msg batchDoneMsg) (tea.Model, tea.Cmd) {
 		m.downloadOpID = 0
 		return m, nil
 	}
+	if m.downloadService != nil {
+		_ = m.downloadService.ClearPendingJob()
+	}
+	m.pendingDownload = nil
 	m.batchInProgress = false
 	m.batchCancel = nil
 	m.batchCurrent = 0

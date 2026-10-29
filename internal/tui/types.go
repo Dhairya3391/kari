@@ -548,9 +548,10 @@ type modelImpl struct {
 	animeStatusTotalEpisodes   int
 	animeStatusOpID            int
 	// Downloads Queue state
-	activeDownloads []ActiveDownload
-	doneDownloads   []DoneDownload
-	downloadsIndex  int
+	activeDownloads        []ActiveDownload
+	doneDownloads          []DoneDownload
+	dismissedDoneDownloads map[string]bool
+	downloadsIndex         int
 }
 
 // mangaResume is a series-level reading position: chapter catalog

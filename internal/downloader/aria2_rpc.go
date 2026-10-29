@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"kari/internal/logging"
@@ -69,12 +70,12 @@ type aria2TellStatusResult struct {
 type Aria2Downloader struct{}
 
 // Download performs the aria2c RPC-based download for the given source.
-// outputDir and baseTitle determine where the output file is placed.
-// The actual file extension is detected from aria2c's reported output path.
+// tempDir is where aria2c downloads fragments and control files. Once
+// complete, the media file is relocated to outputDir/baseTitle.ext.
 func (d *Aria2Downloader) Download(
 	ctx context.Context,
 	source provider.MediaSource,
-	outputDir, baseTitle string,
+	outputDir, tempDir, baseTitle string,
 	progress func(DownloadProgress),
 ) error {
 	port, err := findFreePort()
@@ -115,12 +116,13 @@ func (d *Aria2Downloader) Download(
 	killDaemon := func() {
 		if cmd != nil && cmd.Process != nil {
 			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
 		}
 	}
 	defer killDaemon()
 
 	// Wait until RPC is ready (up to 5 seconds).
-	if err := waitForAria2RPC(port, secret, 5*time.Second); err != nil {
+	if err := waitForAria2RPC(ctx, port, secret, 5*time.Second); err != nil {
 		return fmt.Errorf("aria2: rpc not ready: %w", err)
 	}
 
@@ -137,13 +139,21 @@ func (d *Aria2Downloader) Download(
 		"auto-file-renaming":        "false",
 		"continue":                  "true",
 	}
-	if outputDir != "" {
-		aria2Opts["dir"] = outputDir
+	ext := "." + strings.TrimPrefix(strings.ToLower(strings.TrimSpace(source.Type)), ".")
+	if _, ok := knownMediaExts[ext]; !ok {
+		ext = ".mp4"
+	}
+	aria2Opts["out"] = baseTitle + ext
+	stageDir := tempDir
+	if stageDir == "" {
+		stageDir = outputDir
+	}
+	if stageDir != "" {
+		aria2Opts["dir"] = stageDir
 	}
 	if len(headers) > 0 {
 		aria2Opts["header"] = headers
 	}
-
 	gid, err := aria2AddUri(port, secret, source.URL, aria2Opts)
 	if err != nil {
 		return fmt.Errorf("aria2: addUri: %w", err)
@@ -177,8 +187,12 @@ func (d *Aria2Downloader) Download(
 
 				// aria2c may produce a file whose name we don't control.
 				// Rename it to the canonical baseTitle + extension.
-				renameOutputFile(status, outputDir, baseTitle)
-
+				if err := renameOutputFile(status, outputDir, baseTitle); err != nil {
+					return fmt.Errorf("aria2: finalize output file: %w", err)
+				}
+				if tempDir != "" && tempDir != outputDir {
+					_ = os.Remove(tempDir)
+				}
 				if progress != nil {
 					total, _ := strconv.ParseInt(status.TotalLength, 10, 64)
 					progress(DownloadProgress{
@@ -206,7 +220,7 @@ func (d *Aria2Downloader) Download(
 }
 
 // ── JSON-RPC client helpers ──────────────────────────────────────────────────
-func aria2RPC(port int, secret string, req *aria2RPCRequest) (json.RawMessage, error) {
+func aria2RPC(port int, _ string, req *aria2RPCRequest) (json.RawMessage, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("rpc marshal: %w", err)
@@ -333,14 +347,16 @@ func generateRPCSecret() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// waitForAria2RPC polls aria2.getVersion until it responds or timeout elapses.
-func waitForAria2RPC(port int, secret string, timeout time.Duration) error {
+// waitForAria2RPC polls aria2.getVersion until it responds, context cancels, or timeout elapses.
+func waitForAria2RPC(ctx context.Context, port int, secret string, timeout time.Duration) error {
 	deadline := time.After(timeout)
 	for {
 		if err := aria2GetVersion(port, secret); err == nil {
 			return nil
 		}
 		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-deadline:
 			return fmt.Errorf("timeout after %v", timeout)
 		default:
@@ -393,29 +409,77 @@ func computeAria2Progress(status *aria2TellStatusResult) DownloadProgress {
 
 // renameOutputFile moves the file produced by aria2c to the canonical
 // outputDir/baseTitle.ext path if it differs.
-func renameOutputFile(status *aria2TellStatusResult, outputDir, baseTitle string) {
+func renameOutputFile(status *aria2TellStatusResult, outputDir, baseTitle string) error {
 	if len(status.Files) == 0 || status.Files[0].Path == "" {
-		return
+		return fmt.Errorf("no output file reported by aria2")
 	}
-
 	actualPath := status.Files[0].Path
 	actualExt := filepath.Ext(actualPath)
-	desiredPath := filepath.Join(outputDir, baseTitle+actualExt)
+	if idx := strings.IndexAny(actualExt, "?#"); idx >= 0 {
+		actualExt = actualExt[:idx]
+	}
+	actualExt = strings.ToLower(actualExt)
+	if _, ok := knownMediaExts[actualExt]; !ok {
+		actualExt = ".mp4"
+	}
+	actualPath = filepath.Clean(actualPath)
+	desiredPath := filepath.Clean(filepath.Join(outputDir, baseTitle+actualExt))
 
 	if actualPath == desiredPath {
-		return
+		return nil
+	}
+	if aInfo, err1 := os.Stat(actualPath); err1 == nil {
+		if dInfo, err2 := os.Stat(desiredPath); err2 == nil && os.SameFile(aInfo, dInfo) {
+			return nil
+		}
 	}
 
-	// Check if the desired path already exists — aria2c's auto-file-renaming
-	// is disabled so this shouldn't happen, but guard anyway.
-	if _, err := os.Stat(desiredPath); err == nil {
-		ariaLog.Debug("target already exists; keeping file", "desired", desiredPath, "actual", actualPath)
-		return
-	}
+	_ = os.MkdirAll(outputDir, 0o755)
 
 	if err := os.Rename(actualPath, desiredPath); err != nil {
-		ariaLog.Warn("rename failed", "from", actualPath, "to", desiredPath, "err", err)
-	} else {
-		ariaLog.Debug("renamed", "from", actualPath, "to", desiredPath)
+		if _, statErr := os.Stat(desiredPath); statErr == nil {
+			_ = os.Remove(desiredPath)
+			if renameErr := os.Rename(actualPath, desiredPath); renameErr == nil {
+				ariaLog.Debug("renamed (overwrote existing)", "from", actualPath, "to", desiredPath)
+				return nil
+			}
+		}
+		if copyErr := moveFileCrossFS(actualPath, desiredPath); copyErr != nil {
+			ariaLog.Warn("rename failed", "from", actualPath, "to", desiredPath, "err", err, "copyErr", copyErr)
+			return fmt.Errorf("move %s to %s: %w", actualPath, desiredPath, copyErr)
+		}
 	}
+	ariaLog.Debug("renamed", "from", actualPath, "to", desiredPath)
+	return nil
+}
+
+func moveFileCrossFS(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dst)
+		return fmt.Errorf("sync %s: %w", dst, err)
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(dst)
+		return fmt.Errorf("close %s: %w", dst, err)
+	}
+	_ = in.Close()
+	_ = os.Remove(src)
+	return nil
 }

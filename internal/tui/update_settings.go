@@ -185,6 +185,15 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.settingsIndex++
 			}
 			return m, nil
+		case "g", "home":
+			m.settingsIndex = 0
+			return m, nil
+		case "G", "end":
+			maxRows := m.maxRowsForCategory(m.settingsCategory)
+			if maxRows > 0 {
+				m.settingsIndex = maxRows - 1
+			}
+			return m, nil
 
 		case "left", "h":
 			if m.settingsCategory == CategoryProviders {

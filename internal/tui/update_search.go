@@ -135,7 +135,7 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.queryInput.Focus()
 			m.setStatus(statusInfo, "")
 			return m, textinput.Blink
-		case keyMsg.String() == "/":
+		case keyMsg.String() == "/" || keyMsg.String() == "ctrl+f" || key.Matches(keyMsg, m.keys.Filter):
 			// / filters the current results by title.
 			m.resultsFiltering = true
 			m.resultsFilter = ""
@@ -161,10 +161,10 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case keyMsg.String() == "down" || keyMsg.String() == "j":
 			m.seriesList.CursorDown()
 			return m, m.triggerSearchPoster(m.selectedSeriesIndex())
-		case keyMsg.String() == "g":
+		case keyMsg.String() == "g" || keyMsg.String() == "home":
 			m.seriesList.Select(0)
 			return m, m.triggerSearchPoster(m.selectedSeriesIndex())
-		case keyMsg.String() == "G":
+		case keyMsg.String() == "G" || keyMsg.String() == "end":
 			if items := m.seriesList.Items(); len(items) > 0 {
 				m.seriesList.Select(len(items) - 1)
 			}
@@ -256,6 +256,20 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "g", "home":
+		m.previewSelectedIndex = 0
+		m.manualPlaybackSelected = true
+		m.invalidateSubtitleSync()
+		return m, m.triggerSubtitleSync()
+
+	case "G", "end":
+		if len(m.rankedSources) > 0 {
+			m.previewSelectedIndex = len(m.rankedSources) - 1
+			m.manualPlaybackSelected = true
+			m.invalidateSubtitleSync()
+			return m, m.triggerSubtitleSync()
+		}
+		return m, nil
 	case "r":
 		// Restart the current episode from the beginning.
 		if m.resolved == nil || len(m.orderedPlaybackSources()) == 0 || m.playOpID != 0 {
