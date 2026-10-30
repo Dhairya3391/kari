@@ -463,6 +463,7 @@ func renderAudioLanguagePicker(data SettingsData, st Styles) string {
 
 	rows = append(rows, st.Bold.Render("Select Audio Languages"), "")
 
+	var items []string
 	for i, l := range data.AllLanguages {
 		cursor := "  "
 		if i == data.PickerIndex {
@@ -479,9 +480,14 @@ func renderAudioLanguagePicker(data SettingsData, st Styles) string {
 			label = st.Current.Render(l)
 		}
 
-		rows = append(rows, fmt.Sprintf("%s%s%s", cursor, status, label))
+		items = append(items, fmt.Sprintf("%s%s%s", cursor, status, label))
 	}
 
-	rows = append(rows, "", st.Dim.Render("space toggle   enter/esc save & close"))
+	if data.Height > 0 {
+		rows = append(rows, applyWindow(items, data.PickerIndex, data.Height, 2, st)...)
+	} else {
+		rows = append(rows, items...)
+	}
+
 	return strings.Join(rows, "\n")
 }

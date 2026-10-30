@@ -67,7 +67,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return nil, true
 	}
-	if m.activeView == viewSettings || m.activeView == viewPreview {
+	if (m.activeView == viewSettings && !m.audioPickerOpen) || m.activeView == viewPreview {
 		switch msg.String() {
 		case "ctrl+u":
 			m.scrollBody(-max(1, m.bodyHeight()-1))

@@ -37,6 +37,29 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.audioPickerIndex < len(allLangs)-1 {
 					m.audioPickerIndex++
 				}
+				return m, nil
+			case "home", "g":
+				m.audioPickerIndex = 0
+				return m, nil
+			case "end", "G":
+				if len(allLangs) > 0 {
+					m.audioPickerIndex = len(allLangs) - 1
+				}
+				return m, nil
+			case "pgup", "ctrl+u":
+				step := m.pageStep()
+				if m.audioPickerIndex > step {
+					m.audioPickerIndex -= step
+				} else {
+					m.audioPickerIndex = 0
+				}
+				return m, nil
+			case "pgdn", "pgdown", "ctrl+d":
+				step := m.pageStep()
+				if len(allLangs) > 0 {
+					m.audioPickerIndex = min(len(allLangs)-1, m.audioPickerIndex+step)
+				}
+				return m, nil
 			// Physical spacebar reports " ", not "space" — match
 			// both, or the toggle silently never fires.
 			case " ", "space":
@@ -65,6 +88,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.clearStatus()
 				return m, nil
 			}
+			return m, nil
 		}
 
 		// 2. Custom Hex / AniList input

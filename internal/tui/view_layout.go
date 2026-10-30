@@ -436,8 +436,9 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			{Key: "esc", Action: "back"},
 		}
 	case viewSettings:
-		if data := m.collectSettingsData(m.width, m.height); data.AudioPickerOpen {
+		if m.audioPickerOpen {
 			return []KeyBinding{
+				{Key: "↑/↓", Action: "move"},
 				{Key: "space", Action: "toggle"},
 				{Key: "enter", Action: "done"},
 				{Key: "esc", Action: "cancel"},
