@@ -106,6 +106,26 @@ func TestTriggerPreviewPosterKeepsLoadedSeriesPoster(t *testing.T) {
 		t.Fatal("audio-only re-resolution should not refetch an already loaded series poster")
 	}
 }
+func TestTriggerPreviewPosterProtectsInFlightPrefetch(t *testing.T) {
+	series := providerSearchResultFrieren()
+	cancelCalled := false
+	m := &modelImpl{
+		resolved:            &model.ResolvedMedia{SeriesTitle: series.Title},
+		selectedSeries:      &series,
+		previewPoster:       "",
+		previewPosterOpID:   5,
+		previewPosterCancel: func() { cancelCalled = true },
+	}
+	if cmd := m.triggerPreviewPoster(); cmd != nil {
+		t.Fatal("triggerPreviewPoster must not restart when prefetch is already in flight for same TMDB ID")
+	}
+	if cancelCalled {
+		t.Fatal("triggerPreviewPoster must not cancel active in-flight prefetch")
+	}
+	if m.previewPosterOpID != 5 {
+		t.Fatalf("opID changed to %d, want 5 preserved", m.previewPosterOpID)
+	}
+}
 
 // posterBlock never collapses the column while images are on: loading
 // and absent states render explicit placeholders.

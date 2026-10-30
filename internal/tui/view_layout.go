@@ -726,7 +726,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		// cause Bubble Tea to skip the end-of-line erase and leave old
 		// image cells visible — the root cause of issue #35.
 		metaW := max(20, width-previewPosterMaxCols-4)
-		if width < 80 {
+		if m.width < 80 && width < 70 {
 			metaW = max(20, width)
 		}
 		var prefix string
@@ -864,6 +864,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		SpinnerFrame:     m.spinner.View(),
 		Loading:          m.loading,
 		Width:            width,
+		TermWidth:        m.width,
 		Height:           height,
 		Accent:           accent,
 		Mode:             m.appMode,

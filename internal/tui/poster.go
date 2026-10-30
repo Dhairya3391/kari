@@ -101,24 +101,29 @@ func (m *modelImpl) triggerPreviewPoster() tea.Cmd {
 	if m.previewPoster != "" {
 		return nil
 	}
+	hasNewTMDB := m.resolved.TMDBID != 0 && (m.selectedSeries == nil || m.selectedSeries.TMDBID == 0)
+	if m.previewPosterCancel != nil && !hasNewTMDB {
+		return nil
+	}
 	m.clearPreviewPoster()
 	coverURL := ""
 	coverReferer := ""
-	title := m.resolved.SeriesTitle
-	tmdbID := m.resolved.TMDBID
-	mediaType := m.resolved.MediaType
+	title := ""
 	if m.selectedSeries != nil {
 		coverURL = m.selectedSeries.CoverURL
 		coverReferer = m.selectedSeries.CoverReferer
-		if title == "" {
-			title = m.selectedSeries.Title
-		}
-		if tmdbID == 0 {
-			tmdbID = m.selectedSeries.TMDBID
-		}
-		if mediaType == "" {
-			mediaType = m.selectedSeries.MediaType
-		}
+		title = m.selectedSeries.Title
+	}
+	if title == "" {
+		title = m.resolved.SeriesTitle
+	}
+	tmdbID := m.resolved.TMDBID
+	if tmdbID == 0 && m.selectedSeries != nil {
+		tmdbID = m.selectedSeries.TMDBID
+	}
+	mediaType := m.resolved.MediaType
+	if mediaType == "" && m.selectedSeries != nil {
+		mediaType = m.selectedSeries.MediaType
 	}
 	return m.fetchPosterCmd(posterSlotPreview, m.previewPosterOpID, tmdbID, mediaType, title, coverURL, coverReferer, previewPosterMaxCols, previewPosterMaxRows, kittyPreviewImageID)
 }

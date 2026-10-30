@@ -53,7 +53,7 @@ func RenderEpisodesScreen(data EpisodesData) string {
 	st := NewStyles(data.Accent)
 
 	// Determine whether to show the right inspector pane.
-	showPane := data.TermWidth >= 95 && data.Width >= 65
+	showPane := (data.TermWidth >= 80 || data.Width >= 70) && data.Width >= 65
 
 	// Compute column widths.
 	listW := data.Width

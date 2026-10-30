@@ -394,7 +394,7 @@ func TestRenderPreviewHeader_LongEpisodeTitleBounded(t *testing.T) {
 	longTitle := "The Vice President Doesn't Say Anything About the Possibility of Him Being the Main Character"
 	// Use a placeholder poster of the same visual width as a real rendered one.
 	posterBlock := strings.Repeat(" ", 26)
-	for _, width := range []int{80, 100, 120, 140} {
+	for _, width := range []int{72, 80, 100, 120, 140} {
 		data := PreviewData{
 			SeriesTitle: "Baccano!",
 			EpisodeInfo: fmt.Sprintf("S01 E01 · %s  (1 of 13)", longTitle),
@@ -404,6 +404,7 @@ func TestRenderPreviewHeader_LongEpisodeTitleBounded(t *testing.T) {
 			AudioText:   "sub · Japanese",
 			PosterBlock: posterBlock,
 			Width:       width,
+			TermWidth:   max(80, width+8),
 		}
 		// Full screen check — every row must fit.
 		screen := RenderPreviewScreen(data)
@@ -412,6 +413,20 @@ func TestRenderPreviewHeader_LongEpisodeTitleBounded(t *testing.T) {
 				t.Errorf("width=%d: line %d width=%d exceeds limit: %q", width, i+1, w, line)
 			}
 		}
+	}
+}
+
+func TestRenderPreviewHeader_Standard80ColTerminalShowsPoster(t *testing.T) {
+	data := PreviewData{
+		SeriesTitle: "Inception",
+		PosterBlock: "POSTER_ART",
+		TermWidth:   80,
+		Width:       72,
+	}
+	st := NewStyles(lipgloss.AdaptiveColor{})
+	header := renderPreviewHeader(data, st)
+	if !strings.Contains(header, "POSTER_ART") {
+		t.Fatalf("expected poster art in preview header on standard 80-col terminal (width=72), got:\n%s", header)
 	}
 }
 

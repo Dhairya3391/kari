@@ -83,6 +83,24 @@ func TestRenderEpisodesScreen_NoOverflowWithPane(t *testing.T) {
 		}
 	}
 }
+func TestRenderEpisodesScreen_Standard80ColTerminalShowsInspectorPane(t *testing.T) {
+	eps := []provider.Episode{
+		{Season: 1, Episode: 1, Title: "Episode 1"},
+	}
+	data := EpisodesData{
+		SeriesTitle: "ONE PIECE",
+		Episodes:    eps,
+		PosterBlock: "POSTER_ART",
+		TermWidth:   80,
+		Width:       72,
+		Height:      24,
+		Accent:      ResolveAccent(model.KindAnime, "Auto"),
+	}
+	out := RenderEpisodesScreen(data)
+	if !strings.Contains(out, "POSTER_ART") {
+		t.Fatalf("expected inspector pane with poster on standard 80-col terminal (TermWidth=80, Width=72), got:\n%s", out)
+	}
+}
 
 func TestRenderEpisodesScreen_EpisodeCodeTitleGap(t *testing.T) {
 	data := EpisodesData{

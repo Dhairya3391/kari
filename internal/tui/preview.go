@@ -45,6 +45,7 @@ type PreviewData struct {
 	// resolver.
 	ProviderName map[string]string
 	Width        int
+	TermWidth    int
 	Height       int
 	Accent       lipgloss.AdaptiveColor
 	// Mode drives the audio column: anime audio is a sub/dub track choice
@@ -58,8 +59,7 @@ func RenderPreviewScreen(data PreviewData) string {
 	st := NewStyles(data.Accent)
 
 	var rows []string
-
-	// 1. Header (Poster on left, metadata on right if >= 80 cols and poster available)
+	// 1. Header (Poster on left, metadata on right if >= 80 cols or >= 70 content width and poster available)
 	header := renderPreviewHeader(data, st)
 	rows = append(rows, header, "")
 	// 2. Sources Header Line (count or progressive loading state)
@@ -82,12 +82,16 @@ func RenderPreviewScreen(data PreviewData) string {
 	return strings.Join(rows, "\n")
 }
 
+func showPreviewPoster(data PreviewData) bool {
+	return data.PosterBlock != "" && (data.TermWidth >= 80 || data.Width >= 70)
+}
+
 func renderPreviewHeader(data PreviewData, st Styles) string {
 	// posterW is the total columns reserved by the poster block (image + gutter).
 	// Only count it when the poster is actually shown (same condition as the
 	// side-by-side layout below).
 	posterW := 0
-	if data.PosterBlock != "" && data.Width >= 80 {
+	if showPreviewPoster(data) {
 		posterW = lipgloss.Width(data.PosterBlock) + 4 // 4-char gutter
 	}
 	// metaW is the maximum columns available for the metadata text block.
@@ -179,7 +183,7 @@ func renderPreviewHeader(data PreviewData, st Styles) string {
 	}
 	metaBlock := strings.Join(metaRows, "\n")
 
-	if data.PosterBlock == "" || data.Width < 80 {
+	if !showPreviewPoster(data) {
 		return metaBlock
 	}
 
