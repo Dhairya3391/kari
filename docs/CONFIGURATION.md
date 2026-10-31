@@ -14,6 +14,7 @@ Kari runs with zero configuration by default. Optional behavior can be customize
 | `KARI_DOWNLOAD_DIR` | Directory where downloaded episodes and media files are stored. | `./downloads` |
 | `KARI_IMG_PROTOCOL` | Override terminal graphics protocol (`kitty`, `iterm`, `sixel`, `blocks`, `none`). | Auto-detected |
 | `KARI_DISCORD_APP_ID` | Override Discord Rich Presence application client ID. | Bundled default |
+| `KARI_MPV_ANDROID_PACKAGE` | Android mpv client package name used for availability checks, launch intents, and the config bridge directory. | `is.xyz.mpv` |
 | `MPV_SOCKET` | Override MPV Unix IPC socket path or Windows named pipe. | Auto-generated per process |
 
 ### Logging & Diagnostics

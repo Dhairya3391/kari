@@ -105,6 +105,7 @@ func (m *modelImpl) markEpisodeComplete(ep provider.Episode) error {
 	if err := m.historyStore.Upsert(entry); err != nil {
 		return err
 	}
+	m.invalidateEpisodeHistoryIndex()
 
 	media := &model.ResolvedMedia{
 		SeriesTitle:   seriesTitle,
@@ -123,7 +124,11 @@ func (m *modelImpl) unmarkEpisode(ep provider.Episode) error {
 		return nil
 	}
 	key := m.episodeHistoryKey(ep)
-	return m.historyStore.Delete(key)
+	err := m.historyStore.Delete(key)
+	if err == nil {
+		m.invalidateEpisodeHistoryIndex()
+	}
+	return err
 }
 
 func (m *modelImpl) toggleEpisodeComplete(ep provider.Episode) (bool, error) {

@@ -113,13 +113,16 @@ winget install yt-dlp aria2        # Windows
 
 3. Install [MPV Android](https://play.google.com/store/apps/details?id=is.xyz.mpv).
 4. Install Kari with the install script above.
-5. In MPV Android: **Settings → Advanced → Edit mpv.conf**, add:
+5. In your mpv Android client: **Settings → Advanced → Edit mpv.conf**, add:
 
    ```ini
-   include=/storage/emulated/0/Android/media/is.xyz.mpv/.mpv.conf
+   include=/storage/emulated/0/Android/media/<package>/.mpv.conf
    ```
 
-   This passes stream headers and subtitles from Termux to MPV.
+   The default package is `is.xyz.mpv`. To use another client, set
+   `KARI_MPV_ANDROID_PACKAGE` to its Android package name in your Termux
+   environment, then use that same package in the include path. This passes
+   stream headers and subtitles from Termux to MPV.
 
 ### macOS Gatekeeper
 

@@ -71,6 +71,7 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		if m.appMode == provider.ModeAnime && strings.EqualFold(strings.TrimSpace(m.audioMode), provider.AudioDub) && errors.Is(msg.err, provider.ErrNoEpisodes) {
 			m.episodeResults = nil
+			m.episodeCache.valid = false
 			m.episodeList.SetItems(nil)
 			if m.selectedEpisode == nil {
 				m.pushView(viewEpisodes)
@@ -92,6 +93,7 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 
 	logging.Info("onEpisodesDone success", "opID", msg.opID, "episodes_count", len(msg.results))
 	m.episodeResults = msg.results
+	m.episodeCache.valid = false
 	m.episodeList.SetItems(episodesToItems(msg.results, m.historyStore, seriesTitle, m.appMode, mediaType, m.selectedEpisodes))
 
 	if target := m.pendingHistoryTarget; target != nil {
@@ -114,14 +116,15 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 	if m.historyStore != nil && len(msg.results) > 0 {
 		found := false
 		lastCompleteIdx := -1
+		historyEntries := episodeHistorySnapshot(m.historyStore)
 		for i, it := range msg.results {
-			entry, ok := m.historyStore.Get(history.EntryKey{
+			entry, ok := historyEntries[history.EntryKey{
 				Title:     seriesTitle,
 				Mode:      string(m.appMode),
 				MediaType: mediaType,
 				Season:    it.Season,
 				Episode:   it.Episode,
-			})
+			}.String()]
 			if !ok || !entry.Complete {
 				targetIdx = i
 				found = true
@@ -299,6 +302,7 @@ func (m *modelImpl) onEpisodeTitles(msg episodeTitlesMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if patched {
+		m.episodeCache.valid = false
 		m.refreshEpisodeList()
 	}
 	return m, nil
@@ -320,6 +324,7 @@ func (m *modelImpl) onHistoryContinueEpisodes(msg historyContinueEpisodesMsg) (t
 	}
 
 	m.episodeResults = msg.results
+	m.episodeCache.valid = false
 	seriesTitle, mediaType := msg.group.Title, msg.group.MediaType
 	if m.selectedSeries != nil {
 		seriesTitle = m.selectedSeries.Title

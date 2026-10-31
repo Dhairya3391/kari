@@ -416,7 +416,7 @@ func (m *modelImpl) saveMangaProgress(page, total int) {
 		anilistID = existing.AniListID
 	}
 	chapter := strings.TrimSpace(m.selectedChapter.Number)
-	_ = m.historyStore.Upsert(history.Entry{
+	if err := m.historyStore.Upsert(history.Entry{
 		Key:          key,
 		Title:        m.selectedSeries.Title,
 		EpisodeTitle: chapter,
@@ -429,7 +429,9 @@ func (m *modelImpl) saveMangaProgress(page, total int) {
 		Mode:         string(provider.ModeManga),
 		MediaType:    provider.MediaTypeManga,
 		AniListID:    anilistID,
-	})
+	}); err == nil {
+		m.invalidateEpisodeHistoryIndex()
+	}
 }
 
 // mangaScrobbleChapter converts a chapter label to AniList's whole-chapter

@@ -28,7 +28,7 @@ func (p *MPVPlayer) Name() string {
 
 // Available implements Player.
 func (p *MPVPlayer) Available() bool {
-	return isPackageAvailable(mpvAndroidPackage)
+	return isPackageAvailable(mpvAndroidPackageName())
 }
 
 // Play implements Player.
@@ -63,7 +63,7 @@ func playSingleSourceWithMPVAndroid(
 	// (see parseIntentExtras in the upstream app). Use -t video/any so the URL
 	// is opened regardless of a missing/odd file extension, and pass title and
 	// resume position as supported extras.
-	args := []string{"start", "-n", mpvAndroidPackage + "/.MPVActivity", "-a", "android.intent.action.VIEW", "-t", "video/any", "-d", source.URL}
+	args := []string{"start", "-p", mpvAndroidPackageName(), "-a", "android.intent.action.VIEW", "-t", "video/any", "-d", source.URL}
 
 	if title := sanitizeMediaTitle(media.DisplayTitle()); title != "" {
 		args = append(args, "--es", "title", title)
@@ -90,7 +90,8 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	// config that mpv DOES load. The user adds it once via the app
 	// (Settings -> Advanced -> Edit mpv.conf):
 	//
-	//   include=/storage/emulated/0/Android/media/is.xyz.mpv/.mpv.conf
+	//   include=/storage/emulated/0/Android/media/<package>/.mpv.conf
+	// Replace <package> with KARI_MPV_ANDROID_PACKAGE, or is.xyz.mpv by default.
 	//
 	// Every play launch rewrites that target with fresh playback options:
 	// Referer/Origin/User-Agent/Cookie via
@@ -100,6 +101,10 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	// `~/.config/mpv/mpv.conf` in the Termux home is pointless here: the
 	// mpv-android libmpv process does not read the Termux HOME path.
 	var confBuilder strings.Builder
+	configDir := mpvAndroidConfigDir()
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		return fmt.Errorf("create mpv config dir: %w", err)
+	}
 	title := sanitizeMediaTitle(media.DisplayTitle())
 	if title != "" {
 		confBuilder.WriteString(fmt.Sprintf("force-media-title=%s\n", title))
@@ -171,14 +176,11 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	// this session. (mpv's sub-file is a list option, so a repeated line works.)
 	subPath := ""
 	if subtitlePath != "" {
-		if err := os.MkdirAll(mpvAndroidDir, 0o700); err != nil {
-			return fmt.Errorf("create mpv config dir: %w", err)
-		}
 		ext := filepath.Ext(subtitlePath)
 		if ext == "" {
 			ext = ".vtt"
 		}
-		target := filepath.Join(mpvAndroidDir, "sub"+ext)
+		target := filepath.Join(configDir, "sub"+ext)
 		if err := copyFile(subtitlePath, target); err != nil {
 			return fmt.Errorf("copy subtitle for mpv android: %w", err)
 		}
@@ -196,7 +198,7 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 		confBuilder.WriteString("\n")
 	}
 
-	confPath := filepath.Join(mpvAndroidDir, ".mpv.conf")
+	confPath := filepath.Join(configDir, ".mpv.conf")
 	if err := os.WriteFile(confPath, []byte(confBuilder.String()), 0o600); err != nil {
 		return fmt.Errorf("write mpv android config: %w", err)
 	}

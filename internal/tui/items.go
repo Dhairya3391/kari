@@ -84,18 +84,21 @@ func progressMarker(entry history.Entry) string {
 
 func episodesToItems(items []provider.Episode, historyStore *history.Store, seriesTitle string, mode provider.ContentType, mediaType string, selected map[int]struct{}) []list.Item {
 	out := make([]list.Item, 0, len(items))
+	historyEntries := episodeHistorySnapshot(historyStore)
+	mutedStyle := lipgloss.NewStyle().Foreground(colorMuted)
+	fillerStyle := lipgloss.NewStyle().Foreground(ColorErr)
 	for idx, it := range items {
 		marker := "[    ] "
 		if _, sel := selected[idx]; sel {
 			marker = "[sel] "
-		} else if historyStore != nil {
-			entry, ok := historyStore.Get(history.EntryKey{
+		} else {
+			entry, ok := historyEntries[history.EntryKey{
 				Title:     seriesTitle,
 				Mode:      string(mode),
 				MediaType: mediaType,
 				Season:    it.Season,
 				Episode:   it.Episode,
-			})
+			}.String()]
 			if ok {
 				marker = progressMarker(entry)
 			}
@@ -111,15 +114,14 @@ func episodesToItems(items []provider.Episode, historyStore *history.Store, seri
 		}
 
 		// Apply filler color if episode is marked as filler
-		titleColor := colorMuted
-		titleStyle := lipgloss.NewStyle().Foreground(titleColor)
+		titleStyle := mutedStyle
 		if it.Filler {
-			titleStyle = lipgloss.NewStyle().Foreground(ColorErr)
+			titleStyle = fillerStyle
 		}
 
-		title := lipgloss.NewStyle().Foreground(colorMuted).Render(marker) + titleStyle.Render(fmt.Sprintf("%-7s", tag)) + (func() string {
+		title := mutedStyle.Render(marker) + titleStyle.Render(fmt.Sprintf("%-7s", tag)) + (func() string {
 			if it.Filler {
-				return lipgloss.NewStyle().Foreground(ColorErr).Render(it.Title)
+				return fillerStyle.Render(it.Title)
 			}
 			return it.Title
 		}())
@@ -136,6 +138,21 @@ func episodesToItems(items []provider.Episode, historyStore *history.Store, seri
 		})
 	}
 	return out
+}
+
+// episodeHistorySnapshot avoids locking and scanning history once per row.
+func episodeHistorySnapshot(store *history.Store) map[string]history.Entry {
+	entries := make(map[string]history.Entry)
+	if store == nil {
+		return entries
+	}
+	for _, entry := range store.All() {
+		key := entry.Key.String()
+		if _, exists := entries[key]; !exists {
+			entries[key] = entry
+		}
+	}
+	return entries
 }
 
 // chaptersToItems renders manga/comic chapters as selectable rows using

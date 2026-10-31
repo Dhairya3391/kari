@@ -448,6 +448,8 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 		}
 		if err := m.historyStore.Upsert(entry); err != nil {
 			tuiLog.Error("history upsert failed", "err", err)
+		} else {
+			m.invalidateEpisodeHistoryIndex()
 		}
 
 		// Update resolved StartTime to reflect updated resume point or completion

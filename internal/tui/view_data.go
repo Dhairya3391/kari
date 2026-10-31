@@ -77,8 +77,8 @@ func (m *modelImpl) collectEpisodesData(width, height int, accent lipgloss.Adapt
 		seriesTitle = m.selectedSeries.Title
 	}
 
-	// Compute season count from distinct seasons in the episode list
-	seasons := distinctSeasonNumbers(m.episodeResults)
+	seasonEpisodes, episodeIndices := m.currentSeasonEpisodes()
+	seasons := m.episodeSeasons()
 	seasonCount := len(seasons)
 	if seasonCount <= 0 {
 		seasonCount = 1
@@ -92,8 +92,8 @@ func (m *modelImpl) collectEpisodesData(width, height int, accent lipgloss.Adapt
 	}
 
 	selectedEpTitle := ""
-	if seasonEps, _ := m.currentSeasonEpisodes(); m.seasonEpisodeIndex >= 0 && m.seasonEpisodeIndex < len(seasonEps) {
-		ep := seasonEps[m.seasonEpisodeIndex]
+	if m.seasonEpisodeIndex >= 0 && m.seasonEpisodeIndex < len(seasonEpisodes) {
+		ep := seasonEpisodes[m.seasonEpisodeIndex]
 		num := ep.Episode
 		if num == 0 {
 			num = m.seasonEpisodeIndex + 1
@@ -106,14 +106,12 @@ func (m *modelImpl) collectEpisodesData(width, height int, accent lipgloss.Adapt
 	}
 
 	return EpisodesData{
-		SeriesTitle: seriesTitle,
-		Episodes:    m.episodeResults,
-		HistoryIndex: func() history.EpisodeIndex {
-			if m.historyStore == nil {
-				return nil
-			}
-			return history.BuildEpisodeIndex(m.historyStore.All(), seriesTitle)
-		}(),
+		SeriesTitle:          seriesTitle,
+		Episodes:             m.episodeResults,
+		filteredEpisodes:     seasonEpisodes,
+		episodeIndices:       episodeIndices,
+		episodeListReady:     true,
+		HistoryIndex:         m.episodeHistoryIndex(seriesTitle),
 		SelectedIndex:        m.seasonEpisodeIndex,
 		SeasonCount:          seasonCount,
 		ActiveSeason:         m.activeSeason,
@@ -136,6 +134,24 @@ func (m *modelImpl) collectEpisodesData(width, height int, accent lipgloss.Adapt
 		TermWidth:            m.width,
 		SelectedEpisodeTitle: selectedEpTitle,
 	}
+}
+
+func (m *modelImpl) episodeHistoryIndex(seriesTitle string) history.EpisodeIndex {
+	cache := &m.episodeHistory
+	if cache.valid && cache.title == seriesTitle {
+		return cache.index
+	}
+	cache.title = seriesTitle
+	cache.index = nil
+	if m.historyStore != nil {
+		cache.index = history.BuildEpisodeIndex(m.historyStore.All(), seriesTitle)
+	}
+	cache.valid = true
+	return cache.index
+}
+
+func (m *modelImpl) invalidateEpisodeHistoryIndex() {
+	m.episodeHistory.valid = false
 }
 func (m *modelImpl) collectChaptersData(width, height int, accent lipgloss.AdaptiveColor) ChaptersData {
 	title := "Chapters"

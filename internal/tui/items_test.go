@@ -1,12 +1,54 @@
 package tui
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"kari/internal/history"
 	"kari/internal/provider"
 )
+
+func TestEpisodesToItemsUsesMatchingHistoryEntries(t *testing.T) {
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+
+	entries := []history.Entry{
+		{
+			Key:             history.EntryKey{Title: "One Piece", Mode: "anime", MediaType: "tv", Season: 1, Episode: 1},
+			Title:           "One Piece",
+			Season:          1,
+			Episode:         1,
+			PercentComplete: 0.45,
+		},
+		{
+			Key:             history.EntryKey{Title: "One Piece", Mode: "tv", MediaType: "tv", Season: 1, Episode: 2},
+			Title:           "One Piece",
+			Season:          1,
+			Episode:         2,
+			PercentComplete: 0.75,
+		},
+	}
+	for _, entry := range entries {
+		if err := store.Upsert(entry); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+	}
+
+	items := episodesToItems([]provider.Episode{
+		{Season: 1, Episode: 1, Title: "Episode 1"},
+		{Season: 1, Episode: 2, Title: "Episode 2"},
+	}, store, "One Piece", provider.ModeAnime, "tv", nil)
+	if got := items[0].(rowItem).title; !strings.Contains(got, "45%") {
+		t.Errorf("matching anime history marker missing from %q", got)
+	}
+	if got := items[1].(rowItem).title; strings.Contains(got, "75%") {
+		t.Errorf("TV history leaked into anime row %q", got)
+	}
+}
 
 // TestHistoryTabs pins the tab split: in-progress (including untouched
 // 0% rows) under Continue, completed-only under Finished.

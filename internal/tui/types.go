@@ -32,6 +32,25 @@ const maxResolveAttempts = 3
 
 type viewState string
 
+// episodeListCache keeps the season/filter projection stable across key repeats.
+type episodeListCache struct {
+	source   []provider.Episode
+	seasons  []int
+	filtered []provider.Episode
+	indices  []int
+	season   int
+	filter   string
+	valid    bool
+}
+
+// episodeHistoryIndexCache avoids rebuilding the current series' index on
+// every repaint.
+type episodeHistoryIndexCache struct {
+	title string
+	index history.EpisodeIndex
+	valid bool
+}
+
 const (
 	viewSearch    viewState = "search"
 	viewEpisodes  viewState = "episodes"
@@ -320,6 +339,8 @@ type modelImpl struct {
 	allSeriesResults []provider.SearchResult
 	seriesResults    []provider.SearchResult
 	episodeResults   []provider.Episode
+	episodeCache     episodeListCache
+	episodeHistory   episodeHistoryIndexCache
 	selectedSeries   *provider.SearchResult
 	selectedEpisode  *provider.Episode
 	resolved         *model.ResolvedMedia

@@ -260,3 +260,37 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, nil
 }
+
+// FilterRedundantEpisodeNavigation drops key repeats that cannot move the
+// episode cursor, avoiding redraws while queued input drains at a boundary.
+func FilterRedundantEpisodeNavigation(model tea.Model, msg tea.Msg) tea.Msg {
+	m, ok := model.(*modelImpl)
+	if !ok || m.activeView != viewEpisodes || !m.hasCurrentEpisodeProjection() {
+		return msg
+	}
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return msg
+	}
+	index := m.seasonEpisodeIndex
+	count := len(m.episodeCache.filtered)
+	switch keyMsg.String() {
+	case "down", "j", "pgdown":
+		if index >= count-1 {
+			return nil
+		}
+	case "ctrl+d":
+		if !m.selectMode && !m.episodeFiltering && index >= count-1 {
+			return nil
+		}
+	case "up", "k", "pgup":
+		if index <= 0 {
+			return nil
+		}
+	case "ctrl+u":
+		if !m.selectMode && !m.episodeFiltering && index <= 0 {
+			return nil
+		}
+	}
+	return msg
+}

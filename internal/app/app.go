@@ -234,7 +234,7 @@ func Run() error {
 	if setter, ok := m.(interface{ SetBaseBackgroundColor(color.RGBA) }); ok {
 		setter.SetBaseBackgroundColor(bg)
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithFilter(tui.FilterRedundantEpisodeNavigation))
 	_, err = p.Run()
 	if err != nil {
 		logging.Error("program exited with error", "err", err)

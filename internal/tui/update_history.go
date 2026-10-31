@@ -274,6 +274,7 @@ func (m *modelImpl) cycleHistoryTab(reverse bool) tea.Cmd {
 // refreshHistoryItems rebuilds the list for the active tab from the
 // retained groups, without re-reading the store.
 func (m *modelImpl) refreshHistoryItems() {
+	m.invalidateEpisodeHistoryIndex()
 	if m.historyList.Width() == 0 && m.historyList.Height() == 0 {
 		return
 	}
@@ -494,6 +495,7 @@ func (m *modelImpl) onHistoryResolveSeries(msg historyResolveSeriesMsg) (tea.Mod
 	m.clearPreviewPoster()
 	m.selectedPlayback = 0
 	m.episodeResults = nil
+	m.episodeCache.valid = false
 	m.episodeIndex = -1
 	m.autoPlayAfterResolve = false
 	m.pushView(viewPreview)

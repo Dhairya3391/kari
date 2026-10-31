@@ -55,6 +55,47 @@ func TestEpisodesTopBottomKeys(t *testing.T) {
 	}
 }
 
+func TestEpisodesRepeatedDownAtEndDoesNotBlockMovingUp(t *testing.T) {
+	m := episodesTestModel()
+	m.episodeResults = make([]provider.Episode, 1180)
+	for i := range m.episodeResults {
+		m.episodeResults[i] = provider.Episode{Season: 1, Episode: i + 1}
+	}
+	m.seasonEpisodeIndex = len(m.episodeResults) - 1
+	m.currentSeasonEpisodes()
+
+	for range 200 {
+		m.updateEpisodes(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if got := m.seasonEpisodeIndex; got != len(m.episodeResults)-1 {
+		t.Fatalf("down at end moved cursor to %d, want %d", got, len(m.episodeResults)-1)
+	}
+	m.updateEpisodes(tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.seasonEpisodeIndex; got != len(m.episodeResults)-2 {
+		t.Fatalf("up after repeated down moved cursor to %d, want %d", got, len(m.episodeResults)-2)
+	}
+}
+
+func TestFilterRedundantEpisodeNavigationDropsOnlyBoundaryRepeats(t *testing.T) {
+	m := episodesTestModel()
+	m.currentSeasonEpisodes()
+	m.seasonEpisodeIndex = len(m.episodeCache.filtered) - 1
+
+	down := tea.KeyMsg{Type: tea.KeyDown}
+	if got := FilterRedundantEpisodeNavigation(m, down); got != nil {
+		t.Fatalf("down at end = %v, want it filtered", got)
+	}
+	up := tea.KeyMsg{Type: tea.KeyUp}
+	if got := FilterRedundantEpisodeNavigation(m, up); got == nil {
+		t.Fatal("up at end was filtered")
+	}
+
+	m.seasonEpisodeIndex = 0
+	if got := FilterRedundantEpisodeNavigation(m, up); got != nil {
+		t.Fatalf("up at start = %v, want it filtered", got)
+	}
+}
+
 func TestEpisodesHorizontalArrowsChangeSeason(t *testing.T) {
 	m := episodesTestModel()
 	m.episodeResults = append(m.episodeResults,

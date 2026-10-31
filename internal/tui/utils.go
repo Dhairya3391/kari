@@ -425,8 +425,48 @@ func distinctSeasonNumbers(episodes []provider.Episode) []int {
 	return service.EpisodeSeasons(episodes)
 }
 
+func (m *modelImpl) episodeSeasons() []int {
+	m.ensureEpisodeListCache()
+	return m.episodeCache.seasons
+}
+
 func (m *modelImpl) currentSeasonEpisodes() ([]provider.Episode, []int) {
-	return service.FilterEpisodeList(m.episodeResults, m.activeSeason, m.episodeFilter)
+	m.ensureEpisodeListCache()
+	cache := &m.episodeCache
+	if cache.season != m.activeSeason || cache.filter != m.episodeFilter {
+		cache.filtered, cache.indices = service.FilterEpisodeList(m.episodeResults, m.activeSeason, m.episodeFilter)
+		cache.season = m.activeSeason
+		cache.filter = m.episodeFilter
+	}
+	return cache.filtered, cache.indices
+}
+
+func (m *modelImpl) hasCurrentEpisodeProjection() bool {
+	cache := &m.episodeCache
+	return cache.valid && episodeSlicesShareSource(cache.source, m.episodeResults) &&
+		cache.season == m.activeSeason && cache.filter == m.episodeFilter
+}
+
+func (m *modelImpl) ensureEpisodeListCache() {
+	cache := &m.episodeCache
+	if cache.valid && episodeSlicesShareSource(cache.source, m.episodeResults) {
+		return
+	}
+	*cache = episodeListCache{
+		source:  m.episodeResults,
+		seasons: service.EpisodeSeasons(m.episodeResults),
+		season:  m.activeSeason,
+		filter:  m.episodeFilter,
+		valid:   true,
+	}
+	cache.filtered, cache.indices = service.FilterEpisodeList(m.episodeResults, m.activeSeason, m.episodeFilter)
+}
+
+func episodeSlicesShareSource(left, right []provider.Episode) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	return len(left) == 0 || &left[0] == &right[0]
 }
 
 // clampEpisodeIndex keeps the cursor inside the visible (season- and

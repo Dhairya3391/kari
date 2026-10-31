@@ -19,10 +19,21 @@ import (
 const (
 	androidStartupTimeout = 5000 * time.Millisecond
 	mxPlayerPackage       = "com.mxtech.videoplayer.ad"
-	mpvAndroidPackage     = "is.xyz.mpv"
-	mpvAndroidDir         = "/storage/emulated/0/Android/media/is.xyz.mpv"
+	mpvAndroidDefault     = "is.xyz.mpv"
+	mpvAndroidPackageEnv  = "KARI_MPV_ANDROID_PACKAGE"
 	sharedSubtitleDir     = "/storage/emulated/0/Download/kari"
 )
+
+func mpvAndroidPackageName() string {
+	if pkg := strings.TrimSpace(os.Getenv(mpvAndroidPackageEnv)); pkg != "" {
+		return pkg
+	}
+	return mpvAndroidDefault
+}
+
+func mpvAndroidConfigDir() string {
+	return "/storage/emulated/0/Android/media/" + mpvAndroidPackageName()
+}
 
 // androidLauncher remembers which activity-manager invocation works on the
 // current device without leaking signed intent arguments into logs.

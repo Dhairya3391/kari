@@ -52,7 +52,7 @@ VLC works across Linux, macOS, and Windows.
 
 - Launched via Android Intents through `am start`.
 - Because Android Intents cannot reliably pass custom HTTP headers or complex CLI arguments, Kari uses a bridge file:
-  Add `include=/storage/emulated/0/Android/media/is.xyz.mpv/.mpv.conf` to your `mpv.conf` in the MPV Android app settings (**Settings → Advanced → Edit mpv.conf**). Kari writes stream headers and subtitle paths there before launch.
+  Add `include=/storage/emulated/0/Android/media/<package>/.mpv.conf` to your `mpv.conf` in the mpv Android app settings (**Settings → Advanced → Edit mpv.conf**). The package defaults to `is.xyz.mpv`; set `KARI_MPV_ANDROID_PACKAGE` in Termux to use another client, and replace `<package>` with that value. Kari writes stream headers and subtitle paths there before launch.
 
 #### MX Player
 

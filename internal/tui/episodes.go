@@ -20,22 +20,25 @@ type EpisodeItem struct {
 
 // EpisodesData holds the state needed to render the Episodes screen.
 type EpisodesData struct {
-	SeriesTitle   string
-	Episodes      []provider.Episode
-	HistoryIndex  history.EpisodeIndex
-	SelectedIndex int
-	SeasonCount   int
-	ActiveSeason  int
-	SelectMode    bool
-	SelectedIDs   map[int]struct{}
-	FilterQuery   string
-	Filtering     bool // true while the user is typing a / filter
-	Loading       bool
-	LoadingText   string
-	SpinnerFrame  string
-	Width         int
-	Height        int
-	Accent        lipgloss.AdaptiveColor
+	SeriesTitle      string
+	Episodes         []provider.Episode
+	filteredEpisodes []provider.Episode
+	episodeIndices   []int
+	episodeListReady bool
+	HistoryIndex     history.EpisodeIndex
+	SelectedIndex    int
+	SeasonCount      int
+	ActiveSeason     int
+	SelectMode       bool
+	SelectedIDs      map[int]struct{}
+	FilterQuery      string
+	Filtering        bool // true while the user is typing a / filter
+	Loading          bool
+	LoadingText      string
+	SpinnerFrame     string
+	Width            int
+	Height           int
+	Accent           lipgloss.AdaptiveColor
 	// Inspector pane fields (shown at >= 110 terminal width)
 	PosterBlock    string // pre-rendered poster or half-block art
 	SeriesYear     string // "2023"
@@ -116,7 +119,10 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 
 	// Filter to active season, then by text query. SelectedIndex addresses
 	// the final filtered list.
-	seasonEpisodes, origIndices := service.FilterEpisodeList(data.Episodes, data.ActiveSeason, data.FilterQuery)
+	seasonEpisodes, origIndices := data.filteredEpisodes, data.episodeIndices
+	if !data.episodeListReady {
+		seasonEpisodes, origIndices = service.FilterEpisodeList(data.Episodes, data.ActiveSeason, data.FilterQuery)
+	}
 
 	if data.Filtering || strings.TrimSpace(data.FilterQuery) != "" {
 		rows = append(rows, st.Dim.Render("/")+data.FilterQuery+st.Cursor.Render("▌"))
@@ -136,14 +142,15 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 	startIndex := windowStart(len(seasonEpisodes), data.SelectedIndex, visibleHeight)
 	endIndex := min(len(seasonEpisodes), startIndex+visibleHeight)
 
-	// 3. Episode rows with scroll window. The right column (progress or
-	// runtime) is padded to one width so titles align across rows.
+	// 3. Episode rows with scroll window. Only visible rows need styled
+	// progress labels; formatting the full roster on every repaint stalls
+	// navigation for long-running series.
 	multiSeason := data.SeasonCount > 1
-	rightCols := make([]string, len(seasonEpisodes))
+	rightCols := make([]string, endIndex-startIndex)
 	rightW := 0
-	for i, ep := range seasonEpisodes {
-		rightCols[i] = episodeRightCol(ep, historyEntryFor(data, ep), i == data.SelectedIndex, data.Accent, st)
-		if w := lipgloss.Width(rightCols[i]); w > rightW {
+	for i := startIndex; i < endIndex; i++ {
+		rightCols[i-startIndex] = episodeRightCol(seasonEpisodes[i], historyEntryFor(data, seasonEpisodes[i]), i == data.SelectedIndex, data.Accent, st)
+		if w := lipgloss.Width(rightCols[i-startIndex]); w > rightW {
 			rightW = w
 		}
 	}
@@ -151,7 +158,7 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 	for i := startIndex; i < endIndex; i++ {
 		ep := seasonEpisodes[i]
 		isFocused := i == data.SelectedIndex
-		rows = append(rows, renderEpisodeRow(ep, origIndices[i], isFocused, multiSeason, rightCols[i], rightW, data, listW, st))
+		rows = append(rows, renderEpisodeRow(ep, origIndices[i], isFocused, multiSeason, rightCols[i-startIndex], rightW, data, listW, st))
 	}
 
 	// In Select Mode, show selection count summary line before footer
