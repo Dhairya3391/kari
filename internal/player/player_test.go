@@ -109,6 +109,15 @@ func TestBuildMPVArgsIncludesAlang(t *testing.T) {
 	}
 }
 
+func TestBuildMPVArgsUsesPreferredSubtitleLanguage(t *testing.T) {
+	args := buildMPVArgs(provider.MediaSource{URL: "https://example.com/video.m3u8"}, model.ResolvedMedia{
+		SubtitleLanguage: "ja",
+	}, "/tmp/sock", nil)
+	if !containsArg(args, "--slang=ja,jpn,japanese,en,eng") {
+		t.Errorf("buildMPVArgs missing preferred subtitle language: %v", args)
+	}
+}
+
 func TestDesktopPlayersUseTheirNativeAudioLanguageOptions(t *testing.T) {
 	source := provider.MediaSource{URL: "https://example.com/stream.m3u8", Language: "hi"}
 	media := model.ResolvedMedia{}

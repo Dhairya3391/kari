@@ -35,6 +35,7 @@ var (
 	reFileSize   = regexp.MustCompile(`(?i)\b(\d+(?:\.\d+)?\s*(?:gb|mb))\b`)
 	reRemux      = regexp.MustCompile(`(?i)\bremux\b`)
 	reIMAX       = regexp.MustCompile(`(?i)\bimax\b`)
+	reBluRay     = regexp.MustCompile(`(?i)\bbluray\b`)
 )
 
 const (
@@ -328,9 +329,27 @@ func toMediaSource(cleanURL string, item streamItem) provider.MediaSource {
 	return provider.MediaSource{
 		URL:       cleanURL,
 		Quality:   quality,
+		Backend:   extractSourceName(title),
 		Type:      srcType,
 		UserAgent: config.DesktopUserAgent,
 	}
+}
+
+func extractSourceName(title string) string {
+	var labels []string
+	if reBluRay.MatchString(title) {
+		labels = append(labels, "BluRay")
+	}
+	if reIMAX.MatchString(title) {
+		labels = append(labels, "IMAX")
+	}
+	if reRemux.MatchString(title) {
+		labels = append(labels, "Remux")
+	}
+	if len(labels) == 0 {
+		return "Direct"
+	}
+	return strings.Join(labels, " ")
 }
 
 func extractQuality(title string) string {

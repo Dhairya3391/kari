@@ -118,8 +118,27 @@ func TestA11ResolveStreamMovie(t *testing.T) {
 	if sources[0].Quality != "2160P [Remux 54.3 GB]" {
 		t.Errorf("expected 2160P [Remux 54.3 GB], got %s", sources[0].Quality)
 	}
+	if sources[0].Backend != "BluRay Remux" {
+		t.Errorf("expected BluRay Remux source name, got %q", sources[0].Backend)
+	}
 	if sources[0].URL != "https://young-hill-365c.bdegd.workers.dev/d/sample1" {
 		t.Errorf("unexpected URL: %s", sources[0].URL)
+	}
+}
+
+func TestExtractSourceName(t *testing.T) {
+	tests := []struct {
+		title string
+		want  string
+	}{
+		{"Title.2160p.UHD.BluRay.REMUX.mkv", "BluRay Remux"},
+		{"Title.INTERNAL.IMAX.2160p.mkv", "IMAX"},
+		{"Title.1080p.WEB-DL.mkv", "Direct"},
+	}
+	for _, tc := range tests {
+		if got := extractSourceName(tc.title); got != tc.want {
+			t.Errorf("extractSourceName(%q) = %q, want %q", tc.title, got, tc.want)
+		}
 	}
 }
 
