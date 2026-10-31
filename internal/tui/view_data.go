@@ -243,7 +243,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 	if subLang != "" && subLang != "off" {
 		subtitlesText = subLang
 		if src, ok := m.selectedPlaybackSource(); ok {
-			subtitleType = detectSubtitleType(src, m.resolved, m.rawSubtitles, m.appMode, m.audioMode)
+			subtitleType = detectSubtitleType(src, m.resolved, m.rawSubtitles, m.appMode)
 			if m.resolved != nil && m.resolved.SubtitlePath() != "" {
 				subtitlesText += " ✓"
 				if m.resolved.SelectedSubtitle != nil {
@@ -338,7 +338,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 
 // detectSubtitleType determines the subtitle kind ("hard subs" or "soft subs")
 // for the selected playback source and media context; returns empty string if unknown.
-func detectSubtitleType(src provider.MediaSource, resolved *model.ResolvedMedia, rawSubtitles []model.SubtitleTrack, mode provider.ContentType, _ string) string {
+func detectSubtitleType(src provider.MediaSource, resolved *model.ResolvedMedia, rawSubtitles []model.SubtitleTrack, mode provider.ContentType) string {
 	if mode != provider.ModeAnime {
 		return ""
 	}

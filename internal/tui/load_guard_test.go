@@ -473,29 +473,6 @@ func TestVodPlayStaysOnPreview(t *testing.T) {
 	}
 }
 
-// Backend display names come from typed metadata, not quality labels.
-func TestSourceBackendName(t *testing.T) {
-	display := func(s string) string { return "Pengu-" + s }
-	cases := []struct {
-		backend string
-		want    string
-	}{
-		{"4KHDHub", "4KHDHub"},
-		{"Vidstream-2", "Vidstream-2"},
-		{"", "Pengu-pengu"},
-		{"", "Pengu-pengu"},
-	}
-	for _, tc := range cases {
-		src := provider.MediaSource{Backend: tc.backend, Resolver: "pengu"}
-		if got := sourceBackendName(src, display); got != tc.want {
-			t.Errorf("backend(%q) = %q, want %q", tc.backend, got, tc.want)
-		}
-	}
-	if got := sourceBackendName(provider.MediaSource{}, nil); got != "—" {
-		t.Errorf("empty source backend = %q, want —", got)
-	}
-}
-
 // TestPlayingStatusStaysWhilePlaying pins that "Playing in progress..."
 // never expires on its own: it lasts until playDoneMsg replaces it with
 // the finished/failed status (which keeps the normal threshold).

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"kari/internal/downloader"
+	"kari/internal/provider"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,11 +158,31 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(data.Active) > 0 && m.downloadsIndex < len(data.Active) {
 				item := data.Active[m.downloadsIndex]
 				if item.Queued {
-					// A queued episode has no files yet: just drop it.
+					// Restart from the active episode so the worker observes the
+					// shortened queue without losing its resumable partial files.
 					targetIdx := max(0, m.batchCurrent-1) + m.downloadsIndex
 					if targetIdx >= 0 && targetIdx < len(m.batchEpisodes) {
 						m.batchEpisodes = append(m.batchEpisodes[:targetIdx], m.batchEpisodes[targetIdx+1:]...)
 						m.batchTotal = len(m.batchEpisodes)
+						if m.pendingDownload != nil && m.downloadService != nil {
+							m.pendingDownload.Episodes = append([]provider.Episode(nil), m.batchEpisodes...)
+							_ = m.downloadService.SavePendingJob(*m.pendingDownload)
+						}
+						if m.batchCancel != nil {
+							m.batchCancel()
+							m.batchCancel = nil
+						}
+						if m.batchInProgress && len(m.batchEpisodes) > 0 {
+							opID := m.newOpID()
+							m.downloadOpID = opID
+							m.batchInProgress = true
+							startIndex := max(1, m.batchCurrent)
+							if startIndex > len(m.batchEpisodes) {
+								startIndex = len(m.batchEpisodes)
+							}
+							cmd := m.batchDownloadCmd(opID, m.batchEpisodes[startIndex-1:], m.batchSeries, m.batchMode, true, startIndex, len(m.batchEpisodes))
+							return m, tea.Batch(m.setToast(fmt.Sprintf("cancelled %s", item.Title), ToastInfo), cmd)
+						}
 					}
 					return m, m.setToast(fmt.Sprintf("cancelled %s", item.Title), ToastInfo)
 				}

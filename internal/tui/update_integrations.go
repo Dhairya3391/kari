@@ -144,7 +144,11 @@ func (m *modelImpl) startHistoryImport(source string) (tea.Model, tea.Cmd) {
 // take their own timeouts, and the merge is plain store writes.
 func (m *modelImpl) historyImportCmd(opID int, source string) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.appCtx, 90*time.Second)
+		parentCtx := m.appCtx
+		if parentCtx == nil {
+			parentCtx = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
 		defer cancel()
 
 		items, err := m.fetchSourceItems(ctx, source)
@@ -204,7 +208,11 @@ func (m *modelImpl) autoHistoryImportCmd() tea.Cmd {
 	opID := m.newOpID()
 	m.historyImportOpID = opID
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.appCtx, 180*time.Second)
+		parentCtx := m.appCtx
+		if parentCtx == nil {
+			parentCtx = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(parentCtx, 180*time.Second)
 		defer cancel()
 
 		var (

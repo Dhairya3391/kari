@@ -254,20 +254,3 @@ func (m *modelImpl) preferredRepairNeeded() bool {
 	}
 	return false
 }
-
-// sourceBackendName uses provider-supplied backend metadata when present,
-// falling back to the provider's display name.
-func sourceBackendName(src provider.MediaSource, displayName func(string) string) string {
-	if name := strings.TrimSpace(src.Backend); name != "" {
-		return name
-	}
-	if displayName != nil {
-		if name := displayName(src.Resolver); name != "" {
-			return name
-		}
-	}
-	if strings.TrimSpace(src.Resolver) != "" {
-		return src.Resolver
-	}
-	return "—"
-}

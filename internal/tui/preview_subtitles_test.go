@@ -127,7 +127,7 @@ func TestDetectSubtitleType(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := detectSubtitleType(tc.src, tc.resolved, tc.rawSubtitles, tc.mode, tc.audioMode)
+			got := detectSubtitleType(tc.src, tc.resolved, tc.rawSubtitles, tc.mode)
 			if got != tc.want {
 				t.Errorf("detectSubtitleType() = %q, want %q", got, tc.want)
 			}
