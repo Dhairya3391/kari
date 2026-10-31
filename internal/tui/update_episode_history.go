@@ -111,6 +111,7 @@ func (m *modelImpl) markEpisodeComplete(ep provider.Episode) error {
 		SeriesTitle:   seriesTitle,
 		EpisodeTitle:  entry.EpisodeTitle,
 		MediaType:     mediaType,
+		AniListID:     entry.AniListID,
 		SeasonNumber:  ep.Season,
 		EpisodeNumber: ep.Episode,
 		TMDBID:        tmdbID,

@@ -455,8 +455,11 @@ func mangaScrobbleChapter(number string) (int, bool) {
 // tracker. AniList counts chapters read, so callers invoke this only after
 // the chapter's last page.
 func (m *modelImpl) triggerMangaScrobble() {
-	if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() ||
-		m.selectedSeries == nil || m.selectedChapter == nil {
+	if m.selectedSeries == nil || m.selectedChapter == nil {
+		return
+	}
+	if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
+		tuiLog.Warn("anilist manga sync skipped", "title", m.selectedSeries.Title, "reason", "not authenticated")
 		return
 	}
 	chapter, ok := mangaScrobbleChapter(m.selectedChapter.Number)
@@ -486,7 +489,7 @@ func (m *modelImpl) triggerMangaScrobble() {
 		ctx, cancel := context.WithTimeout(appCtx, 15*time.Second)
 		defer cancel()
 		if err := client.UpdateMangaProgress(ctx, progress); err != nil {
-			tuiLog.Debug("anilist manga scrobble failed",
+			tuiLog.Error("anilist manga progress sync failed",
 				"title", progress.Title, "chapter", progress.Chapter, "err", err)
 			return
 		}

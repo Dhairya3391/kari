@@ -199,10 +199,14 @@ func (c *AniListClient) UpdateProgress(ctx context.Context, media model.Resolved
 
 	aniLog.Debug("updating progress", "series", media.SeriesTitle, "episode", media.EpisodeNumber)
 
-	// Always search by title because TMDB IDs are not AniList IDs
-	mediaID, err := c.searchMediaID(ctx, media.SeriesTitle)
-	if err != nil {
-		return fmt.Errorf("failed to find anilist media id: %w", err)
+	// Prefer the AniList catalog id; title search is only a fallback.
+	mediaID := media.AniListID
+	if mediaID <= 0 {
+		var err error
+		mediaID, err = c.searchMediaID(ctx, media.SeriesTitle)
+		if err != nil {
+			return fmt.Errorf("failed to find anilist media id: %w", err)
+		}
 	}
 
 	aniLog.Debug("media resolved", "mediaID", mediaID, "series", media.SeriesTitle)

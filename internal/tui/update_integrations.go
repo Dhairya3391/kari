@@ -285,16 +285,26 @@ func (m *modelImpl) triggerScrobble(entry history.Entry, media *model.ResolvedMe
 	if entry.Complete {
 		if m.anilistClient != nil && entry.Mode == string(provider.ModeAnime) {
 			go func() {
-				_ = m.anilistClient.UpdateProgress(context.Background(), *media)
+				if err := m.anilistClient.UpdateProgress(context.Background(), *media); err != nil {
+					tuiLog.Error("anilist episode progress sync failed", "title", media.SeriesTitle, "episode", media.EpisodeNumber, "err", err)
+					return
+				}
+				tuiLog.Info("anilist episode progress synced", "title", media.SeriesTitle, "episode", media.EpisodeNumber)
 			}()
 		}
 		if m.traktClient != nil {
 			go func() {
+				var err error
 				if entry.MediaType == provider.MediaTypeMovie {
-					_ = m.traktClient.ScrobbleMovie(context.Background(), *media, 100)
+					err = m.traktClient.ScrobbleMovie(context.Background(), *media, 100)
 				} else {
-					_ = m.traktClient.ScrobbleEpisode(context.Background(), *media, 100)
+					err = m.traktClient.ScrobbleEpisode(context.Background(), *media, 100)
 				}
+				if err != nil {
+					tuiLog.Error("trakt watch sync failed", "title", media.SeriesTitle, "episode", media.EpisodeNumber, "err", err)
+					return
+				}
+				tuiLog.Info("trakt watch synced", "title", media.SeriesTitle, "episode", media.EpisodeNumber)
 			}()
 		}
 	}

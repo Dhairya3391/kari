@@ -32,9 +32,11 @@ type ResolvedMedia struct {
 	MediaType    string
 	// ContentMode identifies the provider catalog used for resolution. Anime
 	// movies keep MediaTypeMovie while still following anime subtitle policy.
-	ContentMode   provider.ContentType
-	Year          string
-	TMDBID        int
+	ContentMode provider.ContentType
+	Year        string
+	TMDBID      int
+	// AniListID identifies anime directly when a title search could be ambiguous.
+	AniListID     int
 	SeasonNumber  int
 	EpisodeNumber int
 	Resolver      string
