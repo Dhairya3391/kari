@@ -418,8 +418,8 @@ func renderInlineConfirm(prompt string, _ int, st Styles) string {
 }
 
 // sortGroupsByDateBucket reorders groups in Today → This week → Earlier
-// order, matching renderHistoryList exactly. Within each bucket the
-// original (newest-first) order is preserved. finishedTab selects
+// order, matching renderHistoryList exactly. Each bucket is newest-first.
+// finishedTab selects
 // FarthestComplete instead of ContinueEntry for the timestamp, mirroring
 // the renderer's tab-aware entry selection.
 func sortGroupsByDateBucket(groups []history.Group, finishedTab bool) []history.Group {
@@ -441,7 +441,15 @@ func sortGroupsByDateBucket(groups []history.Group, finishedTab bool) []history.
 	out := make([]history.Group, len(groups))
 	copy(out, groups)
 	sort.SliceStable(out, func(i, j int) bool {
-		return bucket(out[i]) < bucket(out[j])
+		leftBucket, rightBucket := bucket(out[i]), bucket(out[j])
+		if leftBucket != rightBucket {
+			return leftBucket < rightBucket
+		}
+		left, right := out[i].ContinueEntry, out[j].ContinueEntry
+		if finishedTab {
+			left, right = out[i].FarthestComplete, out[j].FarthestComplete
+		}
+		return left.WatchedAt.After(right.WatchedAt)
 	})
 	return out
 }

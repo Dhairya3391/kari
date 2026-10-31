@@ -4,6 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"kari/internal/history"
 	"kari/internal/logging"
 	"kari/internal/model"
@@ -11,9 +16,6 @@ import (
 	"kari/internal/scrobble"
 	"kari/internal/service"
 	"kari/internal/util"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -172,6 +174,28 @@ type animeHistoryProgress struct {
 
 func exportHistory(ctx context.Context, entries []history.Entry, ani *scrobble.AniListClient, trakt *scrobble.TraktClient) (int, int) {
 	synced, skipped := 0, 0
+	type syncJob struct {
+		name      string
+		skipOnErr int
+		run       func(context.Context) (int, error)
+	}
+	var jobs []syncJob
+	var traktCandidates []scrobble.WatchedItem
+	traktReady := trakt != nil && trakt.IsAuthenticated()
+	traktRemote := make(map[string]struct{})
+	if traktReady {
+		watched, err := trakt.FetchWatchedHistory(ctx)
+		if err != nil {
+			tuiLog.Error("trakt history check failed; skipping export to avoid duplicates", "err", err)
+			traktReady = false
+		} else {
+			for _, item := range watched {
+				for _, key := range traktHistoryKeys(item) {
+					traktRemote[key] = struct{}{}
+				}
+			}
+		}
+	}
 	animeProgress := make(map[string]animeHistoryProgress)
 	mangaProgress := make(map[string]scrobble.MangaProgress)
 	for _, entry := range entries {
@@ -209,51 +233,128 @@ func exportHistory(ctx context.Context, entries []history.Entry, ani *scrobble.A
 				}
 			}
 		}
-		if trakt == nil || !trakt.IsAuthenticated() || entry.Mode == string(provider.ModeManga) {
+		if !traktReady || entry.Mode == string(provider.ModeManga) || entry.Mode == string(provider.ModeLive) {
+			if !traktReady && trakt != nil && trakt.IsAuthenticated() &&
+				entry.Mode != string(provider.ModeManga) && entry.Mode != string(provider.ModeLive) &&
+				(entry.MediaType == provider.MediaTypeMovie || entry.Episode > 0) {
+				skipped++
+			}
 			continue
 		}
-		media := model.ResolvedMedia{
-			SeriesTitle: entry.Title, MediaType: entry.MediaType, TMDBID: entry.TMDBID,
-			SeasonNumber: entry.Season, EpisodeNumber: entry.Episode,
+		item := scrobble.WatchedItem{
+			Title: entry.Title, Mode: entry.Mode, MediaType: entry.MediaType,
+			Season: entry.Season, Episode: entry.Episode, TMDBID: entry.TMDBID,
+			Complete: true, WatchedAt: entry.WatchedAt,
 		}
-		var err error
-		if entry.MediaType == provider.MediaTypeMovie {
-			err = trakt.ScrobbleMovie(ctx, media, 1)
-		} else if entry.Episode > 0 {
-			err = trakt.ScrobbleEpisode(ctx, media, 1)
-		} else {
+		if entry.MediaType != provider.MediaTypeMovie && entry.Episode <= 0 {
 			skipped++
 			continue
 		}
-		if err != nil {
-			tuiLog.Error("trakt local history sync failed", "title", entry.Title, "episode", entry.Episode, "err", err)
-			skipped++
-		} else {
-			synced++
+		alreadySynced := false
+		for _, key := range traktHistoryKeys(item) {
+			if _, ok := traktRemote[key]; ok {
+				alreadySynced = true
+				break
+			}
 		}
+		if alreadySynced {
+			skipped++
+			continue
+		}
+		traktCandidates = append(traktCandidates, item)
+		for _, key := range traktHistoryKeys(item) {
+			traktRemote[key] = struct{}{}
+		}
+	}
+	if trakt != nil && trakt.IsAuthenticated() && !traktReady {
+		skipped += len(traktCandidates)
+		traktCandidates = nil
 	}
 	if ani != nil && ani.IsAuthenticated() {
 		for _, progress := range animeProgress {
 			progress.media.EpisodeNumber = progress.max
-			if err := ani.UpdateProgress(ctx, progress.media); err != nil {
-				tuiLog.Error("anilist local history sync failed", "title", progress.media.SeriesTitle, "episode", progress.max, "err", err)
-				skipped++
-			} else {
-				synced++
-			}
+			media := progress.media
+			jobs = append(jobs, syncJob{
+				name:      media.SeriesTitle,
+				skipOnErr: 1,
+				run: func(ctx context.Context) (int, error) {
+					if err := ani.UpdateProgress(ctx, media); err != nil {
+						return 0, err
+					}
+					return 1, nil
+				},
+			})
 		}
 		for _, progress := range mangaProgress {
-			if err := ani.UpdateMangaProgress(ctx, progress); err != nil {
-				tuiLog.Error("anilist local manga history sync failed", "title", progress.Title, "chapter", progress.Chapter, "err", err)
-				skipped++
-			} else {
-				synced++
-			}
+			jobs = append(jobs, syncJob{
+				name:      progress.Title,
+				skipOnErr: 1,
+				run: func(ctx context.Context) (int, error) {
+					if err := ani.UpdateMangaProgress(ctx, progress); err != nil {
+						return 0, err
+					}
+					return 1, nil
+				},
+			})
 		}
 	} else {
 		skipped += len(animeProgress) + len(mangaProgress)
 	}
+	if len(traktCandidates) > 0 {
+		candidates := traktCandidates
+		jobs = append(jobs, syncJob{
+			name:      "Trakt history",
+			skipOnErr: len(candidates),
+			run: func(ctx context.Context) (int, error) {
+				return trakt.SyncWatchedHistory(ctx, candidates)
+			},
+		})
+	}
+	jobQueue := make(chan syncJob, len(jobs))
+	for _, job := range jobs {
+		jobQueue <- job
+	}
+	close(jobQueue)
+	var mu sync.Mutex
+	var workers sync.WaitGroup
+	for range min(4, len(jobs)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for job := range jobQueue {
+				count, err := job.run(ctx)
+				if err != nil {
+					tuiLog.Error("connected account history sync failed", "title", job.name, "err", err)
+					mu.Lock()
+					synced += count
+					skipped += max(0, job.skipOnErr-count)
+					mu.Unlock()
+					continue
+				}
+				mu.Lock()
+				synced += count
+				mu.Unlock()
+			}
+		}()
+	}
+	workers.Wait()
 	return synced, skipped
+}
+
+func traktHistoryKeys(item scrobble.WatchedItem) []string {
+	if item.MediaType == provider.MediaTypeMovie {
+		keys := []string{"movie:title:" + strings.ToLower(strings.TrimSpace(item.Title))}
+		if item.TMDBID > 0 {
+			keys = append(keys, "movie:tmdb:"+strconv.Itoa(item.TMDBID))
+		}
+		return keys
+	}
+	coordinate := strconv.Itoa(item.Season) + ":" + strconv.Itoa(item.Episode)
+	keys := []string{"episode:title:" + strings.ToLower(strings.TrimSpace(item.Title)) + ":" + coordinate}
+	if item.TMDBID > 0 {
+		keys = append(keys, "episode:tmdb:"+strconv.Itoa(item.TMDBID)+":"+coordinate)
+	}
+	return keys
 }
 
 func historyEntryComplete(entry history.Entry) bool {

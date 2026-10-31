@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"kari/internal/httpclient"
 	"kari/internal/logging"
 	"kari/internal/model"
+	"kari/internal/provider"
 	"kari/internal/util"
 )
 
@@ -309,6 +312,194 @@ func (c *TraktClient) ScrobbleMovie(ctx context.Context, media model.ResolvedMed
 	}
 
 	return c.doScrobble(ctx, payload)
+}
+
+type traktHistoryMovie struct {
+	Title     string       `json:"title,omitempty"`
+	IDs       traktSyncIDs `json:"ids,omitempty"`
+	WatchedAt string       `json:"watched_at"`
+}
+
+type traktHistoryShow struct {
+	Title   string               `json:"title,omitempty"`
+	IDs     traktSyncIDs         `json:"ids,omitempty"`
+	Seasons []traktHistorySeason `json:"seasons"`
+	season  map[int]int
+}
+
+type traktHistorySeason struct {
+	Number   int                   `json:"number"`
+	Episodes []traktHistoryEpisode `json:"episodes"`
+	episode  map[int]struct{}
+}
+
+type traktHistoryEpisode struct {
+	Number    int    `json:"number"`
+	WatchedAt string `json:"watched_at"`
+}
+
+type traktSyncIDs struct {
+	TMDB int `json:"tmdb,omitempty"`
+}
+
+type traktHistoryPayload struct {
+	Movies []traktHistoryMovie `json:"movies,omitempty"`
+	Shows  []traktHistoryShow  `json:"shows,omitempty"`
+}
+
+// SyncWatchedHistory adds a batch of completed local entries through Trakt's
+// history endpoint, which accepts multiple events in one rate-limited write.
+func (c *TraktClient) SyncWatchedHistory(ctx context.Context, items []WatchedItem) (int, error) {
+	if !c.IsAuthenticated() {
+		return 0, fmt.Errorf("trakt not connected")
+	}
+	const batchSize = 100
+	var synced int
+	var lastRequest time.Time
+	for start := 0; start < len(items); start += batchSize {
+		if !lastRequest.IsZero() {
+			if err := waitContext(ctx, time.Until(lastRequest.Add(1100*time.Millisecond))); err != nil {
+				return synced, err
+			}
+		}
+		end := min(start+batchSize, len(items))
+		payload := traktHistoryBatch(items[start:end])
+		if len(payload.Movies) == 0 && len(payload.Shows) == 0 {
+			continue
+		}
+		lastRequest = time.Now()
+		if err := c.postHistoryBatch(ctx, payload); err != nil {
+			return synced, err
+		}
+		synced += len(items[start:end])
+	}
+	return synced, nil
+}
+
+func traktHistoryBatch(items []WatchedItem) traktHistoryPayload {
+	payload := traktHistoryPayload{}
+	showIndexes := make(map[string]int)
+	for _, item := range items {
+		watchedAt := item.WatchedAt
+		if watchedAt.IsZero() {
+			watchedAt = time.Now()
+		}
+		stamp := watchedAt.UTC().Format(time.RFC3339)
+		if item.MediaType == provider.MediaTypeMovie {
+			payload.Movies = append(payload.Movies, traktHistoryMovie{
+				Title: item.Title, IDs: traktSyncIDs{TMDB: item.TMDBID}, WatchedAt: stamp,
+			})
+			continue
+		}
+		if item.Episode <= 0 || item.Mode == string(provider.ModeLive) || item.Mode == string(provider.ModeManga) {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(item.Title))
+		if item.TMDBID > 0 {
+			key = strconv.Itoa(item.TMDBID)
+		}
+		showIndex, ok := showIndexes[key]
+		if !ok {
+			showIndex = len(payload.Shows)
+			showIndexes[key] = showIndex
+			payload.Shows = append(payload.Shows, traktHistoryShow{
+				Title: item.Title, IDs: traktSyncIDs{TMDB: item.TMDBID}, season: make(map[int]int),
+			})
+		}
+		show := &payload.Shows[showIndex]
+		seasonIndex, ok := show.season[item.Season]
+		if !ok {
+			seasonIndex = len(show.Seasons)
+			show.season[item.Season] = seasonIndex
+			show.Seasons = append(show.Seasons, traktHistorySeason{
+				Number: item.Season, episode: make(map[int]struct{}),
+			})
+		}
+		season := &show.Seasons[seasonIndex]
+		if _, duplicate := season.episode[item.Episode]; duplicate {
+			continue
+		}
+		season.episode[item.Episode] = struct{}{}
+		season.Episodes = append(season.Episodes, traktHistoryEpisode{Number: item.Episode, WatchedAt: stamp})
+	}
+	for i := range payload.Shows {
+		for j := range payload.Shows[i].Seasons {
+			payload.Shows[i].Seasons[j].episode = nil
+		}
+		payload.Shows[i].season = nil
+	}
+	return payload
+}
+
+func (c *TraktClient) postHistoryBatch(ctx context.Context, payload traktHistoryPayload) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode trakt history: %w", err)
+	}
+	backoff := time.Second
+	for attempt := 0; attempt < 5; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint()+"/sync/history", bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("create trakt history request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
+		req.Header.Set("trakt-api-version", "2")
+		req.Header.Set("trakt-api-key", c.clientID)
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("send trakt history: %w", err)
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			resp.Body.Close()
+			return nil
+		}
+		var errBody bytes.Buffer
+		_, _ = errBody.ReadFrom(resp.Body)
+		retryDelay := time.Duration(0)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryDelay = traktRetryAfter(resp.Header.Get("Retry-After"))
+		}
+		status, retryHeader := resp.StatusCode, resp.Header.Get("Retry-After")
+		resp.Body.Close()
+		if status != http.StatusTooManyRequests || attempt == 4 {
+			return fmt.Errorf("trakt history sync error: %d: %s", status, strings.TrimSpace(errBody.String()))
+		}
+		if retryDelay <= 0 {
+			retryDelay = backoff
+			backoff = min(backoff*2, 30*time.Second)
+		}
+		traktLog.Warn("history sync rate limited; waiting before retry",
+			"retry_after", retryHeader, "delay", retryDelay)
+		if err := waitContext(ctx, retryDelay); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("trakt history sync retries exhausted")
+}
+
+func traktRetryAfter(value string) time.Duration {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if until, err := http.ParseTime(value); err == nil {
+		return time.Until(until)
+	}
+	return 0
+}
+
+func waitContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c *TraktClient) doScrobble(ctx context.Context, payload interface{}) error {
