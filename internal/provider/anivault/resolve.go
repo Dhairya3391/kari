@@ -47,7 +47,7 @@ func watchSources(watch watchResponse) []provider.MediaSource {
 	}
 	subtitles := subtitleOptions(watch.Subtitles)
 	subType := watchSubType(watch, subtitles)
-	quality := kit.TagQuality("Auto", watch.Server, watch.Source)
+	quality := "Auto"
 	embedReferer := refererFromEmbed(watch.EmbedURL)
 	seen := make(map[string]bool, 3)
 	var out []provider.MediaSource
@@ -64,6 +64,7 @@ func watchSources(watch watchResponse) []provider.MediaSource {
 		out = append(out, provider.MediaSource{
 			URL:       direct,
 			Quality:   quality,
+			Backend:   firstNonEmpty(watch.Server, watch.Source),
 			Referer:   firstNonEmpty(referer, embedReferer),
 			Type:      streamType,
 			Subtitles: subtitles,

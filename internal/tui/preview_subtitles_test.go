@@ -61,10 +61,10 @@ func TestDetectSubtitleType(t *testing.T) {
 			want: "",
 		},
 		{
-			name: "soft sub in quality tag",
+			name: "subtitle hints in quality are not trusted",
 			src:  provider.MediaSource{Quality: "1080p [Soft sub]"},
 			mode: provider.ModeAnime,
-			want: "soft subs",
+			want: "",
 		},
 		{
 			name: "hardsub in URL is not trusted",
@@ -271,7 +271,9 @@ func TestTriggerSubtitleSyncKeepsSecuredTrackOnPoolGrowth(t *testing.T) {
 	}
 	// The fetch secured a track; later arrivals must not displace it.
 	m.subtitleOpID = 0
-	m.resolved.SelectedSubtitle = &model.SubtitleTrack{Path: "/tmp/en.srt", Language: "en"}
+	m.resolved.SelectedSubtitle = &model.SubtitleTrack{
+		Path: "/tmp/en.srt", Language: "en", SourceID: "provider-source",
+	}
 	m.rawSubtitles = append(m.rawSubtitles, model.SubtitleTrack{
 		URL:      "https://cdn.example.com/en2.vtt",
 		Language: "en",

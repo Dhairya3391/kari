@@ -43,6 +43,9 @@ func (f *repairFake) FetchEpisodes(ctx context.Context, s provider.SearchResult)
 func (f *repairFake) ResolveSource(ctx context.Context, mediaID string, e provider.Episode) ([]provider.MediaSource, error) {
 	return f.sources, f.err
 }
+func (f *repairFake) PreferredForPlayback(mode provider.ContentType) bool {
+	return f.name == "movysx" && mode == provider.ModeMovies
+}
 
 // A partial resolve with the preferred provider down triggers one quiet
 // background repair — no manual R needed for movy-first.
@@ -53,6 +56,7 @@ func TestPreferredRepairTriggersOnce(t *testing.T) {
 		sources: []provider.MediaSource{{URL: "https://cdn.example.com/b.m3u8", Quality: "1080p"}}})
 
 	m := rankingTestModel()
+	m.registry = reg
 	m.appMode = provider.ModeMovies
 	m.activeView = viewPreview
 	m.mediaService = service.NewMediaService(reg)
@@ -469,22 +473,22 @@ func TestVodPlayStaysOnPreview(t *testing.T) {
 	}
 }
 
-// Backend display names come from the quality tag, not the aggregator.
+// Backend display names come from typed metadata, not quality labels.
 func TestSourceBackendName(t *testing.T) {
 	display := func(s string) string { return "Pengu-" + s }
 	cases := []struct {
-		quality string
+		backend string
 		want    string
 	}{
-		{"4K [4KHDHub] (Hindi)", "4KHDHub"},
-		{"1080p (Vidstream-2)", "Vidstream-2"},
-		{"1080p (Hindi)", "Pengu-pengu"},
-		{"Auto", "Pengu-pengu"},
+		{"4KHDHub", "4KHDHub"},
+		{"Vidstream-2", "Vidstream-2"},
+		{"", "Pengu-pengu"},
+		{"", "Pengu-pengu"},
 	}
 	for _, tc := range cases {
-		src := provider.MediaSource{Quality: tc.quality, Resolver: "pengu"}
+		src := provider.MediaSource{Backend: tc.backend, Resolver: "pengu"}
 		if got := sourceBackendName(src, display); got != tc.want {
-			t.Errorf("backend(%q) = %q, want %q", tc.quality, got, tc.want)
+			t.Errorf("backend(%q) = %q, want %q", tc.backend, got, tc.want)
 		}
 	}
 	if got := sourceBackendName(provider.MediaSource{}, nil); got != "—" {

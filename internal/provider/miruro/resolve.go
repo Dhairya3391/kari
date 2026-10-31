@@ -372,18 +372,25 @@ func serverSources(pe providerEntry) []provider.MediaSource {
 			if deadHost(st.url) {
 				continue
 			}
-			quality := kit.TagQuality(kit.QualityLabel(st.quality, typ), srv.server, "")
+			quality := kit.QualityLabel(st.quality, typ)
 			suppressOrigin := strings.Contains(strings.ToLower(srv.referer), "megaplay.buzz")
+			skipTimes := pe.skipTimes
+			if skipTimes != nil {
+				labelled := *skipTimes
+				labelled.Source = "Miruro"
+				skipTimes = &labelled
+			}
 			out = append(out, provider.MediaSource{
 				URL:            st.url,
 				Quality:        quality,
+				Backend:        srv.server,
 				Referer:        strings.TrimSpace(srv.referer),
 				Type:           typ,
 				Subtitles:      subs,
 				SubType:        subType,
 				ExtraArgs:      demuxerQuirk(st.url, typ),
 				SuppressOrigin: suppressOrigin,
-				SkipTimes:      pe.skipTimes,
+				SkipTimes:      skipTimes,
 			})
 		}
 	}

@@ -154,8 +154,8 @@ func TestParseStreamItem(t *testing.T) {
 
 	src := parseStreamItem(item)
 
-	if src.Quality != "4K [4KHDHub] (Hindi)" {
-		t.Errorf("Quality = %q, want %q", src.Quality, "4K [4KHDHub] (Hindi)")
+	if src.Quality != "4K" || src.Backend != "4KHDHub" {
+		t.Errorf("quality/backend = %q/%q, want 4K/4KHDHub", src.Quality, src.Backend)
 	}
 	if src.Type != provider.SourceTypeHLS {
 		t.Errorf("Type = %q, want %q", src.Type, provider.SourceTypeHLS)
@@ -202,14 +202,14 @@ func TestParseStreamItemNewBackends(t *testing.T) {
 		{"🐧 PenguPlay 🧊 1080p • PremiumSmart", "PremiumSmart"},
 	} {
 		src := parseStreamItem(penguStreamItem{Name: tc.name, URL: "https://example.com/stream.m3u8"})
-		want := "1080p [" + tc.backend + "]"
+		want := "1080p"
 		if (tc.backend == "Cinejoy" || tc.backend == "Vidy") && strings.Contains(tc.name, "4K") {
-			want = "4K [" + tc.backend + "]"
+			want = "4K"
 		} else if tc.backend == "PlayFy" {
-			want = "360p [" + tc.backend + "]"
+			want = "360p"
 		}
-		if src.Quality != want {
-			t.Errorf("Quality for %q = %q, want %q", tc.name, src.Quality, want)
+		if src.Quality != want || src.Backend != tc.backend {
+			t.Errorf("quality/backend for %q = %q/%q, want %q/%q", tc.name, src.Quality, src.Backend, want, tc.backend)
 		}
 	}
 }
@@ -243,27 +243,30 @@ func TestParseStreamItemAniPmHardSoft(t *testing.T) {
 		{
 			"🐧 PenguPlay 🧊 1080p • Ani.pm · Sub",
 			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Sub\n📝 Subtitles: English, French, Arabic",
-			softSubs, "1080p [Ani.pm]", "", provider.SubTypeSoft,
+			softSubs, "1080p", "", provider.SubTypeSoft,
 		},
 		{
 			"🐧 PenguPlay 🧊 1080p • Ani.pm · Dub",
 			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Dub\n🎧 Audio: English\n📝 Subtitles: English CC (Dub), English",
-			softSubs, "1080p [Ani.pm] (Dub)", "en", provider.SubTypeSoft,
+			softSubs, "1080p", "en", provider.SubTypeSoft,
 		},
 		{
 			"🐧 PenguPlay 🧊 1080p • Ani.pm · Hard Sub",
 			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Hard Sub\n🙊 No included subtitles",
-			nil, "1080p [Ani.pm] (Hard Sub)", "", provider.SubTypeHard,
+			nil, "1080p", "", provider.SubTypeHard,
 		},
 		{
 			"🐧 PenguPlay 🧊 1080p • Ani.pm · Hard Dub",
 			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Hard Dub\n🎧 Audio: English\n🙊 No included subtitles",
-			nil, "1080p [Ani.pm] (Hard Dub)", "en", provider.SubTypeHard,
+			nil, "1080p", "en", provider.SubTypeHard,
 		},
 	} {
 		src := parseStreamItem(mk(tc.name, tc.desc, tc.subs))
 		if src.Quality != tc.wantQuality {
 			t.Errorf("Quality(%q) = %q, want %q", tc.name, src.Quality, tc.wantQuality)
+		}
+		if src.Backend != "Ani.pm" {
+			t.Errorf("Backend(%q) = %q, want Ani.pm", tc.name, src.Backend)
 		}
 		if src.Language != tc.wantLang {
 			t.Errorf("Language(%q) = %q, want %q", tc.name, src.Language, tc.wantLang)
@@ -498,11 +501,11 @@ func TestResolveSourceKeepsDistinctEncodes(t *testing.T) {
 	if len(sources) != 3 {
 		t.Fatalf("sources = %d, want 3: %+v", len(sources), sources)
 	}
-	if sources[0].Quality != "1080p [4KHDHub]" {
-		t.Errorf("sources[0].Quality = %q, want %q", sources[0].Quality, "1080p [4KHDHub]")
+	if sources[0].Quality != "1080p" || sources[0].Backend != "4KHDHub" {
+		t.Errorf("sources[0] quality/backend = %q/%q, want 1080p/4KHDHub", sources[0].Quality, sources[0].Backend)
 	}
-	if sources[2].Quality != "4K [Cinejoy]" {
-		t.Errorf("sources[2].Quality = %q, want %q", sources[2].Quality, "4K [Cinejoy]")
+	if sources[2].Quality != "4K" || sources[2].Backend != "Cinejoy" || !sources[2].FallbackOnly {
+		t.Errorf("sources[2] = %+v, want 4K Cinejoy fallback", sources[2])
 	}
 }
 
@@ -615,8 +618,8 @@ func TestParseStreamItemFilenameLanguage(t *testing.T) {
 	if src.Language != "hi" {
 		t.Errorf("Language = %q, want hi", src.Language)
 	}
-	if src.Quality != "1080p [HDHub4u] (Hindi)" {
-		t.Errorf("Quality = %q, want %q", src.Quality, "1080p [HDHub4u] (Hindi)")
+	if src.Quality != "1080p" || src.Backend != "HDHub4u" {
+		t.Errorf("quality/backend = %q/%q, want 1080p/HDHub4u", src.Quality, src.Backend)
 	}
 }
 
@@ -970,8 +973,8 @@ func TestResolveLiveSource(t *testing.T) {
 	if sources[0].Type != provider.SourceTypeHLS {
 		t.Errorf("Type = %q, want hls", sources[0].Type)
 	}
-	if !strings.Contains(sources[0].Quality, "DaddyLive") {
-		t.Errorf("Quality = %q, want DaddyLive in source name", sources[0].Quality)
+	if sources[0].Backend != "DaddyLive" {
+		t.Errorf("Backend = %q, want DaddyLive", sources[0].Backend)
 	}
 }
 

@@ -37,12 +37,6 @@ func TestAtsuMetadata(t *testing.T) {
 		t.Errorf("expected empty features for non-manga mode")
 	}
 
-	if _, err := c.FetchEpisodes(context.Background(), provider.SearchResult{}); !errors.Is(err, provider.ErrNoEpisodes) {
-		t.Errorf("expected ErrNoEpisodes, got %v", err)
-	}
-	if _, err := c.ResolveSource(context.Background(), "id", provider.Episode{}); !errors.Is(err, provider.ErrNoSources) {
-		t.Errorf("expected ErrNoSources, got %v", err)
-	}
 }
 
 func TestAtsuSearchAndChapters(t *testing.T) {

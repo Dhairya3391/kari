@@ -329,10 +329,10 @@ func toMediaSource(s *vylaSource, subs []provider.SubtitleOption) provider.Media
 
 	backend := cleanBackendName(s.Source)
 	res := cleanResolution(s.Quality, s.Label)
-	quality := fmt.Sprintf("%s [%s]", res, backend)
 	src := provider.MediaSource{
 		URL:       strings.TrimSpace(s.URL),
-		Quality:   quality,
+		Quality:   res,
+		Backend:   backend,
 		Type:      srcType,
 		Subtitles: subs,
 		Language:  detectLanguage(s.Language, s.Label),

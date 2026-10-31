@@ -59,6 +59,12 @@ func (r ResolvedMedia) IsLive() bool {
 	return r.Live || strings.EqualFold(strings.TrimSpace(r.MediaType), provider.MediaTypeLive)
 }
 
+// IsAnime reports anime classification from either the catalog media type or
+// the provider mode, preserving anime policy for movie-shaped anime entries.
+func (r ResolvedMedia) IsAnime() bool {
+	return r.ContentMode == provider.ModeAnime || strings.EqualFold(strings.TrimSpace(r.MediaType), provider.MediaTypeAnime)
+}
+
 // IsEpisodeBased reports whether the given media type is episodic content
 // (anime, TV, cartoons) as opposed to a one-shot movie. It is the canonical
 // predicate for episode-driven behavior such as autoplay-next.

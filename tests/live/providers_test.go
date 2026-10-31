@@ -30,6 +30,10 @@ func TestProviderPipeline(t *testing.T) {
 				seen[p.Name()] = true
 				p := p
 				t.Run(p.Name(), func(t *testing.T) {
+					episodeSource, ok := p.(provider.EpisodeSource)
+					if !ok {
+						t.Skip("provider does not support playback")
+					}
 					ctx := ctxWithTimeout(t)
 					results, err := p.Search(ctx, query, mode)
 					skipOnCatalogDrift(t, "search", err)
@@ -57,14 +61,14 @@ func TestProviderPipeline(t *testing.T) {
 						if mode == provider.ModeAnime {
 							ep.Audio = provider.AudioSub
 						}
-						sources, err = p.ResolveSource(ctx, pick.ID, ep)
+						sources, err = episodeSource.ResolveSource(ctx, pick.ID, ep)
 						skipOnCatalogDrift(t, "resolve(movie)", err)
 						requireSources(t, p.Name(), sources)
 						t.Logf("direct movie resolve ok: %d sources", len(sources))
 						return
 					}
 
-					episodes, err := p.FetchEpisodes(ctx, pick)
+					episodes, err := episodeSource.FetchEpisodes(ctx, pick)
 					skipOnCatalogDrift(t, "episodes", err)
 					if len(episodes) == 0 {
 						t.Fatalf("%s: zero episodes without error", p.Name())
@@ -72,7 +76,7 @@ func TestProviderPipeline(t *testing.T) {
 					ep := episodes[0] // first episode of first season
 					t.Logf("episodes ok: count=%d resolving S%dE%d", len(episodes), ep.Season, ep.Episode)
 
-					sources, err = p.ResolveSource(ctx, pick.ID, ep)
+					sources, err = episodeSource.ResolveSource(ctx, pick.ID, ep)
 					skipOnCatalogDrift(t, "resolve", err)
 					requireSources(t, p.Name(), sources)
 					t.Logf("resolve ok: %d sources (first=%q)", len(sources), sources[0].Quality)

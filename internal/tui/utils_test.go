@@ -68,9 +68,9 @@ func TestCleanErrorForUIRateLimited(t *testing.T) {
 		err  error
 		want string
 	}{
-		{errors.New("pengu: rate limited"), "Rate limited by Pengu, use your own token for better rate limits"},
-		{errors.New("http status 429 for https://pengu.uk/stream.json"), "Rate limited by Pengu, use your own token for better rate limits"},
-		{errors.New("movysx: no sources found; pengu: rate limited"), "Rate limited by Pengu, use your own token for better rate limits"},
+		{errors.New("provider-a: rate limited"), "A provider is rate limited — please try again"},
+		{errors.New("http status 429 for https://provider.example/stream.json"), "A provider is rate limited — please try again"},
+		{errors.New("provider-b: no sources found; provider-a: rate limited"), "A provider is rate limited — please try again"},
 	}
 	for _, tt := range tests {
 		if got := cleanErrorForUI(tt.err); got != tt.want {

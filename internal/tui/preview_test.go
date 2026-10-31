@@ -463,12 +463,14 @@ func TestCollectPreviewData_LongTitlePreservesCount(t *testing.T) {
 	}
 }
 
-func TestCollectPreviewDataMiruroSkipInfo(t *testing.T) {
+func TestCollectPreviewDataProviderSkipInfo(t *testing.T) {
 	miruroSrcWithSkips := provider.MediaSource{
 		URL:      "https://cdn.example.com/miruro.m3u8",
 		Resolver: "miruro",
+		Backend:  "Miruro",
 		Quality:  "1080p",
 		SkipTimes: &provider.SkipTimes{
+			Source:  "Miruro",
 			OpStart: 0,
 			OpEnd:   89,
 			EdStart: 1400,

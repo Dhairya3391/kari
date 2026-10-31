@@ -191,17 +191,20 @@ func (r *Registry) ResolveSkipInfo(media model.ResolvedMedia) (SkipInfo, bool) {
 	if targetResolver == "" && len(media.Playback) > 0 {
 		targetResolver = media.Playback[0].Resolver
 	}
-	if strings.EqualFold(targetResolver, "miruro") {
-		for _, src := range media.Playback {
-			if strings.EqualFold(src.Resolver, "miruro") && src.SkipTimes != nil && src.SkipTimes.HasSegments() {
-				return SkipInfo{
-					Opening: miruroInfoText(src.SkipTimes.OpStart, src.SkipTimes.OpEnd),
-					Ending:  miruroInfoText(src.SkipTimes.EdStart, src.SkipTimes.EdEnd),
-					Recap:   miruroInfoText(src.SkipTimes.RecapStart, src.SkipTimes.RecapEnd),
-					Preview: miruroInfoText(src.SkipTimes.PreviewStart, src.SkipTimes.PreviewEnd),
-				}, true
-			}
+	for _, src := range media.Playback {
+		if targetResolver != "" && !strings.EqualFold(src.Resolver, targetResolver) {
+			continue
 		}
+		if src.SkipTimes == nil || !src.SkipTimes.HasSegments() {
+			continue
+		}
+		sourceName := skipSourceLabel(src)
+		return SkipInfo{
+			Opening: providerInfoText(sourceName, src.SkipTimes.OpStart, src.SkipTimes.OpEnd),
+			Ending:  providerInfoText(sourceName, src.SkipTimes.EdStart, src.SkipTimes.EdEnd),
+			Recap:   providerInfoText(sourceName, src.SkipTimes.RecapStart, src.SkipTimes.RecapEnd),
+			Preview: providerInfoText(sourceName, src.SkipTimes.PreviewStart, src.SkipTimes.PreviewEnd),
+		}, true
 	}
 	_, script := getSkipArgs(r.skipClients, r.skipSettings, media, r.skipCache)
 	cleanupSkipScript(script)
@@ -217,9 +220,9 @@ func (r *Registry) ResolveSkipInfo(media model.ResolvedMedia) (SkipInfo, bool) {
 	}, true
 }
 
-func miruroInfoText(start, end float64) string {
+func providerInfoText(source string, start, end float64) string {
 	if start >= 0 && end > start {
-		return "Miruro"
+		return source
 	}
 	return ""
 }

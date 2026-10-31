@@ -46,8 +46,8 @@ func TestParseStreamItemDubDisplay(t *testing.T) {
 	if src.Language != "fr" {
 		t.Errorf("Language = %q, want fr", src.Language)
 	}
-	if !strings.Contains(src.Quality, "(French)") {
-		t.Errorf("Quality = %q, want French marker", src.Quality)
+	if src.Quality != "1080p" || src.Backend != "MovieBox" {
+		t.Errorf("quality/backend = %q/%q, want 1080p/MovieBox", src.Quality, src.Backend)
 	}
 }
 
@@ -152,27 +152,18 @@ func TestResolveFallsBackWhenAllFiltered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSource: %v", err)
 	}
-	if len(sources) != 1 || !strings.Contains(sources[0].Quality, "French") {
+	if len(sources) != 1 || sources[0].Language != "fr" {
 		t.Fatalf("expected fallback French audio, got %+v", sources)
 	}
 }
 
 func TestQualityHeight(t *testing.T) {
 	cases := map[string]int{
-		"1080p [MovieBox]": 1080, "4K [Cinejoy]": 2160, "Auto": 0, "720p": 720,
+		"1080p": 1080, "4K": 2160, "Auto": 0, "720p": 720,
 	}
 	for in, want := range cases {
 		if got := qualityHeight(in); got != want {
 			t.Errorf("qualityHeight(%q) = %d, want %d", in, got, want)
 		}
-	}
-}
-
-func TestMirrorBackend(t *testing.T) {
-	if got := mirrorBackend("1080p [MovieBox] (Hindi)"); got != "MovieBox" {
-		t.Errorf("mirrorBackend = %q, want MovieBox", got)
-	}
-	if got := mirrorBackend("1080p"); got != "" {
-		t.Errorf("mirrorBackend bare = %q, want empty", got)
 	}
 }

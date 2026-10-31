@@ -199,7 +199,7 @@ func TestHardsubFirstLeadsAnimeTable(t *testing.T) {
 	hard720 := mk("https://cdn.example.com/hard.m3u8", "720p", provider.SubTypeHard)
 	challengedHard := mk("https://vault-01.uwucdn.top/stream/01/uwu.m3u8", "1080p", provider.SubTypeHard)
 
-	got := hardsubFirst(provider.ModeAnime, qualityAll, true, []ranking.ScoredSource{soft1080, hard720, challengedHard})
+	got := ranking.HardsubsFirst(provider.ModeAnime, qualityAll, true, []ranking.ScoredSource{soft1080, hard720, challengedHard})
 	if len(got) != 3 || got[0].Source.URL != hard720.Source.URL {
 		t.Fatalf("hardsub must lead, got %v", urls(got))
 	}
@@ -208,15 +208,15 @@ func TestHardsubFirstLeadsAnimeTable(t *testing.T) {
 	}
 
 	// Subtitles off: no hardsub lift.
-	if got := hardsubFirst(provider.ModeAnime, qualityAll, false, []ranking.ScoredSource{soft1080, hard720}); got[0].Source.URL != soft1080.Source.URL {
+	if got := ranking.HardsubsFirst(provider.ModeAnime, qualityAll, false, []ranking.ScoredSource{soft1080, hard720}); got[0].Source.URL != soft1080.Source.URL {
 		t.Fatalf("subs-off must keep ranked order, got %v", urls(got))
 	}
 	// Lowest mode: size-first semantics win.
-	if got := hardsubFirst(provider.ModeAnime, qualityLowest, true, []ranking.ScoredSource{soft1080, hard720}); got[0].Source.URL != soft1080.Source.URL {
+	if got := ranking.HardsubsFirst(provider.ModeAnime, qualityLowest, true, []ranking.ScoredSource{soft1080, hard720}); got[0].Source.URL != soft1080.Source.URL {
 		t.Fatalf("lowest mode must keep ranked order, got %v", urls(got))
 	}
 	// Non-anime: untouched.
-	if got := hardsubFirst(provider.ModeMovies, qualityAll, true, []ranking.ScoredSource{soft1080, hard720}); got[0].Source.URL != soft1080.Source.URL {
+	if got := ranking.HardsubsFirst(provider.ModeMovies, qualityAll, true, []ranking.ScoredSource{soft1080, hard720}); got[0].Source.URL != soft1080.Source.URL {
 		t.Fatalf("movies must keep ranked order, got %v", urls(got))
 	}
 }
@@ -347,7 +347,7 @@ func TestGroupSourcesByProviderKeepsChallengedLast(t *testing.T) {
 		Resolver: "miruro",
 	}
 
-	got := groupSourcesByProvider([]ranking.ScoredSource{
+	got := ranking.GroupSourcesByProvider([]ranking.ScoredSource{
 		{Source: healthy},
 		{Source: challenged},
 	}, qualityAll, provider.ModeAnime)
@@ -363,7 +363,7 @@ func TestGroupSourcesByProviderDataSaver(t *testing.T) {
 	hd := provider.MediaSource{URL: "hd", Quality: "720p", Resolver: "movysx"}
 	unknown := provider.MediaSource{URL: "unknown", Quality: "Unknown", Resolver: "movysx"}
 
-	got := groupSourcesByProvider([]ranking.ScoredSource{
+	got := ranking.GroupSourcesByProvider([]ranking.ScoredSource{
 		{Source: fourK},
 		{Source: hd},
 		{Source: unknown},
@@ -387,7 +387,7 @@ func TestGroupSourcesByProviderLowestKeepsUnknownLast(t *testing.T) {
 	hd := provider.MediaSource{URL: "hd", Quality: "720p", Resolver: "movysx"}
 	sd := provider.MediaSource{URL: "sd", Quality: "480p", Resolver: "movysx"}
 
-	got := groupSourcesByProvider([]ranking.ScoredSource{
+	got := ranking.GroupSourcesByProvider([]ranking.ScoredSource{
 		{Source: unknown},
 		{Source: hd},
 		{Source: sd},

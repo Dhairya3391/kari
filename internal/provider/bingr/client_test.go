@@ -168,10 +168,10 @@ func TestBingrResolveMovieDirect(t *testing.T) {
 	hasDarkMatter := false
 	hasPolarisHindi := false
 	for _, s := range sources {
-		if strings.Contains(s.Quality, "DarkMatter") && strings.HasPrefix(s.URL, "https://cdn.example.com") {
+		if s.Backend == "DarkMatter" && strings.HasPrefix(s.URL, "https://cdn.example.com") {
 			hasDarkMatter = true
 		}
-		if strings.Contains(s.Quality, "Polaris") && s.Language == "hi" {
+		if s.Backend == "Polaris" && s.Language == "hi" {
 			hasPolarisHindi = true
 			if len(s.Subtitles) == 0 || s.Subtitles[0].Language != "en" {
 				t.Errorf("Polaris stream missing en subtitle: %+v", s.Subtitles)
@@ -346,7 +346,7 @@ func TestBingrResolveAnime(t *testing.T) {
 	hasMegaPlaySub := false
 	hasPolarisOriginal := false
 	for _, s := range subSources {
-		if strings.Contains(s.Quality, "MegaPlay") {
+		if s.Backend == "MegaPlay" {
 			hasMegaPlaySub = true
 			if s.Referer != "https://megaplay.buzz/" {
 				t.Errorf("MegaPlay referer = %q", s.Referer)
@@ -355,7 +355,7 @@ func TestBingrResolveAnime(t *testing.T) {
 				t.Errorf("expected unwrapped subtitle URL, got: %+v", s.Subtitles)
 			}
 		}
-		if strings.Contains(s.Quality, "Polaris") && s.Language == "" {
+		if s.Backend == "Polaris" && s.Language == "" {
 			hasPolarisOriginal = true
 		}
 	}

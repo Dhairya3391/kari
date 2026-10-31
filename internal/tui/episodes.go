@@ -8,6 +8,7 @@ import (
 
 	"kari/internal/history"
 	"kari/internal/provider"
+	"kari/internal/service"
 )
 
 // EpisodeItem wraps a provider.Episode with its history/progress metadata for rendering.
@@ -115,8 +116,7 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 
 	// Filter to active season, then by text query. SelectedIndex addresses
 	// the final filtered list.
-	seasonEpisodes, origIndices := filterToSeason(data.Episodes, data.SeasonCount, data.ActiveSeason)
-	seasonEpisodes, origIndices = FilterEpisodesByText(seasonEpisodes, origIndices, data.FilterQuery)
+	seasonEpisodes, origIndices := service.FilterEpisodeList(data.Episodes, data.ActiveSeason, data.FilterQuery)
 
 	if data.Filtering || strings.TrimSpace(data.FilterQuery) != "" {
 		rows = append(rows, st.Dim.Render("/")+data.FilterQuery+st.Cursor.Render("▌"))
@@ -168,66 +168,12 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 // original indices aligned. Empty query returns the input unchanged. The
 // model and the renderer share it so cursor positions always agree.
 func FilterEpisodesByText(episodes []provider.Episode, idxs []int, query string) ([]provider.Episode, []int) {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return episodes, idxs
-	}
-	var out []provider.Episode
-	var outIdx []int
-	for i, ep := range episodes {
-		num := ep.Episode
-		if num == 0 {
-			num = idxs[i] + 1
-		}
-		hay := strings.ToLower(ep.Title) + " " + fmt.Sprintf("%d", num)
-		if strings.Contains(hay, q) {
-			out = append(out, ep)
-			outIdx = append(outIdx, idxs[i])
-		}
-	}
-	return out, outIdx
+	return service.FilterEpisodesByText(episodes, idxs, query)
 }
 
 // filterToSeason returns the episodes for the active season and their original indices.
 func filterToSeason(episodes []provider.Episode, _ int, activeSeason int) ([]provider.Episode, []int) {
-	seasons := distinctSeasonNumbers(episodes)
-	if len(seasons) <= 1 {
-		idxs := make([]int, len(episodes))
-		for i := range idxs {
-			idxs[i] = i
-		}
-		return episodes, idxs
-	}
-
-	if activeSeason < 0 {
-		activeSeason = 0
-	}
-	if activeSeason >= len(seasons) {
-		activeSeason = len(seasons) - 1
-	}
-	target := seasons[activeSeason]
-
-	var filtered []provider.Episode
-	var idxs []int
-	for i, ep := range episodes {
-		s := ep.Season
-		if s <= 0 {
-			s = 1
-		}
-		if s == target {
-			filtered = append(filtered, ep)
-			idxs = append(idxs, i)
-		}
-	}
-	if len(filtered) > 0 {
-		return filtered, idxs
-	}
-
-	allIdxs := make([]int, len(episodes))
-	for i := range allIdxs {
-		allIdxs[i] = i
-	}
-	return episodes, allIdxs
+	return service.FilterEpisodeList(episodes, activeSeason, "")
 }
 
 // renderInspectorPane renders the right pane: poster + series meta + selected episode detail.

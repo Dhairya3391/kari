@@ -241,8 +241,8 @@ func TestAnikotoResolveSource(t *testing.T) {
 	if strings.Contains(s1.URL, "127.0.0.1") || strings.Contains(s1.URL, "localhost") || strings.Contains(s1.URL, "/proxy/") {
 		t.Errorf("source must never be a proxy URL: %s", s1.URL)
 	}
-	if !strings.Contains(s1.Quality, "Vidstream-2") {
-		t.Errorf("expected Vidstream-2 quality tag, got %s", s1.Quality)
+	if s1.Quality != "1080p" || s1.Backend != "Vidstream-2" {
+		t.Errorf("quality/backend = %q/%q, want 1080p/Vidstream-2", s1.Quality, s1.Backend)
 	}
 	if s1.Type != provider.SourceTypeHLS {
 		t.Errorf("expected hls type, got %s", s1.Type)

@@ -86,6 +86,17 @@ func (c *Client) Modes() []provider.Mode {
 	}
 }
 
+// PreferredForPlayback marks Movy.sx as the repair priority for movie, TV,
+// and cartoon playback.
+func (c *Client) PreferredForPlayback(mode provider.ContentType) bool {
+	switch mode {
+	case provider.ModeMovies, provider.ModeTV, provider.ModeCartoon:
+		return true
+	default:
+		return false
+	}
+}
+
 // Search delegates to the shared TMDB-keyed base.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	return c.base.Search(ctx, query, mode)
@@ -193,13 +204,9 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 		if !c.languageEnabled(a.lang) {
 			continue
 		}
-		quality := "Auto"
-		if a.lang != "" && a.lang != "en" {
-			quality = fmt.Sprintf("Auto (%s)", lang.Name(a.lang))
-		}
 		sources = append(sources, provider.MediaSource{
 			URL:       a.url,
-			Quality:   quality,
+			Quality:   "Auto",
 			Type:      streamType(a.url, a.typ),
 			Referer:   movyReferer,
 			UserAgent: config.DesktopUserAgent,
@@ -289,7 +296,8 @@ func (c *Client) languageEnabled(tag string) bool {
 }
 
 var (
-	_ provider.Provider             = (*Client)(nil)
-	_ provider.Presenter            = (*Client)(nil)
-	_ provider.AudioLanguagesSource = (*Client)(nil)
+	_ provider.Provider                 = (*Client)(nil)
+	_ provider.PlaybackPreferenceSource = (*Client)(nil)
+	_ provider.Presenter                = (*Client)(nil)
+	_ provider.AudioLanguagesSource     = (*Client)(nil)
 )

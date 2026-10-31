@@ -268,8 +268,8 @@ func TestAniVaultResolveSub(t *testing.T) {
 	if soft.URL != "https://cdn.example.com/master.m3u8?token=abc" {
 		t.Errorf("soft URL = %q", soft.URL)
 	}
-	if soft.Quality != "Auto (HD-1)" {
-		t.Errorf("soft Quality = %q, want server-tagged auto", soft.Quality)
+	if soft.Quality != "Auto" || soft.Backend != "HD-1" {
+		t.Errorf("soft quality/backend = %q/%q, want Auto/HD-1", soft.Quality, soft.Backend)
 	}
 	if soft.Referer != "https://megaplay.buzz/" {
 		t.Errorf("soft Referer = %q", soft.Referer)

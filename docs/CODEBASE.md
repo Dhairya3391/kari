@@ -72,6 +72,48 @@ scripts/             release/packaging scripts
 cmd → app → {tui, service, player, …} → {provider, model, …}
 ```
 
+### Provider boundary
+
+`Provider` stays the small common contract for identity, mode declaration, and
+catalog search. Playback providers implement `EpisodeSource`; manga providers
+implement `MangaSource`; a provider can implement both when it supports both
+flows. Providers add typed optional capabilities for additional operations
+they support. A capability belongs with the provider that owns the behavior.
+Progressive resolution, audio availability, and provider-specific episode
+metadata are examples of distinct capabilities, not branches in the service
+or TUI. An unsupported flow must not be represented by dummy methods that
+always return an error.
+
+The registry is the adapter between provider capabilities and the rest of the
+application. It discovers providers by mode, exposes declared capabilities,
+and builds each mode's `RoutePlan` from registered mode priorities and typed
+capabilities. Search and playback routes aggregate; multiple manga routes use
+ordered fallback. There is no hand-maintained provider-name route table.
+The service owns cross-provider concerns
+such as deadlines, cache lifetime, retries, health checks, and combining
+results. It must not infer provider behavior from names, URL patterns, or
+content-mode special cases when that behavior can be declared by a provider.
+
+The TUI owns interaction state and rendering. It may turn user preferences
+into typed service options, but it does not select provider implementations,
+interpret provider-specific source details, or perform media policy. Shared
+ranking and normalization live in domain packages and consume provider-supplied
+metadata rather than parsing provider labels or URLs.
+
+Providers emit clean quality labels plus typed source metadata such as
+`Backend`, `Language`, `SubType`, fallback status, and provider-declared skip
+segments. Do not encode backend or audio identity into quality text and do not
+teach service, player, or TUI code provider names to recover that identity.
+When equivalent transport sources arrive from multiple providers, the
+aggregator keeps one row owned by the provider with the higher declared route
+priority; ties follow registry order. It merges compatible descriptive
+metadata and keeps transport variants separate when headers or player options
+change how the URL must be fetched.
+
+Filtering and ordering that affect the available search, episode, or playback
+choices belong in service/domain pipelines. The TUI supplies the query and
+preferences, keeps the active selection, and renders the prepared rows.
+
 - `provider` imports only leaf/utility packages (`config`, `httpclient`,
   `logging`, `tmdb`, `search`, `model` for aggregates it fills).
 - `tui` talks to `service` and reads `provider` contracts/capabilities; it

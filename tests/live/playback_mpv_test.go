@@ -120,9 +120,13 @@ func TestCinecatMPVPlayback(t *testing.T) {
 	if !ok {
 		t.Fatal("cinecat provider not registered")
 	}
+	episodeSource, ok := client.(provider.EpisodeSource)
+	if !ok {
+		t.Fatal("cinecat does not support playback")
+	}
 
 	ctx := ctxWithTimeout(t)
-	sources, err := client.ResolveSource(ctx, "27205", provider.Episode{TMDBID: 27205})
+	sources, err := episodeSource.ResolveSource(ctx, "27205", provider.Episode{TMDBID: 27205})
 	if err != nil {
 		t.Fatalf("cinecat resolve: %v", err)
 	}

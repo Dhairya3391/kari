@@ -428,10 +428,10 @@ func (c *Client) fetchMegaPlayAnime(ctx context.Context, malID, epNum int, categ
 			subType = provider.SubTypeSoft
 		}
 
-		quality := kit.TagQuality("1080p", "MegaPlay", "bingr")
 		sources = append(sources, provider.MediaSource{
 			URL:            rawURL,
-			Quality:        quality,
+			Quality:        "1080p",
+			Backend:        "MegaPlay",
 			Type:           provider.SourceTypeHLS,
 			Referer:        referer,
 			SuppressOrigin: true,

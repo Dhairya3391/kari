@@ -204,13 +204,9 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 		if !c.languageEnabled(a.lang) {
 			continue
 		}
-		quality := "Auto"
-		if a.lang != "" && a.lang != "en" {
-			quality = fmt.Sprintf("Auto (%s)", lang.Name(a.lang))
-		}
 		sources = append(sources, provider.MediaSource{
 			URL:       a.url,
-			Quality:   quality,
+			Quality:   "Auto",
 			Type:      a.typ,
 			Referer:   a.referer,
 			UserAgent: config.DesktopUserAgent,

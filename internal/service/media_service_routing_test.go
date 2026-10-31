@@ -70,13 +70,16 @@ func (s *slowStub) ResolveSource(ctx context.Context, mediaID string, episode pr
 // budget so a slow catalog can't abort the only search, while multi-provider
 // modes keep the shared cap and any shorter route deadline still wins.
 func TestProviderSearchTimeoutBudgets(t *testing.T) {
-	if got := providerSearchTimeout(1, provider.Route{}, false); got != provider.DefaultSingleSearchTimeout {
-		t.Errorf("single provider timeout = %v, want %v", got, provider.DefaultSingleSearchTimeout)
+	if got := providerSearchTimeout(1, provider.Route{Provider: &slowStub{}}); got != singleSearchTimeout {
+		t.Errorf("single provider timeout = %v, want %v", got, singleSearchTimeout)
 	}
-	if got := providerSearchTimeout(3, provider.Route{}, false); got != provider.DefaultSearchTimeout {
-		t.Errorf("multi provider timeout = %v, want %v", got, provider.DefaultSearchTimeout)
+	if got := providerSearchTimeout(3, provider.Route{Provider: &slowStub{}}); got != searchTimeout {
+		t.Errorf("multi provider timeout = %v, want %v", got, searchTimeout)
 	}
-	if got := providerSearchTimeout(1, provider.Route{SearchTimeout: 2 * time.Second}, true); got != 2*time.Second {
+	if got := providerSearchTimeout(1, provider.Route{
+		Provider:  &slowStub{},
+		Deadlines: provider.Deadlines{Search: 2 * time.Second},
+	}); got != 2*time.Second {
 		t.Errorf("explicit route deadline = %v, want 2s", got)
 	}
 }
@@ -224,13 +227,15 @@ func (s *resolveStub) ResolveSource(ctx context.Context, mediaID string, episode
 	}
 }
 
-// TestResolveMergeDedupesAndBoosts proves cross-provider dedupe by URL
-// and the routes-table preference (movysx first for movies).
+// TestResolveMergeDedupesAndPreservesSources proves shared stream identity
+// collapses duplicates and route priority selects the display owner.
 func TestResolveMergeDedupesAndPreservesSources(t *testing.T) {
 	movysx := &resolveStub{name: "movysx", mode: provider.ModeMovies,
-		sources: []provider.MediaSource{{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p"}}}
+		delay:   20 * time.Millisecond,
+		sources: []provider.MediaSource{{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p", Backend: "Native"}}}
 	pengu := &resolveStub{name: "pengu", mode: provider.ModeMovies,
 		sources: []provider.MediaSource{
+			{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p", Backend: "Mirror"},
 			{URL: "https://cdn.example.com/b.m3u8", Quality: "4K"},
 			{URL: "https://cdn.example.com/b.m3u8", Quality: "4K"},
 			{URL: "https://cdn.example.com/c.m3u8", Quality: "720p"},
@@ -245,6 +250,15 @@ func TestResolveMergeDedupesAndPreservesSources(t *testing.T) {
 	if len(resolved.Playback) != 3 {
 		t.Fatalf("want 3 deduped sources, got %+v", resolved.Playback)
 	}
+	for _, source := range resolved.Playback {
+		if source.URL == "https://cdn.example.com/a.m3u8" {
+			if source.Resolver != "movysx" || source.Backend != "Native" {
+				t.Errorf("duplicate source owner = %s/%s, want preferred route movysx/Native", source.Resolver, source.Backend)
+			}
+			return
+		}
+	}
+	t.Fatal("deduplicated source missing")
 }
 
 // TestResolveLastFailures proves partial results arrive together with
@@ -350,7 +364,7 @@ func TestFetchEpisodesFiltersAudio(t *testing.T) {
 // languages each keep their own budget.
 func TestAggregatorCapsMirrorTiers(t *testing.T) {
 	newAgg := func() *sourceAggregator {
-		return newSourceAggregatorForMode(provider.ModeMovies, []provider.Provider{
+		return newSourceAggregator([]provider.Provider{
 			&stubProvider{name: "movysx", mode: provider.ModeMovies},
 		}, func(n string) string { return n })
 	}
@@ -367,11 +381,11 @@ func TestAggregatorCapsMirrorTiers(t *testing.T) {
 
 	varied := newAgg()
 	varied.add("pengu", []provider.MediaSource{
-		{URL: "https://cdn.example.com/1", Quality: "4K [A]"},
-		{URL: "https://cdn.example.com/2", Quality: "4K [B]"},
-		{URL: "https://cdn.example.com/3", Quality: "4K [C]"},
-		{URL: "https://cdn.example.com/4", Quality: "4K [D]"},
-		{URL: "https://cdn.example.com/5", Quality: "1080p [A]"},
+		{URL: "https://cdn.example.com/1", Quality: "4K", Backend: "A"},
+		{URL: "https://cdn.example.com/2", Quality: "4K", Backend: "B"},
+		{URL: "https://cdn.example.com/3", Quality: "4K", Backend: "C"},
+		{URL: "https://cdn.example.com/4", Quality: "4K", Backend: "D"},
+		{URL: "https://cdn.example.com/5", Quality: "1080p", Backend: "A"},
 	})
 	if len(varied.sources) != 5 {
 		t.Errorf("distinct backends/heights must all survive, got %d", len(varied.sources))

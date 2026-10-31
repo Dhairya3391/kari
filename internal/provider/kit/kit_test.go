@@ -156,18 +156,6 @@ func TestQualityLabels(t *testing.T) {
 	}
 }
 
-func TestTagQuality(t *testing.T) {
-	if got := TagQuality("Auto", "HD1", ""); got != "Auto (HD1)" {
-		t.Errorf("TagQuality = %q", got)
-	}
-	if got := TagQuality("Auto", "", "hd2"); got != "Auto (hd2)" {
-		t.Errorf("TagQuality fallback = %q", got)
-	}
-	if got := TagQuality("Auto", "", ""); got != "Auto" {
-		t.Errorf("TagQuality untagged = %q", got)
-	}
-}
-
 func TestWatchURLs(t *testing.T) {
 	got := WatchURLs("https://api", "12 34", "sub", 2, []string{"hd1", "hd2"})
 	want := []string{

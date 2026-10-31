@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"kari/internal/provider"
-	"kari/internal/provider/kit"
 )
 
 // Load serialization and play readiness live here: one media pipeline at
@@ -236,14 +235,13 @@ func (m *modelImpl) beginRetryWait(mode provider.ContentType, exclude []string) 
 	}
 }
 
-// preferredRepairNeeded reports whether the last resolve left a
-// routes-table preferred provider failed while others delivered: the
-// case for one quiet background repair instead of a manual retry.
+// preferredRepairNeeded reports whether a provider-declared playback
+// priority failed while another provider delivered sources.
 func (m *modelImpl) preferredRepairNeeded() bool {
-	if m.selectedSeries == nil || m.selectedEpisode == nil || m.mediaService == nil {
+	if m.selectedSeries == nil || m.selectedEpisode == nil || m.mediaService == nil || m.registry == nil {
 		return false
 	}
-	preferred := provider.PreferredResolvers(m.appMode)
+	preferred := m.registry.PreferredPlaybackProviders(m.appMode)
 	if len(preferred) == 0 {
 		return false
 	}
@@ -257,14 +255,11 @@ func (m *modelImpl) preferredRepairNeeded() bool {
 	return false
 }
 
-// sourceBackendName names the backend behind one source for display:
-// the [Backend] tag embedded in the quality label (what the aggregator
-// actually serves, e.g. 4KHDHub behind Pengu), falling back to the
-// provider's display name. The resolver alone (e.g. "pengu") never
-// identifies the stream to the user.
+// sourceBackendName uses provider-supplied backend metadata when present,
+// falling back to the provider's display name.
 func sourceBackendName(src provider.MediaSource, displayName func(string) string) string {
-	if tag := qualityTag(src.Quality); tag != "" {
-		return tag
+	if name := strings.TrimSpace(src.Backend); name != "" {
+		return name
 	}
 	if displayName != nil {
 		if name := displayName(src.Resolver); name != "" {
@@ -275,9 +270,4 @@ func sourceBackendName(src provider.MediaSource, displayName func(string) string
 		return src.Resolver
 	}
 	return "—"
-}
-
-// qualityTag extracts the [Backend] token via the shared kit helper.
-func qualityTag(quality string) string {
-	return kit.BackendTag(quality)
 }

@@ -109,6 +109,28 @@ type SearchResult struct {
 	Group    string    // live league / category / channel type
 }
 
+// ResolutionID returns the identifier a provider should receive for this
+// title. The origin provider keeps its native handle; fallback providers use
+// the shared anime ID or TMDB ID supported by Kari's cross-provider routes.
+func (r SearchResult) ResolutionID(mode ContentType, providerName string) (string, bool) {
+	if strings.EqualFold(providerName, r.Provider) {
+		return r.ID, true
+	}
+	if mode == ModeAnime || r.Type == ModeAnime {
+		if r.AniListID > 0 {
+			return strconv.Itoa(r.AniListID), true
+		}
+		return r.ID, r.ID != ""
+	}
+	if r.TMDBID > 0 {
+		return strconv.Itoa(r.TMDBID), true
+	}
+	if id, err := strconv.Atoi(strings.TrimSpace(r.ID)); err == nil && id > 0 {
+		return strconv.Itoa(id), true
+	}
+	return "", false
+}
+
 // Episode is one playable unit of a series. For movies, providers may
 // return a single episode with zero Season/Episode numbers.
 type Episode struct {
@@ -136,6 +158,8 @@ type SubtitleOption struct {
 // SkipTimes holds provider-embedded skip segment boundaries in seconds.
 // A value of -1 means the segment is absent or not declared by the provider.
 type SkipTimes struct {
+	// Source identifies the provider that supplied these segment boundaries.
+	Source       string
 	OpStart      float64
 	OpEnd        float64
 	EdStart      float64
@@ -160,9 +184,11 @@ func (s *SkipTimes) HasSegments() bool {
 // MediaSource is one playable stream. Providers fill everything except
 // Resolver, which MediaService stamps with the producing provider's name.
 type MediaSource struct {
-	URL          string
-	Quality      string
-	Resolver     string
+	URL      string
+	Quality  string
+	Resolver string
+	// Backend identifies the upstream lane or encoder independently of quality.
+	Backend      string
 	Referer      string
 	Type         string
 	Subtitles    []SubtitleOption
@@ -181,6 +207,8 @@ type MediaSource struct {
 	// SkipTimes holds provider-embedded skip segment boundaries in seconds.
 	// When absent or empty, the player layer falls back to external skip providers.
 	SkipTimes *SkipTimes
+	// FallbackOnly keeps a weak lane visible while ranking it below ordinary sources.
+	FallbackOnly bool
 }
 
 // TransportIdentity returns the canonical identity used to deduplicate a
@@ -321,21 +349,25 @@ func (c MangaChapter) DisplayLabel() string {
 }
 
 // MangaSource is implemented by providers serving readable manga/comics:
-// chapter listings plus page-image URLs. The embedded Provider contract
-// still applies (Search must work); FetchEpisodes/ResolveSource are
-// inapplicable to paged media and return sentinel errors.
+// chapter listings plus page-image URLs. It composes with Provider for
+// catalog search and does not imply episodic playback support.
 type MangaSource interface {
 	Provider
 	FetchChapters(ctx context.Context, series SearchResult) ([]MangaChapter, error)
 	FetchPages(ctx context.Context, chapter MangaChapter) ([]MangaPage, error)
 }
 
-// Provider is the core contract every media integration implements:
-// search titles, list episodes, and resolve playable sources.
+// Provider is the common catalog contract for every media integration.
 type Provider interface {
 	Name() string
 	Modes() []Mode
 	Search(ctx context.Context, query string, mode ContentType) ([]SearchResult, error)
+}
+
+// EpisodeSource supports episodic or movie playback by listing episodes and
+// resolving their playable sources.
+type EpisodeSource interface {
+	Provider
 	FetchEpisodes(ctx context.Context, series SearchResult) ([]Episode, error)
 	ResolveSource(ctx context.Context, mediaID string, episode Episode) ([]MediaSource, error)
 }
@@ -391,6 +423,25 @@ type Features struct {
 	AudioSelection    bool   // episode-level audio (sub/dub) selection applies
 }
 
+// Deadlines contains provider-specific operation budgets. Zero values use the
+// service defaults, which keep ordinary providers from needing boilerplate.
+type Deadlines struct {
+	Search time.Duration
+	Source time.Duration
+}
+
+// DeadlineSource lets a provider declare longer operation budgets for its
+// own upstream behavior without teaching the service provider identities.
+type DeadlineSource interface {
+	Deadlines(mode ContentType) Deadlines
+}
+
+// PlaybackPreferenceSource marks modes where this provider should receive a
+// background retry when its route failed but another provider produced rows.
+type PlaybackPreferenceSource interface {
+	PreferredForPlayback(mode ContentType) bool
+}
+
 // FeatureSource lets a provider declare per-mode Features. Optional:
 // unimplemented features fall back to defaults (CacheableSearches=true,
 // everything else false).
@@ -429,7 +480,7 @@ type Deps struct {
 // StreamingProvider is implemented by providers that deliver sources
 // incrementally over a channel instead of one blocking slice.
 type StreamingProvider interface {
-	Provider
+	EpisodeSource
 	ResolveStream(ctx context.Context, mediaID string, episode Episode, updates chan<- []MediaSource) error
 }
 

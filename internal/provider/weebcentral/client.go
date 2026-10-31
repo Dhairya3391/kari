@@ -56,18 +56,6 @@ func (c *Client) Features(mode provider.ContentType) provider.Features {
 	return provider.Features{SearchPlaceholder: "Search manga…"}
 }
 
-// FetchEpisodes is inapplicable to paged media; chapters flow through
-// FetchChapters instead.
-func (c *Client) FetchEpisodes(_ context.Context, _ provider.SearchResult) ([]provider.Episode, error) {
-	return nil, provider.ErrNoEpisodes
-}
-
-// ResolveSource is inapplicable to paged media; pages flow through
-// FetchPages instead.
-func (c *Client) ResolveSource(_ context.Context, _ string, _ provider.Episode) ([]provider.MediaSource, error) {
-	return nil, provider.ErrNoSources
-}
-
 // NewClient constructs the WeebCentral provider against production.
 func NewClient() (*Client, error) {
 	return NewClientWithBaseURL(config.WeebCentralBase)

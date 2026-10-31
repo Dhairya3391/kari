@@ -270,12 +270,12 @@ func (c *Client) mapStreamResponse(sr streamResponse, serverName string) ([]prov
 			continue
 		}
 
-		quality := s.Quality
+		quality := strings.TrimSpace(s.Quality)
 		if quality == "" {
 			quality = "HD"
 		}
-		if scraperLabel != "" && !strings.Contains(quality, "[") {
-			quality = fmt.Sprintf("%s [%s]", quality, scraperLabel)
+		if bracket := strings.Index(quality, "["); bracket >= 0 {
+			quality = strings.TrimSpace(quality[:bracket])
 		}
 		ref := config.BingrReferer
 		if r, ok := s.Headers["Referer"]; ok && r != "" {
@@ -294,6 +294,7 @@ func (c *Client) mapStreamResponse(sr streamResponse, serverName string) ([]prov
 		out = append(out, provider.MediaSource{
 			URL:       rawURL,
 			Quality:   quality,
+			Backend:   scraperLabel,
 			Type:      srcType,
 			Referer:   ref,
 			UserAgent: ua,

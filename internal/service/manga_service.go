@@ -28,15 +28,12 @@ func NewMangaService(registry *provider.Registry) *MangaService {
 // mangaSource resolves the named provider and asserts the MangaSource
 // capability, so callers never switch on provider names themselves.
 func (s *MangaService) mangaSource(name string) (provider.MangaSource, error) {
-	p, ok := s.registry.ProviderByName(name)
-	if !ok {
-		return nil, fmt.Errorf("unknown provider %q", name)
+	for _, route := range s.registry.PlanForMode(provider.ModeManga).Manga {
+		if strings.EqualFold(route.Provider.Name(), strings.TrimSpace(name)) {
+			return route.Manga, nil
+		}
 	}
-	ms, ok := p.(provider.MangaSource)
-	if !ok {
-		return nil, fmt.Errorf("provider %q does not serve manga", name)
-	}
-	return ms, nil
+	return nil, fmt.Errorf("provider %q does not serve manga", name)
 }
 
 // FetchChapters lists chapters for the series, oldest first.
@@ -95,17 +92,15 @@ func (s *MangaService) ResolveReadableChapter(ctx context.Context, series provid
 		}
 	}
 
-	for _, p := range s.registry.ProvidersForMode(provider.ModeManga) {
+	for _, route := range s.registry.PlanForMode(provider.ModeManga).Manga {
 		if len(candidates) >= maxFallbackSeries {
 			break
 		}
+		p := route.Provider
 		if p.Name() == series.Provider {
 			continue
 		}
-		ms, ok := p.(provider.MangaSource)
-		if !ok {
-			continue
-		}
+		ms := route.Manga
 		// Per-call bounds inside the 60s overall budget: one slow
 		// provider must not starve the remaining fallbacks.
 		searchCtx, searchCancel := context.WithTimeout(ctx, 15*time.Second)

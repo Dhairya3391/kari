@@ -137,7 +137,7 @@ func TestMatchesAudioMode(t *testing.T) {
 }
 
 func TestSourceAggregatorDedupesSourcesAndSubtitles(t *testing.T) {
-	agg := newSourceAggregatorForMode("", []provider.Provider{
+	agg := newSourceAggregator([]provider.Provider{
 		&stubProvider{name: "first", mode: provider.ModeTV},
 		&stubProvider{name: "second", mode: provider.ModeTV},
 	}, func(n string) string { return n })
@@ -235,7 +235,7 @@ func TestSourceAggregatorMergesResignedSourceVariants(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			agg := newSourceAggregatorForMode(provider.ModeAnime, []provider.Provider{
+			agg := newSourceAggregator([]provider.Provider{
 				&stubProvider{name: "anikoto", mode: provider.ModeAnime},
 				&stubProvider{name: "anivault", mode: provider.ModeAnime},
 			}, func(n string) string { return n })
@@ -278,7 +278,7 @@ func TestSourceAggregatorMergesResignedSourceVariants(t *testing.T) {
 }
 
 func TestSourceAggregatorMergesUserAgentOnlyVariants(t *testing.T) {
-	agg := newSourceAggregatorForMode(provider.ModeAnime, nil, func(n string) string { return n })
+	agg := newSourceAggregator(nil, func(n string) string { return n })
 	const playlist = "https://fetch.example/anime/abc/master.m3u8"
 	agg.add("anivault", []provider.MediaSource{{
 		URL:     playlist + "?token=anivault",
@@ -299,7 +299,7 @@ func TestSourceAggregatorMergesUserAgentOnlyVariants(t *testing.T) {
 }
 
 func TestSourceAggregatorKeepsDistinctQuerySemantics(t *testing.T) {
-	agg := newSourceAggregatorForMode(provider.ModeAnime, nil, func(n string) string { return n })
+	agg := newSourceAggregator(nil, func(n string) string { return n })
 	agg.add("pengu", []provider.MediaSource{
 		{URL: "https://cdn.example.com/master.m3u8?token=one&quality=1080", Quality: "1080p"},
 		{URL: "https://cdn.example.com/master.m3u8?token=two&quality=720", Quality: "720p"},
@@ -310,7 +310,7 @@ func TestSourceAggregatorKeepsDistinctQuerySemantics(t *testing.T) {
 }
 
 func TestSourceAggregatorReindexesAfterSort(t *testing.T) {
-	agg := newSourceAggregatorForMode(provider.ModeAnime, []provider.Provider{
+	agg := newSourceAggregator([]provider.Provider{
 		&stubProvider{name: "anikoto", mode: provider.ModeAnime},
 		&stubProvider{name: "anivault", mode: provider.ModeAnime},
 	}, func(n string) string { return n })
@@ -362,15 +362,15 @@ func TestCanonicalSourceURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := canonicalSourceURL(tt.raw); got != tt.want {
-				t.Errorf("canonicalSourceURL(%q) = %q, want %q", tt.raw, got, tt.want)
+			if got := provider.CanonicalSourceURL(tt.raw); got != tt.want {
+				t.Errorf("CanonicalSourceURL(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestSourceAggregatorPreservesTransportBoundSubtitles(t *testing.T) {
-	agg := newSourceAggregatorForMode(provider.ModeMovies, nil, func(name string) string { return name })
+	agg := newSourceAggregator(nil, func(name string) string { return name })
 	agg.add("pengu", []provider.MediaSource{
 		{
 			URL:       "https://cdn.example.com/video.m3u8",
@@ -410,7 +410,7 @@ func TestSourceAggregatorPreservesTransportBoundSubtitles(t *testing.T) {
 func TestSourceAggregatorPreservesArrivalOrder(t *testing.T) {
 	first := &stubProvider{name: "first", mode: provider.ModeTV}
 	second := &stubProvider{name: "second", mode: provider.ModeTV}
-	agg := newSourceAggregatorForMode("", []provider.Provider{first, second}, func(n string) string { return n })
+	agg := newSourceAggregator([]provider.Provider{first, second}, func(n string) string { return n })
 
 	agg.add("second", []provider.MediaSource{{URL: "http://hi-2", Quality: "1080p"}})
 	agg.add("first", []provider.MediaSource{
@@ -429,7 +429,7 @@ func TestSourceAggregatorPreservesArrivalOrder(t *testing.T) {
 
 func TestSourceAggregatorSortsHardSubsBeforeSoftSubsPerProvider(t *testing.T) {
 	pengu := &stubProvider{name: "pengu", mode: provider.ModeAnime}
-	agg := newSourceAggregatorForMode(provider.ModeAnime, []provider.Provider{pengu}, func(n string) string { return n })
+	agg := newSourceAggregator([]provider.Provider{pengu}, func(n string) string { return n })
 
 	agg.add("pengu", []provider.MediaSource{
 		{URL: "http://soft", Quality: "1080p", SubType: provider.SubTypeSoft},
@@ -586,13 +586,13 @@ func TestCanonicalAnimeEpisodeTitlesComeFromProviderCapability(t *testing.T) {
 	svc := NewMediaService(newTestRegistry(names))
 	series := provider.SearchResult{Title: "T", ID: "105310", Provider: "mirlike", Type: provider.ModeAnime}
 
-	got := svc.applyCanonicalAnimeEpisodeTitles(context.Background(), provider.ModeAnime, series,
+	got := svc.applyCanonicalEpisodeTitles(context.Background(), provider.ModeAnime, series,
 		[]provider.Episode{{Episode: 6, Title: "Streaming-provider title", Audio: provider.AudioDub}})
 	if len(got) != 1 || got[0].Title != "Canonical episode title" || got[0].ID != "" {
 		t.Fatalf("episodes = %+v", got)
 	}
 	// Cached per series: the second application must not re-query providers.
-	svc.applyCanonicalAnimeEpisodeTitles(context.Background(), provider.ModeAnime, series,
+	svc.applyCanonicalEpisodeTitles(context.Background(), provider.ModeAnime, series,
 		[]provider.Episode{{Episode: 6, Title: "Streaming-provider title"}})
 	if names.calls != 1 {
 		t.Errorf("provider called %d times, want 1 via cache", names.calls)
@@ -602,7 +602,7 @@ func TestCanonicalAnimeEpisodeTitlesComeFromProviderCapability(t *testing.T) {
 func TestCanonicalAnimeEpisodeTitlesAvoidUnverifiedProviderNames(t *testing.T) {
 	svc := NewMediaService(newTestRegistry())
 	episodes := []provider.Episode{{Episode: 6, Title: "Possibly wrong title"}}
-	got := svc.applyCanonicalAnimeEpisodeTitles(context.Background(), provider.ModeAnime, provider.SearchResult{
+	got := svc.applyCanonicalEpisodeTitles(context.Background(), provider.ModeAnime, provider.SearchResult{
 		MediaType: provider.MediaTypeAnime,
 	}, episodes)
 	if len(got) != 1 || got[0].Title != "Episode 06" {
@@ -640,15 +640,15 @@ func TestFetchEpisodesFallsBackWhenAvailabilityFails(t *testing.T) {
 // Route timeouts: default when unset, explicit when set, never beyond
 // the overall budget.
 func TestProviderSourceTimeout(t *testing.T) {
-	if got := providerSourceTimeout(provider.Route{}, false); got != provider.DefaultSourceTimeout {
+	if got := providerSourceTimeout(provider.Route{Provider: &slowStub{}}); got != sourceTimeout {
 		t.Errorf("no route = %v, want default", got)
 	}
-	r := provider.Route{Provider: "pengu", SourceTimeout: 40 * time.Second}
-	if got := providerSourceTimeout(r, true); got != 40*time.Second {
+	route := provider.Route{Provider: &slowStub{}, Deadlines: provider.Deadlines{Source: 40 * time.Second}}
+	if got := providerSourceTimeout(route); got != 40*time.Second {
 		t.Errorf("explicit 40s = %v, want 40s", got)
 	}
-	r.SourceTimeout = 99 * time.Second
-	if got := providerSourceTimeout(r, true); got != provider.DefaultSourcesOverall {
+	route.Deadlines.Source = 99 * time.Second
+	if got := providerSourceTimeout(route); got != sourcesOverallTimeout {
 		t.Errorf("oversize clamped = %v, want overall", got)
 	}
 }
@@ -782,7 +782,6 @@ func TestResolvedMediaSnapshotIsCopied(t *testing.T) {
 
 func TestAggregatorPreservesArrivalOrderAcrossProviders(t *testing.T) {
 	agg := &sourceAggregator{
-		mode: provider.ModeMovies,
 		sources: []provider.MediaSource{
 			{Resolver: "pengu", Quality: "4K [4KHDHub]"},
 			{Resolver: "movysx", Quality: "1080p"},

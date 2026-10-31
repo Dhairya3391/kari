@@ -78,16 +78,6 @@ func (c *Client) Features(mode provider.ContentType) provider.Features {
 	return provider.Features{SearchPlaceholder: "Search manga…"}
 }
 
-// FetchEpisodes is inapplicable to manga titles.
-func (c *Client) FetchEpisodes(_ context.Context, _ provider.SearchResult) ([]provider.Episode, error) {
-	return nil, provider.ErrNoEpisodes
-}
-
-// ResolveSource is inapplicable to manga titles.
-func (c *Client) ResolveSource(_ context.Context, _ string, _ provider.Episode) ([]provider.MediaSource, error) {
-	return nil, provider.ErrNoSources
-}
-
 type searchResponse struct {
 	Found int         `json:"found"`
 	Hits  []searchHit `json:"hits"`

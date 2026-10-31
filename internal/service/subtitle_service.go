@@ -133,7 +133,7 @@ func (s *SubtitleService) fetch(
 		preferredLang = "en"
 	}
 
-	isAnime := media.ContentMode == provider.ModeAnime || media.MediaType == provider.MediaTypeAnime
+	isAnime := media.IsAnime()
 	if isAnime && s.areAnimeSubtitlesDisabled() {
 		return model.SubtitleTrack{}, nil
 	}
@@ -164,9 +164,9 @@ func (s *SubtitleService) fetch(
 	)
 
 	if track, ok := s.cache.Get(cacheKey); ok && usableCachedTrack(track) {
-		isOpenSub := strings.EqualFold(strings.TrimSpace(track.Resolver), "opensubtitles")
+		isExternalTrack := strings.TrimSpace(track.SourceID) == ""
 		hasProviderCandidates := len(exactSourceCandidates) > 0 || len(otherMirrorCandidates) > 0
-		if !isOpenSub || !hasProviderCandidates {
+		if !isExternalTrack || !hasProviderCandidates {
 			return track, nil
 		}
 	}

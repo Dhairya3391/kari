@@ -24,13 +24,6 @@ import (
 // log scopes every line from this package.
 var ariaLog = logging.With("component", "downloader.aria2")
 
-// aria2HTTPClient is deliberately a plain bounded-timeout client rather than
-// the shared retryable one in internal/httpclient — retrying a POST to a
-// non-idempotent JSON-RPC method (e.g. aria2.addUri) could submit the same
-// command twice. The timeout alone is enough to keep a wedged local aria2c
-// process from hanging this call forever.
-var aria2HTTPClient = &http.Client{Timeout: 15 * time.Second}
-
 // ── JSON-RPC types ────────────────────────────────────────────────────────────
 type aria2RPCRequest struct {
 	JSONRPC string `json:"jsonrpc"`
@@ -78,6 +71,9 @@ func (d *Aria2Downloader) Download(
 	outputDir, tempDir, baseTitle string,
 	progress func(DownloadProgress),
 ) error {
+	// Aria2 JSON-RPC uses POST for non-idempotent commands. Keep a bounded
+	// client local to this download so retries cannot duplicate submissions.
+	rpcClient := &http.Client{Timeout: 15 * time.Second}
 	port, err := findFreePort()
 	if err != nil {
 		return fmt.Errorf("aria2: find port: %w", err)
@@ -122,7 +118,7 @@ func (d *Aria2Downloader) Download(
 	defer killDaemon()
 
 	// Wait until RPC is ready (up to 5 seconds).
-	if err := waitForAria2RPC(ctx, port, secret, 5*time.Second); err != nil {
+	if err := waitForAria2RPC(ctx, rpcClient, port, secret, 5*time.Second); err != nil {
 		return fmt.Errorf("aria2: rpc not ready: %w", err)
 	}
 
@@ -154,7 +150,7 @@ func (d *Aria2Downloader) Download(
 	if len(headers) > 0 {
 		aria2Opts["header"] = headers
 	}
-	gid, err := aria2AddUri(port, secret, source.URL, aria2Opts)
+	gid, err := aria2AddUri(ctx, rpcClient, port, secret, source.URL, aria2Opts)
 	if err != nil {
 		return fmt.Errorf("aria2: addUri: %w", err)
 	}
@@ -167,7 +163,9 @@ func (d *Aria2Downloader) Download(
 	for {
 		select {
 		case <-ctx.Done():
-			_ = aria2ForceRemove(port, secret, gid)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+			_ = aria2ForceRemove(cleanupCtx, rpcClient, port, secret, gid)
+			cleanupCancel()
 			// Read stderr for logging before killing.
 			daemonStderr := stderrBuf.String()
 			if daemonStderr != "" {
@@ -176,14 +174,14 @@ func (d *Aria2Downloader) Download(
 			return ctx.Err()
 
 		case <-ticker.C:
-			status, err := aria2TellStatus(port, secret, gid)
+			status, err := aria2TellStatus(ctx, rpcClient, port, secret, gid)
 			if err != nil {
 				return fmt.Errorf("aria2: tellStatus: %w", err)
 			}
 
 			switch status.Status {
 			case "complete":
-				_ = aria2RemoveDownloadResult(port, secret, gid)
+				_ = aria2RemoveDownloadResult(ctx, rpcClient, port, secret, gid)
 
 				// aria2c may produce a file whose name we don't control.
 				// Rename it to the canonical baseTitle + extension.
@@ -220,14 +218,19 @@ func (d *Aria2Downloader) Download(
 }
 
 // ── JSON-RPC client helpers ──────────────────────────────────────────────────
-func aria2RPC(port int, _ string, req *aria2RPCRequest) (json.RawMessage, error) {
+func aria2RPC(ctx context.Context, client *http.Client, port int, req *aria2RPCRequest) (json.RawMessage, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("rpc marshal: %w", err)
 	}
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/jsonrpc", port)
-	resp, err := aria2HTTPClient.Post(url, "application/json", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("rpc request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("rpc http: %w", err)
 	}
@@ -250,7 +253,7 @@ func aria2RPC(port int, _ string, req *aria2RPCRequest) (json.RawMessage, error)
 	return rpcResp.Result, nil
 }
 
-func aria2AddUri(port int, secret, uri string, opts map[string]any) (string, error) {
+func aria2AddUri(ctx context.Context, client *http.Client, port int, secret, uri string, opts map[string]any) (string, error) {
 	params := []any{
 		"token:" + secret,
 		[]string{uri},
@@ -264,7 +267,7 @@ func aria2AddUri(port int, secret, uri string, opts map[string]any) (string, err
 		Params:  params,
 	}
 
-	result, err := aria2RPC(port, secret, req)
+	result, err := aria2RPC(ctx, client, port, req)
 	if err != nil {
 		return "", err
 	}
@@ -276,7 +279,7 @@ func aria2AddUri(port int, secret, uri string, opts map[string]any) (string, err
 	return gid, nil
 }
 
-func aria2TellStatus(port int, secret, gid string) (*aria2TellStatusResult, error) {
+func aria2TellStatus(ctx context.Context, client *http.Client, port int, secret, gid string) (*aria2TellStatusResult, error) {
 	req := &aria2RPCRequest{
 		JSONRPC: "2.0",
 		ID:      "status",
@@ -284,7 +287,7 @@ func aria2TellStatus(port int, secret, gid string) (*aria2TellStatusResult, erro
 		Params:  []any{"token:" + secret, gid},
 	}
 
-	result, err := aria2RPC(port, secret, req)
+	result, err := aria2RPC(ctx, client, port, req)
 	if err != nil {
 		return nil, err
 	}
@@ -296,36 +299,36 @@ func aria2TellStatus(port int, secret, gid string) (*aria2TellStatusResult, erro
 	return &status, nil
 }
 
-func aria2ForceRemove(port int, secret, gid string) error {
+func aria2ForceRemove(ctx context.Context, client *http.Client, port int, secret, gid string) error {
 	req := &aria2RPCRequest{
 		JSONRPC: "2.0",
 		ID:      "remove",
 		Method:  "aria2.forceRemove",
 		Params:  []any{"token:" + secret, gid},
 	}
-	_, err := aria2RPC(port, secret, req)
+	_, err := aria2RPC(ctx, client, port, req)
 	return err
 }
 
-func aria2RemoveDownloadResult(port int, secret, gid string) error {
+func aria2RemoveDownloadResult(ctx context.Context, client *http.Client, port int, secret, gid string) error {
 	req := &aria2RPCRequest{
 		JSONRPC: "2.0",
 		ID:      "rmresult",
 		Method:  "aria2.removeDownloadResult",
 		Params:  []any{"token:" + secret, gid},
 	}
-	_, err := aria2RPC(port, secret, req)
+	_, err := aria2RPC(ctx, client, port, req)
 	return err
 }
 
-func aria2GetVersion(port int, secret string) error {
+func aria2GetVersion(ctx context.Context, client *http.Client, port int, secret string) error {
 	req := &aria2RPCRequest{
 		JSONRPC: "2.0",
 		ID:      "ver",
 		Method:  "aria2.getVersion",
 		Params:  []any{"token:" + secret},
 	}
-	_, err := aria2RPC(port, secret, req)
+	_, err := aria2RPC(ctx, client, port, req)
 	return err
 }
 
@@ -348,10 +351,10 @@ func generateRPCSecret() (string, error) {
 }
 
 // waitForAria2RPC polls aria2.getVersion until it responds, context cancels, or timeout elapses.
-func waitForAria2RPC(ctx context.Context, port int, secret string, timeout time.Duration) error {
+func waitForAria2RPC(ctx context.Context, client *http.Client, port int, secret string, timeout time.Duration) error {
 	deadline := time.After(timeout)
 	for {
-		if err := aria2GetVersion(port, secret); err == nil {
+		if err := aria2GetVersion(ctx, client, port, secret); err == nil {
 			return nil
 		}
 		select {

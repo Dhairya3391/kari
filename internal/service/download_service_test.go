@@ -259,13 +259,13 @@ func TestDownloadSkipsSidecarSubtitleAnimeHardSub(t *testing.T) {
 	svc := NewDownloadService(root, dl, NewMediaService(newTestRegistry()), subSvc)
 
 	cases := []struct {
-		name    string
-		subType string
-		quality string
+		name        string
+		subType     string
+		quality     string
+		wantSidecar bool
 	}{
-		{"explicit hard subtype", provider.SubTypeHard, "1080p"},
-		{"quality hard sub tag", "", "1080p (Hard Sub)"},
-		{"quality hsub tag", "", "1080p [hsub]"},
+		{"explicit hard subtype", provider.SubTypeHard, "1080p", false},
+		{"untyped quality hint", "", "1080p (Hard Sub)", true},
 	}
 
 	for _, tc := range cases {
@@ -291,8 +291,12 @@ func TestDownloadSkipsSidecarSubtitleAnimeHardSub(t *testing.T) {
 			}
 
 			expectedSubPath := filepath.Join(root, "Naruto", "Season 01", "S01E01.en.srt")
-			if _, err := os.Stat(expectedSubPath); !os.IsNotExist(err) {
-				t.Fatalf("sidecar subtitle must NOT be created for hardsub anime (%s)", tc.name)
+			_, statErr := os.Stat(expectedSubPath)
+			if tc.wantSidecar && statErr != nil {
+				t.Fatalf("untyped source must preserve sidecar subtitle: %v", statErr)
+			}
+			if !tc.wantSidecar && !os.IsNotExist(statErr) {
+				t.Fatalf("declared hardsub source must omit sidecar subtitle, got %v", statErr)
 			}
 		})
 	}

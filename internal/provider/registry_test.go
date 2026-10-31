@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // fakeProvider is a configurable Provider double used to exercise registry
@@ -55,6 +56,63 @@ func TestRegistryProvidersForModeOrdersByPriority(t *testing.T) {
 	}
 	if got[0].Name() != "high" || got[1].Name() != "low" {
 		t.Fatalf("priority ordering wrong: %s before %s expected high before low", got[0].Name(), got[1].Name())
+	}
+}
+
+type deadlineFake struct {
+	fakeProvider
+	deadlines Deadlines
+}
+
+func (f *deadlineFake) Deadlines(ContentType) Deadlines { return f.deadlines }
+
+func TestRegistryPlanForModeBuildsTypedOrderedRoutes(t *testing.T) {
+	registry := &Registry{}
+	registry.Register(&deadlineFake{
+		fakeProvider: fakeProvider{name: "slow", modes: []Mode{{Name: ModeAnime, Priority: 4}}},
+		deadlines:    Deadlines{Source: 40 * time.Second},
+	})
+	registry.Register(&fakeProvider{name: "fast", modes: []Mode{{Name: ModeAnime, Priority: 1}}})
+
+	plan := registry.PlanForMode(ModeAnime)
+	if len(plan.Search) != 2 || plan.Search[0].Provider.Name() != "fast" || plan.Search[1].Provider.Name() != "slow" {
+		t.Fatalf("search routes not ordered by declared priority: %+v", plan.Search)
+	}
+	if len(plan.Playback) != 2 || plan.Playback[0].Playback == nil || plan.Playback[1].Playback == nil {
+		t.Fatalf("playback routes do not contain typed episode sources: %+v", plan.Playback)
+	}
+	if got := plan.Playback[1].Deadlines.Source; got != 40*time.Second {
+		t.Errorf("provider deadline = %v, want 40s", got)
+	}
+	if plan.SearchStrategy != RouteFanOut || plan.PlaybackStrategy != RouteFanOut {
+		t.Errorf("multi-provider strategies = %q/%q, want fan-out/fan-out", plan.SearchStrategy, plan.PlaybackStrategy)
+	}
+	if plan.MangaStrategy != "" {
+		t.Errorf("manga strategy = %q, want empty without manga routes", plan.MangaStrategy)
+	}
+}
+
+type preferenceFake struct {
+	fakeProvider
+	preferred bool
+}
+
+func (f *preferenceFake) PreferredForPlayback(ContentType) bool { return f.preferred }
+
+func TestRegistryPreferredPlaybackProvidersUsesRouteOrder(t *testing.T) {
+	registry := &Registry{}
+	registry.Register(&preferenceFake{
+		fakeProvider: fakeProvider{name: "second", modes: []Mode{{Name: ModeMovies, Priority: 2}}},
+		preferred:    true,
+	})
+	registry.Register(&preferenceFake{
+		fakeProvider: fakeProvider{name: "first", modes: []Mode{{Name: ModeMovies, Priority: 1}}},
+		preferred:    true,
+	})
+
+	got := registry.PreferredPlaybackProviders(ModeMovies)
+	if len(got) != 2 || got[0] != "first" || got[1] != "second" {
+		t.Fatalf("preferred providers = %v, want [first second]", got)
 	}
 }
 

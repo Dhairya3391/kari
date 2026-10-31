@@ -242,6 +242,15 @@ func (c *Client) Features(mode provider.ContentType) provider.Features {
 	return provider.Features{}
 }
 
+// Deadlines gives the anime aggregator more time for its slower upstream
+// scrapers while keeping other modes on the shared service budget.
+func (c *Client) Deadlines(mode provider.ContentType) provider.Deadlines {
+	if mode == provider.ModeAnime {
+		return provider.Deadlines{Source: 40 * time.Second}
+	}
+	return provider.Deadlines{}
+}
+
 // audioLanguages is the full set of audio-track languages the PenguPlay API
 // aggregates across its internal providers.
 var audioLanguages = []provider.AudioLanguage{
@@ -582,8 +591,8 @@ func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string
 		source := parseStreamItem(stream)
 		// Collapse only exact mirrors: distinct encodes from the same backend
 		// carry different filenames/sizes and are kept as separate choices.
-		groupKey := fmt.Sprintf("%s|%s|%s|%s|%d",
-			source.Quality, source.Language, source.Type,
+		groupKey := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d",
+			source.Backend, source.Quality, source.Language, source.Type, source.SubType,
 			stream.BehaviorHints.Filename, stream.BehaviorHints.VideoSize)
 		if seenGroup[groupKey] {
 			continue
@@ -611,6 +620,14 @@ func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string
 	sources := collapseMirrors(candidates)
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources
+	}
+	if !isAnime {
+		for i := range sources {
+			switch strings.ToLower(sources[i].Backend) {
+			case "moviebox", "cinejoy":
+				sources[i].FallbackOnly = true
+			}
+		}
 	}
 	select {
 	case result := <-subtitleResults:
@@ -728,7 +745,7 @@ func collapseMirrors(candidates []resolveCandidate) []provider.MediaSource {
 	sources := make([]provider.MediaSource, 0, len(candidates))
 	for _, cand := range candidates {
 		key := mirrorKey{
-			backend: mirrorBackend(cand.source.Quality),
+			backend: cand.source.Backend,
 			height:  qualityHeight(cand.source.Quality),
 			lang:    cand.source.Language,
 			subType: cand.source.SubType,
@@ -748,21 +765,6 @@ func collapseMirrors(candidates []resolveCandidate) []provider.MediaSource {
 		sources = append(sources, cand.source)
 	}
 	return sources
-}
-
-// mirrorBackend extracts the [Backend] token from a quality label such as
-// "1080p [MovieBox] (Hindi)".
-func mirrorBackend(quality string) string {
-	open := strings.Index(quality, "[")
-	if open < 0 {
-		return ""
-	}
-	rest := quality[open+1:]
-	close := strings.Index(rest, "]")
-	if close <= 0 {
-		return ""
-	}
-	return strings.TrimSpace(rest[:close])
 }
 
 // qualityHeight extracts the vertical resolution from a quality label
@@ -1271,28 +1273,7 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 			subType = provider.SubTypeSoft
 		}
 	}
-	audioLangDisplay := ""
-	switch {
-	case subType == provider.SubTypeHard && strings.Contains(strings.ToLower(combined), "dub"):
-		audioLangDisplay = "Hard Dub"
-	case subType == provider.SubTypeHard:
-		audioLangDisplay = "Hard Sub"
-	case audioLang != "" && audioLang != "en":
-		audioLangDisplay = lang.Name(audioLang)
-	case strings.Contains(strings.ToLower(stream.Name), "dub") || strings.Contains(strings.ToLower(stream.Description), "dub"):
-		audioLangDisplay = "Dub"
-	}
-
 	quality := res
-	if sourceName != "" {
-		if audioLangDisplay != "" {
-			quality = fmt.Sprintf("%s [%s] (%s)", res, sourceName, audioLangDisplay)
-		} else {
-			quality = fmt.Sprintf("%s [%s]", res, sourceName)
-		}
-	} else if audioLangDisplay != "" {
-		quality = fmt.Sprintf("%s (%s)", res, audioLangDisplay)
-	}
 
 	// 4. Stream Type: manifests stay HLS; progressive containers
 	// (mp4/mkv/webm/…) are progressive. Extensionless URLs consult the
@@ -1360,6 +1341,7 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 	return provider.MediaSource{
 		URL:          stream.URL,
 		Quality:      quality,
+		Backend:      sourceName,
 		Referer:      referer,
 		Type:         streamType,
 		Subtitles:    subtitles,
@@ -1495,3 +1477,5 @@ func isEmoji(r rune) bool {
 		(r >= 0x2B50 && r <= 0x2B55) ||
 		r == 0xFE0F || r == 0xFE0E || r == 0x200D
 }
+
+var _ provider.DeadlineSource = (*Client)(nil)

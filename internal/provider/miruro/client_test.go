@@ -164,8 +164,8 @@ func TestMiruroResolveSub(t *testing.T) {
 	if s.URL != "https://cdn.example.com/master.m3u8?token=abc" {
 		t.Errorf("URL = %q", s.URL)
 	}
-	if s.Quality != "Auto (Vidstream-1)" {
-		t.Errorf("Quality = %q, want server-tagged auto", s.Quality)
+	if s.Quality != "Auto" || s.Backend != "Vidstream-1" {
+		t.Errorf("quality/backend = %q/%q, want Auto/Vidstream-1", s.Quality, s.Backend)
 	}
 	if s.Referer != "https://megaplay.buzz/" {
 		t.Errorf("Referer = %q", s.Referer)

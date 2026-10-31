@@ -15,6 +15,9 @@ type SubtitleTrack struct {
 	SourceID  string
 	Default   bool
 	Resolver  string
+	// ProviderName is the display-ready source name, including non-media
+	// subtitle catalogs that are not registered as playback providers.
+	ProviderName string
 }
 
 // ResolvedMedia aggregates every playback source and subtitle track

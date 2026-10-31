@@ -47,6 +47,66 @@ func (r *Registry) ProvidersForMode(mode ContentType) []Provider {
 	return out
 }
 
+// PlanForMode builds ordered routes for every operation supported by a mode.
+// Search includes every provider; playback and manga routes contain only
+// providers that implement the corresponding flow.
+func (r *Registry) PlanForMode(mode ContentType) RoutePlan {
+	providers := r.ProvidersForMode(mode)
+	plan := RoutePlan{
+		Mode:     mode,
+		Search:   make([]Route, 0, len(providers)),
+		Playback: make([]Route, 0, len(providers)),
+		Manga:    make([]Route, 0, len(providers)),
+	}
+	for _, p := range providers {
+		route := Route{
+			Provider:  p,
+			Priority:  priorityForMode(p, mode),
+			Deadlines: providerDeadlines(p, mode),
+		}
+		route.Playback, _ = p.(EpisodeSource)
+		route.Manga, _ = p.(MangaSource)
+		plan.Search = append(plan.Search, route)
+		if route.Playback != nil {
+			plan.Playback = append(plan.Playback, route)
+		}
+		if route.Manga != nil {
+			plan.Manga = append(plan.Manga, route)
+		}
+	}
+	plan.SearchStrategy = routeStrategy(len(plan.Search), RouteFanOut)
+	plan.PlaybackStrategy = routeStrategy(len(plan.Playback), RouteFanOut)
+	plan.MangaStrategy = routeStrategy(len(plan.Manga), RouteFallback)
+	return plan
+}
+
+func routeStrategy(routeCount int, many RouteStrategy) RouteStrategy {
+	switch routeCount {
+	case 0:
+		return ""
+	case 1:
+		return RouteSingle
+	default:
+		return many
+	}
+}
+
+func priorityForMode(p Provider, mode ContentType) int {
+	for _, declaration := range p.Modes() {
+		if declaration.Name == mode {
+			return declaration.Priority
+		}
+	}
+	return 0
+}
+
+func providerDeadlines(p Provider, mode ContentType) Deadlines {
+	if source, ok := p.(DeadlineSource); ok {
+		return source.Deadlines(mode)
+	}
+	return Deadlines{}
+}
+
 // ProviderByName returns the registered provider with the given name.
 func (r *Registry) ProviderByName(name string) (Provider, bool) {
 	for _, p := range r.providers {
@@ -158,6 +218,19 @@ func (r *Registry) RequiresEpisodeListForMovies(providerName string) bool {
 		return false
 	}
 	return mef.RequiresEpisodeListForMovies()
+}
+
+// PreferredPlaybackProviders returns providers that declare themselves as
+// playback priorities for mode, in route order.
+func (r *Registry) PreferredPlaybackProviders(mode ContentType) []string {
+	preferred := make([]string, 0)
+	for _, p := range r.ProvidersForMode(mode) {
+		source, ok := p.(PlaybackPreferenceSource)
+		if ok && source.PreferredForPlayback(mode) {
+			preferred = append(preferred, p.Name())
+		}
+	}
+	return preferred
 }
 
 // canonicalModeOrder is the tab-strip order from the UI spec (§5.6):

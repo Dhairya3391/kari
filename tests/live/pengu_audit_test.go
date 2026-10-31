@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"kari/internal/provider"
-	"kari/internal/provider/kit"
 )
 
 // Audit tuning: six headless mpv probes in flight keeps a broadband link
@@ -46,6 +45,10 @@ func TestPenguFullAudit(t *testing.T) {
 	if !ok {
 		t.Skip("pengu not registered")
 	}
+	episodeSource, ok := p.(provider.EpisodeSource)
+	if !ok {
+		t.Skip("pengu does not support playback")
+	}
 
 	titles := []struct {
 		mode  provider.ContentType
@@ -69,15 +72,15 @@ func TestPenguFullAudit(t *testing.T) {
 
 			var sources []provider.MediaSource
 			if pick.MediaType == provider.MediaTypeMovie {
-				sources, err = p.ResolveSource(ctx, pick.ID, provider.Episode{TMDBID: pick.TMDBID})
+				sources, err = episodeSource.ResolveSource(ctx, pick.ID, provider.Episode{TMDBID: pick.TMDBID})
 				skipOnCatalogDrift(t, "resolve(movie)", err)
 			} else {
-				episodes, err := p.FetchEpisodes(ctx, pick)
+				episodes, err := episodeSource.FetchEpisodes(ctx, pick)
 				skipOnCatalogDrift(t, "episodes", err)
 				if len(episodes) == 0 {
 					t.Fatalf("%s: zero episodes without error", p.Name())
 				}
-				sources, err = p.ResolveSource(ctx, pick.ID, episodes[0])
+				sources, err = episodeSource.ResolveSource(ctx, pick.ID, episodes[0])
 				skipOnCatalogDrift(t, "resolve", err)
 			}
 			requireSources(t, p.Name(), sources)
@@ -126,7 +129,7 @@ func auditProbeAll(t *testing.T, sources []provider.MediaSource) int {
 				if u, err := url.Parse(j.src.URL); err == nil && u.Host != "" {
 					host = u.Host
 				}
-				r := auditResult{quality: j.src.Quality, backend: kit.BackendTag(j.src.Quality), host: host}
+				r := auditResult{quality: j.src.Quality, backend: j.src.Backend, host: host}
 				if err := probeSourceOnSocket(t, j.src, sock, auditProbeTimeout, false); err == nil {
 					r.played = true
 				}

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +10,7 @@ import (
 
 	"kari/internal/history"
 	"kari/internal/provider"
+	"kari/internal/service"
 	"kari/internal/termimg"
 )
 
@@ -413,59 +413,11 @@ func (m *modelImpl) hasEnabledLanguage() bool {
 }
 
 func distinctSeasonNumbers(episodes []provider.Episode) []int {
-	seen := make(map[int]bool)
-	var seasons []int
-	for _, ep := range episodes {
-		s := ep.Season
-		if s <= 0 {
-			s = 1
-		}
-		if !seen[s] {
-			seen[s] = true
-			seasons = append(seasons, s)
-		}
-	}
-	slices.Sort(seasons)
-	return seasons
+	return service.EpisodeSeasons(episodes)
 }
 
 func (m *modelImpl) currentSeasonEpisodes() ([]provider.Episode, []int) {
-	if len(m.episodeResults) == 0 {
-		return nil, nil
-	}
-	seasons := distinctSeasonNumbers(m.episodeResults)
-	if len(seasons) <= 1 {
-		indices := make([]int, len(m.episodeResults))
-		for i := range indices {
-			indices[i] = i
-		}
-		return FilterEpisodesByText(m.episodeResults, indices, m.episodeFilter)
-	}
-
-	activeIdx := m.activeSeason
-	if activeIdx < 0 {
-		activeIdx = 0
-	}
-	if activeIdx >= len(seasons) {
-		activeIdx = len(seasons) - 1
-	}
-	targetSeason := seasons[activeIdx]
-
-	var eps []provider.Episode
-	var indices []int
-	for origIdx, ep := range m.episodeResults {
-		s := ep.Season
-		if s <= 0 {
-			s = 1
-		}
-		if s == targetSeason {
-			eps = append(eps, ep)
-			indices = append(indices, origIdx)
-		}
-	}
-	// Text filter shares the screens helper with the renderer so the
-	// cursor index always addresses the same rows on screen.
-	return FilterEpisodesByText(eps, indices, m.episodeFilter)
+	return service.FilterEpisodeList(m.episodeResults, m.activeSeason, m.episodeFilter)
 }
 
 // clampEpisodeIndex keeps the cursor inside the visible (season- and

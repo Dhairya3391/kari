@@ -461,14 +461,10 @@ func resolveIMDbID(ctx context.Context, media model.ResolvedMedia, keyPool *tmdb
 	return id, nil
 }
 
-// resolveSourceSkipArgs builds skip arguments for source when it is a Miruro source
-// that declares its own segment boundaries. Returns whether Miruro segments were used.
+// resolveSourceSkipArgs builds skip arguments from segment boundaries declared by a source.
 func resolveSourceSkipArgs(source provider.MediaSource, settings SkipSettings, media model.ResolvedMedia) ([]string, string, bool) {
 	providerMode := strings.ToLower(strings.TrimSpace(settings.Provider))
 	if providerMode == "off" || providerMode == "none" {
-		return nil, "", false
-	}
-	if !strings.EqualFold(source.Resolver, "miruro") {
 		return nil, "", false
 	}
 	if source.SkipTimes == nil || !source.SkipTimes.HasSegments() {
@@ -488,22 +484,34 @@ func resolveSourceSkipArgs(source provider.MediaSource, settings SkipSettings, m
 	}
 	if source.SkipTimes.OpStart >= 0 && source.SkipTimes.OpEnd > source.SkipTimes.OpStart {
 		times.OpStart, times.OpEnd = source.SkipTimes.OpStart, source.SkipTimes.OpEnd
-		times.OpSource = "Miruro"
+		times.OpSource = skipSourceLabel(source)
 	}
 	if source.SkipTimes.EdStart >= 0 && source.SkipTimes.EdEnd > source.SkipTimes.EdStart {
 		times.EdStart, times.EdEnd = source.SkipTimes.EdStart, source.SkipTimes.EdEnd
-		times.EdSource = "Miruro"
+		times.EdSource = skipSourceLabel(source)
 	}
 	if source.SkipTimes.RecapStart >= 0 && source.SkipTimes.RecapEnd > source.SkipTimes.RecapStart {
 		times.RecapStart, times.RecapEnd = source.SkipTimes.RecapStart, source.SkipTimes.RecapEnd
-		times.RecapSource = "Miruro"
+		times.RecapSource = skipSourceLabel(source)
 	}
 	if source.SkipTimes.PreviewStart >= 0 && source.SkipTimes.PreviewEnd > source.SkipTimes.PreviewStart {
 		times.PreviewStart, times.PreviewEnd = source.SkipTimes.PreviewStart, source.SkipTimes.PreviewEnd
-		times.PrevSource = "Miruro"
+		times.PrevSource = skipSourceLabel(source)
 	}
 	args, scriptPath := buildSkipArgsFromTimes(times, settings)
 	return args, scriptPath, true
+}
+
+func skipSourceLabel(source provider.MediaSource) string {
+	if source.SkipTimes != nil {
+		if label := strings.TrimSpace(source.SkipTimes.Source); label != "" {
+			return label
+		}
+	}
+	if resolver := strings.TrimSpace(source.Resolver); resolver != "" {
+		return resolver
+	}
+	return "Provider"
 }
 
 // getSkipArgs resolves skip intervals according to settings and writes a

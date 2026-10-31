@@ -104,24 +104,6 @@ func BenchmarkDedupeSources(b *testing.B) {
 	}
 }
 
-// TestBackendTag proves backend extraction skips resolutions and
-// language suffixes.
-func TestBackendTag(t *testing.T) {
-	cases := []struct{ raw, want string }{
-		{"4K [4KHDHub] (Hindi)", "4KHDHub"},
-		{"1080p (Vidstream-2)", "Vidstream-2"},
-		{"1080p (Hindi)", ""},
-		{"1080p", ""},
-		{"Auto", ""},
-		{"", ""},
-	}
-	for _, tc := range cases {
-		if got := BackendTag(tc.raw); got != tc.want {
-			t.Errorf("BackendTag(%q) = %q, want %q", tc.raw, got, tc.want)
-		}
-	}
-}
-
 // TestSortByQuality proves descending canonical height with stability.
 func TestSortByQuality(t *testing.T) {
 	in := []provider.MediaSource{

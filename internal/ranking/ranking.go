@@ -211,7 +211,7 @@ func RankSources(sources []provider.MediaSource, crit Criteria) []ScoredSource {
 			SubTypeScore:   scoreSubType(src, crit.Mode),
 			StickyScore:    scoreSticky(src, crit.StickyProvider),
 			HealthScore:    scoreHealth(src, crit.FailedProviders, now),
-			DemoteScore:    scoreDemote(src, crit.Mode),
+			DemoteScore:    scoreDemote(src),
 		}
 	}
 
@@ -428,12 +428,10 @@ func scoreHealth(src provider.MediaSource, failed map[string]time.Time, now time
 	return 0
 }
 
-// scoreDemote sinks rows from backends the live mpv audit found
-// consistently unplayable (see provider.DemoteRank). Healthy rows score
-// 0; demoted rows score below every other playable-now signal but above
-// provider-health failures.
-func scoreDemote(src provider.MediaSource, mode provider.ContentType) int {
-	if provider.DemoteRank(mode, src.Resolver, src.Quality) >= 0 {
+// scoreDemote sinks weak source lanes that the provider marked as fallback
+// only. Ordinary rows score 0; fallback rows sort below playable sources.
+func scoreDemote(src provider.MediaSource) int {
+	if src.FallbackOnly {
 		return -50
 	}
 	return 0

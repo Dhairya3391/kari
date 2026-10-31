@@ -47,6 +47,11 @@ func (c *Client) Modes() []provider.Mode {
 // FetchEpisodes first.
 func (c *Client) RequiresEpisodeListForMovies() bool { return true }
 
+// PreferredForPlayback marks Anikoto as the repair priority for anime.
+func (c *Client) PreferredForPlayback(mode provider.ContentType) bool {
+	return mode == provider.ModeAnime
+}
+
 // Features implements provider.FeatureSource. Anime media supports separate sub/dub audio tracks.
 func (c *Client) Features(mode provider.ContentType) provider.Features {
 	if mode != provider.ModeAnime {
@@ -168,4 +173,5 @@ var (
 	_ provider.FeatureSource             = (*Client)(nil)
 	_ provider.MovieEpisodeFlow          = (*Client)(nil)
 	_ provider.EpisodeAvailabilitySource = (*Client)(nil)
+	_ provider.PlaybackPreferenceSource  = (*Client)(nil)
 )

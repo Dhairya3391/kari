@@ -283,19 +283,6 @@ func QualityLabel(quality, typ string) string {
 	}
 }
 
-// TagQuality appends the serving backend in parentheses when known,
-// preferring primary and falling back to secondary.
-func TagQuality(quality, primary, secondary string) string {
-	server := Clean(primary)
-	if server == "" {
-		server = Clean(secondary)
-	}
-	if server == "" {
-		return quality
-	}
-	return fmt.Sprintf("%s (%s)", quality, server)
-}
-
 // ── Media URL classification ────────────────────────────────────────────────
 
 // dubLangs are quality-field values that actually name dubbed audio.

@@ -36,10 +36,6 @@ type PreviewData struct {
 	FailedProvider   string
 	SpinnerFrame     string
 	Loading          bool // resolve in flight; empty table means "still coming", not "none"
-	// BackendName maps a source Resolver to its display backend (e.g.
-	// the [4KHDHub] tag behind Pengu). Missing entries render the raw
-	// resolver so the table never blanks.
-	BackendName map[string]string
 	// ProviderName maps a source Resolver to its user-facing provider
 	// name (e.g. Miruro for miruro). Missing entries render the raw
 	// resolver.
@@ -303,11 +299,12 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 		}
 		providerStr := st.Dim.Render(fmt.Sprintf("%-14s", truncate(providerName, 14)))
 
-		sourceName := "—"
-		if data.BackendName != nil {
-			if name, ok := data.BackendName[src.Resolver+"\x00"+src.Quality]; ok && name != "" {
-				sourceName = name
-			}
+		sourceName := strings.TrimSpace(src.Backend)
+		if sourceName == "" {
+			sourceName = providerName
+		}
+		if sourceName == "" {
+			sourceName = "—"
 		}
 		sourceStr := st.Dim.Render(fmt.Sprintf("%-18s", truncate(sourceName, 18)))
 

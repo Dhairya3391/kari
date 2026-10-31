@@ -210,8 +210,8 @@ func TestRankSources_ChallengedHostAlwaysLast(t *testing.T) {
 // before audit-dead ones without losing them as fallback.
 func TestRankSources_DemotedBackendsLastAmongPlayable(t *testing.T) {
 	sources := []provider.MediaSource{
-		{URL: "https://cdn.example.com/dead.m3u8", Resolver: "pengu", Quality: "4K [MovieBox]"},
-		{URL: "https://cdn.example.com/live.m3u8", Resolver: "pengu", Quality: "360p [VidFast]"},
+		{URL: "https://cdn.example.com/dead.m3u8", Resolver: "pengu", Quality: "4K", FallbackOnly: true},
+		{URL: "https://cdn.example.com/live.m3u8", Resolver: "pengu", Quality: "360p"},
 		{URL: "https://vault-01.uwucdn.top/stream/01/uwu.m3u8", Resolver: "pengu", Quality: "1080p"},
 	}
 

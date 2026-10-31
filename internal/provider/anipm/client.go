@@ -422,7 +422,8 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 
 	source := provider.MediaSource{
 		URL:       pb.Source,
-		Quality:   "1080p (Ani.pm)",
+		Quality:   "1080p",
+		Backend:   "Ani.pm",
 		Type:      provider.SourceTypeHLS,
 		Referer:   config.AniPMMediaReferer,
 		UserAgent: config.DesktopUserAgent,

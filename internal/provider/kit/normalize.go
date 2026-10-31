@@ -104,41 +104,6 @@ func NormalizeAudioMode(raw string) string {
 	return strings.TrimSpace(raw)
 }
 
-// BackendTag extracts the [Backend] token from a quality label such as
-// "4K [4KHDHub] (Hindi)" or "1080p (Vidstream-2)". Parenthesized server
-// names count too; bare resolutions and language suffixes ("(Hindi)")
-// do not — they are not backends.
-func BackendTag(quality string) string {
-	open := strings.Index(quality, "[")
-	if open >= 0 {
-		if close := strings.Index(quality[open:], "]"); close > 0 {
-			if tag := strings.TrimSpace(quality[open+1 : open+close]); tag != "" {
-				return tag
-			}
-		}
-	}
-	open = strings.Index(quality, "(")
-	if open >= 0 {
-		if close := strings.Index(quality[open:], ")"); close > 0 {
-			if tag := strings.TrimSpace(quality[open+1 : open+close]); tag != "" && !isLanguageTag(tag) {
-				return tag
-			}
-		}
-	}
-	return ""
-}
-
-// isLanguageTag reports whether a parenthesized token is a language
-// suffix (e.g. "(Hindi)") rather than a backend name.
-func isLanguageTag(tag string) bool {
-	switch strings.ToLower(strings.TrimSpace(tag)) {
-	case "hindi", "english", "tamil", "telugu", "spanish", "french", "german",
-		"japanese", "korean", "chinese", "arabic", "dub", "sub", "multi":
-		return true
-	}
-	return false
-}
-
 // DedupeSources drops blank sources and exact transport duplicates while
 // preserving variants that require different headers or player options.
 func DedupeSources(sources []provider.MediaSource) []provider.MediaSource {

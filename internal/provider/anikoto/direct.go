@@ -884,7 +884,8 @@ func (c *Client) resolveServerStream(ctx context.Context, linkID, watchReferer, 
 
 	source := provider.MediaSource{
 		URL:       signedM3U8,
-		Quality:   kit.TagQuality("1080p", serverName, "anikoto"),
+		Quality:   "1080p",
+		Backend:   serverName,
 		Referer:   streamReferer,
 		UserAgent: config.DesktopUserAgent,
 		Type:      provider.SourceTypeHLS,

@@ -74,6 +74,10 @@ func TestMPVMatrixAllProviders(t *testing.T) {
 			if !ok {
 				t.Skipf("%s not registered", tc.provider)
 			}
+			episodeSource, ok := p.(provider.EpisodeSource)
+			if !ok {
+				t.Skip("provider does not support playback")
+			}
 			ctx := ctxWithTimeout(t)
 			results, err := p.Search(ctx, tc.query, tc.mode)
 			skipOnCatalogDrift(t, "search", err)
@@ -85,16 +89,16 @@ func TestMPVMatrixAllProviders(t *testing.T) {
 			var sources []provider.MediaSource
 			ep := provider.Episode{TMDBID: pick.TMDBID}
 			if pick.MediaType == provider.MediaTypeMovie && !reg.RequiresEpisodeListForMovies(p.Name()) {
-				sources, err = p.ResolveSource(ctx, pick.ID, ep)
+				sources, err = episodeSource.ResolveSource(ctx, pick.ID, ep)
 				skipOnCatalogDrift(t, "resolve(movie)", err)
 			} else {
-				episodes, err := p.FetchEpisodes(ctx, pick)
+				episodes, err := episodeSource.FetchEpisodes(ctx, pick)
 				skipOnCatalogDrift(t, "episodes", err)
 				if len(episodes) == 0 {
 					t.Fatalf("%s: zero episodes without error", p.Name())
 				}
 				ep = episodes[0]
-				sources, err = p.ResolveSource(ctx, pick.ID, ep)
+				sources, err = episodeSource.ResolveSource(ctx, pick.ID, ep)
 				skipOnCatalogDrift(t, "resolve", err)
 			}
 			requireSources(t, p.Name(), sources)

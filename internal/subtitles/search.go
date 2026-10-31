@@ -266,11 +266,12 @@ func (c *Client) FetchBestSubtitle(ctx context.Context, query, language string, 
 		selectedLanguage = lang.Normalize(language)
 	}
 	track := model.SubtitleTrack{
-		Label:    fmt.Sprintf("%s (OpenSubtitles)", lang.Name(selectedLanguage)),
-		Language: selectedLanguage,
-		Path:     localPath,
-		Default:  true,
-		Resolver: "opensubtitles",
+		Label:        fmt.Sprintf("%s (OpenSubtitles)", lang.Name(selectedLanguage)),
+		Language:     selectedLanguage,
+		Path:         localPath,
+		Default:      true,
+		Resolver:     "opensubtitles",
+		ProviderName: "OpenSubtitles",
 	}
 	return track, true, nil
 }

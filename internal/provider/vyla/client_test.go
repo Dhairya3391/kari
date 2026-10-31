@@ -101,8 +101,8 @@ func TestVylaResolveStreamMovieSSE(t *testing.T) {
 	if s1.Type != provider.SourceTypeMP4 {
 		t.Errorf("expected MP4 type, got %s", s1.Type)
 	}
-	if s1.Quality != "1080P [XDownloader]" {
-		t.Errorf("expected quality 1080P [XDownloader], got %s", s1.Quality)
+	if s1.Quality != "1080P" || s1.Backend != "XDownloader" {
+		t.Errorf("quality/backend = %s/%s, want 1080P/XDownloader", s1.Quality, s1.Backend)
 	}
 	if s1.Referer != "https://films365.org" {
 		t.Errorf("expected referer https://films365.org, got %s", s1.Referer)
@@ -116,8 +116,8 @@ func TestVylaResolveStreamMovieSSE(t *testing.T) {
 	if s2.Type != provider.SourceTypeHLS {
 		t.Errorf("expected HLS type, got %s", s2.Type)
 	}
-	if s2.Quality != "2160P [111477]" {
-		t.Errorf("expected quality 2160P [111477], got %s", s2.Quality)
+	if s2.Quality != "2160P" || s2.Backend != "111477" {
+		t.Errorf("quality/backend = %s/%s, want 2160P/111477", s2.Quality, s2.Backend)
 	}
 }
 func TestVylaResolveSourceTV(t *testing.T) {
@@ -155,8 +155,8 @@ func TestVylaResolveSourceTV(t *testing.T) {
 	if len(sources) != 1 {
 		t.Fatalf("expected 1 source, got %d", len(sources))
 	}
-	if sources[0].Quality != "1080P [ThugTV]" {
-		t.Errorf("expected quality 1080P [ThugTV], got %s", sources[0].Quality)
+	if sources[0].Quality != "1080P" || sources[0].Backend != "ThugTV" {
+		t.Errorf("quality/backend = %s/%s, want 1080P/ThugTV", sources[0].Quality, sources[0].Backend)
 	}
 }
 
