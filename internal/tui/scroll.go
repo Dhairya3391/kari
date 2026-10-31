@@ -111,17 +111,6 @@ func applyWindow(rows []string, cursorPos, height, headerReserve int, st Styles)
 	return out
 }
 
-// singleColumn finishes a narrow single-column screen: padded rows are
-// trimmed back to their content and the block is centered, so lists sit
-// in the middle of wide terminals instead of hugging the left edge.
-// Wide blocks pass through via centerBlock unchanged.
-func singleColumn(content string, width, maxW int) string {
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, " ")
-	}
-	return centerBlock(strings.Join(lines, "\n"), width, maxW)
-}
 func centerBlock(content string, width, maxW int) string {
 	if maxW <= 0 || width <= 0 {
 		return content

@@ -2,7 +2,10 @@ package tui
 
 import (
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/model"
 	"kari/internal/provider"
@@ -42,6 +45,18 @@ func TestRenderFooterDoesNotWrap(t *testing.T) {
 	}
 }
 
+func TestFormatKeyLabelUsesNativeModifierNames(t *testing.T) {
+	if got := formatKeyLabelForOS("alt+backspace / ctrl+w", "darwin"); got != "Option+Backspace / Control+w" {
+		t.Fatalf("macOS key label = %q, want Option+Backspace / Control+w", got)
+	}
+	if got := formatKeyLabelForOS("alt+backspace / ctrl+w", "linux"); got != "Alt+Backspace / Ctrl+w" {
+		t.Fatalf("Linux key label = %q, want Alt+Backspace / Ctrl+w", got)
+	}
+	if got := formatKeyLabelForOS("tab/⇧tab", "darwin"); got != "Tab / Shift+Tab" {
+		t.Fatalf("Tab key label = %q, want Tab / Shift+Tab", got)
+	}
+}
+
 func TestRenderSettingsScreenAllCategories(t *testing.T) {
 	accent := ResolveAccent(model.KindAnime, "Auto")
 
@@ -59,6 +74,46 @@ func TestRenderSettingsScreenAllCategories(t *testing.T) {
 		rendered := RenderSettingsScreen(data)
 		if rendered == "" {
 			t.Fatalf("rendered settings screen for category %d is empty", i)
+		}
+	}
+}
+
+func TestRenderSettingsScreenDoesNotRepeatCategoryHeading(t *testing.T) {
+	data := SettingsData{
+		ActiveCategory:  CategoryPlayback,
+		FocusedRowIndex: 0,
+		Width:           100,
+		Accent:          ResolveAccent(model.KindAnime, "Auto"),
+		PlayerName:      "mpv",
+		QualityName:     "Highest",
+	}
+	if got := strings.Count(RenderSettingsScreen(data), "Playback"); got != 1 {
+		t.Fatalf("Playback appears %d times, want only the active tab label", got)
+	}
+}
+
+func TestRenderSettingsScreenFitsNarrowTerminal(t *testing.T) {
+	for category := range SettingsCategoryNames {
+		data := SettingsData{
+			ActiveCategory:   SettingsCategory(category),
+			FocusedRowIndex:  0,
+			Width:            28,
+			Height:           12,
+			Accent:           ResolveAccent(model.KindAnime, "Auto"),
+			PlayerName:       "mpv",
+			QualityName:      "Highest",
+			AudioSummary:     "English · Hindi · Japanese",
+			SubtitleLanguage: "English",
+			AnimeAudioTrack:  "Dub · English",
+			DefaultModeName:  "Last active",
+			AccentName:       "Auto (per mode)",
+			ModesRows:        []ModeRow{{Label: "Jellyfin server", Available: false, UnavailNote: "configure server"}},
+			ProviderRows:     []ProviderRow{{Section: "Anime", Name: "A long provider display name", Available: true, Enabled: true}},
+		}
+		for lineNo, line := range strings.Split(RenderSettingsScreen(data), "\n") {
+			if width := lipgloss.Width(line); width > data.Width {
+				t.Errorf("category %d line %d width = %d, exceeds %d", category, lineNo+1, width, data.Width)
+			}
 		}
 	}
 }

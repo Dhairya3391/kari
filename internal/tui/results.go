@@ -48,6 +48,25 @@ func queryLine(data ResultsData) string {
 	return "› " + data.Query
 }
 
+func mediaTypeLabel(mediaType string) string {
+	switch mediaType {
+	case provider.MediaTypeMovie:
+		return "Movie"
+	case provider.MediaTypeTV:
+		return "TV"
+	case provider.MediaTypeAnime:
+		return "Anime"
+	case provider.MediaTypeCartoon:
+		return "Cartoon"
+	case provider.MediaTypeManga:
+		return "Manga"
+	case provider.MediaTypeLive:
+		return "Live"
+	default:
+		return ""
+	}
+}
+
 // RenderResultsScreen renders the Results screen per KARI_TUI_SPEC §4.2.
 // For the Live TV/Sports mode it delegates to RenderLiveResultsScreen (plan §5.5).
 func RenderResultsScreen(data ResultsData) string {
@@ -94,7 +113,7 @@ func RenderResultsScreen(data ResultsData) string {
 			queryLine(data),
 			"",
 			fmt.Sprintf("No results in %s.", modeName),
-			st.Dim.Render("Check the spelling, or try another mode (tab)."),
+			st.Dim.Render("Check the spelling, or try another mode (tab / shift+tab)."),
 		}
 		return strings.Join(emptyMsg, "\n")
 	}
@@ -131,13 +150,16 @@ func RenderResultsScreen(data ResultsData) string {
 func renderResultsTable(data ResultsData, width, height int, st Styles) string {
 	var rows []string
 
-	// Calculate column widths
-	yearW := 6
-	fixedW := 2 + yearW + 4 // cursor + year + gap
-	titleW := width - fixedW
-	if titleW < 18 {
-		titleW = 18
+	// TV and Movies searches have one result type, so only mixed modes need
+	// the extra type column.
+	showType := data.Mode != provider.ModeTV && data.Mode != provider.ModeMovies
+	typeW := 7
+	yearW := 4
+	fixedW := 2 + yearW + 2
+	if showType {
+		fixedW += typeW + 2
 	}
+	titleW := max(8, width-fixedW)
 
 	for i, item := range data.Results {
 		isFocused := i == data.SelectedIndex
@@ -157,16 +179,30 @@ func renderResultsTable(data ResultsData, width, height int, st Styles) string {
 			titlePadded = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
 		}
 
+		var typeStr string
+		if showType {
+			typeStr = fmt.Sprintf("%-*s", typeW, truncate(mediaTypeLabel(item.MediaType), typeW))
+			if isFocused {
+				typeStr = st.Current.Render(typeStr)
+			} else {
+				typeStr = st.Dim.Render(typeStr)
+			}
+		}
+
 		yearStr := "    "
 		if item.Year != "" {
-			y := fmt.Sprintf("%4s", truncate(item.Year, 4))
+			y := fmt.Sprintf("%-4s", truncate(item.Year, 4))
 			if isFocused {
 				yearStr = st.Current.Render(y)
 			} else {
 				yearStr = st.Dim.Render(y)
 			}
 		}
-		row := fmt.Sprintf("%s%s  %s", cursor, titlePadded, yearStr)
+		row := fmt.Sprintf("%s%s", cursor, titlePadded)
+		if showType {
+			row += "  " + typeStr
+		}
+		row += "  " + yearStr
 		rows = append(rows, row)
 	}
 

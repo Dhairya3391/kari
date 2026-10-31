@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/provider"
@@ -73,6 +74,35 @@ func TestModeCyclingWrapAndEffective(t *testing.T) {
 	m.cycleMode(true)
 	if m.appMode != provider.ModeJellyfin {
 		t.Errorf("appMode = %s, want jellyfin (wrapped)", m.appMode)
+	}
+}
+
+func TestTabAndShiftTabUsePortableKeyTypes(t *testing.T) {
+	m := newTestSwitchModel()
+	m.updateSearch(tea.KeyMsg{Type: tea.KeyTab})
+	if m.appMode != provider.ModeCartoon {
+		t.Fatalf("Tab selected %s, want cartoon", m.appMode)
+	}
+	m.updateSearch(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.appMode != provider.ModeAnime {
+		t.Fatalf("Shift+Tab selected %s, want anime", m.appMode)
+	}
+	m.queryInput = textinput.New()
+	m.queryInput.Focus()
+	m.updateSearch(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.appMode != provider.ModeJellyfin {
+		t.Fatalf("Shift+Tab from focused search selected %s, want jellyfin", m.appMode)
+	}
+
+	m.activeView = viewSettings
+	m.settingsCategory = CategoryPlayback
+	m.updateSettings(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.settingsCategory != CategoryInterface {
+		t.Fatalf("Shift+Tab selected settings category %d, want Interface", m.settingsCategory)
+	}
+	m.updateSettings(tea.KeyMsg{Type: tea.KeyTab})
+	if m.settingsCategory != CategoryPlayback {
+		t.Fatalf("Tab selected settings category %d, want Playback", m.settingsCategory)
 	}
 }
 

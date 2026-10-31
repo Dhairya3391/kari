@@ -232,13 +232,13 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.episodeFilter = ""
 				m.seasonEpisodeIndex = 0
 				return m, nil
-			case keyMsg.String() == "[":
+			case keyMsg.String() == "[" || keyMsg.String() == "left":
 				if m.activeSeason > 0 {
 					m.activeSeason--
 					m.seasonEpisodeIndex = 0
 				}
 				return m, nil
-			case keyMsg.String() == "]":
+			case keyMsg.String() == "]" || keyMsg.String() == "right":
 				seasons := distinctSeasonNumbers(m.episodeResults)
 				if m.activeSeason < len(seasons)-1 {
 					m.activeSeason++

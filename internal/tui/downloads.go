@@ -50,7 +50,7 @@ func RenderDownloadsScreen(data DownloadsData) string {
 	}
 
 	// Active Section
-	rows = append(rows, st.Dim.Render("Active"))
+	rows = append(rows, st.Dim.Render(fmt.Sprintf("Active · %d", len(data.Active))))
 
 	if len(data.Active) == 0 {
 		rows = append(rows, "  "+st.Dim.Render("no active downloads"), "")
@@ -99,7 +99,7 @@ func RenderDownloadsScreen(data DownloadsData) string {
 
 	doneHeaderIdx := len(rows)
 	// Done Section
-	rows = append(rows, st.Dim.Render("Done"))
+	rows = append(rows, st.Dim.Render(fmt.Sprintf("Done · %d", len(data.Done))))
 
 	if len(data.Done) == 0 {
 		rows = append(rows, "  "+st.Dim.Render("no completed downloads"))

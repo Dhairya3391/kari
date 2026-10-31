@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"kari/internal/provider"
 )
@@ -114,38 +115,31 @@ type SettingsData struct {
 	AutoUpdate          bool   // on / off
 }
 
-// RenderSettingsScreen renders the 2-pane Settings screen per KARI_TUI_SPEC §4.7.
+// RenderSettingsScreen renders the responsive Settings screen.
 func RenderSettingsScreen(data SettingsData) string {
 	st := NewStyles(data.Accent)
+	width := max(20, data.Width)
 
 	// If Audio Picker modal overlay is active, render it directly
 	if data.AudioPickerOpen {
-		return renderAudioLanguagePicker(data, st)
+		return fitSettingsLines(renderAudioLanguagePicker(data, st), width)
 	}
 
-	leftW := 22
-	rightW := max(46, data.Width-leftW-8)
-	var leftLines []string
-	for i, catName := range SettingsCategoryNames {
-		if SettingsCategory(i) == data.ActiveCategory {
-			leftLines = append(leftLines, st.ActiveTab.Render(strings.ToUpper(catName)))
-		} else {
-			leftLines = append(leftLines, st.Dim.Render(strings.ToLower(catName)))
-		}
-		if data.Height >= 20 && i < len(SettingsCategoryNames)-1 {
-			leftLines = append(leftLines, "")
-		}
+	navigation := renderSettingsNavigation(data.ActiveCategory, width, st)
+	content := renderCategoryContent(data, width, st)
+	return fitSettingsLines(navigation+"\n\n"+content, width)
+}
+
+func fitSettingsLines(content string, width int) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = ansi.Truncate(line, width, "…")
 	}
-	leftCol := strings.Join(leftLines, "\n")
+	return strings.Join(lines, "\n")
+}
 
-	// Build right Settings content
-	rightCol := renderCategoryContent(data, rightW, st)
-
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(leftW).Render(leftCol),
-		"        ",
-		lipgloss.NewStyle().Width(rightW).Render(rightCol),
-	)
+func renderSettingsNavigation(active SettingsCategory, width int, st Styles) string {
+	return renderWrappedTabs(SettingsCategoryNames, int(active), width, st.Accent)
 }
 
 func renderCategoryContent(data SettingsData, width int, st Styles) string {
@@ -191,7 +185,7 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		rows = append(rows, renderSettingRow("Audio track", formatVal(data.AnimeAudioTrack, data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))
 		rows = append(rows, renderSettingRow("Subtitles", formatVal(boolOnOff(data.AnimeSubtitles), data.FocusedRowIndex == 1, st), data.FocusedRowIndex == 1, width, st))
 		rows = append(rows, renderSettingRow("Skip source", formatVal(data.SkipSource, data.FocusedRowIndex == 2, st), data.FocusedRowIndex == 2, width, st))
-		rows = append(rows, "", st.Dim.Render("Skipping"), "")
+		rows = append(rows, "", st.Dim.Render("SKIPPING"))
 		rows = append(rows, renderSettingRow("Intro", formatVal(boolAskAuto(data.AutoSkipIntro), data.FocusedRowIndex == 3, st), data.FocusedRowIndex == 3, width, st))
 		rows = append(rows, renderSettingRow("Outro", formatVal(boolAskAuto(data.AutoSkipEnding), data.FocusedRowIndex == 4, st), data.FocusedRowIndex == 4, width, st))
 		rows = append(rows, renderSettingRow("Recap", formatVal(boolAskAuto(data.AutoSkipRecap), data.FocusedRowIndex == 5, st), data.FocusedRowIndex == 5, width, st))
@@ -307,12 +301,12 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 	}
 
 	if desc != "" {
-		rows = append(rows, "", "", st.Dim.Render(desc))
+		rows = append(rows, "", st.Dim.Render(wrapText(desc, width, 3)))
 	}
 
 	return strings.Join(rows, "\n")
 }
-func renderModeSettingRow(row ModeRow, isFocused bool, _ int, st Styles) string {
+func renderModeSettingRow(row ModeRow, isFocused bool, width int, st Styles) string {
 	cursor := "  "
 	if isFocused {
 		cursor = st.Cursor.Render("▌ ")
@@ -343,12 +337,19 @@ func renderModeSettingRow(row ModeRow, isFocused bool, _ int, st Styles) string 
 	} else {
 		statusStr = st.Dim.Render("off")
 	}
+	if width < 46 {
+		compactName := truncate(row.Label, max(1, width-4))
+		if isFocused {
+			compactName = st.Current.Render(compactName)
+		}
+		return fmt.Sprintf("%s%s %s\n    %s", cursor, dot, compactName, ansi.Truncate(statusStr, max(1, width-4), "…"))
+	}
 
 	labelPart := fmt.Sprintf("%s %s", dot, namePadded)
 	return fmt.Sprintf("%s%s  %s", cursor, labelPart, statusStr)
 }
 
-func renderProviderSettingRow(row ProviderRow, isFocused bool, _ int, st Styles) string {
+func renderProviderSettingRow(row ProviderRow, isFocused bool, width int, st Styles) string {
 	cursor := "  "
 	if isFocused {
 		cursor = st.Cursor.Render("▌ ")
@@ -381,28 +382,45 @@ func renderProviderSettingRow(row ProviderRow, isFocused bool, _ int, st Styles)
 	} else {
 		statusStr = st.Dim.Render("off")
 	}
+	if width < 46 {
+		compactName := truncate(row.Name, max(1, width-4))
+		if isFocused {
+			compactName = st.Current.Render(compactName)
+		}
+		return fmt.Sprintf("%s%s %s\n    %s", cursor, dot, compactName, ansi.Truncate(statusStr, max(1, width-4), "…"))
+	}
 
 	labelPart := fmt.Sprintf("%s %s", dot, namePadded)
 	return fmt.Sprintf("%s%s  %s", cursor, labelPart, statusStr)
 }
 
-func renderSettingRow(label, value string, isFocused bool, _ int, st Styles) string {
+func renderSettingRow(label, value string, isFocused bool, width int, st Styles) string {
 	cursor := "  "
 	if isFocused {
 		cursor = st.Cursor.Render("▌ ")
 	}
 
-	labelW := 28
+	valueW := lipgloss.Width(value)
+	if width < 46 {
+		labelText := truncate(label, max(1, width-2))
+		if isFocused {
+			labelText = st.Current.Render(labelText)
+		}
+		valueText := ansi.Truncate(value, max(1, width-4), "…")
+		return cursor + labelText + "\n    " + valueText
+	}
+	labelW := min(28, max(8, width-valueW-6))
 	labelTrunc := truncate(label, labelW)
 	labelPadded := labelTrunc + strings.Repeat(" ", max(0, labelW-lipgloss.Width(labelTrunc)))
 	if isFocused {
 		labelPadded = st.Current.Render(labelTrunc) + strings.Repeat(" ", max(0, labelW-lipgloss.Width(labelTrunc)))
 	}
 
+	value = ansi.Truncate(value, max(1, width-labelW-4), "…")
 	return fmt.Sprintf("%s%s  %s", cursor, labelPadded, value)
 }
 
-func renderAccountRow(name string, connected bool, isFocused bool, _ int, st Styles) string {
+func renderAccountRow(name string, connected bool, isFocused bool, width int, st Styles) string {
 	cursor := "  "
 	if isFocused {
 		cursor = st.Cursor.Render("▌ ")
@@ -427,24 +445,25 @@ func renderAccountRow(name string, connected bool, isFocused bool, _ int, st Sty
 			actionHint = st.Dim.Render("c  connect")
 		}
 	}
+	if width < 56 {
+		nameW := min(20, max(1, width-12))
+		nameText := truncate(name, nameW)
+		if isFocused {
+			nameText = st.Current.Render(nameText)
+		}
+		statusW := max(1, width-2-lipgloss.Width(nameText)-2)
+		row := fmt.Sprintf("%s%s  %s", cursor, nameText, ansi.Truncate(statusDot, statusW, "…"))
+		if actionHint != "" {
+			row += "\n    " + ansi.Truncate(actionHint, max(1, width-4), "…")
+		}
+		return row
+	}
 
 	return fmt.Sprintf("%s%s  %s  %s", cursor, namePadded, statusPadded, actionHint)
 }
 
-func renderAccountSettingRow(label, value string, isFocused bool, _ int, st Styles) string {
-	cursor := "  "
-	if isFocused {
-		cursor = st.Cursor.Render("▌ ")
-	}
-
-	labelTrunc := truncate(label, 20)
-	labelPadded := labelTrunc + strings.Repeat(" ", max(0, 20-lipgloss.Width(labelTrunc)))
-	if isFocused {
-		labelPadded = st.Current.Render(labelTrunc) + strings.Repeat(" ", max(0, 20-lipgloss.Width(labelTrunc)))
-	}
-
-	valStr := formatVal(value, isFocused, st)
-	return fmt.Sprintf("%s%s  %s", cursor, labelPadded, valStr)
+func renderAccountSettingRow(label, value string, isFocused bool, width int, st Styles) string {
+	return renderSettingRow(label, formatVal(value, isFocused, st), isFocused, width, st)
 }
 
 func formatVal(val string, isFocused bool, st Styles) string {

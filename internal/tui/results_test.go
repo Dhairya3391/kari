@@ -40,8 +40,9 @@ func TestResultsLoadingRendersNoInlineLoader(t *testing.T) {
 	}
 }
 
-// The search home screen is just the input box while loading.
-func TestSearchLoadingRendersInputOnly(t *testing.T) {
+// Loading feedback stays in the frame status row while the search input remains
+// stable.
+func TestSearchLoadingDoesNotRenderInlineLoader(t *testing.T) {
 	out := RenderSearchScreen(SearchData{
 		InputView:    "› frieren",
 		InputFocused: true,
@@ -54,8 +55,8 @@ func TestSearchLoadingRendersInputOnly(t *testing.T) {
 	if strings.Contains(out, "Searching") {
 		t.Errorf("loading line must live above the footer, not in body, got:\n%s", out)
 	}
-	if !strings.Contains(out, "frieren") {
-		t.Errorf("input must stay, got:\n%s", out)
+	if out != "› frieren" {
+		t.Errorf("home screen should contain only the input, got:\n%s", out)
 	}
 }
 
@@ -67,8 +68,8 @@ func TestResultsSelectedRowHighlight(t *testing.T) {
 		Query: "clover",
 		Mode:  provider.ModeAnime,
 		Results: []provider.SearchResult{
-			{Title: "Black Clover", Year: "2017"},
-			{Title: "Black Clover Season 2", Year: "2026"},
+			{Title: "Black Clover", Year: "2017", MediaType: provider.MediaTypeTV},
+			{Title: "Black Clover Season 2", Year: "2026", MediaType: provider.MediaTypeTV},
 		},
 		SelectedIndex: 1,
 		Width:         100,
@@ -93,5 +94,32 @@ func TestResultsSelectedRowHighlight(t *testing.T) {
 	unselectedYear := st.Dim.Render("2017")
 	if !strings.Contains(out, unselectedYear) {
 		t.Errorf("unselected year must remain dim, output:\n%s", out)
+	}
+	if !strings.Contains(out, "TV") {
+		t.Errorf("result rows should show media type, output:\n%s", out)
+	}
+}
+
+func TestResultsOmitRedundantTypeInTVAndMovieModes(t *testing.T) {
+	tests := []struct {
+		mode      provider.ContentType
+		mediaType string
+		wantLabel string
+	}{
+		{mode: provider.ModeTV, mediaType: provider.MediaTypeTV, wantLabel: "TV"},
+		{mode: provider.ModeMovies, mediaType: provider.MediaTypeMovie, wantLabel: "Movie"},
+	}
+	for _, tc := range tests {
+		out := RenderResultsScreen(ResultsData{
+			Mode:          tc.mode,
+			Results:       []provider.SearchResult{{Title: "Example", Year: "2020", MediaType: tc.mediaType}},
+			SelectedIndex: 0,
+			Width:         64,
+			Height:        20,
+			Accent:        ResolveAccent(model.KindTV, "Auto"),
+		})
+		if strings.Contains(out, tc.wantLabel) {
+			t.Errorf("%s mode should omit its redundant type label, got:\n%s", tc.mode, out)
+		}
 	}
 }

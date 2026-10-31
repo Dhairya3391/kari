@@ -56,7 +56,7 @@ func defaultKeyMap() keyMap {
 		),
 		Type: key.NewBinding(
 			key.WithKeys("tab", "shift+tab"),
-			key.WithHelp("tab", "switch mode"),
+			key.WithHelp("tab/⇧tab", "switch mode"),
 		),
 		Audio: key.NewBinding(
 			key.WithKeys("a"),

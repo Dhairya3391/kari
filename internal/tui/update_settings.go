@@ -140,16 +140,18 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// 3. Category & Row Navigation
-		switch msg.String() {
-		case "tab":
+		if msg.Type == tea.KeyTab {
 			m.settingsCategory = (m.settingsCategory + 1) % SettingsCategory(len(SettingsCategoryNames))
 			m.settingsIndex = 0
 			return m, nil
-		case "shift+tab":
+		}
+		if msg.Type == tea.KeyShiftTab {
 			m.settingsCategory = (m.settingsCategory - 1 + SettingsCategory(len(SettingsCategoryNames))) % SettingsCategory(len(SettingsCategoryNames))
 			m.settingsIndex = 0
 			return m, nil
+		}
 
+		switch msg.String() {
 		// Direct category jumps via 1-7 keys
 		case "1":
 			m.settingsCategory = CategoryPlayback

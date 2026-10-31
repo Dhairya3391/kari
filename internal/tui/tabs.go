@@ -39,6 +39,35 @@ func RenderTabs(tabs []string, activeIndex int, accent lipgloss.AdaptiveColor) s
 	return line1 + "\n" + line2
 }
 
+func renderWrappedTabs(tabs []string, activeIndex, width int, accent lipgloss.AdaptiveColor) string {
+	if len(tabs) == 0 {
+		return ""
+	}
+
+	width = max(20, width)
+	st := NewStyles(accent)
+	var lines []string
+	line := ""
+	for i, tab := range tabs {
+		label := st.InactiveTab.Render("  " + tab + "  ")
+		if i == activeIndex {
+			label = st.ActiveTab.Render("[ " + tab + " ]")
+		}
+		if line != "" && lipgloss.Width(line)+2+lipgloss.Width(label) > width {
+			lines = append(lines, line)
+			line = ""
+		}
+		if line != "" {
+			line += "  "
+		}
+		line += label
+	}
+	if line != "" {
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // RenderSeasonTabs produces the season selector strip, windowed to
 // maxWidth (0 = unbounded):
 // Line 1: season   1     2     3     4     5

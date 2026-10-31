@@ -351,7 +351,13 @@ func posterBlock(rendered string, unavailable bool, protocol termimg.Protocol, i
 // text input would otherwise eat them as typed text. The `i=<id>` key
 // requirement keeps human typing safe.
 func scrubTerminalResponses(s string) string {
+	cleaned, _ := scrubTerminalResponseChunk(s)
+	return cleaned
+}
+
+func scrubTerminalResponseChunk(s string) (string, bool) {
 	var b strings.Builder
+	discardTerminator := false
 	for len(s) > 0 {
 		i := strings.Index(s, "_G")
 		if i < 0 {
@@ -364,16 +370,19 @@ func scrubTerminalResponses(s string) string {
 		for end < len(rest) && end < 64 && rest[end] != '\\' {
 			end++
 		}
-		if end < len(rest) && rest[end] == '\\' {
+		terminated := end < len(rest) && rest[end] == '\\'
+		if terminated {
 			end++
 		}
 		token := rest[:end]
 		if !strings.Contains(token, "i=") {
 			b.WriteString(token)
+		} else if !terminated && end == len(rest) {
+			discardTerminator = true
 		}
 		s = rest[end:]
 	}
-	return b.String()
+	return b.String(), discardTerminator
 }
 
 func posterPlaceholder(text string) string {

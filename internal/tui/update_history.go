@@ -16,6 +16,62 @@ func (m *modelImpl) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.historyFiltering {
+			switch msg.String() {
+			case "enter":
+				m.historyFiltering = false
+				m.historyTerminalInputPrefix = ""
+				m.historyDroppingTerminalResponse = false
+				return m, nil
+			case "backspace", "ctrl+h":
+				m.historyTerminalInputPrefix = ""
+				if m.setHistoryFilter(removeLastRune(m.historyFilter)) {
+					return m, m.triggerHistoryPoster()
+				}
+				return m, nil
+			case "ctrl+u":
+				m.historyTerminalInputPrefix = ""
+				m.historyDroppingTerminalResponse = false
+				if m.setHistoryFilter("") {
+					return m, m.triggerHistoryPoster()
+				}
+				return m, nil
+			case "ctrl+w", "alt+backspace":
+				m.historyTerminalInputPrefix = ""
+				if m.setHistoryFilter(removeLastWord(m.historyFilter)) {
+					return m, m.triggerHistoryPoster()
+				}
+				return m, nil
+			case "up":
+				previous := m.selectedHistoryKey()
+				m.historyList.CursorUp()
+				if previous != m.selectedHistoryKey() {
+					return m, m.triggerHistoryPoster()
+				}
+				return m, nil
+			case "down":
+				previous := m.selectedHistoryKey()
+				m.historyList.CursorDown()
+				if previous != m.selectedHistoryKey() {
+					return m, m.triggerHistoryPoster()
+				}
+				return m, nil
+			}
+			if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
+				input := m.historyFilterInput(string(msg.Runes))
+				if input != "" && m.setHistoryFilter(m.historyFilter+input) {
+					return m, m.triggerHistoryPoster()
+				}
+				return m, nil
+			}
+			if msg.Type == tea.KeySpace {
+				if m.setHistoryFilter(m.historyFilter + " ") {
+					return m, m.triggerHistoryPoster()
+				}
+				return m, nil
+			}
+			return m, nil
+		}
 		if m.confirmDelete || m.confirmClearHistory {
 			switch msg.String() {
 			case "y", "Y":
@@ -44,11 +100,19 @@ func (m *modelImpl) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Back):
 			m.goBackOne()
 			return m, nil
+		case msg.String() == "left":
+			return m, m.cycleHistoryMode(-1)
+		case msg.String() == "right":
+			return m, m.cycleHistoryMode(1)
 		case key.Matches(msg, m.keys.Type):
-			if m.historyList.SettingFilter() {
-				break
-			}
-			return m, m.cycleHistoryTab()
+			return m, m.cycleHistoryTab(msg.Type == tea.KeyShiftTab)
+		case msg.String() == "]":
+			return m, m.cycleHistoryMode(1)
+		case msg.String() == "[":
+			return m, m.cycleHistoryMode(-1)
+		case msg.String() == "/" || msg.String() == "ctrl+f" || key.Matches(msg, m.keys.Filter):
+			m.historyFiltering = true
+			return m, nil
 		case key.Matches(msg, m.keys.Delete):
 			if len(m.historyList.Items()) > 0 {
 				m.confirmDelete = true
@@ -67,14 +131,117 @@ func (m *modelImpl) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	prevSel := m.historySelectedIndex()
+	previousSelection := m.historySelectedIndex()
 	var cmd tea.Cmd
 	m.historyList, cmd = m.historyList.Update(msg)
-	cmds := []tea.Cmd{cmd}
-	if newSel := m.historySelectedIndex(); newSel != prevSel {
-		cmds = append(cmds, m.triggerHistoryPoster())
+	if m.historySelectedIndex() != previousSelection {
+		cmd = tea.Batch(cmd, m.triggerHistoryPoster())
 	}
-	return m, tea.Batch(cmds...)
+	return m, cmd
+}
+
+func (m *modelImpl) setHistoryFilter(query string) bool {
+	selectedKey := ""
+	if item, ok := m.historyList.SelectedItem().(rowItem); ok {
+		selectedKey = item.key
+	}
+	m.historyFilter = query
+	m.refreshHistoryItems()
+	if selectedKey == "" {
+		m.historyList.Select(0)
+		return m.selectedHistoryKey() != selectedKey
+	}
+	for i, item := range m.historyList.Items() {
+		if row, ok := item.(rowItem); ok && row.key == selectedKey {
+			m.historyList.Select(i)
+			return m.selectedHistoryKey() != selectedKey
+		}
+	}
+	m.historyList.Select(0)
+	return m.selectedHistoryKey() != selectedKey
+}
+
+// historyFilterInput removes Kitty image responses even when Bubble Tea splits
+// one response across several key events. Holding a possible prefix prevents
+// terminal protocol bytes from changing the query or causing another redraw.
+func (m *modelImpl) historyFilterInput(input string) string {
+	const responsePrefix = "_Gi="
+	var output strings.Builder
+	for _, current := range input {
+		if m.historyDroppingTerminalResponse {
+			if current == '\\' {
+				m.historyDroppingTerminalResponse = false
+			}
+			continue
+		}
+
+		candidate := m.historyTerminalInputPrefix + string(current)
+		if candidate == responsePrefix {
+			m.historyTerminalInputPrefix = ""
+			m.historyDroppingTerminalResponse = true
+			continue
+		}
+		if strings.HasPrefix(responsePrefix, candidate) {
+			m.historyTerminalInputPrefix = candidate
+			continue
+		}
+
+		if m.historyTerminalInputPrefix != "" {
+			output.WriteString(m.historyTerminalInputPrefix)
+			m.historyTerminalInputPrefix = ""
+		}
+		if current == '_' {
+			m.historyTerminalInputPrefix = "_"
+			continue
+		}
+		output.WriteRune(current)
+	}
+	return output.String()
+}
+
+func (m *modelImpl) selectedHistoryKey() string {
+	if item, ok := m.historyList.SelectedItem().(rowItem); ok {
+		return item.key
+	}
+	return ""
+}
+
+func removeLastRune(value string) string {
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return value
+	}
+	return string(runes[:len(runes)-1])
+}
+
+func removeLastWord(value string) string {
+	trimmed := strings.TrimRight(value, " \t\n")
+	lastSpace := strings.LastIndexAny(trimmed, " \t\n")
+	if lastSpace < 0 {
+		return ""
+	}
+	return strings.TrimRight(trimmed[:lastSpace], " \t\n")
+}
+
+func (m *modelImpl) cycleHistoryMode(direction int) tea.Cmd {
+	filters := historyModeFilters(m.historyGroups, m.historyGroups)
+	if len(filters) <= 1 {
+		return nil
+	}
+	active := 0
+	for i, filter := range filters {
+		if filter.Mode == m.historyModeFilter {
+			active = i
+			break
+		}
+	}
+	next := (active + direction + len(filters)) % len(filters)
+	m.historyModeFilter = filters[next].Mode
+	m.historyTabIndex[m.historyTab] = 0
+	m.refreshHistoryItems()
+	m.historyList.Select(0)
+	m.clearStatus()
+	return m.triggerHistoryPoster()
 }
 
 // historySelectedIndex resolves the history list cursor to a result
@@ -86,11 +253,15 @@ func (m *modelImpl) historySelectedIndex() int {
 	return m.historyList.Index()
 }
 
-// cycleHistoryTab flips between the Continue and Finished tabs,
-// restoring each tab's remembered cursor and poster.
-func (m *modelImpl) cycleHistoryTab() tea.Cmd {
+// cycleHistoryTab moves between Continue and Finished, restoring the
+// destination tab's remembered cursor.
+func (m *modelImpl) cycleHistoryTab(reverse bool) tea.Cmd {
 	m.historyTabIndex[m.historyTab] = m.historyList.Index()
-	m.historyTab = (m.historyTab + 1) % 2
+	direction := 1
+	if reverse {
+		direction = -1
+	}
+	m.historyTab = (m.historyTab + direction + 2) % 2
 	m.refreshHistoryItems()
 	if idx := m.historyTabIndex[m.historyTab]; idx > 0 && idx < len(m.historyList.Items()) {
 		m.historyList.Select(idx)
@@ -106,12 +277,29 @@ func (m *modelImpl) refreshHistoryItems() {
 	if m.historyList.Width() == 0 && m.historyList.Height() == 0 {
 		return
 	}
+	m.normalizeHistoryModeFilter()
 	continued, finished := splitHistoryGroups(m.historyGroups)
 	if m.historyTab == historyTabFinished {
-		m.historyList.SetItems(historyTabItems(sortGroupsByDateBucket(finished, true), true))
+		groups := filterHistoryGroups(sortGroupsByDateBucket(finished, true), m.historyModeFilter)
+		groups = searchHistoryGroups(groups, m.historyFilter)
+		m.historyList.SetItems(historyTabItems(groups, true))
 	} else {
-		m.historyList.SetItems(historyTabItems(sortGroupsByDateBucket(continued, false), false))
+		groups := filterHistoryGroups(sortGroupsByDateBucket(continued, false), m.historyModeFilter)
+		groups = searchHistoryGroups(groups, m.historyFilter)
+		m.historyList.SetItems(historyTabItems(groups, false))
 	}
+}
+
+func (m *modelImpl) normalizeHistoryModeFilter() {
+	if m.historyModeFilter == "" {
+		return
+	}
+	for _, filter := range historyModeFilters(m.historyGroups, m.historyGroups) {
+		if filter.Mode == m.historyModeFilter {
+			return
+		}
+	}
+	m.historyModeFilter = ""
 }
 
 func (m *modelImpl) refreshHistory() (tea.Model, tea.Cmd) {

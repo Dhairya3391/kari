@@ -15,6 +15,9 @@ import (
 func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.queryInput.Focused() {
 		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			if key.Matches(keyMsg, m.keys.Type) {
+				return m, m.cycleMode(keyMsg.Type == tea.KeyShiftTab)
+			}
 			switch keyMsg.String() {
 			case "enter":
 				return m.startSearchFromInput()
@@ -75,7 +78,7 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pushView(viewSettings)
 				return m, nil
 			case key.Matches(keyMsg, m.keys.Type):
-				cmd := m.cycleMode(keyMsg.String() == "shift+tab")
+				cmd := m.cycleMode(keyMsg.Type == tea.KeyShiftTab)
 				return m, cmd
 			default:
 				// In control mode, digits 1..9 jump to the nth effective mode
@@ -120,6 +123,11 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// Bubbles binds Left/Right to whole-page movement by default. Keep
+		// horizontal arrows from unexpectedly skipping a screenful of results.
+		if keyMsg.String() == "left" || keyMsg.String() == "right" {
+			return m, nil
+		}
 		switch {
 		case key.Matches(keyMsg, m.keys.Select) || keyMsg.String() == "enter":
 			return m.selectSeries(m.selectedSeriesIndex())
@@ -144,7 +152,7 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pushView(viewDownloads)
 			return m, nil
 		case key.Matches(keyMsg, m.keys.Type):
-			cmd := m.cycleMode(keyMsg.String() == "shift+tab")
+			cmd := m.cycleMode(keyMsg.Type == tea.KeyShiftTab)
 			return m, cmd
 		case keyMsg.String() == "esc":
 			m.seriesResults = nil

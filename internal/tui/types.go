@@ -305,10 +305,15 @@ type modelImpl struct {
 	historyList list.Model
 	// historyTab selects the Continue (0) / Finished (1) tab;
 	// historyTabIndex remembers the cursor per tab across switches.
-	historyTab      int
-	historyTabIndex [2]int
-	spinner         spinner.Model
-	downloadBar     progress.Model
+	historyTab                      int
+	historyTabIndex                 [2]int
+	historyModeFilter               provider.ContentType
+	historyFilter                   string
+	historyFiltering                bool
+	historyTerminalInputPrefix      string
+	historyDroppingTerminalResponse bool
+	spinner                         spinner.Model
+	downloadBar                     progress.Model
 
 	keys keyMap
 
@@ -475,6 +480,7 @@ type modelImpl struct {
 	historyPosterOpID        int
 	historyPosterCancel      context.CancelFunc
 	historyPosterUnavailable bool
+	historyPosterDrawn       bool
 	// back to a group without re-aggregating the store.
 	historyGroups []history.Group
 

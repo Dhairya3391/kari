@@ -55,6 +55,23 @@ func TestEpisodesTopBottomKeys(t *testing.T) {
 	}
 }
 
+func TestEpisodesHorizontalArrowsChangeSeason(t *testing.T) {
+	m := episodesTestModel()
+	m.episodeResults = append(m.episodeResults,
+		provider.Episode{Season: 2, Episode: 1, Title: "The Name of the Game"},
+		provider.Episode{Season: 2, Episode: 2, Title: "Cherry"},
+	)
+	m.seasonEpisodeIndex = 1
+	m.updateEpisodes(tea.KeyMsg{Type: tea.KeyRight})
+	if m.activeSeason != 1 || m.seasonEpisodeIndex != 0 {
+		t.Fatalf("Right selected season %d at episode %d, want season 1 episode 0", m.activeSeason, m.seasonEpisodeIndex)
+	}
+	m.updateEpisodes(tea.KeyMsg{Type: tea.KeyLeft})
+	if m.activeSeason != 0 {
+		t.Fatalf("Left selected season %d, want season 0", m.activeSeason)
+	}
+}
+
 func TestEpisodesFilterNarrowsAndClears(t *testing.T) {
 	m := episodesTestModel()
 

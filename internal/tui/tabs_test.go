@@ -20,6 +20,20 @@ func stripLineWidths(t *testing.T, out string) []int {
 	return widths
 }
 
+func TestWrappedTabsFitAndKeepActiveLabelVisible(t *testing.T) {
+	accent := ResolveAccent(model.KindAnime, "Auto")
+	tabs := []string{"anime", "cartoon", "live", "manga", "movies", "tv", "jellyfin"}
+	out := renderWrappedTabs(tabs, 3, 30, accent)
+	if !strings.Contains(out, "[ manga ]") {
+		t.Fatalf("active tab is missing:\n%s", out)
+	}
+	for i, width := range stripLineWidths(t, out) {
+		if width > 30 {
+			t.Errorf("tab line %d width = %d, exceeds 30:\n%s", i+1, width, out)
+		}
+	}
+}
+
 // Short runs render fully with no markers, unchanged.
 func TestRenderSeasonTabsShortUnchanged(t *testing.T) {
 	accent := ResolveAccent(model.KindTV, "Auto")

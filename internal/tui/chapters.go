@@ -43,7 +43,7 @@ func RenderChaptersScreen(data ChaptersData) string {
 		rows = append(rows, "", st.Dim.Render("No chapters available."))
 		return strings.Join(rows, "\n")
 	}
-	rows = append(rows, "", st.Dim.Render("enter read/open · / to filter · g/G top/bottom"), "")
+	rows = append(rows, "")
 
 	// Story synopsis block at the bottom
 	var story []string

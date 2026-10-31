@@ -25,21 +25,33 @@ type HistoryData struct {
 	ActiveTab        HistoryTab
 	ContinueCount    int
 	FinishedCount    int
+	ModeFilter       provider.ContentType
+	ModeFilters      []HistoryModeFilter
+	FilterQuery      string
+	Filtering        bool
 	Groups           []history.Group
 	SelectedIndex    int
 	PosterBlock      string
-	SelectedGroup    *history.Group
 	ConfirmClearAll  bool
 	ConfirmDeleteOne bool
-	FilterQuery      string
 	Width            int
 	Height           int
 	Accent           lipgloss.AdaptiveColor
 }
 
+// HistoryModeFilter describes a mode option and its item count in the
+// active Continue or Finished section. The zero mode represents All.
+type HistoryModeFilter struct {
+	Mode  provider.ContentType
+	Label string
+	Count int
+}
+
 // RenderHistoryScreen renders the History screen per KARI_TUI_SPEC §4.6.
 func RenderHistoryScreen(data HistoryData) string {
 	st := NewStyles(data.Accent)
+	layoutData := data
+	layoutData.Width = min(data.Width, 130)
 
 	// Confirm inline dialogs
 	if data.ConfirmClearAll {
@@ -49,55 +61,227 @@ func RenderHistoryScreen(data HistoryData) string {
 		return renderInlineConfirm("delete this title from history? y / n", data.Width, st)
 	}
 
-	var rows []string
-
-	// 1. Tab bar: CONTINUE 15     finished 6
-	tabLabels := []string{
-		fmt.Sprintf("CONTINUE %d", data.ContinueCount),
-		fmt.Sprintf("finished %d", data.FinishedCount),
+	rows := []string{renderHistoryNavigation(layoutData)}
+	rows = append(rows, "")
+	listHeaderHeight := lipgloss.Height(strings.Join(rows, "\n"))
+	if data.Filtering || strings.TrimSpace(data.FilterQuery) != "" {
+		rows = append(rows, renderHistoryFilterLine(data, layoutData.Width, st), "")
+		listHeaderHeight += 2
 	}
-	activeTabIdx := 0
-	if data.ActiveTab == HistoryTabFinished {
-		activeTabIdx = 1
-	}
-	tabStrip := RenderTabs(tabLabels, activeTabIdx, data.Accent)
-	rows = append(rows, tabStrip, "")
+	layoutData.Height = max(3, data.Height-listHeaderHeight)
 
 	if len(data.Groups) == 0 {
-		emptyMsg := []string{
-			"",
-			"Nothing here yet. Play something and it shows up.",
+		if query := strings.TrimSpace(data.FilterQuery); query != "" {
+			mode := "history"
+			if data.ModeFilter != "" {
+				mode = strings.ToLower(historyModeLabel(data.ModeFilter)) + " history"
+			}
+			return strings.Join(append(rows, st.Dim.Render(fmt.Sprintf("No matches for %q in %s.", query, mode))), "\n")
 		}
-		return strings.Join(append(rows, emptyMsg...), "\n")
+		if data.ModeFilter != "" {
+			return strings.Join(append(rows, st.Dim.Render(fmt.Sprintf("No %s history in %s.", strings.ToLower(historyModeLabel(data.ModeFilter)), historySectionLabel(data.ActiveTab)))), "\n")
+		}
+		if data.ActiveTab == HistoryTabFinished && data.ContinueCount > 0 {
+			return strings.Join(append(rows, st.Dim.Render("No finished history yet.")), "\n")
+		}
+		if data.ActiveTab == HistoryTabContinue && data.FinishedCount > 0 {
+			return strings.Join(append(rows, st.Dim.Render("No titles to continue.")), "\n")
+		}
+		return strings.Join(append(rows, st.Dim.Render("Nothing here yet. Play something and it shows up.")), "\n")
 	}
 
-	// The inspector pane needs its poster: without artwork it only
-	// repeats the selected row's title/kind/position as floating text,
-	// which reads as overlap. Text-only falls back to one clean column.
-	showPosterPane := data.Width >= 100 && strings.TrimSpace(data.PosterBlock) != ""
-
+	showPosterPane := layoutData.Width >= 100 && strings.TrimSpace(layoutData.PosterBlock) != ""
 	if !showPosterPane {
-		listCol := renderHistoryList(data, data.Width, st)
-		return singleColumn(strings.Join(append(rows, listCol), "\n"), data.Width, 110)
+		list := renderHistoryList(layoutData, layoutData.Width, st)
+		return strings.Join(append(rows, list), "\n")
 	}
 
-	// 2-column layout: Left is time-grouped list, Right is detail card + poster
-	leftW := data.Width * 62 / 100
-	if leftW < 45 {
-		leftW = 45
-	}
-	rightW := data.Width - leftW - 2
-
-	leftCol := renderHistoryList(data, leftW, st)
-	rightCol := renderHistoryDetails(data, rightW, st)
-
-	joined := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(leftW).Render(leftCol),
-		"  ",
-		lipgloss.NewStyle().Width(rightW).Render(rightCol),
+	rightWidth := max(posterPlaceholderWidth, layoutData.Width/4)
+	const paneGap = 6
+	leftWidth := layoutData.Width - rightWidth - paneGap
+	left := renderHistoryList(layoutData, leftWidth, st)
+	right := renderHistoryDetails(layoutData, rightWidth, st)
+	joined := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		lipgloss.NewStyle().Width(leftWidth).Render(left),
+		strings.Repeat(" ", paneGap),
+		lipgloss.NewStyle().Width(rightWidth).Render(right),
 	)
-
 	return strings.Join(append(rows, joined), "\n")
+}
+
+func renderHistoryFilterLine(data HistoryData, width int, st Styles) string {
+	if !data.Filtering {
+		line := fmt.Sprintf("Filter  %q · %d matches · / edit · esc clear", strings.TrimSpace(data.FilterQuery), len(data.Groups))
+		return st.Dim.Render(truncate(line, width))
+	}
+
+	label := "Filter / "
+	hint := "  enter apply · esc close"
+	if width < 70 {
+		hint = "  enter · esc close"
+	}
+	if width < 48 {
+		hint = ""
+	}
+	query := strings.TrimSpace(data.FilterQuery)
+	queryStyle := st.Current
+	if query == "" {
+		query = "type title, episode, or mode"
+		queryStyle = st.Dim
+	}
+	queryWidth := max(1, width-lipgloss.Width(label)-lipgloss.Width(hint)-1)
+	return st.Dim.Render(label) + queryStyle.Render(truncate(query, queryWidth)) + st.Cursor.Render("▌") + st.Dim.Render(hint)
+}
+
+func renderHistoryNavigation(data HistoryData) string {
+	st := NewStyles(data.Accent)
+	continueLabel := fmt.Sprintf("Continue %d", data.ContinueCount)
+	finishedLabel := fmt.Sprintf("Finished %d", data.FinishedCount)
+	if data.ActiveTab == HistoryTabContinue {
+		continueLabel = st.ActiveTab.Render("[ " + continueLabel + " ]")
+		finishedLabel = st.InactiveTab.Render(finishedLabel)
+	} else {
+		continueLabel = st.InactiveTab.Render(continueLabel)
+		finishedLabel = st.ActiveTab.Render("[ " + finishedLabel + " ]")
+	}
+
+	modeLabel := "All"
+	modeCount := data.ContinueCount
+	if data.ActiveTab == HistoryTabFinished {
+		modeCount = data.FinishedCount
+	}
+	for _, mode := range data.ModeFilters {
+		if mode.Mode == data.ModeFilter {
+			modeLabel = mode.Label
+			modeCount = mode.Count
+			break
+		}
+	}
+
+	sections := strings.Join([]string{
+		continueLabel,
+		finishedLabel,
+	}, "   ")
+	mode := st.Dim.Render("Mode") + "  " + st.Current.Render(fmt.Sprintf("[ %s · %d ]", modeLabel, modeCount))
+	if lipgloss.Width(sections)+3+lipgloss.Width(mode) > data.Width {
+		return sections + "\n" + mode
+	}
+	return sections + "   " + mode
+}
+
+func historySectionLabel(tab HistoryTab) string {
+	if tab == HistoryTabFinished {
+		return "Finished"
+	}
+	return "Continue"
+}
+
+func historyModeLabel(mode provider.ContentType) string {
+	switch mode {
+	case provider.ModeAnime:
+		return "Anime"
+	case provider.ModeCartoon:
+		return "Cartoon"
+	case provider.ModeLive:
+		return "Live"
+	case provider.ModeManga:
+		return "Manga"
+	case provider.ModeMovies:
+		return "Movies"
+	case provider.ModeTV:
+		return "TV"
+	case provider.ModeJellyfin:
+		return "Jellyfin"
+	default:
+		return "Other"
+	}
+}
+
+func historyModes() []provider.ContentType {
+	return []provider.ContentType{
+		provider.ModeAnime,
+		provider.ModeCartoon,
+		provider.ModeLive,
+		provider.ModeManga,
+		provider.ModeMovies,
+		provider.ModeTV,
+		provider.ModeJellyfin,
+	}
+}
+
+func historyModeForGroup(group history.Group) provider.ContentType {
+	entry := group.ContinueEntry
+	if entry.Mode == "" {
+		entry.Mode = group.Mode
+	}
+	if entry.MediaType == "" {
+		entry.MediaType = group.MediaType
+	}
+	return modeForHistoryEntry(entry)
+}
+
+func filterHistoryGroups(groups []history.Group, mode provider.ContentType) []history.Group {
+	if mode == "" {
+		return groups
+	}
+	filtered := make([]history.Group, 0, len(groups))
+	for _, group := range groups {
+		if historyModeForGroup(group) == mode {
+			filtered = append(filtered, group)
+		}
+	}
+	return filtered
+}
+
+func searchHistoryGroups(groups []history.Group, query string) []history.Group {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return groups
+	}
+	query = strings.ToLower(query)
+	filtered := make([]history.Group, 0, len(groups))
+	for _, group := range groups {
+		entry := group.ContinueEntry
+		if entry.Title == "" {
+			entry = group.LastPlayed
+		}
+		searchable := strings.ToLower(strings.Join([]string{
+			group.Title,
+			entry.EpisodeTitle,
+			historyModeLabel(historyModeForGroup(group)),
+		}, " "))
+		if strings.Contains(searchable, query) {
+			filtered = append(filtered, group)
+		}
+	}
+	return filtered
+}
+
+func historyModeFilters(allGroups, activeGroups []history.Group) []HistoryModeFilter {
+	if len(allGroups) == 0 {
+		return nil
+	}
+	present := make(map[provider.ContentType]struct{}, len(allGroups))
+	counts := make(map[provider.ContentType]int, len(activeGroups))
+	for _, group := range allGroups {
+		present[historyModeForGroup(group)] = struct{}{}
+	}
+	for _, group := range activeGroups {
+		counts[historyModeForGroup(group)]++
+	}
+	filters := []HistoryModeFilter{{Label: "All", Count: len(activeGroups)}}
+	for _, mode := range historyModes() {
+		if _, ok := present[mode]; !ok {
+			continue
+		}
+		filters = append(filters, HistoryModeFilter{
+			Mode:  mode,
+			Label: historyModeLabel(mode),
+			Count: counts[mode],
+		})
+	}
+	return filters
 }
 
 func renderHistoryList(data HistoryData, width int, st Styles) string {
@@ -149,8 +333,7 @@ func renderHistoryList(data HistoryData, width int, st Styles) string {
 	renderBucket("This week", weekGroups)
 	renderBucket("Earlier", earlierGroups)
 
-	// Tab strip + blank line above the list.
-	return strings.Join(applyWindow(rows, selPos, data.Height, 3, st), "\n")
+	return strings.Join(applyWindow(rows, selPos, data.Height, 0, st), "\n")
 }
 
 func renderHistoryRow(g history.Group, _ int, isFocused bool, data HistoryData, width int, st Styles) string {
@@ -169,142 +352,65 @@ func renderHistoryRow(g history.Group, _ int, isFocused bool, data HistoryData, 
 		title = entry.Title
 	}
 
-	kind := strings.ToLower(entry.MediaType)
-	if entry.Mode != "" {
-		kind = strings.ToLower(entry.Mode)
+	mode := strings.ToLower(historyModeLabel(historyModeForGroup(g)))
+	status := "done"
+	if data.ActiveTab != HistoryTabFinished {
+		status = historyRowPosition(entry)
 	}
-	if kind == "" {
-		kind = "title"
+	meta := historyRowMetadata(mode, status, relativeTime(entry.WatchedAt), width)
+	metaWidth := min(38, max(12, width/2))
+	if width >= 72 {
+		metaWidth = 42
 	}
-
-	pos := formatContinuePosition(entry)
-
-	ratio := 0.0
-	if entry.DurationSecs > 0 {
-		ratio = entry.PositionSecs / entry.DurationSecs
-	}
-	if entry.Complete {
-		ratio = 1.0
-	}
-	bar := RenderProgressBar(ratio, 10, data.Accent)
-
-	// Width calculations
-	kindW := 7
-	posW := 14
-	barW := 10
-	fixedW := 2 + kindW + posW + barW + 8
-	titleW := width - fixedW
-	if titleW < 16 {
-		titleW = 16
-	}
-
-	titleTrunc := truncate(title, titleW)
-	titlePadded := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+	titleWidth := max(8, width-metaWidth-4)
+	titleTrunc := truncate(title, titleWidth)
+	titlePadding := strings.Repeat(" ", max(0, titleWidth-lipgloss.Width(titleTrunc)))
 	if isFocused {
-		titlePadded = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+		titleTrunc = st.Current.Render(titleTrunc)
+	} else {
+		titleTrunc = lipgloss.NewStyle().Foreground(colorText).Render(titleTrunc)
 	}
+	return cursor + titleTrunc + titlePadding + "  " + st.Dim.Render(meta)
+}
 
-	kindStr := st.Dim.Render(fmt.Sprintf("%-7s", truncate(kind, 7)))
-	posFormatted := fmt.Sprintf("%-14s", truncate(pos, 14))
-	posStr := st.Dim.Render(posFormatted)
-	if isFocused {
-		posStr = st.Current.Render(posFormatted)
+func historyRowMetadata(mode, status, age string, width int) string {
+	if width >= 72 {
+		return fmt.Sprintf("%8s  %-20s  %10s", truncate(mode, 8), truncate(status, 20), truncate(age, 10))
 	}
+	metaWidth := min(38, max(12, width/2))
+	meta := truncate(strings.Join([]string{mode, status, age}, " · "), metaWidth)
+	return strings.Repeat(" ", max(0, metaWidth-lipgloss.Width(meta))) + meta
+}
 
-	return fmt.Sprintf("%s%s  %s  %s  %s", cursor, titlePadded, kindStr, posStr, bar)
+func historyRowPosition(entry history.Entry) string {
+	position := formatContinuePosition(entry)
+	if entry.Season > 0 && entry.Episode > 0 && entry.DurationSecs > 0 {
+		return fmt.Sprintf("%s · %s/%s", position, formatDurationShort(entry.PositionSecs), formatDurationShort(entry.DurationSecs))
+	}
+	return position
 }
 
 func renderHistoryDetails(data HistoryData, width int, st Styles) string {
 	if data.SelectedIndex < 0 || data.SelectedIndex >= len(data.Groups) {
 		return ""
 	}
-	g := data.Groups[data.SelectedIndex]
-	entry := g.ContinueEntry
+	group := data.Groups[data.SelectedIndex]
+	entry := group.ContinueEntry
 	if data.ActiveTab == HistoryTabFinished {
-		entry = g.FarthestComplete
+		entry = group.FarthestComplete
 	}
-
-	var parts []string
-
-	// 1. Poster block
-	if data.PosterBlock != "" {
-		parts = append(parts, data.PosterBlock, "")
-	}
-
-	// 2. Title
-	title := g.Title
+	title := group.Title
 	if title == "" {
 		title = entry.Title
 	}
-	parts = append(parts, st.Bold.Render(title))
-
-	// 3. Kind · position line
-	kind := strings.ToLower(entry.MediaType)
-	if entry.Mode != "" {
-		kind = strings.ToLower(entry.Mode)
+	rows := []string{
+		st.Dim.Render("Selected title"),
+		st.Bold.Render(truncate(title, width)),
 	}
-	pos := formatContinuePosition(entry)
-	meta := fmt.Sprintf("%s · %s", kind, pos)
-	parts = append(parts, st.Dim.Render(meta))
-	// 4. Episode title if known
-	if strings.TrimSpace(entry.EpisodeTitle) != "" {
-		parts = append(parts, st.Current.Render(truncate(strings.TrimSpace(entry.EpisodeTitle), width-2)))
+	if data.PosterBlock != "" {
+		rows = append(rows, "", data.PosterBlock)
 	}
-
-	// 5. Timestamp and completion details
-	if entry.PositionSecs > 0 && entry.DurationSecs > 0 {
-		pct := int(entry.PercentComplete * 100)
-		if pct == 0 && entry.DurationSecs > 0 {
-			pct = int((entry.PositionSecs / entry.DurationSecs) * 100)
-		}
-		timeStr := fmt.Sprintf("%s / %s (%d%%)", formatTimeMMSS(entry.PositionSecs), formatTimeMMSS(entry.DurationSecs), pct)
-		parts = append(parts, st.Dim.Render(timeStr))
-	} else if entry.Complete {
-		parts = append(parts, st.Ok.Render("completed"))
-	}
-
-	if g.WatchedCount > 1 {
-		parts = append(parts, st.Dim.Render(fmt.Sprintf("%d watched", g.WatchedCount)))
-	}
-
-	// 6. Relative time line (e.g. "9 minutes ago")
-	relTime := formatLongRelativeTime(entry.WatchedAt)
-	parts = append(parts, st.Dim.Render(relTime))
-
-	// 7. Context hint for anime
-	if entry.Mode == "anime" || entry.Mode == string(provider.ModeAnime) {
-		parts = append(parts, "", st.Dim.Render("t  status / rewatch"))
-	}
-
-	return strings.Join(parts, "\n")
-}
-
-func formatLongRelativeTime(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		mins := int(d.Minutes())
-		if mins == 1 {
-			return "1 minute ago"
-		}
-		return fmt.Sprintf("%d minutes ago", mins)
-	case d < 24*time.Hour:
-		hrs := int(d.Hours())
-		if hrs == 1 {
-			return "1 hour ago"
-		}
-		return fmt.Sprintf("%d hours ago", hrs)
-	case d < 7*24*time.Hour:
-		days := int(d.Hours() / 24)
-		if days == 1 {
-			return "1 day ago"
-		}
-		return fmt.Sprintf("%d days ago", days)
-	default:
-		return t.Format("2006-01-02")
-	}
+	return strings.Join(rows, "\n")
 }
 
 func renderInlineConfirm(prompt string, _ int, st Styles) string {

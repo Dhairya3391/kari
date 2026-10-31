@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -30,7 +31,7 @@ func RenderFooter(bindings []KeyBinding, status *IntegrationStatus, accent lipgl
 		if b.Key == "" && b.Action == "" {
 			continue
 		}
-		pair := b.Key + " " + st.Dim.Render(b.Action)
+		pair := formatKeyLabel(b.Key) + " " + st.Dim.Render(b.Action)
 		leftParts = append(leftParts, pair)
 	}
 	leftContent := strings.Join(leftParts, "   ")
@@ -79,4 +80,50 @@ func RenderFooter(bindings []KeyBinding, status *IntegrationStatus, accent lipgl
 		visible = append(visible, part)
 	}
 	return strings.Join(visible, "   ")
+}
+
+func formatKeyLabel(label string) string {
+	return formatKeyLabelForOS(label, runtime.GOOS)
+}
+
+func formattedKeyBindings(bindings []KeyBinding) []KeyBinding {
+	formatted := append([]KeyBinding(nil), bindings...)
+	for i := range formatted {
+		formatted[i].Key = formatKeyLabel(formatted[i].Key)
+	}
+	return formatted
+}
+
+func formatKeyLabelForOS(label, goos string) string {
+	modifierLabels := []string{"ctrl+", "Ctrl+", "CTRL+", "alt+", "Alt+", "ALT+", "shift+", "Shift+", "SHIFT+"}
+	for _, modifier := range modifierLabels {
+		replacement := "Ctrl+"
+		switch strings.ToLower(modifier) {
+		case "alt+":
+			replacement = "Alt+"
+		case "shift+":
+			replacement = "Shift+"
+		}
+		if goos == "darwin" {
+			switch strings.ToLower(modifier) {
+			case "ctrl+":
+				replacement = "Control+"
+			case "alt+":
+				replacement = "Option+"
+			case "shift+":
+				replacement = "Shift+"
+			}
+		}
+		label = strings.ReplaceAll(label, modifier, replacement)
+	}
+	return strings.NewReplacer(
+		"tab/⇧tab", "Tab / Shift+Tab",
+		"⇧tab", "Shift+Tab",
+		"tab", "Tab",
+		"backspace", "Backspace",
+		"delete", "Delete",
+		"enter", "Enter",
+		"esc", "Esc",
+		"space", "Space",
+	).Replace(label)
 }

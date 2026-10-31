@@ -9,6 +9,7 @@ import (
 
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/termimg"
 )
 
 func (m *modelImpl) currentKind() model.Kind {
@@ -102,6 +103,11 @@ func (m *modelImpl) View() string {
 		output = m.renderReaderFullscreen()
 	} else {
 		output = m.renderMainView()
+	}
+	if m.imgProtocol == termimg.ProtocolKitty && m.historyPosterVisible() {
+		m.historyPosterDrawn = true
+	} else if !m.historyPosterVisible() {
+		m.historyPosterDrawn = false
 	}
 
 	// Pixel-protocol images (Kitty) are persistent overlays: clean up hidden slots
@@ -353,14 +359,14 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			return []KeyBinding{
 				{Key: "enter", Action: "open"},
 				{Key: "space", Action: "search"},
-				{Key: "tab", Action: "mode"},
+				{Key: "tab/⇧tab", Action: "mode"},
 				{Key: "?", Action: "help"},
 				{Key: "esc", Action: "back"},
 			}
 		}
 		return []KeyBinding{
 			{Key: "space", Action: "search"},
-			{Key: "tab", Action: "mode"},
+			{Key: "tab/⇧tab", Action: "mode"},
 			{Key: "h", Action: "history"},
 			{Key: "d", Action: "downloads"},
 			{Key: "s", Action: "settings"},
@@ -383,7 +389,7 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			{Key: "m", Action: "mark complete"},
 		}
 		if len(distinctSeasonNumbers(m.episodeResults)) > 1 {
-			keys = append(keys, KeyBinding{Key: "[ ]", Action: "season"})
+			keys = append(keys, KeyBinding{Key: "←/→", Action: "season"})
 		}
 		if m.appMode == provider.ModeAnime {
 			keys = append(keys, KeyBinding{Key: "t", Action: "status"})
@@ -397,6 +403,8 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 	case viewChapters:
 		return []KeyBinding{
 			{Key: "enter", Action: "read"},
+			{Key: "/", Action: "filter"},
+			{Key: "g/G", Action: "top/bottom"},
 			{Key: "?", Action: "help"},
 			{Key: "esc", Action: "back"},
 		}
@@ -424,10 +432,20 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			KeyBinding{Key: "esc", Action: "back"})
 		return keys
 	case viewHistory:
+		if m.historyFiltering {
+			return []KeyBinding{
+				{Key: "enter", Action: "apply filter"},
+				{Key: "esc", Action: "close filter"},
+				{Key: "alt+backspace / ctrl+w", Action: "delete word"},
+				{Key: "ctrl+u", Action: "clear query"},
+				{Key: "F1", Action: "help"},
+			}
+		}
 		return []KeyBinding{
 			{Key: "enter", Action: "open"},
-			{Key: "tab", Action: "section"},
-			{Key: "t", Action: "status"},
+			{Key: "tab/⇧tab", Action: "section"},
+			{Key: "←/→", Action: "mode"},
+			{Key: "/", Action: "filter"},
 			{Key: "d", Action: "delete"},
 			{Key: "?", Action: "help"},
 			{Key: "esc", Action: "back"},
@@ -442,8 +460,10 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			}
 		}
 		return []KeyBinding{
+			{Key: "↑↓", Action: "move"},
+			{Key: "←→", Action: "change"},
 			{Key: "enter", Action: "edit"},
-			{Key: "tab", Action: "category"},
+			{Key: "tab/⇧tab", Action: "category"},
 			{Key: "?", Action: "help"},
 			{Key: "esc", Action: "back"},
 		}
@@ -556,7 +576,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 			contextKeys = []KeyBinding{
 				{Key: "enter", Action: "open series"},
 				{Key: "↑↓ j k", Action: "navigate results"},
-				{Key: "tab", Action: "cycle mode"},
+				{Key: "tab/⇧tab", Action: "cycle mode"},
 				{Key: "space", Action: "new search"},
 				{Key: "/", Action: "filter results"},
 				{Key: "d", Action: "downloads"},
@@ -565,7 +585,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 			screenName = "Search"
 			contextKeys = []KeyBinding{
 				{Key: "space/enter", Action: "focus search"},
-				{Key: "tab", Action: "cycle mode"},
+				{Key: "tab/⇧tab", Action: "cycle mode"},
 				{Key: "1..9", Action: "jump to mode"},
 				{Key: "h", Action: "history"},
 				{Key: "d", Action: "downloads"},
@@ -609,20 +629,33 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 		}
 	case viewHistory:
 		screenName = "History"
+		if m.historyFiltering {
+			screenName = "Filter history"
+			contextKeys = []KeyBinding{
+				{Key: "type", Action: "search titles, episodes, and modes"},
+				{Key: "backspace", Action: "delete character"},
+				{Key: "alt+backspace / ctrl+w", Action: "delete previous word"},
+				{Key: "ctrl+u", Action: "clear query"},
+				{Key: "enter", Action: "keep filter"},
+				{Key: "esc", Action: "close filter; esc again clears it"},
+			}
+			break
+		}
 		contextKeys = []KeyBinding{
 			{Key: "enter", Action: "resume from timestamp"},
-			{Key: "tab", Action: "switch Continue / Finished tab"},
+			{Key: "tab/⇧tab", Action: "switch Continue / Finished tab"},
+			{Key: "[/]", Action: "switch content mode"},
+			{Key: "/", Action: "filter titles and episodes"},
 			{Key: "d", Action: "delete title from history"},
 			{Key: "D", Action: "clear all history"},
 			{Key: "t", Action: "anime status / rewatch"},
-			{Key: "/ / ctrl+f", Action: "filter history list"},
 		}
 	case viewSettings:
 		screenName = "Settings"
 		contextKeys = []KeyBinding{
 			{Key: "↑↓ j k", Action: "navigate setting rows"},
 			{Key: "←→ h l", Action: "change option value"},
-			{Key: "tab", Action: "switch settings category"},
+			{Key: "tab/⇧tab", Action: "switch settings category"},
 			{Key: "enter", Action: "edit / open picker"},
 			{Key: "c / r / i", Action: "connect / revoke / import"},
 		}

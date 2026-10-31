@@ -17,6 +17,8 @@ type HelpData struct {
 
 func RenderHelpOverlay(data HelpData) string {
 	st := NewStyles(data.Accent)
+	data.ContextKeys = formattedKeyBindings(data.ContextKeys)
+	data.GlobalKeys = formattedKeyBindings(data.GlobalKeys)
 
 	availWidth := data.Width - 8
 	if availWidth < 30 {

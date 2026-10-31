@@ -7,6 +7,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/service"
+	"kari/internal/termimg"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -395,21 +396,29 @@ func (m *modelImpl) collectHistoryData(width, height int, accent lipgloss.Adapti
 		activeTab = HistoryTabFinished
 		activeList = sortGroupsByDateBucket(finished, true)
 	}
-
-	poster := posterBlock(m.historyPoster, m.historyPosterUnavailable, m.imgProtocol, kittyHistoryImageID, m.imagesEnabled)
-
-	var selectedGroup *history.Group
-	if idx := m.historySelectedIndex(); idx >= 0 && idx < len(activeList) {
-		selectedGroup = &activeList[idx]
+	modeFilters := historyModeFilters(m.historyGroups, activeList)
+	activeList = filterHistoryGroups(activeList, m.historyModeFilter)
+	activeList = searchHistoryGroups(activeList, m.historyFilter)
+	poster := ""
+	if m.imagesEnabled {
+		if m.imgProtocol == termimg.ProtocolKitty && m.historyPosterDrawn && m.historyPoster != "" {
+			poster = "\u200b" + strings.Repeat(" ", historyPosterMaxCols-1) + strings.Repeat("\n", historyPosterMaxRows-1)
+		} else {
+			poster = posterBlock(m.historyPoster, m.historyPosterUnavailable, m.imgProtocol, kittyHistoryImageID, m.imagesEnabled)
+		}
 	}
+
 	return HistoryData{
 		ActiveTab:        activeTab,
-		ContinueCount:    len(continued),
-		FinishedCount:    len(finished),
+		ContinueCount:    len(filterHistoryGroups(continued, m.historyModeFilter)),
+		FinishedCount:    len(filterHistoryGroups(finished, m.historyModeFilter)),
+		ModeFilter:       m.historyModeFilter,
+		ModeFilters:      modeFilters,
+		FilterQuery:      m.historyFilter,
+		Filtering:        m.historyFiltering,
 		Groups:           activeList,
 		SelectedIndex:    m.historySelectedIndex(),
 		PosterBlock:      poster,
-		SelectedGroup:    selectedGroup,
 		ConfirmClearAll:  m.confirmClearHistory,
 		ConfirmDeleteOne: m.confirmDelete,
 		Width:            width,

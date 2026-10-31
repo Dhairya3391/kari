@@ -12,6 +12,11 @@ import (
 // updateChapters handles keys on the chapter listing.
 func (m *modelImpl) updateChapters(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		// Bubbles uses horizontal arrows for whole-page jumps. Chapter lists
+		// have no horizontal choice, so keep their cursor on vertical movement.
+		if keyMsg.String() == "left" || keyMsg.String() == "right" {
+			return m, nil
+		}
 		switch {
 		case key.Matches(keyMsg, m.keys.Select):
 			m.autoAdvance = 0

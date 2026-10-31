@@ -81,8 +81,8 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 	// While a / filter is being typed, single-rune keys belong to the
 	// filter query, not to global bindings — typing "q" must not quit,
 	// "h" must not open history, "s" must not open settings.
-	if m.resultsFiltering || m.episodeFiltering {
-		if s := msg.String(); len(s) == 1 && s != "?" {
+	if m.resultsFiltering || m.episodeFiltering || m.historyFiltering {
+		if len(msg.String()) == 1 {
 			return nil, false
 		}
 	}

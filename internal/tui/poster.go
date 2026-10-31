@@ -9,7 +9,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"kari/internal/history"
 	"kari/internal/logging"
 	"kari/internal/termimg"
 
@@ -130,10 +129,7 @@ func (m *modelImpl) triggerPreviewPoster() tea.Cmd {
 	return m.fetchPosterCmd(posterSlotPreview, m.previewPosterOpID, tmdbID, mediaType, title, coverURL, coverReferer, previewPosterMaxCols, previewPosterMaxRows, kittyPreviewImageID)
 }
 
-// clearHistoryPoster resets the history poster slot's state, e.g. when
-// the selection moves or the list rebuilds — otherwise the previous
-// title's poster lingers next to the new selection. Bumping the opID
-// also discards any fetch still in flight for the old row.
+// clearHistoryPoster cancels stale artwork so it cannot appear beside a new selection.
 func (m *modelImpl) clearHistoryPoster() {
 	if m.historyPosterCancel != nil {
 		m.historyPosterCancel()
@@ -142,29 +138,35 @@ func (m *modelImpl) clearHistoryPoster() {
 	m.historyPosterOpID++
 	m.historyPoster = ""
 	m.historyPosterUnavailable = false
+	m.historyPosterDrawn = false
 }
 
-// triggerHistoryPoster starts fetching the poster for the currently
-// selected history row (headers resolve to nothing and just clear the
-// slot), shown in the history screen's right panel.
+// triggerHistoryPoster loads artwork for the selected history title.
 func (m *modelImpl) triggerHistoryPoster() tea.Cmd {
 	m.clearHistoryPoster()
 	item, ok := m.historyList.SelectedItem().(rowItem)
 	if !ok {
 		return nil
 	}
-	var group *history.Group
-	for i := range m.historyGroups {
-		if m.historyGroups[i].Key.String() == item.key {
-			group = &m.historyGroups[i]
-			break
+	for _, group := range m.historyGroups {
+		if group.Key.String() != item.key {
+			continue
 		}
+		entry := group.ContinueEntry
+		return m.fetchPosterCmd(
+			posterSlotHistory,
+			m.historyPosterOpID,
+			entry.TMDBID,
+			group.MediaType,
+			group.Title,
+			"",
+			"",
+			historyPosterMaxCols,
+			historyPosterMaxRows,
+			kittyHistoryImageID,
+		)
 	}
-	if group == nil {
-		return nil
-	}
-	entry := group.ContinueEntry
-	return m.fetchPosterCmd(posterSlotHistory, m.historyPosterOpID, entry.TMDBID, group.MediaType, group.Title, "", "", historyPosterMaxCols, historyPosterMaxRows, kittyHistoryImageID)
+	return nil
 }
 
 // triggerPreviewDetails starts fetching the plot overview/genres for the
@@ -222,8 +224,6 @@ func (m *modelImpl) fetchPosterCmd(slot posterSlot, opID int, tmdbID int, mediaT
 		parentCtx, m.searchPosterCancel = context.WithCancel(appCtx)
 	case posterSlotPreview:
 		parentCtx, m.previewPosterCancel = context.WithCancel(appCtx)
-	case posterSlotHistory:
-		parentCtx, m.historyPosterCancel = context.WithCancel(appCtx)
 	default:
 		parentCtx = appCtx
 	}

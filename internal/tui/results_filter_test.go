@@ -30,6 +30,22 @@ func resultsFilterModel() *modelImpl {
 	return m
 }
 
+func TestResultsHorizontalArrowsDoNotPageTheList(t *testing.T) {
+	m := resultsFilterModel()
+	m.seriesResults = make([]provider.SearchResult, 24)
+	for i := range m.seriesResults {
+		m.seriesResults[i] = provider.SearchResult{Title: "Title", ID: string(rune('a' + i))}
+	}
+	m.seriesList.SetItems(seriesToItems(m.seriesResults))
+	m.seriesList.SetSize(80, 5)
+	for _, key := range []tea.KeyType{tea.KeyLeft, tea.KeyRight} {
+		m.updateSearch(tea.KeyMsg{Type: key})
+		if got := m.selectedSeriesIndex(); got != 0 {
+			t.Fatalf("horizontal arrow moved result selection to %d; want 0", got)
+		}
+	}
+}
+
 func specialKey(t tea.KeyType, s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: t, Runes: []rune(s)}
 }

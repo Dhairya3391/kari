@@ -397,6 +397,19 @@ func (m *modelImpl) clearActiveFilter() bool {
 			m.clearStatus()
 			return true
 		}
+	case viewHistory:
+		if m.historyFiltering {
+			m.historyFiltering = false
+			m.clearStatus()
+			return true
+		}
+		if strings.TrimSpace(m.historyFilter) != "" {
+			m.historyFilter = ""
+			m.refreshHistoryItems()
+			m.historyList.Select(0)
+			m.clearStatus()
+			return true
+		}
 	}
 	return false
 }

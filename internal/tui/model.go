@@ -146,7 +146,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 
 	historyList := list.New([]list.Item{}, historyDelegate, 80, 16)
 	historyList.Title = ""
-	historyList.SetFilteringEnabled(true)
+	historyList.SetFilteringEnabled(false)
 	historyList.SetShowStatusBar(false)
 	historyList.SetShowPagination(false)
 	historyList.SetShowHelp(false)
@@ -575,6 +575,7 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.opID == m.historyPosterOpID {
 				m.historyPoster = msg.rendered
 				m.historyPosterUnavailable = msg.err != nil
+				m.historyPosterDrawn = false
 			}
 		case posterSlotPreview:
 			if msg.opID == m.previewPosterOpID {
