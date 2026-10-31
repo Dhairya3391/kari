@@ -621,6 +621,13 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.setStatusTimed(statusError, "AniList error: "+msg.err.Error())
 		}
 		return m, m.setStatusTimed(statusSuccess, msg.statusText)
+	case historyExportMsg:
+		m.loading = false
+		m.loadingText = ""
+		if msg.err != nil {
+			return m, m.setStatusTimed(statusError, "History sync failed: "+msg.err.Error())
+		}
+		return m, m.setStatusTimed(statusSuccess, fmt.Sprintf("History synced: %d updates, %d skipped", msg.synced, msg.skipped))
 	}
 
 	mdl, cmd := m.updateActive(msg)

@@ -216,6 +216,12 @@ type animeStatusUpdatedMsg struct {
 	err        error
 }
 
+type historyExportMsg struct {
+	synced  int
+	skipped int
+	err     error
+}
+
 type downloadStartedMsg struct {
 	opID      int
 	cancel    context.CancelFunc

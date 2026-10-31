@@ -153,7 +153,6 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	runBatch := func(batch []provider.Route) error {
 		g, _ := errgroup.WithContext(ctx)
 		for _, route := range batch {
-			route := route
 			p := route.Provider
 			episodeSource := route.Playback
 			g.Go(func() error {

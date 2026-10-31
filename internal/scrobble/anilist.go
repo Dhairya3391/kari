@@ -210,6 +210,13 @@ func (c *AniListClient) UpdateProgress(ctx context.Context, media model.Resolved
 	}
 
 	aniLog.Debug("media resolved", "mediaID", mediaID, "series", media.SeriesTitle)
+	current, _, err := c.GetMediaListEntry(ctx, mediaID, "")
+	if err != nil {
+		return fmt.Errorf("read current anilist progress: %w", err)
+	}
+	if current != nil && current.Progress > media.EpisodeNumber {
+		media.EpisodeNumber = current.Progress
+	}
 
 	return c.saveProgress(ctx, mediaID, media.EpisodeNumber)
 }

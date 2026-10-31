@@ -646,6 +646,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 			{Key: "tab/⇧tab", Action: "switch Continue / Finished tab"},
 			{Key: "[/]", Action: "switch content mode"},
 			{Key: "/", Action: "filter titles and episodes"},
+			{Key: "u", Action: "sync completed history to connected accounts"},
 			{Key: "d", Action: "delete title from history"},
 			{Key: "D", Action: "clear all history"},
 			{Key: "t", Action: "anime status / rewatch"},

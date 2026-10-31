@@ -11,6 +11,7 @@ import (
 	"kari/internal/scrobble"
 	"kari/internal/service"
 	"kari/internal/util"
+	"strconv"
 	"strings"
 	"time"
 
@@ -138,6 +139,126 @@ func (m *modelImpl) startHistoryImport(source string) (tea.Model, tea.Cmd) {
 	opID := m.newOpID()
 	m.historyImportOpID = opID
 	return m, tea.Batch(m.spinner.Tick, m.historyImportCmd(opID, source))
+}
+
+func (m *modelImpl) startHistoryExport() (tea.Model, tea.Cmd) {
+	if m.historyStore == nil {
+		return m, m.setStatusTimed(statusError, "Watch history unavailable")
+	}
+	if (m.anilistClient == nil || !m.anilistClient.IsAuthenticated()) &&
+		(m.traktClient == nil || !m.traktClient.IsAuthenticated()) {
+		return m, m.setStatusTimed(statusWarn, "Connect AniList or Trakt first (c)")
+	}
+	entries := m.historyStore.All()
+	anilistClient, traktClient := m.anilistClient, m.traktClient
+	parentCtx := m.appCtx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	m.loading = true
+	m.loadingText = "Syncing local history to connected accounts..."
+	return m, func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parentCtx, 2*time.Minute)
+		defer cancel()
+		synced, skipped := exportHistory(ctx, entries, anilistClient, traktClient)
+		return historyExportMsg{synced: synced, skipped: skipped}
+	}
+}
+
+type animeHistoryProgress struct {
+	media model.ResolvedMedia
+	max   int
+}
+
+func exportHistory(ctx context.Context, entries []history.Entry, ani *scrobble.AniListClient, trakt *scrobble.TraktClient) (int, int) {
+	synced, skipped := 0, 0
+	animeProgress := make(map[string]animeHistoryProgress)
+	mangaProgress := make(map[string]scrobble.MangaProgress)
+	for _, entry := range entries {
+		if !historyEntryComplete(entry) || strings.TrimSpace(entry.Title) == "" {
+			skipped++
+			continue
+		}
+		switch entry.Mode {
+		case string(provider.ModeAnime):
+			if entry.Episode > 0 {
+				idPart := strconv.Itoa(entry.AniListID)
+				key := idPart
+				if entry.AniListID <= 0 {
+					key = strings.ToLower(strings.TrimSpace(entry.Title))
+				}
+				progress := animeProgress[key]
+				if progress.max < entry.Episode {
+					progress.max = entry.Episode
+					progress.media = model.ResolvedMedia{SeriesTitle: entry.Title, AniListID: entry.AniListID, EpisodeNumber: entry.Episode}
+				}
+				animeProgress[key] = progress
+			}
+		case string(provider.ModeManga):
+			chapter, ok := mangaScrobbleChapter(entry.MangaChapter)
+			if !ok {
+				chapter, ok = mangaScrobbleChapter(entry.EpisodeTitle)
+			}
+			if ok && entry.MangaPages > 0 && entry.MangaPage >= entry.MangaPages {
+				key := strconv.Itoa(entry.AniListID)
+				if entry.AniListID <= 0 {
+					key = strings.ToLower(strings.TrimSpace(entry.Title))
+				}
+				if old, found := mangaProgress[key]; !found || old.Chapter < chapter {
+					mangaProgress[key] = scrobble.MangaProgress{Title: entry.Title, AniListID: entry.AniListID, Chapter: chapter}
+				}
+			}
+		}
+		if trakt == nil || !trakt.IsAuthenticated() || entry.Mode == string(provider.ModeManga) {
+			continue
+		}
+		media := model.ResolvedMedia{
+			SeriesTitle: entry.Title, MediaType: entry.MediaType, TMDBID: entry.TMDBID,
+			SeasonNumber: entry.Season, EpisodeNumber: entry.Episode,
+		}
+		var err error
+		if entry.MediaType == provider.MediaTypeMovie {
+			err = trakt.ScrobbleMovie(ctx, media, 1)
+		} else if entry.Episode > 0 {
+			err = trakt.ScrobbleEpisode(ctx, media, 1)
+		} else {
+			skipped++
+			continue
+		}
+		if err != nil {
+			tuiLog.Error("trakt local history sync failed", "title", entry.Title, "episode", entry.Episode, "err", err)
+			skipped++
+		} else {
+			synced++
+		}
+	}
+	if ani != nil && ani.IsAuthenticated() {
+		for _, progress := range animeProgress {
+			progress.media.EpisodeNumber = progress.max
+			if err := ani.UpdateProgress(ctx, progress.media); err != nil {
+				tuiLog.Error("anilist local history sync failed", "title", progress.media.SeriesTitle, "episode", progress.max, "err", err)
+				skipped++
+			} else {
+				synced++
+			}
+		}
+		for _, progress := range mangaProgress {
+			if err := ani.UpdateMangaProgress(ctx, progress); err != nil {
+				tuiLog.Error("anilist local manga history sync failed", "title", progress.Title, "chapter", progress.Chapter, "err", err)
+				skipped++
+			} else {
+				synced++
+			}
+		}
+	} else {
+		skipped += len(animeProgress) + len(mangaProgress)
+	}
+	return synced, skipped
+}
+
+func historyEntryComplete(entry history.Entry) bool {
+	return entry.Complete || entry.PercentComplete >= 0.95 ||
+		(entry.DurationSecs > 0 && entry.PositionSecs/entry.DurationSecs >= 0.95)
 }
 
 // historyImportCmd runs the fetch+merge off the UI thread: tracker calls

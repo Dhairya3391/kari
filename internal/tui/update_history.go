@@ -108,6 +108,8 @@ func (m *modelImpl) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.cycleHistoryTab(msg.Type == tea.KeyShiftTab)
 		case msg.String() == "]":
 			return m, m.cycleHistoryMode(1)
+		case msg.String() == "u":
+			return m.startHistoryExport()
 		case msg.String() == "[":
 			return m, m.cycleHistoryMode(-1)
 		case msg.String() == "/" || msg.String() == "ctrl+f" || key.Matches(msg, m.keys.Filter):
