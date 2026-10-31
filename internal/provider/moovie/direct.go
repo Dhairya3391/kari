@@ -103,6 +103,7 @@ type mergedSource struct {
 	quality string
 	typ     string
 	referer string
+	backend string
 }
 
 type mergedAudio struct {
@@ -110,6 +111,7 @@ type mergedAudio struct {
 	lang    string
 	typ     string
 	referer string
+	backend string
 }
 
 type mergedSubtitle struct {
@@ -659,6 +661,7 @@ func (c *Client) merge(ctx context.Context, collected []scrapeResult, subtitleCa
 			quality: normalizeQuality(row.quality),
 			typ:     typ,
 			referer: refererOf(row.headers),
+			backend: row.provider.name,
 		})
 	}
 	for _, row := range audioRows {
@@ -670,6 +673,7 @@ func (c *Client) merge(ctx context.Context, collected []scrapeResult, subtitleCa
 		out.audio = append(out.audio, mergedAudio{
 			url: row.url, lang: language, typ: typ,
 			referer: refererOf(row.headers),
+			backend: row.provider.name,
 		})
 	}
 

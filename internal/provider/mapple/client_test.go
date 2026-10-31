@@ -144,6 +144,7 @@ https://source.example.com/video_720p.m3u8`
 				"success": true,
 				"data": map[string]any{
 					"stream_url": fmt.Sprintf("http://%s/master.m3u8", r.Host),
+					"source":     "upstream-node-1",
 				},
 			})
 
@@ -173,6 +174,9 @@ https://source.example.com/video_720p.m3u8`
 
 	if sources[0].Quality != "1080p" {
 		t.Errorf("sources[0].Quality = %q, want 1080p", sources[0].Quality)
+	}
+	if sources[0].Backend != "upstream-node-1" {
+		t.Errorf("sources[0].Backend = %q, want upstream-node-1", sources[0].Backend)
 	}
 	if sources[1].Quality != "720p" {
 		t.Errorf("sources[1].Quality = %q, want 720p", sources[1].Quality)

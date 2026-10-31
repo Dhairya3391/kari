@@ -90,14 +90,32 @@ func TestResolveSourceSuccess(t *testing.T) {
 	if len(sources) != 2 {
 		t.Fatalf("len(sources) = %d, want 2", len(sources))
 	}
-	if sources[0].Quality != "1080p (Dexter)" {
-		t.Errorf("sources[0].Quality = %q", sources[0].Quality)
+	if sources[0].Backend != "Dexter" || sources[0].Quality != "1080p" {
+		t.Errorf("sources[0] quality/backend = %q/%q, want 1080p/Dexter", sources[0].Quality, sources[0].Backend)
 	}
 	if len(sources[0].Subtitles) != 1 {
 		t.Fatalf("len(subtitles) = %d, want 1", len(sources[0].Subtitles))
 	}
 	if sources[0].Subtitles[0].Language != "en" {
 		t.Errorf("subtitle language = %q, want en", sources[0].Subtitles[0].Language)
+	}
+}
+
+func TestSplitSourceQuality(t *testing.T) {
+	tests := []struct {
+		input string
+		wantQ string
+		wantB string
+	}{
+		{"1080p (Dexter)", "1080p", "Dexter"},
+		{"2160p", "2160p", ""},
+		{"Auto (Adaptive)", "Auto (Adaptive)", ""},
+	}
+	for _, tc := range tests {
+		quality, backend := splitSourceQuality(tc.input)
+		if quality != tc.wantQ || backend != tc.wantB {
+			t.Errorf("splitSourceQuality(%q) = %q/%q, want %q/%q", tc.input, quality, backend, tc.wantQ, tc.wantB)
+		}
 	}
 }
 
@@ -163,7 +181,7 @@ func TestResolveStreamSSE(t *testing.T) {
 		if len(batch) == 0 {
 			t.Fatal("empty batch received")
 		}
-		if batch[0].Quality != "1080p (Dexter)" {
+		if batch[0].Quality != "1080p" || batch[0].Backend != "Dexter" {
 			t.Errorf("batch[0].Quality = %q", batch[0].Quality)
 		}
 	default:

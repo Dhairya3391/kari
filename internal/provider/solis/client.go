@@ -310,6 +310,8 @@ func (c *Client) fallbackStream(
 type apiSource struct {
 	URL       string   `json:"url"`
 	Quality   string   `json:"quality"`
+	Backend   string   `json:"backend"`
+	Source    string   `json:"source"`
 	Type      string   `json:"type"`
 	Referer   string   `json:"referer"`
 	UserAgent string   `json:"userAgent"`
@@ -328,9 +330,17 @@ type apiResolveResponse struct {
 }
 
 func toMediaSource(s apiSource, subs []provider.SubtitleOption) provider.MediaSource {
+	quality, backend := splitSourceQuality(s.Quality)
+	if strings.TrimSpace(s.Backend) != "" {
+		backend = strings.TrimSpace(s.Backend)
+	}
+	if strings.TrimSpace(s.Source) != "" {
+		backend = strings.TrimSpace(s.Source)
+	}
 	src := provider.MediaSource{
 		URL:       strings.TrimSpace(s.URL),
-		Quality:   strings.TrimSpace(s.Quality),
+		Quality:   quality,
+		Backend:   backend,
 		Type:      strings.TrimSpace(s.Type),
 		Referer:   strings.TrimSpace(s.Referer),
 		UserAgent: strings.TrimSpace(s.UserAgent),
@@ -347,6 +357,31 @@ func toMediaSource(s apiSource, subs []provider.SubtitleOption) provider.MediaSo
 		src.ExtraArgs = append([]string(nil), defaultLavfDemuxerArgs...)
 	}
 	return src
+}
+
+func splitSourceQuality(raw string) (string, string) {
+	raw = strings.TrimSpace(raw)
+	open := strings.LastIndex(raw, " (")
+	if open < 0 || !strings.HasSuffix(raw, ")") {
+		return raw, ""
+	}
+	quality := strings.TrimSpace(raw[:open])
+	if !isResolutionQuality(quality) {
+		return raw, ""
+	}
+	return quality, strings.TrimSpace(raw[open+2 : len(raw)-1])
+}
+
+func isResolutionQuality(quality string) bool {
+	quality = strings.ToLower(strings.TrimSpace(quality))
+	if quality == "4k" || quality == "uhd" {
+		return true
+	}
+	if !strings.HasSuffix(quality, "p") {
+		return false
+	}
+	_, err := strconv.Atoi(strings.TrimSuffix(quality, "p"))
+	return err == nil
 }
 
 func toSubtitleOptions(apiSubs []apiSubtitle) []provider.SubtitleOption {

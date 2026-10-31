@@ -428,6 +428,7 @@ func (c *Client) resolveStreamURL(
 			sources = append(sources, provider.MediaSource{
 				URL:            v.URL,
 				Quality:        v.Quality,
+				Backend:        strings.TrimSpace(sResp.Data.Source),
 				Type:           provider.SourceTypeHLS,
 				Referer:        c.siteBase + "/",
 				UserAgent:      config.DesktopUserAgent,
@@ -448,6 +449,7 @@ func (c *Client) resolveStreamURL(
 		{
 			URL:            masterURL,
 			Quality:        quality,
+			Backend:        strings.TrimSpace(sResp.Data.Source),
 			Type:           provider.SourceTypeHLS,
 			Referer:        c.siteBase + "/",
 			UserAgent:      config.DesktopUserAgent,

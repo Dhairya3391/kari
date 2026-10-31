@@ -186,6 +186,7 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 		sources = append(sources, provider.MediaSource{
 			URL:       s.url,
 			Quality:   s.quality,
+			Backend:   s.backend,
 			Type:      s.typ,
 			Referer:   s.referer,
 			UserAgent: config.DesktopUserAgent,
@@ -207,6 +208,7 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 		sources = append(sources, provider.MediaSource{
 			URL:       a.url,
 			Quality:   "Auto",
+			Backend:   a.backend,
 			Type:      a.typ,
 			Referer:   a.referer,
 			UserAgent: config.DesktopUserAgent,

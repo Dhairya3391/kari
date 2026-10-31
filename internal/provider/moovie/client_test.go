@@ -134,9 +134,15 @@ func TestMoovieResolve(t *testing.T) {
 	if sources[0].URL != "https://cdn.example.com/a.m3u8" {
 		t.Errorf("sources[0].URL = %s", sources[0].URL)
 	}
+	if sources[0].Backend != "Poseidon" {
+		t.Errorf("sources[0].Backend = %q, want Poseidon", sources[0].Backend)
+	}
 	dub := sources[1]
 	if dub.Language != "hi" {
 		t.Errorf("dub Language = %q, want hi", dub.Language)
+	}
+	if dub.Backend != "Poseidon" {
+		t.Errorf("dub Backend = %q, want Poseidon", dub.Backend)
 	}
 	// needsProxy subtitle skipped; direct + item captions kept.
 	if len(sources[0].Subtitles) != 2 {

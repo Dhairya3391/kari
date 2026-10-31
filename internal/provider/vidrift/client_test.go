@@ -324,6 +324,9 @@ func TestResolveMovieBuildsSources(t *testing.T) {
 	if original.Language != "" || original.Quality != "1080p" || original.Type != provider.SourceTypeHLS {
 		t.Errorf("original = %+v", original)
 	}
+	if original.Backend != "Orion" {
+		t.Errorf("original Backend = %q, want Orion", original.Backend)
+	}
 	if len(original.Subtitles) != 2 {
 		t.Errorf("original subtitles = %+v, want en+hi", original.Subtitles)
 	}
@@ -359,6 +362,9 @@ func TestResolveMovieBuildsSources(t *testing.T) {
 	}
 	if bigbang.Quality != "Auto" || len(bigbang.Subtitles) != 1 || bigbang.Subtitles[0].Language != "en" {
 		t.Errorf("bigbang = %+v", bigbang)
+	}
+	if bigbang.Backend != "BigBang" {
+		t.Errorf("bigbang Backend = %q, want BigBang", bigbang.Backend)
 	}
 	if _, ok := byURL["https://cdn.example.com/vexon/index.m3u8"]; !ok {
 		t.Error("missing baked Vexon source")

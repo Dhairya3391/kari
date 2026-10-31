@@ -217,6 +217,7 @@ func mediaSource(stream apiStream, lane laneResult, base string, subtitles []pro
 	return provider.MediaSource{
 		URL:            resolvedURL,
 		Quality:        streamQuality(stream, lane.maxRes),
+		Backend:        firstNonEmpty(stream.Provider, lane.provider),
 		Referer:        base + "/",
 		Type:           sourceType,
 		Subtitles:      subtitles,
@@ -227,20 +228,30 @@ func mediaSource(stream apiStream, lane laneResult, base string, subtitles []pro
 	}
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // bakedSources returns the directly signed lanes VidRift renders into the
 // page, which are playable without an /api/source round trip. These are
 // only used for movies and TV: their audio language is not declared, so
 // they cannot satisfy a picked anime sub/dub track.
 func bakedSources(meta embedMeta, base string) []provider.MediaSource {
 	var sources []provider.MediaSource
-	appendSource := func(rawURL, quality string, subtitles []provider.SubtitleOption) {
+	appendSource := func(rawURL, backend string, subtitles []provider.SubtitleOption) {
 		resolved := resolveURL(base, rawURL)
 		if resolved == "" {
 			return
 		}
 		sources = append(sources, provider.MediaSource{
 			URL:            resolved,
-			Quality:        quality,
+			Quality:        "Auto",
+			Backend:        backend,
 			Referer:        base + "/",
 			Type:           kit.NormalizeSourceKind(resolved),
 			Subtitles:      subtitles,
@@ -248,14 +259,15 @@ func bakedSources(meta embedMeta, base string) []provider.MediaSource {
 			SuppressOrigin: true,
 		})
 	}
-	appendSource(meta.BigBangURL, "Auto", subtitleOptions(meta.BigBangSubs, base))
-	appendSource(meta.EvionURL, "Auto", nil)
-	appendSource(meta.VexonURL, "Auto", nil)
+	appendSource(meta.BigBangURL, "BigBang", subtitleOptions(meta.BigBangSubs, base))
+	appendSource(meta.EvionURL, "Evion", nil)
+	appendSource(meta.VexonURL, "Vexon", nil)
 
 	if resolved := resolveURL(base, meta.SelfhostURL); resolved != "" {
 		sources = append(sources, provider.MediaSource{
 			URL:            resolved,
 			Quality:        "Auto",
+			Backend:        "Selfhost",
 			Referer:        base + "/",
 			Type:           kit.NormalizeSourceKind(resolved),
 			UserAgent:      config.DesktopUserAgent,
