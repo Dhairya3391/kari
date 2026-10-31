@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 
+	_ "golang.org/x/image/webp"
+
 	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/logging"

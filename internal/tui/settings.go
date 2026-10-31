@@ -41,6 +41,9 @@ type ProviderRow struct {
 	Key       string
 	Enabled   bool
 	Available bool
+	// Radio is true for modes that enforce a single active provider (manga).
+	// The renderer shows ◉/○ instead of ●/○ to signal mutually-exclusive selection.
+	Radio bool
 }
 
 // ModeRow represents one content mode row in Settings > Modes.
@@ -351,8 +354,15 @@ func renderProviderSettingRow(row ProviderRow, isFocused bool, _ int, st Styles)
 		cursor = st.Cursor.Render("▌ ")
 	}
 
-	dot := st.Dim.Render("○")
-	if row.Available {
+	var dot string
+	switch {
+	case !row.Available:
+		dot = st.Dim.Render("○")
+	case row.Radio && row.Enabled:
+		dot = st.Ok.Render("◉")
+	case row.Radio:
+		dot = st.Dim.Render("○")
+	default:
 		dot = st.Ok.Render("●")
 	}
 

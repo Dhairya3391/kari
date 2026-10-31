@@ -73,14 +73,14 @@ func TestBuildConfigSegment(t *testing.T) {
 		"source_moviebox", "source_2peckle", "source_4khdhub", "source_vegamovies",
 		"source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy",
 		"source_kisskh", "source_hdhub4u", "source_moviesdrives", "source_vidy",
-		"source_toonworld4all", "source_vidlink", "source_obejrzyj",
+		"source_toonworld4all", "source_obejrzyj",
 		"source_lamovie", "source_sololatino", "source_moflix", "source_premiumsmart",
 	} {
 		if parsed[key] != "on" {
 			t.Errorf("%s = %v, want on", key, parsed[key])
 		}
 	}
-	for _, key := range []string{"source_arctic", "source_reanime", "source_miruro", "source_anikoto", "source_anipm"} {
+	for _, key := range []string{"source_vidlink", "source_arctic", "source_reanime", "source_miruro", "source_anikoto", "source_anipm"} {
 		if parsed[key] != "off" {
 			t.Errorf("%s = %v, want off", key, parsed[key])
 		}

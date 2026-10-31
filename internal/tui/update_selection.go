@@ -66,6 +66,11 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.manualPlaybackSelected = false
 		m.resolveAttempts = 0
 		m.preferredRepairAttempts = 0
+		// Drop the previous content's ranking so Preview never flashes
+		// stale sources before the first snapshot arrives (mirrors
+		// startEpisodeResolution lines 252-253).
+		m.rankedSources = nil
+		m.previewSelectedIndex = 0
 		m.clearPreviewPoster()
 		m.beginProviderWait(m.appMode)
 		m.autoPlayAfterResolve = false
@@ -458,6 +463,7 @@ func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 	}
 	resolved := *m.resolved
 	resolved.StartTime = startTime
+	resolved.SubtitleLanguage = m.subtitleLanguage
 	playerName := m.selectedPlayerName()
 	providerName := ""
 	if src, ok := m.selectedPlaybackSource(); ok {

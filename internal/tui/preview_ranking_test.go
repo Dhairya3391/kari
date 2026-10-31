@@ -256,6 +256,154 @@ func TestRankAndSelectSourcesFiltersDisabledAudioLanguages(t *testing.T) {
 		}
 	}
 }
+func TestGroupSourcesByProvider(t *testing.T) {
+	m := rankingTestModel()
+	m.appMode = provider.ModeMovies
+	m.qualityMode = qualityAll
+
+	cnoFHD := provider.MediaSource{URL: "cno-fhd", Quality: "1080p [Cno]", Resolver: "cno"}
+	cno4K := provider.MediaSource{URL: "cno-4k", Quality: "2160p [Cno]", Resolver: "cno"}
+	movyFHD := provider.MediaSource{URL: "movy-fhd", Quality: "1080p [Movy]", Resolver: "movysx"}
+	movy4K := provider.MediaSource{URL: "movy-4k", Quality: "2160p [Movy]", Resolver: "movysx"}
+	movyHindi := provider.MediaSource{URL: "movy-hi", Quality: "1080p [Movy]", Resolver: "movysx", Language: "hi"}
+	vylaFHD := provider.MediaSource{URL: "vyla-fhd", Quality: "1080P [XDownloader]", Resolver: "vyla"}
+	vyla4K := provider.MediaSource{URL: "vyla-4k", Quality: "2160P [111477]", Resolver: "vyla"}
+
+	m.resolved = &model.ResolvedMedia{
+		Playback: []provider.MediaSource{cnoFHD, vylaFHD, movyFHD, cno4K, movy4K, vyla4K, movyHindi},
+	}
+	m.rankAndSelectSources()
+
+	if len(m.rankedSources) != 7 {
+		t.Fatalf("expected 7 sources, got %d", len(m.rankedSources))
+	}
+
+	// Verify cno group comes first with 4K then FHD
+	if m.rankedSources[0].Source.URL != "cno-4k" || m.rankedSources[1].Source.URL != "cno-fhd" {
+		t.Errorf("cno group should be 4K then FHD, got %s, %s", m.rankedSources[0].Source.URL, m.rankedSources[1].Source.URL)
+	}
+
+	// Verify vyla group comes second with 4K then FHD
+	if m.rankedSources[2].Source.URL != "vyla-4k" || m.rankedSources[3].Source.URL != "vyla-fhd" {
+		t.Errorf("vyla group should be 4K then FHD, got %s, %s", m.rankedSources[2].Source.URL, m.rankedSources[3].Source.URL)
+	}
+
+	// Verify movysx group comes third with 4K then English FHD then Hindi FHD
+	if m.rankedSources[4].Source.URL != "movy-4k" || m.rankedSources[5].Source.URL != "movy-fhd" || m.rankedSources[6].Source.URL != "movy-hi" {
+		t.Errorf("movysx group order mismatch: %s, %s, %s",
+			m.rankedSources[4].Source.URL, m.rankedSources[5].Source.URL, m.rankedSources[6].Source.URL)
+	}
+}
+
+func TestGroupSourcesByProviderQualityLowest(t *testing.T) {
+	m := rankingTestModel()
+	m.qualityMode = qualityLowest
+	m.appMode = provider.ModeMovies
+
+	fhd := provider.MediaSource{URL: "movy-fhd", Quality: "1080p", Resolver: "movysx"}
+	sd := provider.MediaSource{URL: "movy-480p", Quality: "480p", Resolver: "movysx"}
+	fourK := provider.MediaSource{URL: "movy-4k", Quality: "2160p", Resolver: "movysx"}
+
+	m.resolved = &model.ResolvedMedia{Playback: []provider.MediaSource{fhd, fourK, sd}}
+	m.rankAndSelectSources()
+
+	if len(m.rankedSources) != 3 {
+		t.Fatalf("expected 3 sources, got %d", len(m.rankedSources))
+	}
+	if m.rankedSources[0].Source.URL != "movy-480p" || m.rankedSources[1].Source.URL != "movy-fhd" || m.rankedSources[2].Source.URL != "movy-4k" {
+		t.Errorf("qualityLowest order mismatch: got %v", urls(m.rankedSources))
+	}
+}
+
+func TestGroupSourcesByProviderAnimeAudio(t *testing.T) {
+	m := rankingTestModel()
+	m.qualityMode = qualityAll
+	m.appMode = provider.ModeAnime
+
+	// In anime mode, English audio must not be prioritized above Japanese.
+	enSrc := provider.MediaSource{URL: "src-en", Quality: "1080p", Language: "en", Resolver: "anikoto"}
+	jaSrc := provider.MediaSource{URL: "src-ja", Quality: "1080p", Language: "ja", Resolver: "anikoto"}
+
+	m.resolved = &model.ResolvedMedia{Playback: []provider.MediaSource{jaSrc, enSrc}}
+	m.rankAndSelectSources()
+
+	if len(m.rankedSources) != 2 {
+		t.Fatalf("expected 2 sources, got %d", len(m.rankedSources))
+	}
+	if m.rankedSources[0].Source.URL != "src-ja" {
+		t.Errorf("anime mode should preserve Japanese track before English, got %s", m.rankedSources[0].Source.URL)
+	}
+}
+
+func TestGroupSourcesByProviderKeepsChallengedLast(t *testing.T) {
+	healthy := provider.MediaSource{
+		URL:      "https://cdn.example.com/1080.m3u8",
+		Quality:  "1080p",
+		Resolver: "miruro",
+	}
+	challenged := provider.MediaSource{
+		URL:      "https://vault-01.uwucdn.top/stream/01/uwu.m3u8",
+		Quality:  "2160p",
+		Resolver: "miruro",
+	}
+
+	got := groupSourcesByProvider([]ranking.ScoredSource{
+		{Source: healthy},
+		{Source: challenged},
+	}, qualityAll, provider.ModeAnime)
+
+	if len(got) != 2 || got[0].Source.URL != healthy.URL || got[1].Source.URL != challenged.URL {
+		t.Fatalf("challenged host must stay last, got %v", urls(got))
+	}
+}
+
+func TestGroupSourcesByProviderDataSaver(t *testing.T) {
+	fourK := provider.MediaSource{URL: "4k", Quality: "2160p", Resolver: "movysx"}
+	fhd := provider.MediaSource{URL: "fhd", Quality: "1080p", Resolver: "movysx"}
+	hd := provider.MediaSource{URL: "hd", Quality: "720p", Resolver: "movysx"}
+	unknown := provider.MediaSource{URL: "unknown", Quality: "Unknown", Resolver: "movysx"}
+
+	got := groupSourcesByProvider([]ranking.ScoredSource{
+		{Source: fourK},
+		{Source: hd},
+		{Source: unknown},
+		{Source: fhd},
+	}, qualityDataSaver, provider.ModeMovies)
+
+	want := []string{"fhd", "hd", "4k", "unknown"}
+	gotURLs := urls(got)
+	if len(gotURLs) != len(want) {
+		t.Fatalf("data saver order = %v, want %v", gotURLs, want)
+	}
+	for i := range want {
+		if gotURLs[i] != want[i] {
+			t.Fatalf("data saver order = %v, want %v", gotURLs, want)
+		}
+	}
+}
+
+func TestGroupSourcesByProviderLowestKeepsUnknownLast(t *testing.T) {
+	unknown := provider.MediaSource{URL: "unknown", Quality: "Unknown", Resolver: "movysx"}
+	hd := provider.MediaSource{URL: "hd", Quality: "720p", Resolver: "movysx"}
+	sd := provider.MediaSource{URL: "sd", Quality: "480p", Resolver: "movysx"}
+
+	got := groupSourcesByProvider([]ranking.ScoredSource{
+		{Source: unknown},
+		{Source: hd},
+		{Source: sd},
+	}, qualityLowest, provider.ModeMovies)
+
+	want := []string{"sd", "hd", "unknown"}
+	gotURLs := urls(got)
+	if len(gotURLs) != len(want) {
+		t.Fatalf("lowest order = %v, want %v", gotURLs, want)
+	}
+	for i := range want {
+		if gotURLs[i] != want[i] {
+			t.Fatalf("lowest order = %v, want %v", gotURLs, want)
+		}
+	}
+}
 
 func urls(s []ranking.ScoredSource) []string {
 	out := make([]string, 0, len(s))

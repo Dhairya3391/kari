@@ -922,6 +922,27 @@ func TestMediaServiceSearchUsesEnabledProvidersWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestMediaServiceSearchMangaQueriesEveryEnabledProvider(t *testing.T) {
+	weebcentral := &stubProvider{name: "weebcentral", mode: provider.ModeManga, results: []provider.SearchResult{
+		{Title: "One Piece", ID: "1", MediaType: provider.MediaTypeManga},
+	}}
+	atsu := &stubProvider{name: "atsu", mode: provider.ModeManga, results: []provider.SearchResult{
+		{Title: "One Piece", ID: "2", MediaType: provider.MediaTypeManga},
+	}}
+
+	svc := NewMediaService(newTestRegistry(weebcentral, atsu))
+	results, _, _, err := svc.Search(context.Background(), provider.ModeManga, "One Piece")
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 manga results, got %d: %+v", len(results), results)
+	}
+	if results[0].Provider != "weebcentral" || results[1].Provider != "atsu" {
+		t.Fatalf("expected both providers queried, got %+v", results)
+	}
+}
+
 func TestMediaServiceResolveFallsBackToDisabledProviders(t *testing.T) {
 	enabled := &stubProvider{name: "enabled_prov", mode: provider.ModeAnime, err: provider.ErrNoSources}
 	disabled := &stubProvider{

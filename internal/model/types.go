@@ -43,6 +43,9 @@ type ResolvedMedia struct {
 	// SelectedSubtitle is the single validated local track passed to playback.
 	// Subtitles remains the unselected provider candidate list.
 	SelectedSubtitle *SubtitleTrack
+	// SubtitleLanguage is the preferred language for embedded subtitle tracks.
+	// Empty or "off" leaves track selection to the player's own configuration.
+	SubtitleLanguage string
 	StartTime        float64
 	// Live marks real-time broadcast playback where duration-based
 	// short video filtering and skip timestamps are inapplicable.

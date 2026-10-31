@@ -192,7 +192,6 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 		primaryProviders = allProviders
 		disabledProviders = nil
 	}
-
 	allResults, warnings, err := s.searchProviders(ctx, mode, query, primaryProviders)
 	if len(allResults) == 0 && len(disabledProviders) > 0 && ctx.Err() == nil {
 		mediaLog.Debug("search: enabled providers returned no results, attempting fallback to disabled providers",

@@ -341,6 +341,11 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			}
 		}
 	}
+	// Enforce the single-provider invariant for manga after settings load:
+	// fresh installs and older settings files may leave every manga provider
+	// enabled, while the radio control only permits one.
+	model.enforceSingleMangaProvider()
+	model.syncDisabledProvidersToService()
 	model.updateQueryPlaceholder()
 	for i, code := range lang.SubtitleOptions {
 		if code == model.subtitleLanguage {

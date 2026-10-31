@@ -59,6 +59,31 @@ func TestAppendAudioLangArgs(t *testing.T) {
 	}
 }
 
+func TestAppendSubtitleArgsUsesConfiguredLanguage(t *testing.T) {
+	args := appendSubtitleArgs(nil, "/tmp/sub.srt", "ja")
+	want := map[string]bool{
+		"--slang=ja,jpn,japanese,en,eng": false,
+		"--sub-file=/tmp/sub.srt":        false,
+	}
+	for _, arg := range args {
+		if _, ok := want[arg]; ok {
+			want[arg] = true
+		}
+	}
+	for arg, found := range want {
+		if !found {
+			t.Errorf("appendSubtitleArgs missing %q: %v", arg, args)
+		}
+	}
+
+	if got := appendSubtitleArgs(nil, "", "off"); len(got) != 0 {
+		t.Errorf("subtitle language off must not set --slang, got %v", got)
+	}
+	if got := appendSubtitleArgs(nil, "", ""); len(got) != 0 {
+		t.Errorf("empty subtitle language must not set --slang, got %v", got)
+	}
+}
+
 func TestBuildMPVArgsIncludesAlang(t *testing.T) {
 	source := provider.MediaSource{
 		URL:      "https://example.com/stream.m3u8",

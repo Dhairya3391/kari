@@ -185,6 +185,11 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 		subPath = target
 		mpvLog.Debug("subtitle copied for config bridge", "target", target)
 	}
+	if slang := lang.SubtitleLangs(media.SubtitleLanguage); len(slang) > 0 {
+		confBuilder.WriteString("slang=")
+		confBuilder.WriteString(strings.Join(slang, ","))
+		confBuilder.WriteString("\n")
+	}
 	if subPath != "" {
 		confBuilder.WriteString("sub-file=")
 		confBuilder.WriteString(subPath)

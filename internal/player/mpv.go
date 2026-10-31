@@ -279,7 +279,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	}
 
 	pipeMpvArgs = appendTitleArgs(pipeMpvArgs, media.DisplayTitle())
-	pipeMpvArgs = appendSubtitleArgs(pipeMpvArgs, media.SubtitlePath())
+	pipeMpvArgs = appendSubtitleArgs(pipeMpvArgs, media.SubtitlePath(), media.SubtitleLanguage)
 	pipeMpvArgs = appendAudioLangArgs(pipeMpvArgs, source.Language)
 	pipeMpvArgs = append(pipeMpvArgs, aniskipArgs...)
 	pipeMpvArgs = appendExtraArgsWithBracket(pipeMpvArgs, source.ExtraArgs, media.SubtitlePath())
@@ -396,7 +396,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 	}
 
 	args = appendTitleArgs(args, media.DisplayTitle())
-	args = appendSubtitleArgs(args, media.SubtitlePath())
+	args = appendSubtitleArgs(args, media.SubtitlePath(), media.SubtitleLanguage)
 	args = appendAudioLangArgs(args, source.Language)
 	args = append(args, aniskipArgs...)
 	// ExtraArgs may contain --demuxer-lavf-format=hls (miruro). When
@@ -458,7 +458,10 @@ func appendTitleArgs(args []string, title string) []string {
 
 // appendSubtitleArgs uses mpv's single-file CLI option so one supplied track
 // is selected by default, including when the URL is a non-file stream.
-func appendSubtitleArgs(args []string, subtitlePath string) []string {
+func appendSubtitleArgs(args []string, subtitlePath, subtitleLanguage string) []string {
+	if slang := lang.SubtitleLangs(subtitleLanguage); len(slang) > 0 {
+		args = append(args, "--slang="+strings.Join(slang, ","))
+	}
 	subtitlePath = strings.TrimSpace(subtitlePath)
 	if subtitlePath == "" {
 		return args

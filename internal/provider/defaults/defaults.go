@@ -4,10 +4,12 @@ import (
 	"kari/internal/config"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/a11"
 	"kari/internal/provider/anicine"
 	"kari/internal/provider/anikoto"
 	"kari/internal/provider/anipm"
 	"kari/internal/provider/anivault"
+	"kari/internal/provider/atsu"
 	"kari/internal/provider/bingr"
 	"kari/internal/provider/cinecat"
 	"kari/internal/provider/cno"
@@ -19,6 +21,7 @@ import (
 	"kari/internal/provider/pengu"
 	"kari/internal/provider/solis"
 	"kari/internal/provider/vidrift"
+	"kari/internal/provider/vyla"
 	"kari/internal/provider/weebcentral"
 	"kari/internal/tmdb"
 )
@@ -125,6 +128,24 @@ var DefaultProviders = []provider.Descriptor{
 		},
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return jellyfin.NewClient(d.Config.JellyfinURL, d.Config.JellyfinAPIKey)
+		},
+	},
+	{
+		ID: "a11",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return a11.NewClient(d.KeyPool)
+		},
+	},
+	{
+		ID: "vyla",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return vyla.NewClient(d.KeyPool)
+		},
+	},
+	{
+		ID: "atsu",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return atsu.NewClient()
 		},
 	},
 }

@@ -27,7 +27,7 @@ Kari runs with zero configuration by default. Optional behavior can be customize
 
 ### Integrations & Custom API Keys
 
-*Bundled public keys and client IDs are included out of the box for TMDB, Trakt, AniList, Anime-Skip, and Pengu. Use these variables only if you want to use your own personal developer applications or private accounts.*
+*Bundled public keys and client IDs are included out of the box for TMDB, Trakt, AniList, Anime-Skip, and Pengu. The variables below cover the integrations that still accept overrides.*
 
 | Variable | Description |
 | --- | --- |
@@ -37,12 +37,6 @@ Kari runs with zero configuration by default. Optional behavior can be customize
 | `OPENSUBTITLES_API_KEY` | OpenSubtitles REST API key for fallback subtitles. |
 | `OPENSUBTITLES_USERNAME` | OpenSubtitles account username (required when API key is set). |
 | `OPENSUBTITLES_PASSWORD` | OpenSubtitles account password (required when API key is set). |
-| `TRAKT_CLIENT_ID` / `TRAKT_ID` | Custom Trakt.tv OAuth application client ID. |
-| `TRAKT_CLIENT_SECRET` / `TRAKT_SECRET` | Custom Trakt.tv OAuth application client secret. |
-| `ANILIST_CLIENT_ID` / `ANILIST_ID` | Custom AniList OAuth application client ID. |
-| `ANILIST_CLIENT_SECRET` / `ANILIST_SECRET` | Custom AniList OAuth application client secret. |
-| `KARI_ANIME_SKIP_CLIENT_ID` | Custom Anime-Skip GraphQL API client ID. |
-| `PENGU_AUTH_TOKEN` / `PENGU_TOKEN` | Custom PenguPlay token (from `https://pengu.uk`, Telegram `@PenguPlayBot`, or Discord). |
 
 ---
 

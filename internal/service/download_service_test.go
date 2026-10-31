@@ -546,7 +546,6 @@ func TestCleanupPartialPreservesSiblingTempDirs(t *testing.T) {
 	}
 }
 
-
 func TestFindLegacyPartialJob_TmpDir(t *testing.T) {
 	root := t.TempDir()
 	tempDir := filepath.Join(root, ".tmp", "One Piece", "Season 01")

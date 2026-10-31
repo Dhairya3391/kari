@@ -76,8 +76,9 @@ func (r Route) sourceTimeout() time.Duration {
 
 // defaultRoutes is the single source of truth for provider routing:
 // anime merges searches and falls back for sources; movies/tv/cartoon
-// merge searches and race (with preference) for sources; live, manga
-// and jellyfin are single-provider modes.
+// merge searches and race (with preference) for sources; live and
+// jellyfin are single-provider modes, while manga offers two routes that
+// fall back to one another when the radio-selected provider is unavailable.
 //
 // Pengu's anime route carries a longer source deadline: its anime
 // aggregation fans out to slow scrapers (Ani.pm, Reanime) that answer
@@ -94,11 +95,15 @@ func defaultRoutes() map[ContentType][]Route {
 		{Provider: "pengu", Search: StrategyMerge, Sources: StrategyFallback, SourceTimeout: 40 * time.Second},
 	}
 	movies := []Route{
+		{Provider: "a11", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "vyla", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "cno", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "movysx", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "pengu", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "moovie", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "solis", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "cinecat", Search: StrategyMerge, Sources: StrategyRace},
+		{Provider: "mapple", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "vidrift", Search: StrategyMerge, Sources: StrategyRace},
 		{Provider: "bingr", Search: StrategyMerge, Sources: StrategyRace},
 	}
@@ -120,6 +125,7 @@ func defaultRoutes() map[ContentType][]Route {
 		},
 		ModeManga: {
 			{Provider: "weebcentral", Search: StrategySingle, Sources: StrategySingle},
+			{Provider: "atsu", Search: StrategySingle, Sources: StrategySingle},
 		},
 		ModeJellyfin: {
 			{Provider: "jellyfin", Search: StrategySingle, Sources: StrategySingle},

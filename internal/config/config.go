@@ -24,12 +24,11 @@ type Config struct {
 	PreferredPlayer     string
 	JellyfinURL         string
 	JellyfinAPIKey      string
-	// AnimeSkipClientID is the X-Client-ID header value for the Anime-Skip
-	// GraphQL API. Set via KARI_ANIME_SKIP_CLIENT_ID; falls back to the
-	// bundled default client ID.
+	// AnimeSkipClientID is the bundled X-Client-ID header value for the
+	// Anime-Skip GraphQL API.
 	AnimeSkipClientID string
-	// PenguAuthToken is the access token for PenguPlay (https://pengu.uk).
-	// Set via PENGU_AUTH_TOKEN; falls back to the bundled default token.
+	// PenguAuthToken is the bundled access token for PenguPlay
+	// (https://pengu.uk).
 	PenguAuthToken string
 }
 
@@ -49,38 +48,19 @@ func Load() (*Config, error) {
 		OpenSubtitlesKey:    strings.TrimSpace(os.Getenv("OPENSUBTITLES_API_KEY")),
 		OpenSubtitlesUser:   strings.TrimSpace(os.Getenv("OPENSUBTITLES_USERNAME")),
 		OpenSubtitlesPass:   strings.TrimSpace(os.Getenv("OPENSUBTITLES_PASSWORD")),
-		TraktClientID:       firstEnv("TRAKT_CLIENT_ID", "TRAKT_ID"),
-		TraktClientSecret:   firstEnv("TRAKT_CLIENT_SECRET", "TRAKT_SECRET"),
-		AniListClientID:     firstEnv("ANILIST_CLIENT_ID", "ANILIST_ID"),
-		AniListClientSecret: firstEnv("ANILIST_CLIENT_SECRET", "ANILIST_SECRET"),
+		TraktClientID:       DefaultTraktClientID,
+		TraktClientSecret:   DefaultTraktClientSecret,
+		AniListClientID:     DefaultAniListClientID,
+		AniListClientSecret: DefaultAniListClientSecret,
+		AnimeSkipClientID:   DefaultAnimeSkipClientID,
 		DownloadDir:         strings.TrimSpace(os.Getenv("KARI_DOWNLOAD_DIR")),
 		LogFile:             firstEnv("KARI_LOG_FILE"),
 		PreferredPlayer:     firstEnv("KARI_PLAYER"),
 		JellyfinURL:         strings.TrimSpace(os.Getenv("JELLYFIN_URL")),
 		JellyfinAPIKey:      strings.TrimSpace(os.Getenv("JELLYFIN_API_KEY")),
-		AnimeSkipClientID:   firstEnv("KARI_ANIME_SKIP_CLIENT_ID"),
-		PenguAuthToken:      firstEnv("PENGU_AUTH_TOKEN", "PENGU_TOKEN"),
+		PenguAuthToken:      DefaultPenguAuthToken,
 	}
 
-	// Apply hardcoded defaults if env vars are missing
-	if cfg.TraktClientID == "" {
-		cfg.TraktClientID = DefaultTraktClientID
-	}
-	if cfg.TraktClientSecret == "" {
-		cfg.TraktClientSecret = DefaultTraktClientSecret
-	}
-	if cfg.AniListClientID == "" {
-		cfg.AniListClientID = DefaultAniListClientID
-	}
-	if cfg.AniListClientSecret == "" {
-		cfg.AniListClientSecret = DefaultAniListClientSecret
-	}
-	if cfg.AnimeSkipClientID == "" {
-		cfg.AnimeSkipClientID = DefaultAnimeSkipClientID
-	}
-	if cfg.PenguAuthToken == "" {
-		cfg.PenguAuthToken = DefaultPenguAuthToken
-	}
 	if cfg.DownloadDir == "" {
 		cfg.DownloadDir = defaultDownloadDir()
 	}

@@ -347,7 +347,6 @@ func TestDownloadsIndexClampedOnDismiss(t *testing.T) {
 	}
 }
 
-
 func TestEpisodesMarkCompleteToggle(t *testing.T) {
 	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
 	if err != nil {

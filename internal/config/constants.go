@@ -13,6 +13,7 @@ const (
 	OpenSubtitlesAPI = "https://api.opensubtitles.com/api/v1"
 	OpenSubtitlesUA  = "kari v1.0"
 	SearchAPIBase    = "https://noobsearch.broggl.farm"
+	VylaAPIBase      = "https://noob.broggl.farm"
 	KariClientHeader = "X-Kari-Client"
 	KariClientToken  = "kari-app-v1"
 	TraktAPIBase     = "https://api.trakt.tv"

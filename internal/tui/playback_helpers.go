@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sort"
 	"strings"
 
 	"kari/internal/lang"
@@ -28,9 +29,79 @@ func (m *modelImpl) rankAndSelectSources() {
 			OriginalIndex: i,
 		}
 	}
-
+	scored = groupSourcesByProvider(scored, m.qualityMode, m.appMode)
 	m.rankedSources = hardsubFirst(m.appMode, m.qualityMode, !m.disableAnimeSubtitles, scored)
 	m.previewSelectedIndex = 0
+}
+
+func groupSourcesByProvider(sources []ranking.ScoredSource, qualityMode int, mode provider.ContentType) []ranking.ScoredSource {
+	if len(sources) <= 1 {
+		return sources
+	}
+	groups := make(map[string][]ranking.ScoredSource)
+	var provOrder []string
+	for _, s := range sources {
+		res := s.Source.Resolver
+		if _, exists := groups[res]; !exists {
+			provOrder = append(provOrder, res)
+		}
+		groups[res] = append(groups[res], s)
+	}
+
+	out := make([]ranking.ScoredSource, 0, len(sources))
+	for _, prov := range provOrder {
+		group := groups[prov]
+		sort.SliceStable(group, func(i, j int) bool {
+			srcI, srcJ := group[i].Source, group[j].Source
+			if challengedI, challengedJ := provider.ChallengedHost(srcI.URL), provider.ChallengedHost(srcJ.URL); challengedI != challengedJ {
+				return !challengedI
+			}
+			resI := ranking.ParseResolution(srcI.Quality)
+			resJ := ranking.ParseResolution(srcJ.Quality)
+			if resI != resJ {
+				return qualitySortRank(resI, qualityMode) < qualitySortRank(resJ, qualityMode)
+			}
+			if mode != provider.ModeAnime {
+				langI := strings.ToLower(strings.TrimSpace(group[i].Source.Language))
+				langJ := strings.ToLower(strings.TrimSpace(group[j].Source.Language))
+				if (langI == "" || langI == "en") && (langJ != "" && langJ != "en") {
+					return true
+				}
+				if (langJ == "" || langJ == "en") && (langI != "" && langI != "en") {
+					return false
+				}
+			}
+			return false
+		})
+		out = append(out, group...)
+	}
+	return out
+}
+
+// qualitySortRank maps a parsed resolution to an ascending sort key for the
+// active quality mode. Lower keys sort first. Rows without a parseable
+// resolution always sort last so "unknown" never outranks a real height.
+func qualitySortRank(resolution, qualityMode int) int {
+	const unknownResolution = 1 << 30
+
+	switch qualityMode {
+	case qualityLowest:
+		if resolution == 0 {
+			return unknownResolution
+		}
+		return resolution
+	case qualityDataSaver:
+		switch {
+		case resolution == 0:
+			return unknownResolution
+		case resolution <= 1080:
+			return 1080 - resolution
+		default:
+			return 10000 + resolution
+		}
+	default:
+		return -resolution
+	}
 }
 
 func (m *modelImpl) filterSourcesByLanguage(sources []provider.MediaSource) []provider.MediaSource {

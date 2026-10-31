@@ -1020,9 +1020,13 @@ func isExcludedStream(stream penguStreamItem) bool {
 		stream.URL,
 		stream.BehaviorHints.Filename,
 	}, " "))
+	if strings.Contains(combined, ".mpd") {
+		return true
+	}
 	return strings.Contains(combined, "movysx") || strings.Contains(combined, "movy.sx") ||
 		strings.Contains(combined, "anikoto") ||
-		strings.Contains(combined, "ani.pm") || strings.Contains(combined, "anipm")
+		strings.Contains(combined, "ani.pm") || strings.Contains(combined, "anipm") ||
+		strings.Contains(combined, "111477") || strings.Contains(combined, "cno.to")
 }
 
 // isHousekeepingEntry reports whether a stream item is one of Pengu's own
@@ -1062,7 +1066,7 @@ func buildConfigSegment(token string) (string, error) {
 		"source_moviesdrives":  "on",
 		"source_vaplayer":      "on",
 		"source_miruro":        "off",
-		"source_vidlink":       "on",
+		"source_vidlink":       "off",
 		"source_vidfast":       "on",
 		"source_cinefreak":     "on",
 		"source_cinejoy":       "on",

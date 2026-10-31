@@ -914,6 +914,7 @@ func (m *modelImpl) providerRows() []ProviderRow {
 				Key:       key,
 				Enabled:   !m.isProviderDisabledKey(sec.Mode, id),
 				Available: avail,
+				Radio:     sec.Mode == provider.ModeManga,
 			})
 		}
 	}
@@ -934,7 +935,20 @@ func (m *modelImpl) toggleProviderAtIndex(index int) (tea.Model, tea.Cmd) {
 	if m.disabledProviders == nil {
 		m.disabledProviders = make(map[string]bool)
 	}
-	if m.isProviderDisabledKey(row.Mode, id) {
+	if row.Mode == provider.ModeManga {
+		for _, r := range rows {
+			if r.Mode == provider.ModeManga {
+				k := strings.ToLower(strings.TrimSpace(r.Key))
+				otherID := strings.ToLower(strings.TrimSpace(r.ID))
+				if otherID == id {
+					delete(m.disabledProviders, k)
+					delete(m.disabledProviders, otherID)
+				} else {
+					m.disabledProviders[k] = true
+				}
+			}
+		}
+	} else if m.isProviderDisabledKey(row.Mode, id) {
 		delete(m.disabledProviders, key)
 		delete(m.disabledProviders, id)
 	} else {
@@ -957,4 +971,35 @@ func (m *modelImpl) syncDisabledProvidersToService() {
 	}
 	slices.Sort(list)
 	m.mediaService.SetDisabledProviders(list)
+}
+
+// enforceSingleMangaProvider ensures at most one manga provider is enabled.
+// It runs at init time so a fresh install (no saved settings) or a settings
+// file written before the radio invariant existed never shows both on.
+// If no manga provider is already explicitly disabled, the highest-priority
+// one (first returned by the registry) is kept and the rest are disabled.
+// If one is already disabled the state is already valid and nothing changes.
+func (m *modelImpl) enforceSingleMangaProvider() {
+	if m.registry == nil {
+		return
+	}
+	providers := m.registry.ProvidersForMode(provider.ModeManga)
+	if len(providers) <= 1 {
+		return
+	}
+	// Check whether any manga provider is already explicitly disabled —
+	// if so the user (or a previous session) already chose one; respect it.
+	for _, p := range providers {
+		if m.isProviderDisabledKey(provider.ModeManga, p.Name()) {
+			return
+		}
+	}
+	// Nothing disabled yet: keep index-0 (highest priority), disable the rest.
+	if m.disabledProviders == nil {
+		m.disabledProviders = make(map[string]bool)
+	}
+	for _, p := range providers[1:] {
+		key := string(provider.ModeManga) + ":" + strings.ToLower(p.Name())
+		m.disabledProviders[key] = true
+	}
 }

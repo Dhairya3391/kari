@@ -17,7 +17,7 @@ func TestDefaultRegistryIncludesNewProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDefaultRegistry: %v", err)
 	}
-	for _, name := range []string{"cno", "mapple", "cinecat", "movysx"} {
+	for _, name := range []string{"cno", "mapple", "cinecat", "movysx", "a11", "vyla", "atsu"} {
 		p, ok := reg.ProviderByName(name)
 		if !ok || p == nil {
 			t.Errorf("expected provider %q in registry", name)

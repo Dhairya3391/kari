@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"kari/internal/lang"
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/util"
@@ -265,7 +266,7 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 	}
 
 	args = appendTitleArgs(args, media.DisplayTitle())
-	args = appendIINASubtitleArgs(args, media.SubtitlePath())
+	args = appendIINASubtitleArgs(args, media.SubtitlePath(), media.SubtitleLanguage)
 	args = appendAudioLangArgs(args, source.Language)
 	args = append(args, aniskipArgs...)
 	// IINA puts the URL in [files] before "--", so mpv per-file brackets
@@ -282,7 +283,10 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 // libmpv, where the --sub-file CLI alias is never resolved (iina/iina#1991),
 // so --sub-file silently loads nothing. Verified against IINA 1.4.4:
 // --sub-files=<path> loads the track, --sub-files-append does not.
-func appendIINASubtitleArgs(args []string, subtitlePath string) []string {
+func appendIINASubtitleArgs(args []string, subtitlePath, subtitleLanguage string) []string {
+	if slang := lang.SubtitleLangs(subtitleLanguage); len(slang) > 0 {
+		args = append(args, "--slang="+strings.Join(slang, ","))
+	}
 	subtitlePath = strings.TrimSpace(subtitlePath)
 	if subtitlePath == "" {
 		return args

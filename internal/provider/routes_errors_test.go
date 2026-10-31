@@ -125,7 +125,8 @@ func TestAnimePenguSourceTimeout(t *testing.T) {
 
 // TestRoutesStrategiesMatchSpec proves the default strategies: anime
 // merges search and falls back for sources; movies race sources;
-// single-provider modes stay single.
+// single-route modes stay single; multi-route modes fall back unless a
+// route asks to merge.
 func TestRoutesStrategiesMatchSpec(t *testing.T) {
 	if SearchStrategy(ModeAnime) != StrategyMerge {
 		t.Errorf("anime search = %q, want merge", SearchStrategy(ModeAnime))
@@ -142,8 +143,11 @@ func TestRoutesStrategiesMatchSpec(t *testing.T) {
 	if SearchStrategy(ModeLive) != StrategySingle {
 		t.Errorf("live search = %q, want single", SearchStrategy(ModeLive))
 	}
-	if SearchStrategy(ModeManga) != StrategySingle {
-		t.Errorf("manga search = %q, want single", SearchStrategy(ModeManga))
+	if SearchStrategy(ModeManga) != StrategyFallback {
+		t.Errorf("manga search = %q, want fallback", SearchStrategy(ModeManga))
+	}
+	if SourcesStrategy(ModeManga) != StrategyFallback {
+		t.Errorf("manga sources = %q, want fallback", SourcesStrategy(ModeManga))
 	}
 }
 

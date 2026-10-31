@@ -3,6 +3,7 @@ package manga
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"image"
 	"image/color"
@@ -13,6 +14,23 @@ import (
 
 	"kari/internal/provider"
 )
+
+// tinyWebP is a 2x2 white WebP page, matching the format Atsu returns.
+const tinyWebP = "UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoCAAIAAgA0JaQAA3AA/vuUAAA="
+
+func TestDecodeWebP(t *testing.T) {
+	data, err := base64.StdEncoding.DecodeString(tinyWebP)
+	if err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	img, err := decode(data)
+	if err != nil {
+		t.Fatalf("decode webp: %v", err)
+	}
+	if got := img.Bounds().Dx(); got != 2 {
+		t.Errorf("webp width = %d, want 2", got)
+	}
+}
 
 func pngBytes(t *testing.T) []byte {
 	t.Helper()

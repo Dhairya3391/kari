@@ -244,12 +244,11 @@ func (c *Client) fetchServer20(
 		var sources []provider.MediaSource
 		for _, v := range variants {
 			sources = append(sources, provider.MediaSource{
-				URL:            v.URL,
-				Quality:        v.Quality,
-				Type:           provider.SourceTypeHLS,
-				Referer:        c.siteBase + "/",
-				UserAgent:      config.DesktopUserAgent,
-				SuppressOrigin: true,
+				URL:       v.URL,
+				Quality:   v.Quality,
+				Type:      provider.SourceTypeHLS,
+				Referer:   c.siteBase + "/",
+				UserAgent: config.DesktopUserAgent,
 			})
 		}
 		return sources, nil
@@ -264,12 +263,11 @@ func (c *Client) fetchServer20(
 
 	return []provider.MediaSource{
 		{
-			URL:            masterURL,
-			Quality:        quality,
-			Type:           provider.SourceTypeHLS,
-			Referer:        c.siteBase + "/",
-			UserAgent:      config.DesktopUserAgent,
-			SuppressOrigin: true,
+			URL:       masterURL,
+			Quality:   quality,
+			Type:      provider.SourceTypeHLS,
+			Referer:   c.siteBase + "/",
+			UserAgent: config.DesktopUserAgent,
 		},
 	}, nil
 }
@@ -304,13 +302,12 @@ func (c *Client) fetchServer21(
 	var sources []provider.MediaSource
 	for _, v := range variants {
 		sources = append(sources, provider.MediaSource{
-			URL:            v.URL,
-			Quality:        v.Quality,
-			Type:           provider.SourceTypeHLS,
-			Referer:        c.siteBase + "/",
-			UserAgent:      config.DesktopUserAgent,
-			SuppressOrigin: true,
-			ExtraArgs:      []string{"--demuxer-lavf-o=extension_picky=0,allowed_segment_extensions=ALL"},
+			URL:       v.URL,
+			Quality:   v.Quality,
+			Type:      provider.SourceTypeHLS,
+			Referer:   c.siteBase + "/",
+			UserAgent: config.DesktopUserAgent,
+			ExtraArgs: []string{"--demuxer-lavf-o=extension_picky=0,allowed_segment_extensions=ALL"},
 		})
 	}
 

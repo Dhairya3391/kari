@@ -12,6 +12,8 @@ import (
 	"kari/internal/history"
 	"kari/internal/logging"
 	"kari/internal/termimg"
+
+	_ "golang.org/x/image/webp"
 )
 
 const (

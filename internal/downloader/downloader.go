@@ -44,9 +44,9 @@ type DownloadRequest struct {
 	// TempDir is the directory where intermediate fragments and control
 	// files are stored during download. If empty, defaults to
 	// filepath.Join(OutputDir, ".tmp").
-	TempDir   string
-	Progress  func(p DownloadProgress)
-	Verify    bool
+	TempDir  string
+	Progress func(p DownloadProgress)
+	Verify   bool
 }
 
 // Downloader is the engine contract for fetching media to disk.
@@ -265,7 +265,6 @@ func (d *YTDLPDownloader) findOutputPath(outputDir, baseTitle string) string {
 		return ""
 	}
 
-	lowerBase := strings.ToLower(baseTitle)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -276,7 +275,7 @@ func (d *YTDLPDownloader) findOutputPath(outputDir, baseTitle string) string {
 			continue
 		}
 		nameWithoutExt := strings.TrimSuffix(name, filepath.Ext(name))
-		if strings.ToLower(nameWithoutExt) != lowerBase {
+		if !strings.EqualFold(nameWithoutExt, baseTitle) {
 			continue
 		}
 		path := filepath.Join(outputDir, name)
@@ -578,7 +577,7 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 		return fmt.Errorf("ytdlp: failed: %w, stderr: %s", err, stderrBuf.String())
 	}
 	if req.TempDir != "" && req.TempDir != req.OutputDir {
-		_ = os.Remove(req.TempDir)
+		_ = os.RemoveAll(req.TempDir)
 	}
 	return nil
 }

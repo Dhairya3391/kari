@@ -13,11 +13,11 @@ import (
 // DownloadJob stores provider-independent selection data needed to resolve a
 // fresh media URL after Kari restarts.
 type DownloadJob struct {
-	Series         provider.SearchResult `json:"series"`
-	Episode        provider.Episode      `json:"episode,omitempty"`
-	Episodes       []provider.Episode    `json:"episodes,omitempty"`
-	BatchCurrent   int                   `json:"batch_current,omitempty"`
-	Mode           provider.ContentType  `json:"mode"`
+	Series       provider.SearchResult `json:"series"`
+	Episode      provider.Episode      `json:"episode,omitempty"`
+	Episodes     []provider.Episode    `json:"episodes,omitempty"`
+	BatchCurrent int                   `json:"batch_current,omitempty"`
+	Mode         provider.ContentType  `json:"mode"`
 	// SearchOnResume marks jobs discovered from old partial files that predate
 	// persisted provider selection data.
 	SearchOnResume bool `json:"search_on_resume,omitempty"`

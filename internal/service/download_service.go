@@ -150,12 +150,17 @@ func (s *DownloadService) CompletedDownloads() []CompletedDownload {
 		}
 		info, err := entry.Info()
 		if err != nil || info.Size() <= 0 {
-			return nil
+			// A vanished or unreadable entry must not hide the rest of
+			// the completed downloads.
+			return nil //nolint:nilerr // intentional per-entry skip
 		}
 
 		rel, err := filepath.Rel(s.downloadDir, path)
 		if err != nil {
-			return nil
+			// WalkDir rooted at downloadDir should always yield relative
+			// paths; skip rather than abort the whole listing on a path
+			// that cannot be made relative.
+			return nil //nolint:nilerr // intentional per-entry skip
 		}
 
 		slashRel := filepath.ToSlash(rel)

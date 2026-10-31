@@ -54,11 +54,11 @@ func TestDemoteRankWeakBackends(t *testing.T) {
 func TestRoutesCoverKnownProviders(t *testing.T) {
 	known := map[ContentType][]string{
 		ModeAnime:    {"anicine", "anipm", "anikoto", "miruro", "vidrift", "bingr", "pengu"},
-		ModeMovies:   {"movysx", "pengu", "moovie", "solis", "cinecat", "vidrift", "bingr"},
-		ModeTV:       {"movysx", "pengu", "moovie", "solis", "cinecat", "vidrift", "bingr"},
+		ModeMovies:   {"a11", "vyla", "cno", "movysx", "pengu", "moovie", "solis", "cinecat", "mapple", "vidrift", "bingr"},
+		ModeTV:       {"a11", "vyla", "cno", "movysx", "pengu", "moovie", "solis", "cinecat", "mapple", "vidrift", "bingr"},
 		ModeCartoon:  {"movysx", "pengu", "moovie", "solis", "cinecat", "bingr"},
 		ModeLive:     {"pengu"},
-		ModeManga:    {"weebcentral"},
+		ModeManga:    {"weebcentral", "atsu"},
 		ModeJellyfin: {"jellyfin"},
 	}
 	for mode, want := range known {

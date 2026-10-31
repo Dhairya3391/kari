@@ -962,7 +962,6 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 		return m, m.setStatusTimed(statusError, errMsg)
 	}
 
-
 	if completedTitle != "" {
 		displayTitle := completedTitle
 		if m.downloadService != nil && outputDir != "" {

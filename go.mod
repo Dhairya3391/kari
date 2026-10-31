@@ -7,14 +7,16 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
-	golang.org/x/sync v0.20.0
-	golang.org/x/text v0.37.0 // audited 2026-05-09: latest available, code only uses encoding/charmap.
+	golang.org/x/sync v0.24.0
+	golang.org/x/text v0.43.0 // audited 2026-05-09: latest available, code only uses encoding/charmap.
 )
 
 require (
 	github.com/BourgeoisBear/rasterm v1.1.2
 	github.com/muesli/termenv v0.16.0
-	golang.org/x/sys v0.42.0
+	golang.org/x/image v0.47.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/term v0.18.0
 )
 
 require (
@@ -37,5 +39,4 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sahilm/fuzzy v0.1.1 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/term v0.18.0 // indirect
 )

@@ -850,7 +850,6 @@ func downloadQualityLabel(effectiveQuality int) string {
 	}
 }
 
-
 func (m *modelImpl) batchDownloadCmd(
 	opID int,
 	episodes []provider.Episode,
