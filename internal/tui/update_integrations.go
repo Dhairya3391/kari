@@ -157,12 +157,12 @@ func (m *modelImpl) startHistoryExport() (tea.Model, tea.Cmd) {
 	}
 	m.loading = true
 	m.loadingText = "Syncing local history to connected accounts..."
-	return m, func() tea.Msg {
+	return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parentCtx, 2*time.Minute)
 		defer cancel()
 		synced, skipped := exportHistory(ctx, entries, anilistClient, traktClient)
 		return historyExportMsg{synced: synced, skipped: skipped}
-	}
+	})
 }
 
 type animeHistoryProgress struct {
