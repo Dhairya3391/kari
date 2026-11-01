@@ -100,6 +100,45 @@ func TestResultsSelectedRowHighlight(t *testing.T) {
 	}
 }
 
+func TestLiveResultsShowProviderAndChannelDetails(t *testing.T) {
+	data := ResultsData{
+		Query: "cartoon",
+		Mode:  provider.ModeLive,
+		Results: []provider.SearchResult{
+			{
+				Title:     "Cartoon Network HD+",
+				ID:        "famelack:TAW3V6RUdxKtJQ",
+				Group:     "India",
+				Live:      true,
+				Type:      provider.ModeLive,
+				MediaType: provider.MediaTypeLive,
+				Provider:  "famelack",
+			},
+			{
+				Title:     "LIVE: Match 1",
+				ID:        "pp-live:1",
+				Group:     "Football",
+				Live:      true,
+				Type:      provider.ModeLive,
+				MediaType: provider.MediaTypeLive,
+				Provider:  "pengu",
+			},
+		},
+		ProviderNames: map[string]string{"famelack": "Famelack", "pengu": "Pengu"},
+		SelectedIndex: 0,
+		Width:         100,
+		Height:        20,
+		Accent:        ResolveAccent(model.KindLive, "Auto"),
+	}
+
+	out := RenderLiveResultsScreen(data)
+	for _, want := range []string{"Cartoon Network HD+", "India", "Famelack", "Pengu"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("live list must show %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestResultsOmitRedundantTypeInTVAndMovieModes(t *testing.T) {
 	tests := []struct {
 		mode      provider.ContentType

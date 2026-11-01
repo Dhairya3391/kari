@@ -65,6 +65,29 @@ func windowRows(rows []string, cursorPos, visible int) (out []string, above, bel
 	return rows[start:end], start, len(rows) - end
 }
 
+// windowRange returns the row indices that fit in a scroll window and the
+// number of rows clipped above and below it.
+func windowRange(total, cursorPos, height, headerReserve int) (start, end, above, below int) {
+	if total <= 0 {
+		return 0, 0, 0, 0
+	}
+	avail := max(3, height-headerReserve)
+	if total <= avail {
+		return 0, total, 0, 0
+	}
+	visible := max(1, avail-2)
+	start = windowStart(total, cursorPos, visible)
+	end = start + visible
+	above, below = start, total-end
+	if (above == 0 && below > 0) || (below == 0 && above > 0) {
+		visible = max(1, avail-1)
+		start = windowStart(total, cursorPos, visible)
+		end = start + visible
+		above, below = start, total-end
+	}
+	return start, end, above, below
+}
+
 // windowHint renders one "↑ n more" / "↓ n more" marker, or "" when
 // nothing was clipped on that side.
 func windowHint(n int, up bool, st Styles) string {
@@ -80,31 +103,13 @@ func windowHint(n int, up bool, st Styles) string {
 // applyWindow slices rows to the viewport and wraps them with scroll
 // markers. headerReserve is the lines already used above the list.
 func applyWindow(rows []string, cursorPos, height, headerReserve int, st Styles) []string {
-	avail := height - headerReserve
-	if avail < 3 {
-		avail = 3
-	}
-	if len(rows) <= avail {
-		return rows
-	}
-
-	// When clipped, reserve vertical space for scroll hints so the total
-	// line count (hints + visible rows) never exceeds available height.
-	// Try 2 hints first (middle of list).
-	visible := max(1, avail-2)
-	win, above, below := windowRows(rows, cursorPos, visible)
-
-	// If only one hint is needed (at head or tail), we can fit one more row.
-	if (above == 0 && below > 0) || (below == 0 && above > 0) {
-		visible = max(1, avail-1)
-		win, above, below = windowRows(rows, cursorPos, visible)
-	}
+	start, end, above, below := windowRange(len(rows), cursorPos, height, headerReserve)
 
 	var out []string
 	if h := windowHint(above, true, st); h != "" {
 		out = append(out, h)
 	}
-	out = append(out, win...)
+	out = append(out, rows[start:end]...)
 	if h := windowHint(below, false, st); h != "" {
 		out = append(out, h)
 	}

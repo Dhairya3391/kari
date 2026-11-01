@@ -21,6 +21,9 @@ type ResultsData struct {
 	Mode          provider.ContentType
 	Results       []provider.SearchResult
 	SelectedIndex int
+	// ProviderNames maps a result's Provider ID to its user-facing alias.
+	// Live rows use it to name the integration serving each channel.
+	ProviderNames map[string]string
 	FilterQuery   string // / text filter; empty means unfiltered
 	Filtering     bool   // true while the user is typing the / filter
 	PosterBlock   string
@@ -161,7 +164,19 @@ func renderResultsTable(data ResultsData, width, height int, st Styles) string {
 	}
 	titleW := max(8, width-fixedW)
 
-	for i, item := range data.Results {
+	// 3 lines reserved above the table ("› query", count, ""),
+	// plus 2 more while the / filter prompt is shown.
+	reserve := 3
+	if data.Filtering || strings.TrimSpace(data.FilterQuery) != "" {
+		reserve = 5
+	}
+	start, end, above, below := windowRange(len(data.Results), data.SelectedIndex, height, reserve)
+	if hint := windowHint(above, true, st); hint != "" {
+		rows = append(rows, hint)
+	}
+
+	for i := start; i < end; i++ {
+		item := data.Results[i]
 		isFocused := i == data.SelectedIndex
 
 		cursor := "  "
@@ -206,13 +221,10 @@ func renderResultsTable(data ResultsData, width, height int, st Styles) string {
 		rows = append(rows, row)
 	}
 
-	// 3 lines reserved above the table ("› query", count, ""),
-	// plus 2 more while the / filter prompt is shown.
-	reserve := 3
-	if data.Filtering || strings.TrimSpace(data.FilterQuery) != "" {
-		reserve = 5
+	if hint := windowHint(below, false, st); hint != "" {
+		rows = append(rows, hint)
 	}
-	return strings.Join(applyWindow(rows, data.SelectedIndex, height, reserve, st), "\n")
+	return strings.Join(rows, "\n")
 }
 
 func renderResultsDetails(data ResultsData, width int, st Styles) string {

@@ -119,6 +119,27 @@ const (
 	DiscordAssetPaused = "paused"
 )
 
+// Famelack live TV catalog endpoints. Famelack (formerly TV.Garden) publishes
+// its directory as gzip-compressed JSON in a public GitHub data repository.
+const (
+	// FamelackDataBase is the root of the public Famelack data repository.
+	FamelackDataBase = "https://raw.githubusercontent.com/famelack/famelack-data/main"
+	// FamelackTVChannelsURL is the complete live TV channel catalog.
+	FamelackTVChannelsURL = FamelackDataBase + "/tv/compressed/categories/all.json"
+	// FamelackTVCountriesURL maps ISO country codes to display names.
+	FamelackTVCountriesURL = FamelackDataBase + "/tv/compressed/countries_metadata.json"
+)
+
+// TimStreams exposes sports events and 24/7 channels through its public API.
+const (
+	// TimStreamsBase is the TimStreams web application origin.
+	TimStreamsBase = "https://tim-streams.com"
+	// TimStreamsAPIBase is the API used for live events, channels, and playback lanes.
+	TimStreamsAPIBase = TimStreamsBase + "/api"
+	// TimStreamsShortBase serves the short stream links that issue playback tickets.
+	TimStreamsShortBase = "https://ehgembxe.cfd"
+)
+
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var
 // replaces the whole list when set.
 var DefaultTMDBAPIKeys = []string{

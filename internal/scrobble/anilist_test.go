@@ -336,7 +336,7 @@ func TestAniListClient_UpdateProgressDoesNotForceCurrent(t *testing.T) {
 		lastQuery = req.Query
 
 		w.Header().Set("Content-Type", "application/json")
-		if strings.Contains(req.Query, "Media (search:") {
+		if strings.Contains(req.Query, "search: $search") {
 			_, _ = w.Write([]byte(`{"data":{"Media":{"id":154587}}}`))
 			return
 		}

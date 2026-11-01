@@ -58,6 +58,9 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 	}
 
 	if len(allResults) > 0 {
+		if mode == provider.ModeLive {
+			SortLiveResults(allResults, time.Now())
+		}
 		if s.searchCache != nil && len(warnings) == 0 {
 			s.searchCache.Set(cacheKey, searchCacheEntry{
 				results:  allResults,

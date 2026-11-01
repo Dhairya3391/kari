@@ -48,6 +48,18 @@ func (m *modelImpl) collectResultsData(width, height int, accent lipgloss.Adapti
 		inputView, inputFocused = m.queryInput.View(), true
 	}
 
+	providerNames := make(map[string]string)
+	if m.registry != nil {
+		for _, r := range visible {
+			if r.Provider == "" {
+				continue
+			}
+			if _, ok := providerNames[r.Provider]; !ok {
+				providerNames[r.Provider] = m.registry.DisplayName(r.Provider)
+			}
+		}
+	}
+
 	return ResultsData{
 		Query:         m.searchQuery,
 		InputView:     inputView,
@@ -55,6 +67,7 @@ func (m *modelImpl) collectResultsData(width, height int, accent lipgloss.Adapti
 		Mode:          m.appMode,
 		Results:       visible,
 		SelectedIndex: pos,
+		ProviderNames: providerNames,
 		FilterQuery:   m.resultsFilter,
 		Filtering:     m.resultsFiltering,
 		PosterBlock:   posterBlock,

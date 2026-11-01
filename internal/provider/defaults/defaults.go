@@ -13,6 +13,7 @@ import (
 	"kari/internal/provider/bingr"
 	"kari/internal/provider/cinecat"
 	"kari/internal/provider/cno"
+	"kari/internal/provider/famelack"
 	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/mapple"
 	"kari/internal/provider/miruro"
@@ -20,6 +21,7 @@ import (
 	"kari/internal/provider/movysx"
 	"kari/internal/provider/pengu"
 	"kari/internal/provider/solis"
+	"kari/internal/provider/timstreams"
 	"kari/internal/provider/vidrift"
 	"kari/internal/provider/vyla"
 	"kari/internal/provider/weebcentral"
@@ -119,6 +121,18 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "pengu",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return pengu.NewClientWithLanguageFilter(d.KeyPool, d.Config.PenguAuthToken, d.LanguageFilter)
+		},
+	},
+	{
+		ID: "timstreams",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return timstreams.NewClient()
+		},
+	},
+	{
+		ID: "famelack",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return famelack.NewClient()
 		},
 	},
 	{

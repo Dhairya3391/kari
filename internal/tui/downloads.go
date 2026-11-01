@@ -41,110 +41,126 @@ type DownloadsData struct {
 // RenderDownloadsScreen renders the Downloads screen per KARI_TUI_SPEC §4.8.
 func RenderDownloadsScreen(data DownloadsData) string {
 	st := NewStyles(data.Accent)
-
-	var rows []string
-
 	titleW := data.Width - 56
 	if titleW < 20 {
 		titleW = 20
 	}
 
-	// Active Section
-	rows = append(rows, st.Dim.Render(fmt.Sprintf("Active · %d", len(data.Active))))
-
-	if len(data.Active) == 0 {
-		rows = append(rows, "  "+st.Dim.Render("no active downloads"), "")
-	} else {
-		for i, item := range data.Active {
-			isFocused := i == data.SelectedIndex
-			cursor := "  "
-			if isFocused {
-				cursor = st.Cursor.Render("▌ ")
-			}
-
-			titleTrunc := truncate(item.Title, titleW)
-			titleStr := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
-			if isFocused {
-				titleStr = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
-			}
-
-			qFormatted := fmt.Sprintf("%-6s", truncate(item.Quality, 6))
-			qualityStr := st.Dim.Render(qFormatted)
-			if isFocused {
-				qualityStr = st.Current.Render(qFormatted)
-			}
-
-			if item.Queued {
-				rows = append(rows, fmt.Sprintf("%s%s  %s  %s", cursor, titleStr, qualityStr, st.Dim.Render("queued")))
-			} else if item.Paused {
-				bar := RenderProgressBar(item.Progress, 10, data.Accent)
-				pctStr := st.Current.Render(fmt.Sprintf("%3.0f%%", item.Progress*100))
-				rows = append(rows, fmt.Sprintf("%s%s  %s  %s   %s   %s", cursor, titleStr, qualityStr, bar, pctStr, st.Dim.Render("paused")))
-			} else {
-				bar := RenderProgressBar(item.Progress, 10, data.Accent)
-				pctStr := st.Current.Render(fmt.Sprintf("%3.0f%%", item.Progress*100))
-				speed := item.Speed
-				eta := item.ETA
-				if item.Progress == 0 && speed == "" && eta == "" {
-					speed = "connecting…"
-				}
-				speedStr := fmt.Sprintf("%-10s", speed)
-				etaStr := fmt.Sprintf("%-8s", eta)
-
-				rows = append(rows, fmt.Sprintf("%s%s  %s  %s   %s   %s   %s", cursor, titleStr, qualityStr, bar, pctStr, st.Dim.Render(speedStr), st.Dim.Render(etaStr)))
-			}
-		}
-		rows = append(rows, "")
+	type rowKind uint8
+	const (
+		activeHeader rowKind = iota
+		activeEmpty
+		blank
+		activeItem
+		doneHeader
+		doneEmpty
+		doneItem
+	)
+	type displayRow struct {
+		kind  rowKind
+		index int
 	}
-
-	doneHeaderIdx := len(rows)
-	// Done Section
-	rows = append(rows, st.Dim.Render(fmt.Sprintf("Done · %d", len(data.Done))))
-
-	if len(data.Done) == 0 {
-		rows = append(rows, "  "+st.Dim.Render("no completed downloads"))
+	flat := []displayRow{{kind: activeHeader}}
+	if len(data.Active) == 0 {
+		flat = append(flat, displayRow{kind: activeEmpty}, displayRow{kind: blank})
 	} else {
-		offset := len(data.Active)
-		for i, item := range data.Done {
-			isFocused := (offset + i) == data.SelectedIndex
-			cursor := "  "
-			if isFocused {
-				cursor = st.Cursor.Render("▌ ")
-			}
-
-			titleTrunc := truncate(item.Title, titleW)
-			titleStr := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
-			if isFocused {
-				titleStr = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
-			}
-
-			qFormatted := fmt.Sprintf("%-6s", truncate(item.Quality, 6))
-			qualityStr := st.Dim.Render(qFormatted)
-			if isFocused {
-				qualityStr = st.Current.Render(qFormatted)
-			}
-			checkStr := st.Ok.Render("✓ ")
-			sizeStr := st.Dim.Render(item.Size)
-
-			rows = append(rows, fmt.Sprintf("%s%s  %s  %s %s", cursor, titleStr, qualityStr, checkStr, sizeStr))
+		for i := range data.Active {
+			flat = append(flat, displayRow{kind: activeItem, index: i})
+		}
+		flat = append(flat, displayRow{kind: blank})
+	}
+	doneHeaderIndex := len(flat)
+	flat = append(flat, displayRow{kind: doneHeader})
+	if len(data.Done) == 0 {
+		flat = append(flat, displayRow{kind: doneEmpty})
+	} else {
+		for i := range data.Done {
+			flat = append(flat, displayRow{kind: doneItem, index: i})
 		}
 	}
 
 	flatCursor := -1
-	totalItems := len(data.Active) + len(data.Done)
-	if totalItems > 0 && data.SelectedIndex >= 0 {
-		if data.SelectedIndex < len(data.Active) {
-			flatCursor = 1 + data.SelectedIndex
-		} else {
-			doneIdx := data.SelectedIndex - len(data.Active)
-			if doneIdx < len(data.Done) {
-				flatCursor = doneHeaderIdx + 1 + doneIdx
-			}
+	if data.SelectedIndex >= 0 && data.SelectedIndex < len(data.Active) {
+		flatCursor = 1 + data.SelectedIndex
+	} else if doneIndex := data.SelectedIndex - len(data.Active); doneIndex >= 0 && doneIndex < len(data.Done) {
+		flatCursor = doneHeaderIndex + 1 + doneIndex
+	}
+	start, end, above, below := 0, len(flat), 0, 0
+	if data.Height > 0 {
+		start, end, above, below = windowRange(len(flat), flatCursor, data.Height, 0)
+	}
+	var rows []string
+	if hint := windowHint(above, true, st); hint != "" {
+		rows = append(rows, hint)
+	}
+	for _, row := range flat[start:end] {
+		switch row.kind {
+		case activeHeader:
+			rows = append(rows, st.Dim.Render(fmt.Sprintf("Active · %d", len(data.Active))))
+		case activeEmpty:
+			rows = append(rows, "  "+st.Dim.Render("no active downloads"))
+		case blank:
+			rows = append(rows, "")
+		case activeItem:
+			rows = append(rows, renderActiveDownload(data.Active[row.index], row.index == data.SelectedIndex, titleW, data, st))
+		case doneHeader:
+			rows = append(rows, st.Dim.Render(fmt.Sprintf("Done · %d", len(data.Done))))
+		case doneEmpty:
+			rows = append(rows, "  "+st.Dim.Render("no completed downloads"))
+		case doneItem:
+			rows = append(rows, renderDoneDownload(data.Done[row.index], len(data.Active)+row.index == data.SelectedIndex, titleW, st))
 		}
 	}
-
-	if data.Height > 0 {
-		rows = applyWindow(rows, flatCursor, data.Height, 0, st)
+	if hint := windowHint(below, false, st); hint != "" {
+		rows = append(rows, hint)
 	}
 	return strings.Join(rows, "\n")
+}
+
+func renderActiveDownload(item ActiveDownload, isFocused bool, titleW int, data DownloadsData, st Styles) string {
+	cursor := "  "
+	if isFocused {
+		cursor = st.Cursor.Render("▌ ")
+	}
+	titleTrunc := truncate(item.Title, titleW)
+	titleStr := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+	if isFocused {
+		titleStr = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+	}
+	qFormatted := fmt.Sprintf("%-6s", truncate(item.Quality, 6))
+	qualityStr := st.Dim.Render(qFormatted)
+	if isFocused {
+		qualityStr = st.Current.Render(qFormatted)
+	}
+	if item.Queued {
+		return fmt.Sprintf("%s%s  %s  %s", cursor, titleStr, qualityStr, st.Dim.Render("queued"))
+	}
+	bar := RenderProgressBar(item.Progress, 10, data.Accent)
+	pctStr := st.Current.Render(fmt.Sprintf("%3.0f%%", item.Progress*100))
+	if item.Paused {
+		return fmt.Sprintf("%s%s  %s  %s   %s   %s", cursor, titleStr, qualityStr, bar, pctStr, st.Dim.Render("paused"))
+	}
+	speed, eta := item.Speed, item.ETA
+	if item.Progress == 0 && speed == "" && eta == "" {
+		speed = "connecting…"
+	}
+	return fmt.Sprintf("%s%s  %s  %s   %s   %s   %s", cursor, titleStr, qualityStr, bar, pctStr, st.Dim.Render(fmt.Sprintf("%-10s", speed)), st.Dim.Render(fmt.Sprintf("%-8s", eta)))
+}
+
+func renderDoneDownload(item DoneDownload, isFocused bool, titleW int, st Styles) string {
+	cursor := "  "
+	if isFocused {
+		cursor = st.Cursor.Render("▌ ")
+	}
+	titleTrunc := truncate(item.Title, titleW)
+	titleStr := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+	if isFocused {
+		titleStr = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+	}
+	quality := fmt.Sprintf("%-6s", truncate(item.Quality, 6))
+	qualityStr := st.Dim.Render(quality)
+	if isFocused {
+		qualityStr = st.Current.Render(quality)
+	}
+	return fmt.Sprintf("%s%s  %s  %s %s", cursor, titleStr, qualityStr, st.Ok.Render("✓ "), st.Dim.Render(item.Size))
 }

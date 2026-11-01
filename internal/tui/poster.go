@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/logging"
+	"kari/internal/provider"
 	"kari/internal/termimg"
 
 	_ "golang.org/x/image/webp"
@@ -55,6 +56,9 @@ func (m *modelImpl) clearSearchPoster() {
 // the search result at idx, to be shown in the search screen's right panel.
 func (m *modelImpl) triggerSearchPoster(idx int) tea.Cmd {
 	m.clearSearchPoster()
+	if m.appMode == provider.ModeLive {
+		return nil
+	}
 	if idx < 0 || idx >= len(m.seriesResults) {
 		return nil
 	}

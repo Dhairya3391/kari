@@ -285,7 +285,13 @@ func historyModeFilters(allGroups, activeGroups []history.Group) []HistoryModeFi
 }
 
 func renderHistoryList(data HistoryData, width int, st Styles) string {
-	var rows []string
+	type displayRow struct {
+		title      string
+		groupIndex int
+		isHeader   bool
+		blank      bool
+	}
+	var flat []displayRow
 	selPos := -1
 
 	// Group into Today, This week, Earlier
@@ -313,19 +319,16 @@ func renderHistoryList(data HistoryData, width int, st Styles) string {
 		if len(indices) == 0 {
 			return
 		}
-		if len(rows) > 0 {
-			rows = append(rows, "")
+		if len(flat) > 0 {
+			flat = append(flat, displayRow{blank: true})
 		}
-		rows = append(rows, st.Dim.Render(title))
+		flat = append(flat, displayRow{title: title, isHeader: true})
 
 		for _, idx := range indices {
-			g := data.Groups[idx]
-			isFocused := idx == data.SelectedIndex
-			if isFocused {
-				selPos = len(rows)
+			if idx == data.SelectedIndex {
+				selPos = len(flat)
 			}
-			row := renderHistoryRow(g, idx, isFocused, data, width, st)
-			rows = append(rows, row)
+			flat = append(flat, displayRow{groupIndex: idx})
 		}
 	}
 
@@ -333,7 +336,25 @@ func renderHistoryList(data HistoryData, width int, st Styles) string {
 	renderBucket("This week", weekGroups)
 	renderBucket("Earlier", earlierGroups)
 
-	return strings.Join(applyWindow(rows, selPos, data.Height, 0, st), "\n")
+	start, end, above, below := windowRange(len(flat), selPos, data.Height, 0)
+	var rows []string
+	if hint := windowHint(above, true, st); hint != "" {
+		rows = append(rows, hint)
+	}
+	for _, row := range flat[start:end] {
+		if row.isHeader {
+			rows = append(rows, st.Dim.Render(row.title))
+		} else if row.blank {
+			rows = append(rows, "")
+		} else {
+			g := data.Groups[row.groupIndex]
+			rows = append(rows, renderHistoryRow(g, row.groupIndex, row.groupIndex == data.SelectedIndex, data, width, st))
+		}
+	}
+	if hint := windowHint(below, false, st); hint != "" {
+		rows = append(rows, hint)
+	}
+	return strings.Join(rows, "\n")
 }
 
 func renderHistoryRow(g history.Group, _ int, isFocused bool, data HistoryData, width int, st Styles) string {

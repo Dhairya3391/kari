@@ -492,8 +492,15 @@ func renderAudioLanguagePicker(data SettingsData, st Styles) string {
 
 	rows = append(rows, st.Bold.Render("Select Audio Languages"), "")
 
-	var items []string
-	for i, l := range data.AllLanguages {
+	start, end, above, below := 0, len(data.AllLanguages), 0, 0
+	if data.Height > 0 {
+		start, end, above, below = windowRange(len(data.AllLanguages), data.PickerIndex, data.Height, 2)
+	}
+	if hint := windowHint(above, true, st); hint != "" {
+		rows = append(rows, hint)
+	}
+	for i := start; i < end; i++ {
+		l := data.AllLanguages[i]
 		cursor := "  "
 		if i == data.PickerIndex {
 			cursor = st.Cursor.Render("▌ ")
@@ -509,13 +516,10 @@ func renderAudioLanguagePicker(data SettingsData, st Styles) string {
 			label = st.Current.Render(l)
 		}
 
-		items = append(items, fmt.Sprintf("%s%s%s", cursor, status, label))
+		rows = append(rows, fmt.Sprintf("%s%s%s", cursor, status, label))
 	}
-
-	if data.Height > 0 {
-		rows = append(rows, applyWindow(items, data.PickerIndex, data.Height, 2, st)...)
-	} else {
-		rows = append(rows, items...)
+	if hint := windowHint(below, false, st); hint != "" {
+		rows = append(rows, hint)
 	}
 
 	return strings.Join(rows, "\n")

@@ -42,7 +42,10 @@ func (m *modelImpl) onSearchDone(msg searchDoneMsg) (tea.Model, tea.Cmd) {
 	logging.Info("onSearchDone success", "opID", msg.opID, "results_count", len(msg.results), "used_query", msg.usedQuery)
 	m.allSeriesResults = msg.results
 	m.usedQuery = msg.usedQuery
-	m.seriesResults = msg.results
+	m.seriesResults = append([]provider.SearchResult(nil), msg.results...)
+	if m.appMode == provider.ModeLive {
+		m.searchIndex = 0
+	}
 	// A fresh result list drops any stale / text filter.
 	m.resultsFilter = ""
 	m.resultsFiltering = false

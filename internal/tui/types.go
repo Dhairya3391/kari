@@ -366,6 +366,8 @@ type modelImpl struct {
 	showHelp               bool
 	bodyScroll             int
 	helpScroll             int
+	lastScrollInputAt      time.Time
+	lastScrollDirection    string
 	selectedPlayback       int
 	previewSkipInfo        string
 	previewSkipKey         string

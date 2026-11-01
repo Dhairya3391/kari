@@ -568,6 +568,7 @@ var providerSections = []struct {
 	{Section: "Anime", Mode: provider.ModeAnime},
 	{Section: "Movies", Mode: provider.ModeMovies},
 	{Section: "TV Shows", Mode: provider.ModeTV},
+	{Section: "Live", Mode: provider.ModeLive},
 	{Section: "Manga", Mode: provider.ModeManga},
 }
 
