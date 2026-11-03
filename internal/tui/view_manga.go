@@ -80,20 +80,30 @@ func (m *modelImpl) renderReaderFullscreen() string {
 
 	header := padBG(readerBGStyle.Render(shorten(title+" · "+chapter, width)), width)
 	footerText := fmt.Sprintf("%s · ←/→ pages · n/p chapters · esc back", pageInfo)
+	if m.showHelp {
+		footerText = "? / esc close help"
+	}
 	// Flag background work only while the current page itself has
 	// nothing to show yet; prefetching ahead must not paint a
 	// permanent "loading…" next to a fully rendered page.
-	if _, ready := m.readerRender[m.readerPage]; m.loading && !ready {
-		footerText += " · loading…"
+	if !m.showHelp {
+		if _, ready := m.readerRender[m.readerPage]; m.loading && !ready {
+			footerText += " · loading…"
+		}
 	}
 	footer := padBG(readerMutedStyle.Render(shorten(footerText, width)), width)
 
 	var page string
-	// A rendered current page stays on screen even while prefetch loads
-	// ahead in the background. The old `&& !m.loading` guard hid it
-	// behind "Loading page…", and since the Kitty placement then kept
-	// showing the previous page's image, every prefetch read as stuck.
-	if rendered, ok := m.readerRender[m.readerPage]; ok {
+	if m.showHelp {
+		// The reader bypasses the main view, so ? used to toggle a flag
+		// that swallowed reader input without drawing anything. Render
+		// the overlay in the page slot instead.
+		page = fitReaderBlock(m.renderHelpOverlayContent(width, m.currentAccent()), width, boxH)
+	} else if rendered, ok := m.readerRender[m.readerPage]; ok {
+		// A rendered current page stays on screen even while prefetch loads
+		// ahead in the background. The old `&& !m.loading` guard hid it
+		// behind "Loading page…", and since the Kitty placement then kept
+		// showing the previous page's image, every prefetch read as stuck.
 		page = rendered
 	} else if m.readerUnavailable {
 		page = readerBGStyle.Render(lipgloss.Place(width, boxH, lipgloss.Center, lipgloss.Center, "Page unavailable"))
@@ -102,6 +112,21 @@ func (m *modelImpl) renderReaderFullscreen() string {
 	}
 
 	return strings.Join([]string{header, page, footer}, "\n")
+}
+
+// fitReaderBlock clamps a pre-rendered block (the help overlay) to the
+// reader's page box and centers it. The reader promises exactly m.height
+// lines, so an oversized block must be truncated rather than allowed to
+// push the footer off screen.
+func fitReaderBlock(block string, width, height int) string {
+	lines := strings.Split(block, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Top, strings.Join(lines, "\n"))
 }
 
 // padBG pads a chrome row with black-background spaces to full width.

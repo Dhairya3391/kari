@@ -145,8 +145,30 @@ func (m *modelImpl) renderSmallTerminalNotice() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, notice)
 }
 
+// contentWidth is the centered body width at the current terminal size.
+func (m *modelImpl) contentWidth() int {
+	return ComputeDims(m.width, m.height).ContentWidth
+}
+
+// searchPosterVisible reports whether the search-results or episodes
+// inspector is actually drawing the series poster. The width gates mirror
+// RenderResultsScreen and RenderEpisodesScreen: counting a poster the
+// layout hides as an on-screen placement would make overlayLayoutKey clear
+// the screen for an image that was never drawn.
 func (m *modelImpl) searchPosterVisible() bool {
-	return (m.activeView == viewSearch || m.activeView == viewEpisodes) && !m.showHelp && !m.animeStatusPickerOpen && m.imagesEnabled && m.searchPoster != ""
+	if !m.imagesEnabled || m.showHelp || m.animeStatusPickerOpen || m.searchPoster == "" {
+		return false
+	}
+	switch m.activeView {
+	case viewSearch:
+		// The results screen uses the filtered list for its details pane.
+		visible, _ := m.visibleSeriesResults()
+		return len(visible) > 0 && (m.width >= 90 || m.contentWidth() >= 70)
+	case viewEpisodes:
+		return m.width >= 80 && m.contentWidth() >= 65
+	default:
+		return false
+	}
 }
 
 func (m *modelImpl) previewPosterVisible() bool {
@@ -155,19 +177,79 @@ func (m *modelImpl) previewPosterVisible() bool {
 	// a still-valid poster every frame (blank art after refresh). The
 	// poster belongs to the selected series/episode, which retries
 	// never change; title switches already clear the slot explicitly.
-	return m.activeView == viewPreview && !m.showHelp && !m.animeStatusPickerOpen && m.imagesEnabled && m.previewPoster != ""
+	if m.activeView != viewPreview || m.showHelp || m.animeStatusPickerOpen || !m.imagesEnabled || m.previewPoster == "" {
+		return false
+	}
+	// Mirrors showPreviewPoster in preview.go.
+	return m.width >= 80 || m.contentWidth() >= 70
 }
 
 func (m *modelImpl) historyPosterVisible() bool {
-	return m.activeView == viewHistory && !m.showHelp && !m.animeStatusPickerOpen && m.imagesEnabled && m.historyPoster != "" && m.width >= 100
+	if m.activeView != viewHistory || m.showHelp || m.animeStatusPickerOpen || !m.imagesEnabled || m.historyPoster == "" {
+		return false
+	}
+	// Mirrors showPosterPane in history.go, which gates on content width.
+	return m.contentWidth() >= 100
 }
 
+// readerPageVisible reports whether the fullscreen reader is drawing a
+// rendered page. Help replaces the page (see renderReaderFullscreen), so a
+// page hidden behind help must not count as visible or Kitty cleanup would
+// leave its placement on screen.
 func (m *modelImpl) readerPageVisible() bool {
 	if m.activeView != viewReader || m.showHelp {
 		return false
 	}
 	_, ok := m.readerRender[m.readerPage]
 	return ok
+}
+
+// overlayLayoutKey snapshots every out-of-band image placement a frame
+// would draw: which image, where, and at what terminal size. Non-image
+// state (status text, spinner) is deliberately excluded so typing and
+// progress ticks never force a full-screen clear. An empty key means no
+// such graphics are on screen.
+//
+// Sixel and iTerm2 have no delete-by-id, so a moved or hidden placement can
+// only be removed by clearing the screen. Comparing this key before and
+// after an update tells Update when that clear is actually needed.
+func (m *modelImpl) overlayLayoutKey() string {
+	if !m.imgProtocol.NeedsScreenClear() || m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+	// The tiny-terminal notice replaces the whole UI, images included.
+	if m.width < 36 || m.height < 10 {
+		return ""
+	}
+
+	// Slot op IDs identify the artwork; rendered lengths catch a slot
+	// whose image changed without a new fetch (notably poster size). Every
+	// current render path bumps the op ID (posters) or the page index
+	// (reader) when the bytes change, so equal keys imply equal placements.
+	// Hashing the base64 payload here would run on every message, including
+	// spinner ticks, for no added benefit today.
+	var placements strings.Builder
+	if m.searchPosterVisible() {
+		fmt.Fprintf(&placements, "|search:%d:%d", m.searchPosterOpID, len(m.searchPoster))
+	}
+	if m.previewPosterVisible() {
+		fmt.Fprintf(&placements, "|preview:%d:%d", m.previewPosterOpID, len(m.previewPoster))
+	}
+	if m.historyPosterVisible() {
+		fmt.Fprintf(&placements, "|history:%d:%d", m.historyPosterOpID, len(m.historyPoster))
+	}
+	// Help replaces the reader page, so a page behind help is not a
+	// placement; removing it must request a clear.
+	if m.activeView == viewReader && !m.showHelp {
+		if rendered, ok := m.readerRender[m.readerPage]; ok {
+			fmt.Fprintf(&placements, "|reader:%d:%d:%d:%d:%d",
+				m.readerPage, m.readerOpID, m.readerCols, m.readerRows, len(rendered))
+		}
+	}
+	if placements.Len() == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s|%s|%dx%d", m.activeView, m.appMode, m.width, m.height) + placements.String()
 }
 
 func (m *modelImpl) activeDownloadBadge(st Styles) string {

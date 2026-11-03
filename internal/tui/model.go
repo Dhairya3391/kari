@@ -397,10 +397,22 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	prevStatusID := m.statusID
 	prevView := m.activeView
 	prevMode := m.appMode
+	prevOverlayKey := m.overlayLayoutKey()
 
 	mdl, cmd := m.updateMessage(msg)
 
 	if updated, ok := mdl.(*modelImpl); ok {
+		// Sixel/iTerm2 pixels outlive the text cells they were drawn over,
+		// and Bubble Tea skips redrawing unchanged lines, so a moved or
+		// hidden image would otherwise stay on screen. Clear-and-repaint
+		// only when the placement actually changed; status/spinner updates
+		// leave the key untouched. The clear is full-screen because that is
+		// the only portable way to drop an iTerm2 placement (see
+		// termimg.Protocol.NeedsScreenClear); the cost is one repaint, so
+		// gating on the layout key keeps it off the steady-state path.
+		if prevOverlayKey != "" && updated.overlayLayoutKey() != prevOverlayKey {
+			cmd = tea.Batch(cmd, tea.ClearScreen)
+		}
 		if updated.activeView != prevView || updated.appMode != prevMode {
 			if updated.statusID == prevStatusID {
 				updated.clearStatus()

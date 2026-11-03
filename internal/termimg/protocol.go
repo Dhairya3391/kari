@@ -52,10 +52,33 @@ func (p Protocol) String() string {
 
 // NeedsCleanup reports whether the protocol leaves persistent placements
 // behind that must be explicitly deleted when the image stops being shown.
-// Only Kitty behaves this way; Sixel/iTerm2/blocks output is ordinary
-// scrolling cell content that the next frame overwrites on its own.
+// Only Kitty supports delete-by-id; Sixel and iTerm2 placements must be
+// cleared with the screen instead (see NeedsScreenClear). Blocks output is
+// ordinary cell content that the next frame overwrites.
 func (p Protocol) NeedsCleanup() bool {
 	return p == ProtocolKitty
+}
+
+// NeedsScreenClear reports whether a frame can leave stale image pixels
+// behind after a placement moves or disappears. Sixel and iTerm2 images are
+// terminal placements outside the text cell stream: Bubble Tea skips
+// unchanged lines, so the cells under an old placement are not rewritten
+// and the graphic stays visible. Kitty is excluded because it supports
+// delete-by-id (see NeedsCleanup); Sixel terminals are the worst offenders
+// since even a rewritten row does not reliably drop the placement.
+//
+// iTerm2 is the costlier of the two: its placements are not tied to the
+// cell grid, so whether overwriting the cells removes the image depends on
+// the terminal (iTerm2 itself, WezTerm, Rio, Mintty, mlterm all differ).
+// The portable fix is a full clear-and-repaint whenever a placement moves,
+// which can visibly flicker one frame on large posters. Repainting only
+// the affected geometry would avoid that, but it needs renderer internals
+// (bubbletea has no public repaint/region command at v1.3.10) and cannot be
+// validated across those terminals here, so correctness wins over the
+// flicker. Callers should still gate on an actual placement change (see
+// overlayLayoutKey) rather than clearing every frame.
+func (p Protocol) NeedsScreenClear() bool {
+	return p == ProtocolSixel || p == ProtocolIterm
 }
 
 // Cleanup returns the escape sequence that clears a previous placement of

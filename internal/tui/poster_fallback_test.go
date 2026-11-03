@@ -151,12 +151,15 @@ func TestSearchPosterVisibleOnEpisodesView(t *testing.T) {
 		imagesEnabled: true,
 		searchPoster:  "POSTER_ART",
 		activeView:    viewEpisodes,
+		width:         120,
+		height:        40,
 	}
 	if !m.searchPosterVisible() {
 		t.Errorf("searchPosterVisible must be true on viewEpisodes so poster is not cleaned up")
 	}
 
 	m.activeView = viewSearch
+	m.seriesResults = []provider.SearchResult{providerSearchResultFrieren()}
 	if !m.searchPosterVisible() {
 		t.Errorf("searchPosterVisible must be true on viewSearch")
 	}

@@ -110,6 +110,19 @@ func TestItermMagic(t *testing.T) {
 	}
 }
 
+func TestScreenClearForOverlayProtocols(t *testing.T) {
+	for _, p := range []Protocol{ProtocolSixel, ProtocolIterm} {
+		if !p.NeedsScreenClear() {
+			t.Errorf("%v must report NeedsScreenClear: pixels outlive skipped lines", p)
+		}
+	}
+	for _, p := range []Protocol{ProtocolNone, ProtocolBlocks, ProtocolKitty} {
+		if p.NeedsScreenClear() {
+			t.Errorf("protocol %v should not need a screen clear", p)
+		}
+	}
+}
+
 func TestCleanupOnlyKitty(t *testing.T) {
 	if got := ProtocolKitty.Cleanup(3); got == "" {
 		t.Error("kitty Cleanup should be non-empty")
