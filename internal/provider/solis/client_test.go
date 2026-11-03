@@ -101,6 +101,89 @@ func TestResolveSourceSuccess(t *testing.T) {
 	}
 }
 
+func TestResolveSourceMergesPerSourceAndTopLevelSubtitles(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := apiResolveResponse{
+			Sources: []apiSource{
+				{
+					URL:     "https://cdn.example.com/s1.m3u8",
+					Quality: "1080p (Dexter)",
+					Type:    "hls",
+					Subtitles: []apiSubtitle{
+						{URL: "https://sub.example.com/es.vtt", Language: "Spanish"},
+					},
+				},
+			},
+			Subtitles: []apiSubtitle{
+				{URL: "https://sub.example.com/en.vtt", Language: "English"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	pool := tmdb.NewKeyPool([]string{"dummy-key"})
+	c, err := NewClientWithURL(pool, ts.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURL failed: %v", err)
+	}
+
+	sources, err := c.ResolveSource(context.Background(), "550", provider.Episode{TMDBID: 550})
+	if err != nil {
+		t.Fatalf("ResolveSource failed: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("len(sources) = %d, want 1", len(sources))
+	}
+	if len(sources[0].Subtitles) != 2 {
+		t.Fatalf("len(subtitles) = %d, want 2", len(sources[0].Subtitles))
+	}
+	if got := sources[0].Subtitles[0].Language; got != "es" {
+		t.Errorf("first subtitle language = %q, want es", got)
+	}
+	if got := sources[0].Subtitles[1].Language; got != "en" {
+		t.Errorf("second subtitle language = %q, want en", got)
+	}
+}
+
+func TestResolveSourcePerSourceSubtitlesWithoutTopLevel(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := apiResolveResponse{
+			Sources: []apiSource{
+				{
+					URL:     "https://cdn.example.com/s1.m3u8",
+					Quality: "1080p (Dexter)",
+					Type:    "hls",
+					Subtitles: []apiSubtitle{
+						{URL: "https://sub.example.com/en.vtt", Language: "en"},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	pool := tmdb.NewKeyPool([]string{"dummy-key"})
+	c, err := NewClientWithURL(pool, ts.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURL failed: %v", err)
+	}
+
+	sources, err := c.ResolveSource(context.Background(), "550", provider.Episode{TMDBID: 550})
+	if err != nil {
+		t.Fatalf("ResolveSource failed: %v", err)
+	}
+	if len(sources) != 1 || len(sources[0].Subtitles) != 1 {
+		t.Fatalf("sources/subtitles = %+v, want one source with one subtitle", sources)
+	}
+	if got := sources[0].Subtitles[0].Language; got != "en" {
+		t.Errorf("subtitle language = %q, want en", got)
+	}
+}
+
 func TestSplitSourceQuality(t *testing.T) {
 	tests := []struct {
 		input string
@@ -186,5 +269,116 @@ func TestResolveStreamSSE(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected update on channel")
+	}
+}
+
+func TestResolveStreamMergesPerSourceAndStreamSubtitles(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected http.Flusher")
+		}
+
+		fmt.Fprint(w, "event: source\ndata: {\"url\":\"https://cdn.example.com/s1.m3u8\",\"quality\":\"1080p (Dexter)\",\"subtitles\":[{\"url\":\"https://sub.example.com/es.vtt\",\"language\":\"es\"}]}\n\n")
+		flusher.Flush()
+
+		fmt.Fprint(w, "event: subtitles\ndata: [{\"url\":\"https://sub.example.com/en.vtt\",\"language\":\"en\"}]\n\n")
+		flusher.Flush()
+
+		fmt.Fprint(w, "event: done\ndata: {\"ok\":true}\n\n")
+		flusher.Flush()
+	}))
+	defer ts.Close()
+
+	pool := tmdb.NewKeyPool([]string{"dummy-key"})
+	c, err := NewClientWithURL(pool, ts.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURL failed: %v", err)
+	}
+
+	updates := make(chan []provider.MediaSource, 4)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := c.ResolveStream(ctx, "550", provider.Episode{TMDBID: 550}, updates); err != nil {
+		t.Fatalf("ResolveStream failed: %v", err)
+	}
+
+	first := recvSources(t, updates)
+	if len(first) != 1 || len(first[0].Subtitles) != 1 {
+		t.Fatalf("first update = %+v, want one source with one subtitle", first)
+	}
+	if got := first[0].Subtitles[0].Language; got != "es" {
+		t.Errorf("first subtitle language = %q, want es", got)
+	}
+
+	second := recvSources(t, updates)
+	if len(second) != 1 || len(second[0].Subtitles) != 2 {
+		t.Fatalf("second update = %+v, want one source with two subtitles", second)
+	}
+	if got := second[0].Subtitles[1].Language; got != "en" {
+		t.Errorf("second subtitle language = %q, want en", got)
+	}
+}
+
+func TestResolveStreamKeepsStreamSubtitlesArrivingFirst(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected http.Flusher")
+		}
+
+		fmt.Fprint(w, "event: subtitles\ndata: [{\"url\":\"https://sub.example.com/en.vtt\",\"language\":\"en\"}]\n\n")
+		flusher.Flush()
+
+		fmt.Fprint(w, "event: source\ndata: {\"url\":\"https://cdn.example.com/s1.m3u8\",\"quality\":\"1080p (Dexter)\",\"subtitles\":[{\"url\":\"https://sub.example.com/es.vtt\",\"language\":\"es\"}]}\n\n")
+		flusher.Flush()
+
+		fmt.Fprint(w, "event: done\ndata: {\"ok\":true}\n\n")
+		flusher.Flush()
+	}))
+	defer ts.Close()
+
+	pool := tmdb.NewKeyPool([]string{"dummy-key"})
+	c, err := NewClientWithURL(pool, ts.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURL failed: %v", err)
+	}
+
+	updates := make(chan []provider.MediaSource, 4)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := c.ResolveStream(ctx, "550", provider.Episode{TMDBID: 550}, updates); err != nil {
+		t.Fatalf("ResolveStream failed: %v", err)
+	}
+
+	batch := recvSources(t, updates)
+	if len(batch) != 1 || len(batch[0].Subtitles) != 2 {
+		t.Fatalf("update = %+v, want one source with two subtitles", batch)
+	}
+	if got := batch[0].Subtitles[0].Language; got != "es" {
+		t.Errorf("first subtitle language = %q, want es", got)
+	}
+	if got := batch[0].Subtitles[1].Language; got != "en" {
+		t.Errorf("second subtitle language = %q, want en", got)
+	}
+}
+
+// recvSources reads one buffered update or fails the test instead of blocking
+// forever when a regression stops the expected emission.
+func recvSources(t *testing.T, updates <-chan []provider.MediaSource) []provider.MediaSource {
+	t.Helper()
+	select {
+	case batch, ok := <-updates:
+		if !ok {
+			t.Fatal("updates channel closed unexpectedly")
+		}
+		return batch
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for update")
+		return nil
 	}
 }

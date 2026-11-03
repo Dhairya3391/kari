@@ -241,13 +241,15 @@ func (c *Client) ResolveStream(
 			if err := json.Unmarshal([]byte(payload), &apiSubs); err != nil {
 				continue
 			}
-			currentSubs = append(currentSubs, toSubtitleOptions(apiSubs)...)
+			currentSubs = mergeSubtitleOptions(currentSubs, toSubtitleOptions(apiSubs))
 
 			if len(emitted) > 0 {
 				updated := make([]provider.MediaSource, len(emitted))
-				for i, src := range emitted {
-					src.Subtitles = currentSubs
-					updated[i] = src
+				for i := range emitted {
+					// Keep any per-source tracks and add the stream-level
+					// list, which may arrive before or after this source.
+					emitted[i].Subtitles = mergeSubtitleOptions(emitted[i].Subtitles, currentSubs)
+					updated[i] = emitted[i]
 				}
 				select {
 				case updates <- updated:
@@ -265,11 +267,15 @@ func (c *Client) ResolveStream(
 		case "error":
 			var errPayload struct {
 				Message string `json:"message"`
+				Error   string `json:"error"`
 			}
 			_ = json.Unmarshal([]byte(payload), &errPayload)
 			if delivered == 0 {
 				if errPayload.Message != "" {
 					return errors.New(errPayload.Message)
+				}
+				if errPayload.Error != "" {
+					return errors.New(errPayload.Error)
 				}
 				return provider.ErrNoSources
 			}
@@ -308,14 +314,21 @@ func (c *Client) fallbackStream(
 }
 
 type apiSource struct {
-	URL       string   `json:"url"`
-	Quality   string   `json:"quality"`
+	URL     string `json:"url"`
+	Quality string `json:"quality"`
+	// Backend and Source are legacy pre-1.1.0 fields. Current responses encode
+	// the backend in Quality as "1080p (Dexter)" instead; keep reading them so
+	// an older deployment still resolves with its lane names intact.
 	Backend   string   `json:"backend"`
 	Source    string   `json:"source"`
 	Type      string   `json:"type"`
 	Referer   string   `json:"referer"`
 	UserAgent string   `json:"userAgent"`
 	ExtraArgs []string `json:"extraArgs"`
+	// Subtitles are attached to each source by API 1.1.0+, letting a lane
+	// carry its own tracks. Older responses only list them at the top level,
+	// so callers pass those for merging as well.
+	Subtitles []apiSubtitle `json:"subtitles"`
 }
 
 type apiSubtitle struct {
@@ -329,7 +342,7 @@ type apiResolveResponse struct {
 	Error     string        `json:"error,omitempty"`
 }
 
-func toMediaSource(s apiSource, subs []provider.SubtitleOption) provider.MediaSource {
+func toMediaSource(s apiSource, fallbackSubs []provider.SubtitleOption) provider.MediaSource {
 	quality, backend := splitSourceQuality(s.Quality)
 	if strings.TrimSpace(s.Backend) != "" {
 		backend = strings.TrimSpace(s.Backend)
@@ -337,6 +350,10 @@ func toMediaSource(s apiSource, subs []provider.SubtitleOption) provider.MediaSo
 	if strings.TrimSpace(s.Source) != "" {
 		backend = strings.TrimSpace(s.Source)
 	}
+	// API 1.1.0+ attaches the subtitle list to every source. Merge it ahead of
+	// the response/stream-level list so a lane keeps its own tracks without
+	// losing tracks that only arrived at the broader level.
+	subs := mergeSubtitleOptions(toSubtitleOptions(s.Subtitles), fallbackSubs)
 	src := provider.MediaSource{
 		URL:       strings.TrimSpace(s.URL),
 		Quality:   quality,
@@ -407,6 +424,33 @@ func toSubtitleOptions(apiSubs []apiSubtitle) []provider.SubtitleOption {
 		})
 	}
 	return subs
+}
+
+// mergeSubtitleOptions appends incoming tracks to existing ones while
+// de-duplicating by URL and normalized language, preserving first-seen order.
+// The streaming endpoint delivers per-source tracks inside a source event and
+// a broader list in a separate subtitles event, in either order; both must
+// survive the merge.
+func mergeSubtitleOptions(existing, incoming []provider.SubtitleOption) []provider.SubtitleOption {
+	if len(incoming) == 0 {
+		return existing
+	}
+	if len(existing) == 0 {
+		return incoming
+	}
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	merged := make([]provider.SubtitleOption, 0, len(existing)+len(incoming))
+	for _, group := range [][]provider.SubtitleOption{existing, incoming} {
+		for _, sub := range group {
+			key := sub.URL + ":" + sub.Language
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, sub)
+		}
+	}
+	return merged
 }
 
 func parseEpisodeCoords(mediaID string, episode provider.Episode) (int, string, int, int, error) {
