@@ -283,6 +283,29 @@ func TestResolveLastFailures(t *testing.T) {
 	}
 }
 
+func TestResolveOnlyQueriesResolvableProviders(t *testing.T) {
+	pengu := &resolveStub{name: "pengu", mode: provider.ModeLive,
+		sources: []provider.MediaSource{{URL: "https://example.com/live.m3u8", Quality: "1080p"}}}
+	timstreams := &resolveStub{name: "timstreams", mode: provider.ModeLive,
+		sources: []provider.MediaSource{{URL: "https://example.com/other.m3u8", Quality: "1080p"}}}
+
+	svc := NewMediaService(newTestRegistry(pengu, timstreams))
+	series := provider.SearchResult{Title: "Match", ID: "pp-live:123", Provider: "pengu", Type: provider.ModeLive, MediaType: provider.MediaTypeLive}
+	resolved, err := svc.Resolve(context.Background(), provider.ModeLive, series, provider.Episode{ID: "pp-live:123"}, nil, ResolveOptions{})
+	if err != nil {
+		t.Fatalf("resolve error: %v", err)
+	}
+	if resolved.TotalResolvers != 1 {
+		t.Errorf("TotalResolvers = %d, want 1", resolved.TotalResolvers)
+	}
+	if len(resolved.CompletedResolvers) != 1 || resolved.CompletedResolvers[0] != "pengu" {
+		t.Errorf("CompletedResolvers = %v, want [pengu]", resolved.CompletedResolvers)
+	}
+	if len(resolved.Playback) != 1 || resolved.Playback[0].URL != "https://example.com/live.m3u8" {
+		t.Errorf("Playback = %+v, want only pengu source", resolved.Playback)
+	}
+}
+
 // TestFetchEpisodesFiltersAudio proves the sub/dub filter and the
 // unavailable-provider error.
 func TestFetchEpisodesUsesVerifiedAnimeAvailability(t *testing.T) {

@@ -801,6 +801,10 @@ func TestLiveFeaturesAndModes(t *testing.T) {
 	if f.SearchPlaceholder == "" {
 		t.Errorf("expected non-empty SearchPlaceholder for ModeLive")
 	}
+	dl := c.Deadlines(provider.ModeLive)
+	if dl.Source != 40*time.Second {
+		t.Errorf("expected Source deadline 40s for ModeLive, got %v", dl.Source)
+	}
 }
 
 func TestSearchLiveCatalog(t *testing.T) {
@@ -1032,5 +1036,15 @@ func TestCollapseMirrorsPrefersMP4OverDASH(t *testing.T) {
 	}
 	if sources[0].URL != "https://example.com/video.mp4" {
 		t.Errorf("URL = %q, want progressive mp4 over dash", sources[0].URL)
+	}
+}
+
+func TestIsAuthPromptWithHousekeeping(t *testing.T) {
+	items := []penguStreamItem{
+		{Name: "✨ | support the project!", Description: "pengu.uk/donate", ExternalURL: "https://pengu.uk/donate"},
+		{Name: "PenguPlay", Title: "You must sign in", URL: "https://pengu.uk/signin.mp4"},
+	}
+	if !isAuthPrompt(items) {
+		t.Error("isAuthPrompt must be true when auth prompt accompanies donation banner")
 	}
 }

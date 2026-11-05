@@ -144,6 +144,18 @@ func TestLiveClassificationIgnoresYear(t *testing.T) {
 			r:         provider.SearchResult{Title: "Match", StartsAt: tmrw},
 			wantGroup: liveGroupTomorrow,
 		},
+		{
+			name:       "recent start is live",
+			r:          provider.SearchResult{Title: "Match", StartsAt: now.Add(-1 * time.Hour)},
+			wantGroup:  liveGroupNow,
+			wantHeader: "Live now",
+		},
+		{
+			name:       "ended event beyond max live duration is later",
+			r:          provider.SearchResult{Title: "Match", StartsAt: now.Add(-24 * time.Hour)},
+			wantGroup:  liveGroupLater,
+			wantHeader: "Later",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

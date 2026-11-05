@@ -242,10 +242,10 @@ func (c *Client) Features(mode provider.ContentType) provider.Features {
 	return provider.Features{}
 }
 
-// Deadlines gives the anime aggregator more time for its slower upstream
+// Deadlines gives the anime and live aggregators more time for their slower upstream
 // scrapers while keeping other modes on the shared service budget.
 func (c *Client) Deadlines(mode provider.ContentType) provider.Deadlines {
-	if mode == provider.ModeAnime {
+	if mode == provider.ModeAnime || mode == provider.ModeLive {
 		return provider.Deadlines{Source: 40 * time.Second}
 	}
 	return provider.Deadlines{}
@@ -954,10 +954,10 @@ func liveResult(catalogID string, m penguCatalogMeta, title string, genres []str
 		res.Group = "Channel"
 		res.Live = true // 24/7 channels are always live
 	case "pp-live-now":
-		res.Live = true
+		res.Live = res.StartsAt.IsZero() || now.Sub(res.StartsAt) <= provider.LiveEventMaxDuration
 	default:
-		// Upcoming catalogs: an event whose start already passed is live.
-		res.Live = !res.StartsAt.IsZero() && !res.StartsAt.After(now)
+		// Upcoming catalogs: an event whose start passed within the max live duration is live.
+		res.Live = !res.StartsAt.IsZero() && !res.StartsAt.After(now) && now.Sub(res.StartsAt) <= provider.LiveEventMaxDuration
 	}
 	return res
 }
@@ -1043,12 +1043,25 @@ func isHousekeepingEntry(stream penguStreamItem) bool {
 		strings.Contains(combined, "pengu.uk/donate")
 }
 
-// isAuthPrompt checks if the response is Pengu's authentication requirement notice.
+// isAuthPrompt checks if the response is Pengu's authentication requirement notice,
+// ignoring donation or housekeeping banners that may accompany it.
 func isAuthPrompt(streams []penguStreamItem) bool {
-	if len(streams) != 1 {
-		return false
+	hasAuth := false
+	hasPlayable := false
+	for _, s := range streams {
+		if isHousekeepingEntry(s) {
+			continue
+		}
+		if isAuthStream(s) {
+			hasAuth = true
+		} else if strings.TrimSpace(s.URL) != "" {
+			hasPlayable = true
+		}
 	}
-	s := streams[0]
+	return hasAuth && !hasPlayable
+}
+
+func isAuthStream(s penguStreamItem) bool {
 	return strings.Contains(s.URL, "signin.mp4") ||
 		strings.Contains(strings.ToLower(s.Title), "sign in") ||
 		strings.Contains(strings.ToLower(s.Description), "authentication is missing")

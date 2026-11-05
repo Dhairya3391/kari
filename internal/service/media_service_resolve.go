@@ -29,6 +29,20 @@ type ResolveOptions struct {
 // reporting each aggregated snapshot through onResult as batches arrive.
 func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, series provider.SearchResult, episode provider.Episode, onResult func(model.ResolvedMedia), opts ResolveOptions) (model.ResolvedMedia, error) {
 	allRoutes := s.registry.PlanForMode(mode).Playback
+	// Filter to providers capable of resolving this specific title so
+	// provider-specific handles (e.g. live sports, non-TMDB items) do not
+	// spawn dead goroutines that falsely report completed or failed resolvers.
+	if series.ID != "" {
+		resolvable := make([]provider.Route, 0, len(allRoutes))
+		for _, route := range allRoutes {
+			if _, ok := series.ResolutionID(mode, route.Provider.Name()); ok {
+				resolvable = append(resolvable, route)
+			}
+		}
+		if len(resolvable) > 0 {
+			allRoutes = resolvable
+		}
+	}
 	if len(opts.Exclude) > 0 && len(opts.Exclude) < len(allRoutes) {
 		kept := allRoutes[:0]
 		for _, route := range allRoutes {

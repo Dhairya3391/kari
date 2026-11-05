@@ -65,12 +65,12 @@ func classifyLiveResultAt(r provider.SearchResult, now time.Time) (liveGroup, st
 	if r.Group == "Channel" {
 		return liveGroupChannels, "—"
 	}
-	if r.Live {
-		return liveGroupNow, "live"
-	}
 	if !r.StartsAt.IsZero() {
 		diff := r.StartsAt.Sub(now)
 		if diff <= 0 {
+			if now.Sub(r.StartsAt) > provider.LiveEventMaxDuration {
+				return liveGroupLater, "Ended"
+			}
 			return liveGroupNow, "live"
 		}
 		if sameLiveDate(r.StartsAt, now) {
@@ -81,6 +81,9 @@ func classifyLiveResultAt(r provider.SearchResult, now time.Time) (liveGroup, st
 			return liveGroupTomorrow, r.StartsAt.Format("15:04")
 		}
 		return liveGroupLater, r.StartsAt.Format("Mon 15:04")
+	}
+	if r.Live {
+		return liveGroupNow, "live"
 	}
 	return liveGroupLater, "—"
 }

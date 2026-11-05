@@ -274,7 +274,7 @@ func toSearchResult(item event, genres map[int]genre, isEvent bool) provider.Sea
 		group = "Channel"
 		live = true
 	}
-	if isEvent && !startsAt.IsZero() && !startsAt.After(time.Now()) {
+	if isEvent && !startsAt.IsZero() && !startsAt.After(time.Now()) && time.Since(startsAt) <= provider.LiveEventMaxDuration {
 		live = true
 	}
 	if item.Flag != "" {

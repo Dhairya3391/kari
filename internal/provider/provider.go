@@ -46,6 +46,10 @@ const (
 	MediaTypeLive    = "live"
 )
 
+// LiveEventMaxDuration is the duration after kickoff past which an event is
+// considered ended rather than ongoing when no explicit completion is signalled.
+const LiveEventMaxDuration = 4 * time.Hour
+
 // Audio-track vocabulary for Episode.Audio and the sub/dub selection feature.
 const (
 	AudioSub = "sub"

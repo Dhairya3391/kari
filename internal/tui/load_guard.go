@@ -114,20 +114,36 @@ func (m *modelImpl) mediaReady() bool {
 	return len(m.orderedPlaybackSources()) > 0
 }
 
-// enabledProvidersCount counts the number of enabled providers for mode.
+// enabledProvidersCount counts the number of enabled providers capable of resolving
+// the active title for mode.
 func (m *modelImpl) enabledProvidersCount(mode provider.ContentType) int {
 	if m.registry == nil {
 		return 0
 	}
 	all := m.registry.ProvidersForMode(mode)
+	if len(all) == 0 {
+		return 0
+	}
+	candidates := all
+	if m.selectedSeries != nil && m.selectedSeries.ID != "" {
+		resolvable := make([]provider.Provider, 0, len(all))
+		for _, p := range all {
+			if _, ok := m.selectedSeries.ResolutionID(mode, p.Name()); ok {
+				resolvable = append(resolvable, p)
+			}
+		}
+		if len(resolvable) > 0 {
+			candidates = resolvable
+		}
+	}
 	count := 0
-	for _, p := range all {
+	for _, p := range candidates {
 		if !m.isProviderDisabledKey(mode, p.Name()) {
 			count++
 		}
 	}
 	if count == 0 {
-		return len(all)
+		return len(candidates)
 	}
 	return count
 }

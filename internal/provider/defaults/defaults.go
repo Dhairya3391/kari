@@ -21,6 +21,7 @@ import (
 	"kari/internal/provider/movysx"
 	"kari/internal/provider/pengu"
 	"kari/internal/provider/solis"
+	"kari/internal/provider/stability"
 	"kari/internal/provider/timstreams"
 	"kari/internal/provider/vidrift"
 	"kari/internal/provider/vyla"
@@ -133,6 +134,12 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "famelack",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return famelack.NewClient()
+		},
+	},
+	{
+		ID: "stability",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return stability.NewClient()
 		},
 	},
 	{

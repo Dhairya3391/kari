@@ -140,6 +140,18 @@ const (
 	TimStreamsShortBase = "https://ehgembxe.cfd"
 )
 
+// Stability live sports and channels platform (https://stability.taxidev.me).
+const (
+	// StabilityBase is the Stability web application origin.
+	StabilityBase = "https://stability.taxidev.me"
+	// StabilityAPIBase is the API endpoint prefix for schedule, channels, and stream resolution.
+	StabilityAPIBase = StabilityBase + "/api"
+	// StabilityTaxiCDNBase is the primary CDN origin for Stability HLS stream playlists.
+	StabilityTaxiCDNBase = "https://taxi-dev.b-cdn.net"
+	// StabilityCloudCDNBase is the secondary CDN origin for Stability live master manifests.
+	StabilityCloudCDNBase = "https://cdn.taxicloud.dev"
+)
+
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var
 // replaces the whole list when set.
 var DefaultTMDBAPIKeys = []string{

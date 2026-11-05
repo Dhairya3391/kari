@@ -38,17 +38,23 @@ func liveResultGroup(result provider.SearchResult, now time.Time) int {
 	if result.Group == "Channel" {
 		return 4
 	}
-	if result.Live || (!result.StartsAt.IsZero() && !result.StartsAt.After(now)) {
-		return 0
-	}
-	if result.StartsAt.IsZero() {
+	if !result.StartsAt.IsZero() {
+		if !result.StartsAt.After(now) {
+			if now.Sub(result.StartsAt) <= provider.LiveEventMaxDuration {
+				return 0
+			}
+			return 3
+		}
+		if sameDate(result.StartsAt, now) {
+			return 1
+		}
+		if sameDate(result.StartsAt, now.AddDate(0, 0, 1)) {
+			return 2
+		}
 		return 3
 	}
-	if sameDate(result.StartsAt, now) {
-		return 1
-	}
-	if sameDate(result.StartsAt, now.AddDate(0, 0, 1)) {
-		return 2
+	if result.Live {
+		return 0
 	}
 	return 3
 }

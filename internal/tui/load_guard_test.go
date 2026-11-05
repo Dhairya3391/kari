@@ -351,6 +351,33 @@ func TestProviderWaitCountdown(t *testing.T) {
 	}
 }
 
+func TestProviderWaitCountdownFiltersByTitleResolvers(t *testing.T) {
+	m := guardTestModel()
+	m.registry.Register(&fakeProviderForSwitch{name: "pengu", modes: []provider.Mode{{Name: provider.ModeLive}}})
+	m.registry.Register(&fakeProviderForSwitch{name: "timstreams", modes: []provider.Mode{{Name: provider.ModeLive}}})
+	m.registry.Register(&fakeProviderForSwitch{name: "famelack", modes: []provider.Mode{{Name: provider.ModeLive}}})
+
+	series := provider.SearchResult{Title: "Match", ID: "pp-live:123", Provider: "pengu", Type: provider.ModeLive, MediaType: provider.MediaTypeLive}
+	m.selectedSeries = &series
+	m.beginProviderWait(provider.ModeLive)
+	if m.totalProviders != 1 || m.loadingProviders != 1 {
+		t.Fatalf("wait opened: total=%d loading=%d, want 1 for single-provider live entry", m.totalProviders, m.loadingProviders)
+	}
+}
+
+func TestProviderWaitCountdownAllDisabledFallback(t *testing.T) {
+	m := guardTestModel()
+	m.registry = &provider.Registry{}
+	m.registry.Register(&fakeProviderForSwitch{name: "p1", modes: []provider.Mode{{Name: provider.ModeMovies}}})
+	m.registry.Register(&fakeProviderForSwitch{name: "p2", modes: []provider.Mode{{Name: provider.ModeMovies}}})
+	m.disabledProviders = map[string]bool{"p1": true, "p2": true}
+
+	m.beginProviderWait(provider.ModeMovies)
+	if m.totalProviders != 2 {
+		t.Fatalf("all providers disabled: totalProviders = %d, want 2 (fallback to all)", m.totalProviders)
+	}
+}
+
 // Space from the results list refocuses search AND restarts the cursor
 // blink — without the blink cmd a refocused input looks dead.
 func TestSpaceRefocusRestartsBlink(t *testing.T) {
