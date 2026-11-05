@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +16,8 @@ import (
 	"kari/internal/provider"
 )
 
-func newTestCalendarModel() *modelImpl {
+func newTestCalendarModel(t *testing.T) *modelImpl {
+	t.Helper()
 	ti := textinput.New()
 	ti.Blur()
 
@@ -61,8 +63,12 @@ func newTestCalendarModel() *modelImpl {
 		},
 	}
 
-	histPath := filepathJoin(tTempDir(), "history.json")
-	store, _ := history.NewStore(histPath)
+	histPath := filepath.Join(t.TempDir(), "history.json")
+	store, err := history.NewStore(histPath)
+	if err != nil {
+		t.Fatalf("history.NewStore failed: %v", err)
+	}
+	t.Cleanup(store.Close)
 	_ = store.Upsert(history.Entry{
 		Key: history.EntryKey{
 			Title:     "Sousou no Frieren",
@@ -90,19 +96,9 @@ func newTestCalendarModel() *modelImpl {
 	return m
 }
 
-func filepathJoin(elem ...string) string {
-	return strings.Join(elem, "/")
-}
-
-var tempDirCounter int
-
-func tTempDir() string {
-	tempDirCounter++
-	return "/tmp/kari-test-" + time.Now().Format("20060102150405")
-}
 
 func TestRenderCalendarScreen(t *testing.T) {
-	m := newTestCalendarModel()
+	m := newTestCalendarModel(t)
 	accent := lipgloss.AdaptiveColor{Light: "#7AA2F7", Dark: "#7AA2F7"}
 	data := m.collectCalendarData(120, 30, accent)
 
@@ -122,7 +118,7 @@ func TestRenderCalendarScreen(t *testing.T) {
 }
 
 func TestCalendar_Navigation(t *testing.T) {
-	m := newTestCalendarModel()
+	m := newTestCalendarModel(t)
 
 	// 1. Open Calendar
 	cmd := m.openCalendar()
@@ -183,7 +179,7 @@ func TestCalendar_Navigation(t *testing.T) {
 }
 
 func TestCalendar_GlobalKeyToggle(t *testing.T) {
-	m := newTestCalendarModel()
+	m := newTestCalendarModel(t)
 	m.activeView = viewSearch
 
 	// Pressing 'c' on search view opens calendar
@@ -200,7 +196,7 @@ func TestCalendar_GlobalKeyToggle(t *testing.T) {
 	}
 }
 func TestCalendar_EnterResumesWatchedShow(t *testing.T) {
-	m := newTestCalendarModel()
+	m := newTestCalendarModel(t)
 	m.activeView = viewCalendar
 	m.calendarReleaseIndex = 0 // Frieren (watched up to ep 5, airing 8)
 
@@ -220,7 +216,7 @@ func TestCalendar_EnterResumesWatchedShow(t *testing.T) {
 }
 
 func TestCalendar_EscapeFilterBehavior(t *testing.T) {
-	m := newTestCalendarModel()
+	m := newTestCalendarModel(t)
 	m.pushView(viewCalendar)
 	m.calendarFiltering = true
 	m.calendarQuery = "frieren"

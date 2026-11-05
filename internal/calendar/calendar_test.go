@@ -39,6 +39,7 @@ func TestCrossReference_Anime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore failed: %v", err)
 	}
+	t.Cleanup(store.Close)
 
 	// 1. Frieren: user watched up to ep 5 complete
 	for ep := 1; ep <= 5; ep++ {
@@ -193,6 +194,7 @@ func TestCrossReference_Series(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore failed: %v", err)
 	}
+	t.Cleanup(store.Close)
 
 	// Severance S01 complete
 	for ep := 1; ep <= 9; ep++ {
@@ -422,6 +424,9 @@ func TestClient_FetchSeriesWeek_TMDBFallback(t *testing.T) {
 }
 
 func TestLiveSmoke(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping live test in short mode")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
