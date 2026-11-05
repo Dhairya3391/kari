@@ -417,6 +417,8 @@ func (m *modelImpl) activeCrumbsForView(v viewState) []string {
 		return []string{"kari", "settings"}
 	case viewDownloads:
 		return []string{"kari", "downloads"}
+	case viewCalendar:
+		return []string{"kari", "calendar"}
 	default:
 		return []string{"kari"}
 	}
@@ -452,6 +454,7 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			{Key: "h", Action: "history"},
 			{Key: "d", Action: "downloads"},
 			{Key: "s", Action: "settings"},
+			{Key: "c", Action: "calendar"},
 			{Key: "?", Action: "help"},
 			{Key: "q", Action: "quit"},
 		}
@@ -583,6 +586,15 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			KeyBinding{Key: "esc", Action: "back"},
 		)
 		return bindings
+	case viewCalendar:
+		return []KeyBinding{
+			{Key: "enter", Action: "resume/search"},
+			{Key: "←/→", Action: "day"},
+			{Key: "tab", Action: "filter"},
+			{Key: "/", Action: "filter title"},
+			{Key: "r", Action: "refresh"},
+			{Key: "esc", Action: "back"},
+		}
 	default:
 		return []KeyBinding{
 			{Key: "esc", Action: "back"},
@@ -642,6 +654,8 @@ func (m *modelImpl) renderScreenBody(dims Dims, accent lipgloss.AdaptiveColor) s
 
 	case viewDownloads:
 		return RenderDownloadsScreen(m.collectDownloadsData(dims.ContentWidth, dims.BodyHeight, accent))
+	case viewCalendar:
+		return RenderCalendarScreen(m.collectCalendarData(dims.ContentWidth, dims.BodyHeight, accent))
 
 	default:
 		return ""
@@ -672,6 +686,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 				{Key: "h", Action: "history"},
 				{Key: "d", Action: "downloads"},
 				{Key: "s", Action: "settings"},
+				{Key: "c", Action: "calendar"},
 			}
 		}
 	case viewEpisodes:
@@ -775,6 +790,18 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 			{Key: "pgup / pgdn", Action: "page up / down"},
 			{Key: "ctrl+u / ctrl+d", Action: "half page scroll"},
 		}
+	case viewCalendar:
+		screenName = "Calendar"
+		contextKeys = []KeyBinding{
+			{Key: "enter", Action: "resume unviewed or search show"},
+			{Key: "← / → / h / l", Action: "switch day (Mon..Sun)"},
+			{Key: "↑ / ↓ / k / j", Action: "select scheduled release"},
+			{Key: "tab / ⇧tab", Action: "cycle filter (All/Anime/Series/Watching)"},
+			{Key: "1 / 2 / 3 / 4", Action: "jump to filter mode"},
+			{Key: "/", Action: "filter releases by title"},
+			{Key: "r", Action: "refresh latest schedule"},
+			{Key: "esc", Action: "back"},
+		}
 	}
 
 	globalKeys := []KeyBinding{
@@ -783,6 +810,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 		{Key: "h", Action: "history"},
 		{Key: "s", Action: "settings"},
 		{Key: "d", Action: "downloads"},
+		{Key: "c", Action: "calendar"},
 		{Key: "ctrl+c", Action: "force quit"},
 		{Key: "q", Action: "quit (2× if downloading)"},
 	}

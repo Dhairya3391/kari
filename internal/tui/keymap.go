@@ -24,6 +24,7 @@ type keyMap struct {
 	Restart           key.Binding
 	History           key.Binding
 	Settings          key.Binding
+	Calendar          key.Binding
 	Delete            key.Binding
 	ClearHistory      key.Binding
 	ToggleSelect      key.Binding
@@ -117,6 +118,10 @@ func defaultKeyMap() keyMap {
 		Settings: key.NewBinding(
 			key.WithKeys("s", "S"),
 			key.WithHelp("s", "settings"),
+		),
+		Calendar: key.NewBinding(
+			key.WithKeys("c", "C"),
+			key.WithHelp("c", "calendar"),
 		),
 		Delete: key.NewBinding(
 			key.WithKeys("d", "delete", "backspace"),

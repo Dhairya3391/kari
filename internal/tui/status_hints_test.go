@@ -156,7 +156,7 @@ func TestNewModel_StderrSuppressedStatus(t *testing.T) {
 
 	reg := &provider.Registry{}
 	players := player.NewRegistry("", player.SkipClients{}, player.SkipSettings{})
-	mdl := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0", "")
+	mdl := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0", "")
 	m, ok := mdl.(*modelImpl)
 	if !ok {
 		t.Fatal("expected *modelImpl")

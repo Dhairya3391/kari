@@ -25,6 +25,8 @@ func (m *modelImpl) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateSettings(msg)
 	case viewDownloads:
 		return m.updateDownloads(msg)
+	case viewCalendar:
+		return m.updateCalendar(msg)
 	default:
 		return m, nil
 	}

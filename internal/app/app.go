@@ -11,6 +11,7 @@ import (
 
 	"kari/internal/animeskip"
 	"kari/internal/aniskip"
+	"kari/internal/calendar"
 	"kari/internal/config"
 	"kari/internal/downloader"
 	"kari/internal/history"
@@ -201,6 +202,7 @@ func Run() error {
 	traktClient := scrobble.NewTraktClient(cfg.TraktClientID, cfg.TraktClientSecret)
 	anilistClient := scrobble.NewAniListClient(cfg.AniListClientID, cfg.AniListClientSecret)
 	posterClient := poster.NewClient(keyPool)
+	calendarClient := calendar.NewClient(keyPool)
 
 	// Discord Rich Presence is opt-in and entirely best-effort: the client
 	// is idle until the TUI publishes a now-playing card, and reports live
@@ -230,7 +232,7 @@ func Run() error {
 	}
 
 	bg := detectTerminalBackground()
-	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, mangaService, mangaClient, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, presenceClient, Version, Commit)
+	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, mangaService, mangaClient, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, presenceClient, calendarClient, Version, Commit)
 	if setter, ok := m.(interface{ SetBaseBackgroundColor(color.RGBA) }); ok {
 		setter.SetBaseBackgroundColor(bg)
 	}

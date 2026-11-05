@@ -81,7 +81,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 	// While a / filter is being typed, single-rune keys belong to the
 	// filter query, not to global bindings — typing "q" must not quit,
 	// "h" must not open history, "s" must not open settings.
-	if m.resultsFiltering || m.episodeFiltering || m.historyFiltering {
+	if m.resultsFiltering || m.episodeFiltering || m.historyFiltering || m.calendarFiltering {
 		if len(msg.String()) == 1 {
 			return nil, false
 		}
@@ -155,9 +155,19 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			}
 			m.pushView(viewSettings)
 			return nil, true
-		case viewEpisodes, viewPreview, viewDownloads, viewChapters:
+		case viewEpisodes, viewPreview, viewDownloads, viewChapters, viewCalendar:
 			m.pushView(viewSettings)
 			return nil, true
+		}
+	case key.Matches(msg, m.keys.Calendar):
+		switch m.activeView {
+		case viewSearch:
+			if m.queryInput.Focused() || m.seriesList.SettingFilter() {
+				return nil, false
+			}
+			return m.openCalendar(), true
+		case viewEpisodes, viewPreview, viewDownloads, viewSettings, viewChapters, viewHistory:
+			return m.openCalendar(), true
 		}
 	case key.Matches(msg, m.keys.Stop):
 		if m.queryInput.Focused() {

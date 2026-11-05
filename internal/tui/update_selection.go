@@ -410,6 +410,18 @@ func (m *modelImpl) clearActiveFilter() bool {
 			m.clearStatus()
 			return true
 		}
+	case viewCalendar:
+		if m.calendarFiltering {
+			m.calendarFiltering = false
+			m.clearStatus()
+			return true
+		}
+		if strings.TrimSpace(m.calendarQuery) != "" {
+			m.calendarQuery = ""
+			m.calendarReleaseIndex = 0
+			m.clearStatus()
+			return true
+		}
 	}
 	return false
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/calendar"
 	"kari/internal/history"
 	"kari/internal/manga"
 	"kari/internal/model"
@@ -62,7 +63,8 @@ const (
 	// the manga equivalent of the episodes screen and its preview page.
 	viewChapters viewState = "chapters"
 	// viewReader is the fullscreen black-background page viewer.
-	viewReader viewState = "reader"
+	viewReader   viewState = "reader"
+	viewCalendar viewState = "calendar"
 )
 
 type statusLevel string
@@ -121,6 +123,11 @@ type historyContinueEpisodesMsg struct {
 	results []provider.Episode
 	opID    int
 	err     error
+}
+type calendarLoadedMsg struct {
+	schedule calendar.WeeklySchedule
+	opID     int
+	err      error
 }
 
 // historyResolveSeriesMsg carries the result of re-searching currently
@@ -313,6 +320,7 @@ type modelImpl struct {
 	historyStore    *history.Store
 	traktClient     *scrobble.TraktClient
 	anilistClient   *scrobble.AniListClient
+	calendarClient  *calendar.Client
 	registry        *provider.Registry
 	players         *player.Registry
 	appCtx          context.Context
@@ -339,6 +347,15 @@ type modelImpl struct {
 	historyDroppingTerminalResponse bool
 	spinner                         spinner.Model
 	downloadBar                     progress.Model
+	calendarSchedule                calendar.WeeklySchedule
+	calendarDayIndex                int
+	calendarReleaseIndex            int
+	calendarScrollOffset            int
+	calendarFilter                  calendar.FilterMode
+	calendarQuery                   string
+	calendarFiltering               bool
+	calendarLoaded                  bool
+	calendarOpID                    int
 
 	keys keyMap
 

@@ -47,6 +47,8 @@ func (m *modelImpl) scrollInputActive() bool {
 		return m.hasCurrentEpisodeProjection()
 	case viewChapters, viewReader, viewHistory, viewDownloads, viewPreview:
 		return true
+	case viewCalendar:
+		return !m.calendarFiltering
 	case viewSettings:
 		return m.audioPickerOpen || !m.authInput.Focused()
 	default:

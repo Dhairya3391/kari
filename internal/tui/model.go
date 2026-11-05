@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"kari/internal/calendar"
 	"kari/internal/history"
 	"kari/internal/lang"
 	"kari/internal/logging"
@@ -36,7 +37,7 @@ var tuiLog = logging.With("component", "tui")
 // NewModel wires every dependency into the TUI root model. This signature
 // is intentionally explicit: all components arrive pre-constructed from
 // app.Run, so nothing inside tui constructs I/O collaborators.
-func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, mangaService *service.MangaService, mangaClient *manga.Client, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, presenceClient *presence.Client, appVersion string, appCommit string) tea.Model {
+func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, mangaService *service.MangaService, mangaClient *manga.Client, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, presenceClient *presence.Client, calendarClient *calendar.Client, appVersion string, appCommit string) tea.Model {
 	// Loaded up front (rather than where settings used to be applied,
 	// further down) so the accent color is in effect before any of the
 	// list delegates or the download bar below are built — those cache
@@ -186,6 +187,8 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		traktClient:     traktClient,
 		anilistClient:   anilistClient,
 		appCtx:          ctx,
+		calendarClient:  calendarClient,
+		calendarFilter:  calendar.FilterAll,
 		appVersion:      appVersion,
 		appCommit:       appCommit,
 		activeView:      viewSearch,
@@ -493,6 +496,9 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return mdl, tea.Batch(spinnerCmd, cmd)
 	case authDoneMsg:
 		mdl, cmd := m.onAuthDone(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case calendarLoadedMsg:
+		mdl, cmd := m.onCalendarLoaded(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)
 	case historyContinueEpisodesMsg:
 		mdl, cmd := m.onHistoryContinueEpisodes(msg)
