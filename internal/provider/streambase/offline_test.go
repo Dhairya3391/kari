@@ -236,6 +236,67 @@ func TestSearchTMDBFallbackWhenNoobsearchDown(t *testing.T) {
 	}
 }
 
+// TestSearchTMDBFallbackWithExpiredContext proves the TMDB fallback still
+// runs when the failed index attempt already consumed the caller's context
+// deadline (the noobsearch outage shape): the fallback must start from a
+// fresh budget instead of inheriting the exhausted context.
+func TestSearchTMDBFallbackWithExpiredContext(t *testing.T) {
+	fake := &hostFake{t: t, routes: map[string]func() (int, string){
+		"noobsearch.broggl.farm/tv": func() (int, string) {
+			return 502, `Bad Gateway`
+		},
+		"api.themoviedb.org/3/search/multi": func() (int, string) {
+			return 200, `{"page":1,"total_pages":1,"total_results":1,"results":[
+				{"id":1622,"name":"Supernatural","media_type":"tv","first_air_date":"2005-09-13","genre_ids":[18]}
+			]}`
+		},
+	}}
+	hc := &http.Client{Transport: fake}
+	b, err := newForTest(tmdb.NewKeyPool([]string{"k"}),
+		hc, NewClientWithHTTPClient(&http.Client{Transport: fake}))
+	if err != nil {
+		t.Fatalf("newForTest: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate the context deadline having fired during the index attempt
+
+	results, err := b.Search(ctx, "supernatural", provider.ModeTV)
+	if err != nil {
+		t.Fatalf("fallback with expired context failed: %v", err)
+	}
+	if len(results) != 1 || results[0].Title != "Supernatural" || results[0].TMDBID != 1622 {
+		t.Errorf("expected 1 fallback result for Supernatural, got: %+v", results)
+	}
+}
+
+// TestSearchTMDBFallbackErrorSurfaces proves the fallback failure is the
+// error that reaches the caller, not the stale index error.
+func TestSearchTMDBFallbackErrorSurfaces(t *testing.T) {
+	fake := &hostFake{t: t, routes: map[string]func() (int, string){
+		"noobsearch.broggl.farm/tv": func() (int, string) {
+			return 502, `Bad Gateway`
+		},
+		"api.themoviedb.org/3/search/multi": func() (int, string) {
+			return 500, `boom`
+		},
+	}}
+	hc := &http.Client{Transport: fake}
+	b, err := newForTest(tmdb.NewKeyPool([]string{"k"}),
+		hc, NewClientWithHTTPClient(&http.Client{Transport: fake}))
+	if err != nil {
+		t.Fatalf("newForTest: %v", err)
+	}
+
+	results, err := b.Search(context.Background(), "supernatural", provider.ModeTV)
+	if err == nil {
+		t.Fatalf("expected fallback failure to surface, got results: %+v", results)
+	}
+	if got := err.Error(); !strings.Contains(got, "500") {
+		t.Errorf("err = %v, want the TMDB fallback failure to surface", err)
+	}
+}
+
 func TestFetchEpisodesTVAppendedSeasonsBatch(t *testing.T) {
 	fake := &hostFake{t: t, routes: map[string]func() (int, string){
 		"api.themoviedb.org/3/tv/1622": func() (int, string) {

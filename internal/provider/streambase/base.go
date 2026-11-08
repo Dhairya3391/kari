@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -62,10 +63,16 @@ func newForTest(keyPool *tmdb.KeyPool, hc *http.Client, searcher *Client) (*Base
 // across both movie and TV classifications.
 const tmdbAnimationGenreID = 16
 
+// fallbackSearchTimeout bounds one direct-TMDB fallback attempt. It starts
+// from a fresh context so a fallback can run even when the failed index
+// attempt already consumed the caller's context deadline.
+const fallbackSearchTimeout = 10 * time.Second
+
 // Search resolves titles to TMDB ids. For ModeCartoon, it queries TMDB
 // multi-search directly and filters exclusively for animation titles (genre
 // ID 16). For movies/TV, it queries the meilisearch index and normalizes
-// media types.
+// media types, falling back to a direct TMDB multi-search when the index is
+// unreachable.
 func (b *Base) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	logging.Debug("stream search start", "mode", mode, "query", query)
 	if mode == provider.ModeCartoon {
@@ -88,13 +95,22 @@ func (b *Base) Search(ctx context.Context, query string, mode provider.ContentTy
 			return nil, err
 		}
 		logging.Debug("stream search index failed, falling back to direct TMDB search", "mode", mode, "query", query, "err", err)
-		fallbackResults, fallbackErr := b.searchTMDB(ctx, query, mode)
-		if fallbackErr == nil && len(fallbackResults) > 0 {
+		// The failed index attempt may have already burned the caller's
+		// context deadline, which would doom the fallback immediately. Start
+		// from a fresh budget that keeps the values but not the stale
+		// deadline.
+		fallbackCtx, fallbackCancel := context.WithTimeout(context.WithoutCancel(ctx), fallbackSearchTimeout)
+		defer fallbackCancel()
+		fallbackResults, fallbackErr := b.searchTMDB(fallbackCtx, query, mode)
+		if fallbackErr != nil {
+			logging.Debug("stream search fallback to TMDB failed", "mode", mode, "query", query, "err", fallbackErr)
+			return nil, fmt.Errorf("streambase search: %w", fallbackErr)
+		}
+		if len(fallbackResults) > 0 {
 			logging.Debug("stream search fallback to TMDB succeeded", "mode", mode, "query", query, "results", len(fallbackResults))
 			return fallbackResults, nil
 		}
-		logging.Debug("stream search failed", "mode", mode, "query", query, "err", err)
-		return nil, fmt.Errorf("streambase search: %w", err)
+		return nil, provider.ErrNoResults
 	}
 
 	// Normalize the media type to the selected mode — meilisearch results
