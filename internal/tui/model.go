@@ -296,7 +296,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		model.skipRecap = s.SkipRecap
 		model.skipPreview = s.SkipPreview
 		if s.DefaultAnimeAudio != "" {
-			model.audioMode = s.DefaultAnimeAudio
+			model.audioMode = normalizeAudioMode(s.DefaultAnimeAudio)
 		}
 		if s.PreferredPlayer != "" {
 			for i, p := range model.availablePlayers {

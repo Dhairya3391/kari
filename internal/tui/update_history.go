@@ -329,7 +329,7 @@ func (m *modelImpl) resumeHistoryEntry(entry history.Entry) (tea.Model, tea.Cmd)
 	}
 	m.appMode = modeForHistoryEntry(entry)
 	if entry.AudioMode != "" {
-		m.audioMode = entry.AudioMode
+		m.audioMode = normalizeAudioMode(entry.AudioMode)
 	} else if m.modeFeatures().AudioSelection {
 		m.audioMode = provider.AudioSub
 	}

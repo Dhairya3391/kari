@@ -44,11 +44,11 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 			Title: m.selectedSeries.Title,
 			ID:    m.selectedSeries.ID,
 		}
-		// Direct-resolve skips the episode list, but anime providers still
-		// need the picked sub/dub track: search-result IDs alone do not say
-		// which audio lane to open.
-		if m.appMode == provider.ModeAnime {
-			m.selectedEpisode.Audio = m.audioMode
+		// Direct-resolve skips the episode list, but audio-selecting
+		// providers still need the picked sub/dub track: search-result IDs
+		// alone do not say which audio lane to open.
+		if m.audioMode != "" && m.modeFeatures().AudioSelection {
+			m.selectedEpisode.Audio = normalizeAudioMode(m.audioMode)
 		}
 		m.loadingText = "Preparing playback..."
 		m.resolved = nil
@@ -192,6 +192,14 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	}
 	m.selectedEpisode = &m.episodeResults[idx]
 	m.episodeIndex = idx
+	// The listing keeps the audio lane it was fetched with, and an `a`
+	// toggle on Preview only re-resolves the current episode's streams.
+	// Stamp the live preference on every handle we resolve so "next
+	// episode" keeps playing the track the user picked, not the one the
+	// listing was loaded under.
+	if m.audioMode != "" && m.modeFeatures().AudioSelection {
+		m.selectedEpisode.Audio = normalizeAudioMode(m.audioMode)
+	}
 	if idx >= 0 && idx < len(m.episodeList.Items()) {
 		m.episodeList.Select(idx)
 	}

@@ -42,7 +42,7 @@ All keybindings are active inside the Kari TUI. Context-sensitive keys are avail
 | `[` | Switch to previous season (multi-season TV & Anime) |
 | `]` | Switch to next season |
 | `Enter` | Select episode / resolve streams |
-| `a` | Toggle Sub / Dub audio track (Anime mode) |
+| `a` | Toggle Sub / Dub audio track (Anime mode; kept for following episodes) |
 | `m` | Toggle episode marked as watched / unwatched |
 | `t` | Show anime airing status and episode count overlay |
 | `Space` | Toggle multi-select checkbox for batch download |
@@ -61,7 +61,7 @@ All keybindings are active inside the Kari TUI. Context-sensitive keys are avail
 | `j` / `k` or `↓` / `↑` | Move cursor between available stream resolutions and mirrors |
 | `r` | Restart episode from 00:00 (discards saved resume timestamp) |
 | `R` | Retry failed provider stream resolution |
-| `a` | Toggle Sub / Dub audio mode |
+| `a` | Toggle Sub / Dub audio mode (kept for following episodes) |
 | `A` | Toggle auto-play next episode on/off |
 | `n` | Play next episode |
 | `m` | Mark current episode as watched |

@@ -551,7 +551,7 @@ func (m *modelImpl) saveSettings() {
 
 	audioMode := m.audioMode
 	if audioMode == "" {
-		audioMode = "sub"
+		audioMode = provider.AudioSub
 	}
 
 	skipProvider := m.skipProvider

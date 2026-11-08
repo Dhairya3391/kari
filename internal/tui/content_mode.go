@@ -6,6 +6,17 @@ import (
 	"kari/internal/provider"
 )
 
+// normalizeAudioMode canonicalizes an anime sub/dub preference so values
+// coming from saved settings, history entries, or hand-edited files match
+// the vocabulary providers read from Episode.Audio. Anything that is not an
+// explicit dub falls back to sub, the same default the resolvers apply.
+func normalizeAudioMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), provider.AudioDub) {
+		return provider.AudioDub
+	}
+	return provider.AudioSub
+}
+
 func resultTypeLabel(item provider.SearchResult) string {
 	switch strings.ToLower(strings.TrimSpace(item.MediaType)) {
 	case provider.MediaTypeMovie:

@@ -237,7 +237,7 @@ func (m *modelImpl) toggleAnimeAudio() (tea.Model, tea.Cmd) {
 	// the fresh resolve into stale Playback would leave the old audio's
 	// rows in the list.
 	if m.activeView == viewPreview && m.selectedEpisode != nil {
-		m.selectedEpisode.Audio = m.audioMode
+		m.selectedEpisode.Audio = normalizeAudioMode(m.audioMode)
 		m.loading = true
 		m.loadingText = "Reloading streams (" + m.audioMode + ")..."
 		m.resolved = nil

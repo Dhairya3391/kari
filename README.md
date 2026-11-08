@@ -53,7 +53,7 @@ Type a query, press `Space`, pick a result, press `Enter` to play. `Tab` switche
 | **Skip** | Auto-skip intros, outros and recaps, with seekbar chapter markers (mpv) |
 | **Scrobbling** | AniList (anime), Trakt (movies/TV) |
 | **Manga reader** | In-terminal, Kitty / iTerm2 / Sixel / Unicode block graphics |
-| **Sub / Dub** | Toggle per title with `a`, subtitles side-loaded automatically |
+| **Sub / Dub** | Toggle with `a`; the track sticks for following episodes, subtitles side-loaded automatically |
 | **Downloads** | Single or batch via yt-dlp, 16-connection with aria2 |
 | **Discord presence** | Optional, local only |
 | **Self-update** | `kari -u` |

@@ -2,12 +2,14 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
 
 	"kari/internal/config"
+	"kari/internal/history"
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/provider"
@@ -174,6 +176,264 @@ func TestToggleAnimeAudioDoesNotAppendOldSources(t *testing.T) {
 	}
 	if m2.resolved.Playback[0].URL != subSource.URL {
 		t.Errorf("expected only sub source, got %+v", m2.resolved.Playback[0])
+	}
+}
+
+// audioProviderFake declares episode-level sub/dub selection for anime,
+// mirroring the real providers that implement it.
+type audioProviderFake struct {
+	fakeProviderForSwitch
+}
+
+func (f *audioProviderFake) Features(mode provider.ContentType) provider.Features {
+	if mode == provider.ModeAnime {
+		return provider.Features{AudioSelection: true}
+	}
+	return provider.Features{}
+}
+
+// After 'a' switches tracks on Preview, 'n' must resolve the next episode
+// on the picked track instead of the lane the listing was fetched with.
+func TestNextEpisodeKeepsToggledAudioTrack(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := unavailableTestModel()
+	m.registry.Register(&audioProviderFake{
+		fakeProviderForSwitch: fakeProviderForSwitch{name: "p", modes: []provider.Mode{{Name: provider.ModeAnime}}},
+	})
+	m.audioMode = provider.AudioSub
+	// The listing was fetched in sub, so every handle carries the sub lane.
+	for i := range m.episodeResults {
+		m.episodeResults[i].Audio = provider.AudioSub
+	}
+	m.episodeIndex = 0
+	m.selectedEpisode = &m.episodeResults[0]
+
+	mdl, _ := m.toggleAnimeAudio()
+	m = mdl.(*modelImpl)
+	if !stringsEqualFold(m.audioMode, provider.AudioDub) {
+		t.Fatalf("audioMode = %q, want dub after toggle", m.audioMode)
+	}
+
+	// The in-place track switch settles before the user moves on.
+	m.resolveOpID = 0
+	m.loading = false
+
+	mdl, _ = m.playNextEpisode()
+	m = mdl.(*modelImpl)
+	if m.selectedEpisode == nil || m.selectedEpisode.Episode != 1179 {
+		t.Fatalf("selectedEpisode = %+v, want episode 1179", m.selectedEpisode)
+	}
+	if !stringsEqualFold(m.selectedEpisode.Audio, provider.AudioDub) {
+		t.Errorf("next episode audio = %q, want dub", m.selectedEpisode.Audio)
+	}
+}
+
+// When the toggled track is genuinely missing for a later episode, the app
+// reports a clear miss instead of silently playing the other lane.
+func TestNextEpisodeAudioUnavailableShowsHint(t *testing.T) {
+	m := unavailableTestModel()
+	m.registry.Register(&audioProviderFake{
+		fakeProviderForSwitch: fakeProviderForSwitch{name: "p", modes: []provider.Mode{{Name: provider.ModeAnime}}},
+	})
+	m.audioMode = provider.AudioDub
+	for i := range m.episodeResults {
+		m.episodeResults[i].Audio = provider.AudioDub
+	}
+	m.episodeIndex = 0
+	m.selectedEpisode = &m.episodeResults[0]
+
+	mdl, _ := m.startEpisodeResolution(1, false)
+	m = mdl.(*modelImpl)
+	mdl, _ = m.onResolveDone(resolveDoneMsg{
+		opID: m.resolveOpID,
+		err:  fmt.Errorf("all providers failed: %w", provider.ErrAudioUnavailable),
+	})
+	m = mdl.(*modelImpl)
+
+	if m.loading || m.loadingText != "" {
+		t.Errorf("loading = %v %q, want settled", m.loading, m.loadingText)
+	}
+	if len(m.episodeResults) != 2 {
+		t.Errorf("episodes = %d, want both rows retained", len(m.episodeResults))
+	}
+	if m.selectedEpisode == nil || m.selectedEpisode.Episode != 1179 {
+		t.Fatalf("selectedEpisode = %+v, want episode 1179", m.selectedEpisode)
+	}
+	if m.statusType != statusWarn || !strings.Contains(m.statusText, "press a") {
+		t.Errorf("status = %q/%q, want a warn with the track-switch hint", m.statusType, m.statusText)
+	}
+}
+
+// Direct-resolve (movies that skip the episode list) stamps the current
+// sub/dub track only when the mode's providers actually support audio
+// selection, never as a hardcoded anime check.
+func TestSelectSeriesStampsAudioOnlyWithAudioSelection(t *testing.T) {
+	newModel := func(p provider.Provider) *modelImpl {
+		m := rankingTestModel()
+		m.appMode = provider.ModeAnime
+		m.audioMode = provider.AudioDub
+		m.registry.Register(p)
+		m.seriesResults = []provider.SearchResult{{
+			Title:     "A Silent Voice",
+			ID:        "28851",
+			MediaType: provider.MediaTypeMovie,
+			Type:      provider.ModeAnime,
+		}}
+		m.seriesList = list.New(nil, list.NewDefaultDelegate(), 80, 20)
+		return m
+	}
+
+	supported := newModel(&audioProviderFake{
+		fakeProviderForSwitch: fakeProviderForSwitch{name: "p", modes: []provider.Mode{{Name: provider.ModeAnime}}},
+	})
+	mdl, _ := supported.selectSeries(0)
+	supported = mdl.(*modelImpl)
+	if supported.selectedEpisode == nil {
+		t.Fatal("direct resolve must select an episode handle")
+	}
+	if !stringsEqualFold(supported.selectedEpisode.Audio, provider.AudioDub) {
+		t.Errorf("episode audio = %q, want dub", supported.selectedEpisode.Audio)
+	}
+
+	unsupported := newModel(&fakeProviderForSwitch{name: "plain", modes: []provider.Mode{{Name: provider.ModeAnime}}})
+	mdl, _ = unsupported.selectSeries(0)
+	unsupported = mdl.(*modelImpl)
+	if unsupported.selectedEpisode == nil {
+		t.Fatal("direct resolve must select an episode handle")
+	}
+	if unsupported.selectedEpisode.Audio != "" {
+		t.Errorf("episode audio = %q, want empty without audio selection", unsupported.selectedEpisode.Audio)
+	}
+}
+
+// normalizeAudioMode keeps saved and historical values on the provider
+// vocabulary; anything but an explicit dub resolves as sub.
+func TestNormalizeAudioMode(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"dub", provider.AudioDub},
+		{"DUB", provider.AudioDub},
+		{" dub ", provider.AudioDub},
+		{"sub", provider.AudioSub},
+		{"SUB", provider.AudioSub},
+		{"", provider.AudioSub},
+		{"dual", provider.AudioSub},
+	}
+	for _, tt := range tests {
+		if got := normalizeAudioMode(tt.in); got != tt.want {
+			t.Errorf("normalizeAudioMode(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// Resuming from history canonicalizes the saved audio mode before it
+// becomes the active preference.
+func TestResumeHistoryNormalizesAudioMode(t *testing.T) {
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+
+	entry := history.Entry{
+		Key: history.EntryKey{
+			Title:     "Frieren",
+			Mode:      string(provider.ModeAnime),
+			MediaType: provider.MediaTypeAnime,
+			Season:    1,
+			Episode:   3,
+		},
+		Title:     "Frieren",
+		Mode:      string(provider.ModeAnime),
+		MediaType: provider.MediaTypeAnime,
+		AudioMode: "DUB",
+	}
+	if err := store.Upsert(entry); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	m := rankingTestModel()
+	m.historyStore = store
+	mdl, _ := m.resumeHistoryEntry(entry)
+	m = mdl.(*modelImpl)
+	if m.audioMode != provider.AudioDub {
+		t.Errorf("audioMode = %q, want %q", m.audioMode, provider.AudioDub)
+	}
+}
+
+// A finished episode records the track that actually played, and autoplay
+// carries that same track into the next episode.
+func TestAutoplayAfterAudioToggleKeepsTrack(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store, err := history.NewStore(filepath.Join(t.TempDir(), "history.json"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(store.Close)
+
+	m := unavailableTestModel()
+	m.registry.Register(&audioProviderFake{
+		fakeProviderForSwitch: fakeProviderForSwitch{name: "p", modes: []provider.Mode{{Name: provider.ModeAnime}}},
+	})
+	m.historyStore = store
+	m.autoplay = true
+	m.audioMode = provider.AudioSub
+	for i := range m.episodeResults {
+		m.episodeResults[i].Audio = provider.AudioSub
+	}
+	m.episodeIndex = 0
+	m.selectedEpisode = &m.episodeResults[0]
+
+	mdl, _ := m.toggleAnimeAudio()
+	m = mdl.(*modelImpl)
+	if !stringsEqualFold(m.audioMode, provider.AudioDub) {
+		t.Fatalf("audioMode = %q, want dub after toggle", m.audioMode)
+	}
+
+	// The in-place track switch settles, then the episode finishes.
+	m.resolveOpID = 0
+	m.loading = false
+	m.resolved = &model.ResolvedMedia{
+		SeriesTitle:   "ONE PIECE",
+		MediaType:     provider.MediaTypeAnime,
+		SeasonNumber:  1,
+		EpisodeNumber: 1178,
+	}
+	m.playOpID = 5
+
+	mdl, cmd := m.onPlayDone(playDoneMsg{
+		opID: 5,
+		result: player.PlaybackResult{
+			FinalPositionSecs: 100,
+			DurationSecs:      100,
+			Completed:         true,
+		},
+	})
+	m = mdl.(*modelImpl)
+	if cmd == nil {
+		t.Fatal("expected autoplay to start the next episode")
+	}
+
+	entry, ok := store.Get(history.EntryKey{
+		Title:     "ONE PIECE",
+		Mode:      string(provider.ModeAnime),
+		MediaType: provider.MediaTypeAnime,
+		Season:    1,
+		Episode:   1178,
+	})
+	if !ok {
+		t.Fatal("history entry for the finished episode missing")
+	}
+	if !stringsEqualFold(entry.AudioMode, provider.AudioDub) {
+		t.Errorf("history audioMode = %q, want dub", entry.AudioMode)
+	}
+
+	if m.selectedEpisode == nil || m.selectedEpisode.Episode != 1179 {
+		t.Fatalf("selectedEpisode = %+v, want episode 1179", m.selectedEpisode)
+	}
+	if !stringsEqualFold(m.selectedEpisode.Audio, provider.AudioDub) {
+		t.Errorf("next episode audio = %q, want dub", m.selectedEpisode.Audio)
 	}
 }
 
