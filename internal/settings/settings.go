@@ -14,6 +14,7 @@ import (
 var DefaultModes = []string{
 	"anime",
 	"cartoon",
+	"stremio",
 	"live",
 	"manga",
 	"movies",
@@ -80,6 +81,8 @@ type Data struct {
 	// DisabledProviders is the list of user-disabled provider keys (e.g. "pengu", "anivault").
 	// When empty/nil, all providers are enabled.
 	DisabledProviders []string `json:"disabled_providers,omitempty"`
+	// StremioAddonManifests stores user-configured Stremio-compatible addon manifest URLs.
+	StremioAddonManifests []string `json:"stremio_addon_manifests,omitempty"`
 	// LastMode is the last active content mode key.
 	LastMode string `json:"last_mode"`
 	// Transitions controls whether theme color crossfades are enabled (default true).
@@ -226,7 +229,7 @@ func Load() *Data {
 // since the TUI treats saving as fire-and-forget.
 func Save(s *Data) {
 	dir := filepath.Dir(path())
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		logging.Warn("settings dir create failed", "dir", dir, "err", err)
 		return
 	}
@@ -235,7 +238,7 @@ func Save(s *Data) {
 		logging.Warn("settings marshal failed", "err", err)
 		return
 	}
-	if err := util.AtomicWriteFile(path(), data, 0644); err != nil {
+	if err := util.AtomicWriteFile(path(), data, 0600); err != nil {
 		logging.Warn("settings write failed", "path", path(), "err", err)
 	}
 }

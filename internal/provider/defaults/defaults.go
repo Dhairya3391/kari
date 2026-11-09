@@ -1,6 +1,8 @@
 package defaults
 
 import (
+	"context"
+	"fmt"
 	"kari/internal/config"
 	"kari/internal/logging"
 	"kari/internal/provider"
@@ -24,6 +26,7 @@ import (
 	"kari/internal/provider/pengu"
 	"kari/internal/provider/solis"
 	"kari/internal/provider/stability"
+	"kari/internal/provider/stremioaddon"
 	"kari/internal/provider/timstreams"
 	"kari/internal/provider/vidrift"
 	"kari/internal/provider/vyla"
@@ -205,4 +208,23 @@ func NewDefaultRegistry(keyPool *tmdb.KeyPool, cfg *config.Config, langFilter ma
 		registry.Register(p)
 	}
 	return registry, nil
+}
+
+// LoadConfiguredStremioAddon loads a previously validated addon without
+// repeating the playback probe used when it was added.
+func LoadConfiguredStremioAddon(ctx context.Context, manifestURL string, keyPool *tmdb.KeyPool) (provider.Provider, error) {
+	return stremioaddon.NewClient(ctx, manifestURL, keyPool)
+}
+
+// LoadStremioAddon validates a configured manifest and confirms that it
+// resolves an item from its own catalog before making it available to Kari.
+func LoadStremioAddon(ctx context.Context, manifestURL string, keyPool *tmdb.KeyPool) (provider.Provider, error) {
+	addon, err := stremioaddon.NewClient(ctx, manifestURL, keyPool)
+	if err != nil {
+		return nil, err
+	}
+	if err := addon.Probe(ctx); err != nil {
+		return nil, fmt.Errorf("test addon streams: %w", err)
+	}
+	return addon, nil
 }

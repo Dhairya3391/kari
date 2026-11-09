@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image/color"
 	"strings"
 	"time"
 
@@ -34,15 +33,31 @@ import (
 // tuiLog scopes every log line emitted by the TUI layer.
 var tuiLog = logging.With("component", "tui")
 
+// ModelOptions supplies persisted settings and optional Stremio addon loaders.
+type ModelOptions struct {
+	// Settings avoids rereading settings when app.Run already loaded them.
+	Settings *settings.Data
+	// AddonManifestTester validates a user-entered addon before it is saved.
+	AddonManifestTester func(context.Context, string) (provider.Provider, error)
+	// StartupAddonLoader rebuilds a previously validated addon without probing
+	// playback endpoints during startup.
+	StartupAddonLoader func(context.Context, string) (provider.Provider, error)
+}
+
 // NewModel wires every dependency into the TUI root model. This signature
 // is intentionally explicit: all components arrive pre-constructed from
 // app.Run, so nothing inside tui constructs I/O collaborators.
-func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, mangaService *service.MangaService, mangaClient *manga.Client, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, presenceClient *presence.Client, calendarClient *calendar.Client, appVersion string, appCommit string) tea.Model {
+func NewModel(ctx context.Context, initialQuery string, registry *provider.Registry, players *player.Registry, downloadDir string, mediaService *service.MediaService, mangaService *service.MangaService, mangaClient *manga.Client, downloadService *service.DownloadService, subtitleService *service.SubtitleService, historyStore *history.Store, historyLoadErr error, traktClient *scrobble.TraktClient, anilistClient *scrobble.AniListClient, posterClient *poster.Client, presenceClient *presence.Client, calendarClient *calendar.Client, appVersion string, appCommit string, options ...ModelOptions) tea.Model {
 	// Loaded up front (rather than where settings used to be applied,
 	// further down) so the accent color is in effect before any of the
 	// list delegates or the download bar below are built — those cache
 	// colorPrimary at construction time, not at render time.
-	savedSettings := settings.Load()
+	var savedSettings *settings.Data
+	if len(options) > 0 {
+		savedSettings = options[0].Settings
+	} else {
+		savedSettings = settings.Load()
+	}
 	if savedSettings != nil {
 		if normalized, ok := normalizeHexColor(savedSettings.AccentColor); ok {
 			SetAccentColor(normalized)
@@ -164,6 +179,10 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 	ai := textinput.New()
 	ai.Placeholder = "Paste code here"
 	ai.CharLimit = 4096
+	addonInput := textinput.New()
+	addonInput.Placeholder = "https://addon.example/manifest.json"
+	addonInput.CharLimit = 2048
+	addonInput.Width = 70
 
 	hexInput := textinput.New()
 	hexInput.Prompt = "#"
@@ -194,6 +213,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		activeView:      viewSearch,
 		queryInput:      ti,
 		authInput:       ai,
+		addonInput:      addonInput,
 		hexInput:        hexInput,
 		seriesList:      seriesList,
 		episodeList:     episodeList,
@@ -218,7 +238,6 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		disabledProviders:   make(map[string]bool),
 		transitions:         true,
 		startupSearchActive: startupSearchActive,
-		baseBgColor:         HexToRGBA("#0B0D10"),
 		qualityMode:         qualityAll,
 		languageFilter:      make(map[string]bool),
 		audioMode:           provider.AudioSub,
@@ -236,6 +255,10 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		// internal/poster to keep a long browsing session's memory bounded.
 		posterCache: util.NewBoundedCache[string](30),
 	}
+	if len(options) > 0 {
+		model.addonManifestTester = options[0].AddonManifestTester
+		model.startupAddonLoader = options[0].StartupAddonLoader
+	}
 	model.selectedPlayer = model.defaultPlayerIndex()
 	if downloadService != nil {
 		job, err := downloadService.PendingJob()
@@ -248,6 +271,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		}
 	}
 	if s := savedSettings; s != nil {
+		model.stremioAddonManifests = append([]string(nil), s.StremioAddonManifests...)
 		if s.QualityMode >= qualityAll && s.QualityMode <= qualityLowest {
 			model.qualityMode = s.QualityMode
 		}
@@ -372,6 +396,11 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 
 func (m *modelImpl) Init() tea.Cmd {
 	cmds := []tea.Cmd{textinput.Blink, m.spinner.Tick}
+	if m.startupAddonLoader != nil {
+		for _, manifestURL := range m.stremioAddonManifests {
+			cmds = append(cmds, m.loadStartupAddonCmd(manifestURL))
+		}
+	}
 	if m.searchQuery != "" {
 		m.loading = true
 		m.loadingText = "Searching..."
@@ -494,6 +523,12 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return mdl, tea.Batch(spinnerCmd, cmd)
 	case authDoneMsg:
 		mdl, cmd := m.onAuthDone(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case addonTestDoneMsg:
+		mdl, cmd := m.updateSettings(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case startupAddonLoadedMsg:
+		mdl, cmd := m.updateSettings(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)
 	case calendarLoadedMsg:
 		mdl, cmd := m.onCalendarLoaded(msg)
@@ -679,8 +714,4 @@ func (m *modelImpl) startThemeCrossfade(fromKind, toKind model.Kind) tea.Cmd {
 	return tea.Tick(14*time.Millisecond, func(t time.Time) tea.Msg {
 		return themeCrossfadeTickMsg{opID: opID, step: 1}
 	})
-}
-
-func (m *modelImpl) SetBaseBackgroundColor(c color.RGBA) {
-	m.baseBgColor = c
 }

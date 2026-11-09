@@ -61,6 +61,28 @@ func TestProviderRowsIncludeLiveProviders(t *testing.T) {
 	}
 }
 
+func TestLoadedStartupAddonMakesStremioModeAvailable(t *testing.T) {
+	registry := &provider.Registry{}
+	m := &modelImpl{
+		registry:        registry,
+		configuredModes: []string{"anime", "stremio"},
+		disabledModes:   make(map[string]bool),
+	}
+	addon := &fakeProviderForSwitch{
+		name:  "configured-addon",
+		modes: []provider.Mode{{Name: provider.ModeStremio}},
+	}
+
+	mdl, _ := m.updateSettings(startupAddonLoadedMsg{addon: addon})
+	m = mdl.(*modelImpl)
+	if !m.isModeAvailable(string(provider.ModeStremio)) {
+		t.Fatal("Stremio mode should be available after its configured addon loads")
+	}
+	if len(m.modes) != 1 || m.modes[0] != provider.ModeStremio {
+		t.Fatalf("effective modes = %v, want [stremio]", m.modes)
+	}
+}
+
 func TestReadingProviderToggleIsIndependentAndClearsSearchCache(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	registry := &provider.Registry{}

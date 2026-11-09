@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +22,7 @@ import (
 	"kari/internal/player"
 	"kari/internal/poster"
 	"kari/internal/presence"
+	"kari/internal/provider"
 	"kari/internal/provider/defaults"
 	"kari/internal/scrobble"
 	"kari/internal/selfupdate"
@@ -34,7 +34,6 @@ import (
 	"kari/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/muesli/termenv"
 )
 
 // Version and Commit are set at build time via -ldflags (see build.sh),
@@ -115,7 +114,7 @@ func Run() error {
 	}
 	query := strings.TrimSpace(strings.Join(args, " "))
 	logging.Info("starting app", "query", query)
-	selfupdate.CleanupOldExecutables()
+	go selfupdate.CleanupOldExecutables()
 	go func() {
 		if _, err := man.EnsureInstalled(); err != nil {
 			logging.Debug("man page ensure install", "err", err)
@@ -221,21 +220,27 @@ func Run() error {
 
 	// Bound on-disk caches so repeat sessions don't grow them without limit;
 	// eviction is oldest-first and failures only log.
-	if err := manga.PruneDiskCache(); err != nil {
-		logging.Debug("manga page cache prune failed", "err", err)
-	}
-	if err := poster.PruneDiskCache(); err != nil {
-		logging.Debug("poster cache prune failed", "err", err)
-	}
-	if err := subtitles.PruneCacheDir(7 * 24 * time.Hour); err != nil {
-		logging.Debug("subtitle cache prune failed", "err", err)
-	}
+	go func() {
+		if err := manga.PruneDiskCache(); err != nil {
+			logging.Debug("manga page cache prune failed", "err", err)
+		}
+		if err := poster.PruneDiskCache(); err != nil {
+			logging.Debug("poster cache prune failed", "err", err)
+		}
+		if err := subtitles.PruneCacheDir(7 * 24 * time.Hour); err != nil {
+			logging.Debug("subtitle cache prune failed", "err", err)
+		}
+	}()
 
-	bg := detectTerminalBackground()
-	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, mangaService, mangaClient, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, presenceClient, calendarClient, Version, Commit)
-	if setter, ok := m.(interface{ SetBaseBackgroundColor(color.RGBA) }); ok {
-		setter.SetBaseBackgroundColor(bg)
-	}
+	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, mangaService, mangaClient, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, presenceClient, calendarClient, Version, Commit, tui.ModelOptions{
+		Settings: savedSettings,
+		AddonManifestTester: func(ctx context.Context, manifestURL string) (provider.Provider, error) {
+			return defaults.LoadStremioAddon(ctx, manifestURL, keyPool)
+		},
+		StartupAddonLoader: func(ctx context.Context, manifestURL string) (provider.Provider, error) {
+			return defaults.LoadConfiguredStremioAddon(ctx, manifestURL, keyPool)
+		},
+	})
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithFilter(tui.FilterScrollInput))
 	_, err = p.Run()
 	if err != nil {
@@ -261,28 +266,4 @@ func newPresenceClient() *presence.Client {
 		return nil
 	}
 	return client
-}
-
-func detectTerminalBackground() color.RGBA {
-	darkFallback := tui.HexToRGBA("#0B0D10")
-	lightFallback := tui.HexToRGBA("#FAFAFA")
-
-	ch := make(chan termenv.Color, 1)
-	go func() {
-		c := termenv.BackgroundColor()
-		ch <- c
-	}()
-
-	select {
-	case c := <-ch:
-		if rgb, ok := c.(termenv.RGBColor); ok && string(rgb) != "" {
-			return tui.HexToRGBA(string(rgb))
-		}
-	case <-time.After(150 * time.Millisecond):
-	}
-
-	if termenv.HasDarkBackground() {
-		return darkFallback
-	}
-	return lightFallback
 }

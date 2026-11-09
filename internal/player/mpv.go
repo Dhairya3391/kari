@@ -185,7 +185,7 @@ func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMed
 		}
 	}()
 
-	return attemptSources("mpv", sources, func(source provider.MediaSource) (PlaybackResult, error) {
+	return attemptSources("mpv", media.DisplayTitle(), sources, func(source provider.MediaSource) (PlaybackResult, error) {
 		skipArgs, skipPath, isMiruro := resolveSourceSkipArgs(source, p.skipSettings, media)
 		if isMiruro {
 			defer cleanupSkipScript(skipPath)

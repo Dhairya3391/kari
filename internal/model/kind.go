@@ -22,6 +22,7 @@ const (
 	KindManga
 	KindMovie
 	KindTV
+	KindStremio
 )
 
 // KindSpec describes static behavior for one Kind so callers never switch
@@ -51,11 +52,12 @@ type KindSpec struct {
 var kindSpecs = map[Kind]*KindSpec{
 	KindAnime:    {Key: "anime", Label: "Anime", Tab: 0, HasItems: true, ItemNoun: "episode"},
 	KindCartoon:  {Key: "cartoon", Label: "Cartoon", Tab: 1, HasItems: true, ItemNoun: "episode"},
-	KindLive:     {Key: "live", Label: "Live", Tab: 2, Live: true, ItemNoun: "episode"},
-	KindManga:    {Key: "manga", Label: "Reading", Tab: 3, Reader: true, HasItems: true, ItemNoun: "chapter"},
-	KindMovie:    {Key: "movies", Label: "Movies", Tab: 4, ItemNoun: "episode"},
-	KindTV:       {Key: "tv", Label: "TV", Tab: 5, HasItems: true, ItemNoun: "episode"},
-	KindJellyfin: {Key: "jellyfin", Label: "Jellyfin", Tab: 6, HasItems: true, ItemNoun: "episode"},
+	KindStremio:  {Key: "stremio", Label: "Stremio", Tab: 2, HasItems: true, ItemNoun: "episode"},
+	KindLive:     {Key: "live", Label: "Live", Tab: 3, Live: true, ItemNoun: "episode"},
+	KindManga:    {Key: "manga", Label: "Reading", Tab: 4, Reader: true, HasItems: true, ItemNoun: "chapter"},
+	KindMovie:    {Key: "movies", Label: "Movies", Tab: 5, ItemNoun: "episode"},
+	KindTV:       {Key: "tv", Label: "TV", Tab: 6, HasItems: true, ItemNoun: "episode"},
+	KindJellyfin: {Key: "jellyfin", Label: "Jellyfin", Tab: 7, HasItems: true, ItemNoun: "episode"},
 }
 
 // kindByKey indexes the same table by wire key.

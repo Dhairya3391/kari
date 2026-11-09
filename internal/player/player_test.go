@@ -553,7 +553,7 @@ func TestAttemptSourcesSkipsShortWarningVideo(t *testing.T) {
 	}
 
 	tried := []string{}
-	res, err := attemptSources("mpv", sources, func(src provider.MediaSource) (PlaybackResult, error) {
+	res, err := attemptSources("mpv", "Test episode", sources, func(src provider.MediaSource) (PlaybackResult, error) {
 		tried = append(tried, src.URL)
 		if src.URL == "https://bad.example.com/45s.m3u8" {
 			return PlaybackResult{}, fmt.Errorf("source rejected: stream is a short placeholder/warning video (45.0s <= 60s)")
@@ -569,6 +569,23 @@ func TestAttemptSourcesSkipsShortWarningVideo(t *testing.T) {
 	}
 	if res.DurationSecs != 1440 {
 		t.Errorf("expected good source result (1440s), got %.1f", res.DurationSecs)
+	}
+}
+
+func TestAttemptSourcesReportsMediaTitleInsteadOfStreamTitle(t *testing.T) {
+	_, err := attemptSources("mpv", "Motu Patlu - S01E01 - Jon Banega Don", []provider.MediaSource{
+		{URL: "https://example.com/stream", Quality: "Odelu - S1E1"},
+	}, func(provider.MediaSource) (PlaybackResult, error) {
+		return PlaybackResult{}, fmt.Errorf("stream failed")
+	})
+	if err == nil {
+		t.Fatal("attemptSources error = nil, want playback failure")
+	}
+	if !strings.Contains(err.Error(), "Motu Patlu - S01E01 - Jon Banega Don") {
+		t.Fatalf("error = %q, want media title", err)
+	}
+	if strings.Contains(err.Error(), "Odelu") {
+		t.Fatalf("error = %q, must not report the source label as the title", err)
 	}
 }
 

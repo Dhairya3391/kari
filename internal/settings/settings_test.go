@@ -26,7 +26,7 @@ func TestNormalizedModesCustomOrderAndMissingAppends(t *testing.T) {
 		Modes: []string{"tv", "movies", "unknown_mode", "anime"},
 	}
 	modes := d.NormalizedModes()
-	want := []string{"tv", "movies", "anime", "cartoon", "live", "manga", "jellyfin"}
+	want := []string{"tv", "movies", "anime", "cartoon", "stremio", "live", "manga", "jellyfin"}
 	if !reflect.DeepEqual(modes, want) {
 		t.Errorf("got %v, want %v", modes, want)
 	}
@@ -96,7 +96,7 @@ func TestDefaultModeAndCustomOrderRoundtrip(t *testing.T) {
 	if d.DefaultMode != "anime" {
 		t.Errorf("DefaultMode = %q, want 'anime'", d.DefaultMode)
 	}
-	want := []string{"movies", "tv", "anime", "cartoon", "live", "manga", "jellyfin"}
+	want := []string{"movies", "tv", "anime", "cartoon", "stremio", "live", "manga", "jellyfin"}
 	if !reflect.DeepEqual(d.NormalizedModes(), want) {
 		t.Errorf("NormalizedModes = %v, want %v", d.NormalizedModes(), want)
 	}

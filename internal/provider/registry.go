@@ -3,21 +3,44 @@ package provider
 import (
 	"slices"
 	"strings"
+	"sync"
 )
 
 // Registry stores registered providers and returns providers by mode.
 type Registry struct {
+	mu        sync.RWMutex
 	providers []Provider
 }
 
 // Register adds a provider to the registry. It is idempotent.
 func (r *Registry) Register(p Provider) {
+	if p == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, existing := range r.providers {
 		if existing.Name() == p.Name() {
 			return
 		}
 	}
 	r.providers = append(r.providers, p)
+}
+
+// UnregisterConfigured removes the provider matching a user configuration,
+// returning its name and whether a provider was removed.
+func (r *Registry) UnregisterConfigured(value string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, p := range r.providers {
+		configured, ok := p.(ConfiguredProvider)
+		if !ok || !configured.MatchesConfiguration(value) {
+			continue
+		}
+		r.providers = append(r.providers[:i], r.providers[i+1:]...)
+		return p.Name(), true
+	}
+	return "", false
 }
 
 // ProvidersForMode returns providers supporting the given mode, ordered by priority.
@@ -27,7 +50,10 @@ func (r *Registry) ProvidersForMode(mode ContentType) []Provider {
 		priority int
 	}
 	var matched []rankedProvider
-	for _, p := range r.providers {
+	r.mu.RLock()
+	providers := append([]Provider(nil), r.providers...)
+	r.mu.RUnlock()
+	for _, p := range providers {
 		for _, m := range p.Modes() {
 			if m.Name == mode {
 				matched = append(matched, rankedProvider{p: p, priority: m.Priority})
@@ -109,7 +135,10 @@ func providerDeadlines(p Provider, mode ContentType) Deadlines {
 
 // ProviderByName returns the registered provider with the given name.
 func (r *Registry) ProviderByName(name string) (Provider, bool) {
-	for _, p := range r.providers {
+	r.mu.RLock()
+	providers := append([]Provider(nil), r.providers...)
+	r.mu.RUnlock()
+	for _, p := range providers {
 		if strings.EqualFold(p.Name(), name) {
 			return p, true
 		}
@@ -179,7 +208,9 @@ func (r *Registry) AudioLanguages(modes ...ContentType) []AudioLanguage {
 	seen := make(map[string]struct{})
 	var providers []Provider
 	if len(modes) == 0 {
-		providers = r.providers
+		r.mu.RLock()
+		providers = append([]Provider(nil), r.providers...)
+		r.mu.RUnlock()
 	} else {
 		for _, mode := range modes {
 			providers = append(providers, r.ProvidersForMode(mode)...)
@@ -238,7 +269,7 @@ func (r *Registry) PreferredPlaybackProviders(mode ContentType) []string {
 // list (from a future provider) keep alphabetical relative order at the
 // end so nothing registered silently disappears.
 var canonicalModeOrder = []ContentType{
-	ModeAnime, ModeCartoon, ModeMovies, ModeTV, ModeJellyfin, ModeLive, ModeManga,
+	ModeAnime, ModeCartoon, ModeStremio, ModeMovies, ModeTV, ModeJellyfin, ModeLive, ModeManga,
 }
 
 // AllModes returns the unique modes supported by registered providers in
@@ -247,7 +278,10 @@ var canonicalModeOrder = []ContentType{
 // providers are configured.
 func (r *Registry) AllModes() []ContentType {
 	modeSet := make(map[ContentType]struct{})
-	for _, p := range r.providers {
+	r.mu.RLock()
+	providers := append([]Provider(nil), r.providers...)
+	r.mu.RUnlock()
+	for _, p := range providers {
 		for _, m := range p.Modes() {
 			modeSet[m.Name] = struct{}{}
 		}

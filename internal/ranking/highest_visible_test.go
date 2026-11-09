@@ -6,8 +6,8 @@ import (
 	"kari/internal/provider"
 )
 
-// KeepHighestVisible is the Highest-mode display rule for Preview: FHD and
-// above stay; below-FHD rows show only when nothing better exists.
+// KeepHighestVisible applies the Highest-mode display rule independently to
+// each provider, preserving lower-tier fallbacks from other providers.
 func TestKeepHighestVisible(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -75,6 +75,22 @@ func TestKeepHighestVisible(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestKeepHighestVisibleRetainsEachProvidersBestTier(t *testing.T) {
+	sources := []provider.MediaSource{
+		{URL: "https://bingr.example/hd.m3u8", Resolver: "bingr", Quality: "720p"},
+		{URL: "https://solis.example/fhd.m3u8", Resolver: "solis", Quality: "1080p"},
+		{URL: "https://solis.example/hd.m3u8", Resolver: "solis", Quality: "720p"},
+		{URL: "https://bingr.example/sd.m3u8", Resolver: "bingr", Quality: "480p"},
+	}
+	got := KeepHighestVisible(sources)
+	if len(got) != 2 {
+		t.Fatalf("kept %d rows, want each provider's best tier: %+v", len(got), got)
+	}
+	if got[0].Resolver != "bingr" || got[0].Quality != "720p" || got[1].Resolver != "solis" || got[1].Quality != "1080p" {
+		t.Errorf("kept rows = %+v, want Bingr 720p and Solis 1080p", got)
 	}
 }
 

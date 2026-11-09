@@ -229,6 +229,20 @@ func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 	}
 }
 
+func (m *modelImpl) loadStartupAddonCmd(manifestURL string) tea.Cmd {
+	loader := m.startupAddonLoader
+	parent := m.appCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+		defer cancel()
+		addon, err := loader(ctx, manifestURL)
+		return startupAddonLoadedMsg{addon: addon, err: err}
+	}
+}
+
 func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
 	if len(resolved.Subtitles) == 0 && len(m.rawSubtitles) > 0 {
 		resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)

@@ -183,6 +183,8 @@ func historyModeLabel(mode provider.ContentType) string {
 		return "Anime"
 	case provider.ModeCartoon:
 		return "Cartoon"
+	case provider.ModeStremio:
+		return "Stremio"
 	case provider.ModeLive:
 		return "Live"
 	case provider.ModeManga:
@@ -202,6 +204,7 @@ func historyModes() []provider.ContentType {
 	return []provider.ContentType{
 		provider.ModeAnime,
 		provider.ModeCartoon,
+		provider.ModeStremio,
 		provider.ModeLive,
 		provider.ModeManga,
 		provider.ModeMovies,

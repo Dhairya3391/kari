@@ -34,7 +34,7 @@ func (p *VLCPlayer) Available() bool { return vlcBinary() != "" }
 
 // Play implements Player.
 func (p *VLCPlayer) Play(sources []provider.MediaSource, media model.ResolvedMedia) (PlaybackResult, error) {
-	return attemptSources("vlc", sources, func(source provider.MediaSource) (PlaybackResult, error) {
+	return attemptSources("vlc", media.DisplayTitle(), sources, func(source provider.MediaSource) (PlaybackResult, error) {
 		if err := playSingleSourceWithVLC(source, media); err != nil {
 			return PlaybackResult{}, err
 		}
@@ -167,7 +167,7 @@ func (p *IINAPlayer) Play(sources []provider.MediaSource, media model.ResolvedMe
 		}
 	}()
 
-	return attemptSources("iina", sources, func(source provider.MediaSource) (PlaybackResult, error) {
+	return attemptSources("iina", media.DisplayTitle(), sources, func(source provider.MediaSource) (PlaybackResult, error) {
 		skipArgs, skipPath, isMiruro := resolveSourceSkipArgs(source, p.skipSettings, media)
 		if isMiruro {
 			defer cleanupSkipScript(skipPath)

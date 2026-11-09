@@ -41,7 +41,7 @@ func playWithMPVAndroid(
 	media model.ResolvedMedia,
 	launcher *androidLauncher,
 ) (PlaybackResult, error) {
-	return attemptSources("mpv", sources, func(source provider.MediaSource) (PlaybackResult, error) {
+	return attemptSources("mpv", media.DisplayTitle(), sources, func(source provider.MediaSource) (PlaybackResult, error) {
 		if err := playSingleSourceWithMPVAndroid(source, media, launcher); err != nil {
 			return PlaybackResult{}, err
 		}

@@ -21,6 +21,7 @@ const (
 	CategoryProviders
 	CategoryAccounts
 	CategoryInterface
+	CategoryAddons
 	CategoryHistory
 )
 
@@ -32,6 +33,7 @@ var SettingsCategoryNames = []string{
 	"Providers",
 	"Accounts",
 	"Interface",
+	"Add-ons",
 	"History",
 }
 
@@ -96,7 +98,11 @@ type SettingsData struct {
 	HistoryDisabled bool
 	HistoryModes    []HistoryModeRow
 	// Providers values
-	ProviderRows []ProviderRow
+	ProviderRows          []ProviderRow
+	StremioAddonManifests []string
+	AddonInputOpen        bool
+	AddonInputView        string
+	AddonTesting          bool
 	// Accounts values
 	AniListConnected  bool
 	AniListAuthActive bool
@@ -239,6 +245,22 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		} else {
 			desc = "Choose which content modes save playback progress."
 		}
+	case CategoryAddons:
+		rows = append(rows, renderSettingRow("Add Stremio addon manifest", "[Enter] paste URL", data.FocusedRowIndex == 0, width, st))
+		for i, manifest := range data.StremioAddonManifests {
+			label := manifest
+			if len(label) > width-18 {
+				label = "…" + label[max(0, len(label)-(width-19)):]
+			}
+			rows = append(rows, renderSettingRow(fmt.Sprintf("Addon %d", i+1), label, data.FocusedRowIndex == i+1, width, st))
+		}
+		if data.AddonInputOpen {
+			rows = append(rows, "", "    "+st.Bold.Render("Manifest URL:"), "    "+data.AddonInputView, "    "+st.Dim.Render("Paste a configured Stremio addon manifest URL · Enter checks and adds · Esc cancels"))
+			if data.AddonTesting {
+				rows = append(rows, "    "+st.Dim.Render("Checking manifest and sample streams…"))
+			}
+		}
+		desc = "Enter tests and adds a Stremio addon manifest; d removes the selected addon."
 	case CategoryProviders:
 		var lastSection string
 		focusedLine := -1

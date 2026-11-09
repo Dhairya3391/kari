@@ -40,7 +40,7 @@ func playWithMXPlayerAndroid(
 	media model.ResolvedMedia,
 	launcher *androidLauncher,
 ) (PlaybackResult, error) {
-	return attemptSources("mxplayer", sources, func(source provider.MediaSource) (PlaybackResult, error) {
+	return attemptSources("mxplayer", media.DisplayTitle(), sources, func(source provider.MediaSource) (PlaybackResult, error) {
 		if err := playSingleSourceWithMXPlayer(source, media, launcher); err != nil {
 			return PlaybackResult{}, err
 		}

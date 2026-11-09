@@ -125,7 +125,26 @@ func (m *modelImpl) selectedSeriesIndex() int {
 // full list unchanged. The list widget and the renderer share it so the
 // cursor position always addresses the same rows on screen.
 func (m *modelImpl) visibleSeriesResults() ([]provider.SearchResult, []int) {
-	return service.FilterSearchResults(m.seriesResults, m.resultsFilter)
+	cache := &m.seriesFilterCache
+	if cache.valid && cache.query == m.resultsFilter && sameSearchResults(cache.source, m.seriesResults) {
+		return cache.results, cache.indices
+	}
+	cache.query = m.resultsFilter
+	cache.source = m.seriesResults
+	cache.results, cache.indices = service.FilterSearchResults(m.seriesResults, m.resultsFilter)
+	cache.valid = true
+	return cache.results, cache.indices
+}
+
+// sameSearchResults detects result-list replacement without scanning rows.
+func sameSearchResults(left, right []provider.SearchResult) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	if len(left) == 0 {
+		return true
+	}
+	return &left[0] == &right[0]
 }
 
 // refilterSeriesList rebuilds the results widget from the current /
@@ -482,6 +501,18 @@ func (m *modelImpl) exitInputMode() bool {
 	// here falls through to goBackOne() and exits the whole Settings
 	// screen instead of just closing the input.
 	if m.activeView == viewSettings {
+		if m.addonInputOpen {
+			if m.addonTestCancel != nil {
+				m.addonTestCancel()
+			}
+			m.addonTesting = false
+			m.addonPendingURL = ""
+			m.addonTestCancel = nil
+			m.addonInputOpen = false
+			m.addonInput.Blur()
+			m.clearStatus()
+			return true
+		}
 		if m.audioPickerOpen {
 			m.audioPickerOpen = false
 			m.saveSettings()

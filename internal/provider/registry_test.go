@@ -14,6 +14,13 @@ type fakeProvider struct {
 	modes []Mode
 }
 
+type configuredFake struct {
+	fakeProvider
+	value string
+}
+
+func (f *configuredFake) MatchesConfiguration(value string) bool { return value == f.value }
+
 func (f *fakeProvider) Name() string { return f.name }
 func (f *fakeProvider) Modes() []Mode {
 	return f.modes
@@ -41,6 +48,24 @@ func TestRegistryRegisterDeduplicatesByName(t *testing.T) {
 	}
 	if got = r.ProvidersForMode(ModeMovies); len(got) != 1 {
 		t.Fatalf("want 1 provider for movies, got %d", len(got))
+	}
+}
+
+func TestRegistryUnregisterConfigured(t *testing.T) {
+	r := &Registry{}
+	r.Register(&configuredFake{
+		fakeProvider: fakeProvider{name: "configured", modes: []Mode{{Name: ModeStremio}}},
+		value:        "addon-url",
+	})
+	r.Register(&fakeProvider{name: "builtin", modes: []Mode{{Name: ModeAnime}}})
+	if name, ok := r.UnregisterConfigured("addon-url"); !ok || name != "configured" {
+		t.Fatal("UnregisterConfigured() = false for matching configuration")
+	}
+	if _, ok := r.UnregisterConfigured("addon-url"); ok {
+		t.Fatal("UnregisterConfigured() = true after matching provider was removed")
+	}
+	if got := r.AllModes(); len(got) != 1 || got[0] != ModeAnime {
+		t.Fatalf("AllModes() = %v, want only anime", got)
 	}
 }
 

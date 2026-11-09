@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -83,6 +84,84 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	wantDisabledProviders := []string{"anivault", "pengu"}
 	if !reflect.DeepEqual(saved.DisabledProviders, wantDisabledProviders) {
 		t.Errorf("saved.DisabledProviders = %v, want %v", saved.DisabledProviders, wantDisabledProviders)
+	}
+}
+
+func TestAddonManifestIsSavedOnlyAfterSuccessfulCheck(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := newTestSwitchModel()
+	m.appCtx = context.Background()
+	m.settingsCategory = CategoryAddons
+	m.addonInputOpen = true
+	m.addonInput.SetValue("https://addon.example/manifest.json")
+	m.addonManifestTester = func(context.Context, string) (provider.Provider, error) {
+		return nil, errors.New("no playable streams")
+	}
+	_, cmd := m.updateSettings(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || !m.addonTesting || len(m.stremioAddonManifests) != 0 {
+		t.Fatal("addon should be pending verification and not saved")
+	}
+	result := cmd()
+	m.updateSettings(result)
+	if m.addonTesting || len(m.stremioAddonManifests) != 0 {
+		t.Fatal("failed addon check should leave the addon unsaved")
+	}
+	if saved := settings.Load(); saved != nil && len(saved.StremioAddonManifests) > 0 {
+		t.Fatalf("failed addon check persisted manifests: %v", saved.StremioAddonManifests)
+	}
+
+	m.addonManifestTester = func(context.Context, string) (provider.Provider, error) {
+		return &fakeProviderForSwitch{name: "verified-addon", modes: []provider.Mode{{Name: provider.ModeMovies}}}, nil
+	}
+	m.addonInputOpen = true
+	m.addonInput.SetValue("https://addon.example/manifest.json")
+	_, cmd = m.updateSettings(tea.KeyMsg{Type: tea.KeyEnter})
+	result = cmd()
+	m.updateSettings(result)
+	saved := settings.Load()
+	if saved == nil || len(saved.StremioAddonManifests) != 1 || saved.StremioAddonManifests[0] != "https://addon.example/manifest.json" {
+		t.Fatalf("successful addon check saved manifests = %v", saved)
+	}
+}
+
+type configuredFakeForRemoval struct {
+	fakeProviderForSwitch
+	manifestURL string
+}
+
+func (f *configuredFakeForRemoval) MatchesConfiguration(value string) bool {
+	return value == f.manifestURL
+}
+
+func TestRemovingAddonUnregistersItImmediately(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const manifestURL = "https://addon.example/manifest.json?token=secret"
+	m := newTestSwitchModel()
+	m.registry.Register(&configuredFakeForRemoval{
+		fakeProviderForSwitch: fakeProviderForSwitch{name: "addon-test", modes: []provider.Mode{{Name: provider.ModeStremio}}},
+		manifestURL:           manifestURL,
+	})
+	m.configuredModes = append(m.configuredModes, string(provider.ModeStremio))
+	m.updateEffectiveModes()
+	m.appMode = provider.ModeStremio
+	m.stremioAddonManifests = []string{manifestURL}
+	m.settingsCategory = CategoryAddons
+	m.settingsIndex = 1
+	m.disabledProviders = map[string]bool{"addon-test": true, "tv:addon-test": true}
+
+	m.updateSettings(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+
+	if len(m.stremioAddonManifests) != 0 {
+		t.Fatalf("configured addons = %v, want empty", m.stremioAddonManifests)
+	}
+	if m.appMode == provider.ModeStremio {
+		t.Fatal("removed addon's mode stayed active")
+	}
+	if _, removed := m.registry.UnregisterConfigured(manifestURL); removed {
+		t.Fatal("addon remained registered after removal")
+	}
+	if len(m.disabledProviders) != 0 {
+		t.Fatalf("removed provider's disabled settings remained: %v", m.disabledProviders)
 	}
 }
 
@@ -188,7 +267,7 @@ func TestNewModelRestoresSettingsAfterRestart(t *testing.T) {
 		t.Fatal("expected *modelImpl")
 	}
 
-	wantConfigured := []string{"tv", "movies", "anime", "cartoon", "live", "manga", "jellyfin"}
+	wantConfigured := []string{"tv", "movies", "anime", "cartoon", "live", "manga", "jellyfin", "stremio"}
 	if !reflect.DeepEqual(m.configuredModes, wantConfigured) {
 		t.Errorf("m.configuredModes = %v, want %v", m.configuredModes, wantConfigured)
 	}
@@ -233,7 +312,7 @@ func TestModeReorderPersistsAcrossRestart(t *testing.T) {
 
 	m := newTestSwitchModel()
 	// Focus on second mode (index 2 in Settings > Modes, where index 0 is Startup mode)
-	// Initially: anime, cartoon, live, manga, movies, tv, jellyfin
+	// Initially: anime, cartoon, live, manga, movies, tv, jellyfin, Stremio.
 	m.settingsIndex = 2 // cartoon (idx = 1)
 	m.reorderMode(-1)   // move cartoon before anime -> cartoon, anime, live...
 
@@ -263,8 +342,9 @@ func TestModeReorderPersistsAcrossRestart(t *testing.T) {
 		t.Fatal("expected *modelImpl")
 	}
 
-	if !reflect.DeepEqual(restarted.configuredModes, wantOrder) {
-		t.Errorf("after restart restarted.configuredModes = %v, want %v", restarted.configuredModes, wantOrder)
+	restartedWant := append(append([]string(nil), wantOrder...), "stremio")
+	if !reflect.DeepEqual(restarted.configuredModes, restartedWant) {
+		t.Errorf("after restart restarted.configuredModes = %v, want %v", restarted.configuredModes, restartedWant)
 	}
 }
 

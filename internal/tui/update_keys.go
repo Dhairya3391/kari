@@ -619,6 +619,7 @@ func (m *modelImpl) saveSettings() {
 		Modes:                       modes,
 		ModesDisabled:               disabledList,
 		DisabledProviders:           disabledProvList,
+		StremioAddonManifests:       m.stremioAddonManifests,
 		LastMode:                    string(m.appMode),
 		Transitions:                 &transitionsVal,
 		StartupSearchActive:         &startupSearchActiveVal,

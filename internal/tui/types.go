@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"image/color"
 	"sync/atomic"
 	"time"
 
@@ -182,6 +181,17 @@ type downloadDoneMsg struct {
 	err  error
 }
 
+type addonTestDoneMsg struct {
+	manifestURL string
+	addon       provider.Provider
+	err         error
+}
+
+type startupAddonLoadedMsg struct {
+	addon provider.Provider
+	err   error
+}
+
 type downloadProgressMsg struct {
 	opID       int
 	progress   float64
@@ -333,6 +343,7 @@ type modelImpl struct {
 	activeView viewState
 
 	queryInput  textinput.Model
+	addonInput  textinput.Model
 	seriesList  list.Model
 	episodeList list.Model
 	chapterList list.Model
@@ -360,8 +371,15 @@ type modelImpl struct {
 
 	keys keyMap
 
-	allSeriesResults []provider.SearchResult
-	seriesResults    []provider.SearchResult
+	allSeriesResults  []provider.SearchResult
+	seriesResults     []provider.SearchResult
+	seriesFilterCache struct {
+		query   string
+		source  []provider.SearchResult
+		results []provider.SearchResult
+		indices []int
+		valid   bool
+	}
 	episodeResults   []provider.Episode
 	episodeCache     episodeListCache
 	episodeHistory   episodeHistoryIndexCache
@@ -409,7 +427,6 @@ type modelImpl struct {
 	transitions         bool
 	startupSearchActive bool
 	autoUpdate          bool
-	baseBgColor         color.RGBA
 	crossfadeActive     bool
 	crossfadeStep       int
 	crossfadeFrom       ModeTheme
@@ -475,6 +492,13 @@ type modelImpl struct {
 	presenceSession             atomic.Int64
 	searchCacheGeneration       atomic.Uint64
 	settingsIndex               int
+	stremioAddonManifests       []string
+	addonInputOpen              bool
+	addonManifestTester         func(context.Context, string) (provider.Provider, error)
+	startupAddonLoader          func(context.Context, string) (provider.Provider, error)
+	addonTestCancel             context.CancelFunc
+	addonTesting                bool
+	addonPendingURL             string
 	searchCache                 *util.BoundedCache[searchCacheEntry]
 	audioMode                   string
 	qualityMode                 int

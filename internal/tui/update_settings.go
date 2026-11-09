@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"context"
+	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -13,7 +16,90 @@ import (
 
 func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case startupAddonLoadedMsg:
+		if msg.err != nil {
+			tuiLog.Warn("configured addon unavailable", "err", msg.err)
+			return m, nil
+		}
+		if msg.addon == nil || m.registry == nil {
+			return m, nil
+		}
+		m.registry.Register(msg.addon)
+		m.updateEffectiveModes()
+		m.syncDisabledProvidersToService()
+		return m, nil
+	case addonTestDoneMsg:
+		if !m.addonTesting || msg.manifestURL != m.addonPendingURL {
+			return m, nil
+		}
+		m.addonTesting = false
+		m.addonTestCancel = nil
+		m.addonPendingURL = ""
+		if msg.err != nil {
+			return m, m.setStatusTimed(statusError, "Addon check failed: "+msg.err.Error())
+		}
+		if msg.addon == nil || m.registry == nil {
+			return m, m.setStatusTimed(statusError, "Addon check returned no provider")
+		}
+		m.registry.Register(msg.addon)
+		m.modes = m.registry.AllModes()
+		m.updateEffectiveModes()
+		m.syncDisabledProvidersToService()
+		m.stremioAddonManifests = append(m.stremioAddonManifests, msg.manifestURL)
+		m.addonInput.SetValue("")
+		m.addonInputOpen = false
+		m.addonInput.Blur()
+		m.settingsIndex = len(m.stremioAddonManifests)
+		m.saveSettings()
+		return m, m.setStatusTimed(statusSuccess, "Addon checked, saved, and enabled")
 	case tea.KeyMsg:
+		if m.addonInputOpen {
+			if m.addonTesting {
+				return m, nil
+			}
+			switch msg.String() {
+			case "enter":
+				manifest := strings.TrimSpace(m.addonInput.Value())
+				u, err := url.Parse(manifest)
+				if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+					return m, m.setStatusTimed(statusError, "Enter a valid http or https manifest URL")
+				}
+				for _, existing := range m.stremioAddonManifests {
+					if existing == manifest {
+						m.addonInputOpen = false
+						m.addonInput.Blur()
+						return m, m.setStatusTimed(statusInfo, "Addon already configured")
+					}
+				}
+				if m.addonManifestTester == nil {
+					return m, m.setStatusTimed(statusError, "Addon checks are unavailable")
+				}
+				ctx, cancel := context.WithTimeout(m.appCtx, 25*time.Second)
+				m.addonTesting = true
+				m.addonTestCancel = cancel
+				m.addonPendingURL = manifest
+				tester := m.addonManifestTester
+				return m, func() tea.Msg {
+					addon, err := tester(ctx, manifest)
+					cancel()
+					return addonTestDoneMsg{manifestURL: manifest, addon: addon, err: err}
+				}
+			case "esc":
+				if m.addonTestCancel != nil {
+					m.addonTestCancel()
+				}
+				m.addonTesting = false
+				m.addonPendingURL = ""
+				m.addonTestCancel = nil
+				m.addonInputOpen = false
+				m.addonInput.Blur()
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.addonInput, cmd = m.addonInput.Update(msg)
+				return m, cmd
+			}
+		}
 		// 1. Audio Language Picker Modal
 		if m.audioPickerOpen {
 			allLangs := m.availableLanguages()
@@ -152,7 +238,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		// Direct category jumps via 1-8 keys
+		// Direct category jumps via number keys.
 		case "1":
 			m.settingsCategory = CategoryPlayback
 			m.settingsIndex = 0
@@ -182,9 +268,43 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.settingsIndex = 0
 			return m, nil
 		case "8":
+			m.settingsCategory = CategoryAddons
+			m.settingsIndex = 0
+			return m, nil
+		case "9":
 			m.settingsCategory = CategoryHistory
 			m.settingsIndex = 0
 			return m, nil
+		case "d":
+			if m.settingsCategory == CategoryAddons && m.settingsIndex > 0 {
+				idx := m.settingsIndex - 1
+				manifestURL := m.stremioAddonManifests[idx]
+				m.stremioAddonManifests = append(m.stremioAddonManifests[:idx], m.stremioAddonManifests[idx+1:]...)
+				if m.settingsIndex > len(m.stremioAddonManifests) {
+					m.settingsIndex = len(m.stremioAddonManifests)
+				}
+				if m.registry != nil {
+					providerName, removed := m.registry.UnregisterConfigured(manifestURL)
+					if removed {
+						providerName = strings.ToLower(strings.TrimSpace(providerName))
+						for key := range m.disabledProviders {
+							if key == providerName || strings.HasSuffix(key, ":"+providerName) {
+								delete(m.disabledProviders, key)
+							}
+						}
+						m.modes = m.registry.AllModes()
+						m.updateEffectiveModes()
+						m.syncDisabledProvidersToService()
+					}
+				}
+				m.saveSettings()
+				if len(m.modes) > 0 && !m.isModeAvailable(string(m.appMode)) {
+					modeCmd := m.switchToMode(m.modes[0])
+					statusCmd := m.setStatusTimed(statusInfo, "Addon removed")
+					return m, tea.Batch(modeCmd, statusCmd)
+				}
+				return m, m.setStatusTimed(statusInfo, "Addon removed")
+			}
 		case "K", "shift+up":
 			if m.settingsCategory == CategoryModes && m.settingsIndex > 0 {
 				return m.reorderMode(-1)
@@ -231,6 +351,14 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.saveSettings()
 			return m, m.triggerSubtitleSync()
 		case "enter", "space", " ":
+			if m.settingsCategory == CategoryAddons {
+				if m.settingsIndex == 0 {
+					m.addonInputOpen = true
+					m.addonInput.Focus()
+					m.addonInput.SetValue("")
+				}
+				return m, nil
+			}
 			if m.settingsCategory == CategoryModes {
 				if m.settingsIndex == 0 {
 					m.cycleDefaultMode(1)
@@ -321,6 +449,8 @@ func (m *modelImpl) maxRowsForCategory(cat SettingsCategory) int {
 		return len(m.configuredModes) + 1
 	case CategoryProviders:
 		return len(m.providerRows())
+	case CategoryAddons:
+		return len(m.stremioAddonManifests) + 1
 	case CategoryAccounts:
 		return 4
 	case CategoryInterface:
@@ -611,6 +741,7 @@ var providerSections = []struct {
 	{Section: "Anime", Mode: provider.ModeAnime},
 	{Section: "Movies", Mode: provider.ModeMovies},
 	{Section: "TV Shows", Mode: provider.ModeTV},
+	{Section: "Stremio Add-ons", Mode: provider.ModeStremio},
 	{Section: "Live", Mode: provider.ModeLive},
 	{Section: "Reading", Mode: provider.ModeManga},
 }

@@ -153,34 +153,35 @@ func ParseFileSizeMB(raw string) float64 {
 // Adaptive "Auto" masters parse as 1080 via ParseResolution, so they stay.
 const fullHDThreshold = 1080
 
-// KeepHighestVisible narrows sources to what the Highest quality mode may
-// show in Preview: every row at FHD (1080p) or better. When no row reaches
-// FHD it keeps every row at the highest available tier instead, so a
-// low-only list still shows its best rather than an empty table. Rows with
-// unparseable labels are kept only when nothing parses at all.
+// KeepHighestVisible keeps FHD and better rows per provider. A provider with
+// no FHD row keeps its best available tier, so one provider's better source
+// does not hide every fallback from the others.
 func KeepHighestVisible(sources []provider.MediaSource) []provider.MediaSource {
 	if len(sources) == 0 {
 		return nil
 	}
-	res := make([]int, len(sources))
-	best := 0
+
+	bestByProvider := make(map[string]int)
+	resolutions := make([]int, len(sources))
 	for i, src := range sources {
-		r := ParseResolution(src.Quality)
-		res[i] = r
-		if r > best {
-			best = r
+		resolution := ParseResolution(src.Quality)
+		resolutions[i] = resolution
+		if resolution > bestByProvider[src.Resolver] {
+			bestByProvider[src.Resolver] = resolution
 		}
-	}
-	if best == 0 {
-		return sources
-	}
-	threshold := fullHDThreshold
-	if best < fullHDThreshold {
-		threshold = best
 	}
 	kept := make([]provider.MediaSource, 0, len(sources))
 	for i, src := range sources {
-		if res[i] >= threshold {
+		best := bestByProvider[src.Resolver]
+		if best == 0 {
+			kept = append(kept, src)
+			continue
+		}
+		threshold := fullHDThreshold
+		if best < fullHDThreshold {
+			threshold = best
+		}
+		if resolutions[i] >= threshold {
 			kept = append(kept, src)
 		}
 	}

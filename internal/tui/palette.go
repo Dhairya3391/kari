@@ -57,6 +57,16 @@ var modeThemes = map[model.Kind]ModeTheme{
 			Light: "#82AB9B",
 		},
 	},
+	model.KindStremio: {
+		Accent: lipgloss.AdaptiveColor{
+			Dark:  "#D08CFA",
+			Light: "#8053A0",
+		},
+		AccentDim: lipgloss.AdaptiveColor{
+			Dark:  "#9565B5",
+			Light: "#B695CA",
+		},
+	},
 	model.KindLive: {
 		Accent: lipgloss.AdaptiveColor{
 			Dark:  "#FF6B4A",

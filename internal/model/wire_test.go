@@ -5,11 +5,10 @@ import (
 )
 
 func TestKindSpecTable(t *testing.T) {
-	// Tab order follows the spec strip: anime cartoon live manga movies tv,
-	// jellyfin last when shown.
+	// Tab order follows the visible mode strip, with Jellyfin last when shown.
 	wantTabs := map[Kind]int{
-		KindAnime: 0, KindCartoon: 1, KindLive: 2, KindManga: 3,
-		KindMovie: 4, KindTV: 5, KindJellyfin: 6,
+		KindAnime: 0, KindCartoon: 1, KindStremio: 2, KindLive: 3, KindManga: 4,
+		KindMovie: 5, KindTV: 6, KindJellyfin: 7,
 	}
 	for k, want := range wantTabs {
 		s := k.Spec()
@@ -32,7 +31,7 @@ func TestKindSpecFlows(t *testing.T) {
 	if !KindLive.Spec().Live {
 		t.Errorf("live must set Live")
 	}
-	for _, k := range []Kind{KindAnime, KindCartoon, KindJellyfin, KindTV, KindManga} {
+	for _, k := range []Kind{KindAnime, KindCartoon, KindStremio, KindJellyfin, KindTV, KindManga} {
 		if !k.Spec().HasItems {
 			t.Errorf("%s must have items", k.Spec().Key)
 		}
@@ -48,7 +47,7 @@ func TestKindSpecFlows(t *testing.T) {
 }
 
 func TestFromKeyRoundTrip(t *testing.T) {
-	for _, k := range []Kind{KindAnime, KindCartoon, KindJellyfin, KindLive, KindManga, KindMovie, KindTV} {
+	for _, k := range []Kind{KindAnime, KindCartoon, KindStremio, KindJellyfin, KindLive, KindManga, KindMovie, KindTV} {
 		if got := FromKey(k.Key()); got != k {
 			t.Errorf("FromKey(%q) = %d, want %d", k.Key(), got, k)
 		}

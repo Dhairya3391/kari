@@ -59,7 +59,7 @@ func (e *NeedsCompletionConfirmError) Error() string {
 // confirm completion" instead of returning real stats. Every player's
 // outer Play function otherwise repeated this same loop-and-join-errors
 // shape, so it's centralized here.
-func attemptSources(playerLabel string, sources []provider.MediaSource, play func(provider.MediaSource) (PlaybackResult, error)) (PlaybackResult, error) {
+func attemptSources(playerLabel, mediaTitle string, sources []provider.MediaSource, play func(provider.MediaSource) (PlaybackResult, error)) (PlaybackResult, error) {
 	if len(sources) == 0 {
 		return PlaybackResult{}, fmt.Errorf("%s playback failed: no playback sources available", playerLabel)
 	}
@@ -77,7 +77,10 @@ func attemptSources(playerLabel string, sources []provider.MediaSource, play fun
 		if errors.As(err, &needsConfirm) {
 			return result, err
 		}
-		label := strings.TrimSpace(source.Quality)
+		label := sanitizeMediaTitle(mediaTitle)
+		if label == "" {
+			label = strings.TrimSpace(source.Quality)
+		}
 		if label == "" {
 			label = fmt.Sprintf("source %d", idx+1)
 		}

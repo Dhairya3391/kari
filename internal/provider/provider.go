@@ -16,10 +16,12 @@ import (
 type ContentType string
 
 const (
-	ModeAnime    ContentType = "anime"
-	ModeMovies   ContentType = "movies"
-	ModeTV       ContentType = "tv"
-	ModeCartoon  ContentType = "cartoon"
+	ModeAnime   ContentType = "anime"
+	ModeMovies  ContentType = "movies"
+	ModeTV      ContentType = "tv"
+	ModeCartoon ContentType = "cartoon"
+	// ModeStremio exposes the catalogs declared by user-added Stremio addons.
+	ModeStremio  ContentType = "stremio"
 	ModeJellyfin ContentType = "jellyfin"
 	// ModeManga is the in-terminal manga/comic reading mode, served by
 	// providers implementing MangaSource.
@@ -472,6 +474,13 @@ type FeatureSource interface {
 // persisted history — Alias is purely presentational.
 type Presenter interface {
 	Alias() string
+}
+
+// ConfiguredProvider matches one user-provided configuration value so the
+// registry can remove that provider when the setting is deleted.
+type ConfiguredProvider interface {
+	// MatchesConfiguration reports whether value identifies this provider.
+	MatchesConfiguration(value string) bool
 }
 
 // Descriptor declares a provider for registration. Descriptors live only in
