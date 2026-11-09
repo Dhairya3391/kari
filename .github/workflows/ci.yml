@@ -24,6 +24,9 @@ jobs:
       - name: Go Vet
         run: go vet ./...
 
+      - name: Build Android target
+        run: CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -buildmode=pie ./cmd/kari
+
       - name: Staticcheck
         uses: dominikh/staticcheck-action@v1.3.1
         with:

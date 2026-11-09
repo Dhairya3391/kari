@@ -12,7 +12,6 @@ import (
 	"kari/internal/logging"
 	"kari/internal/termimg"
 
-	_ "github.com/gen2brain/avif"
 	_ "golang.org/x/image/webp"
 )
 
