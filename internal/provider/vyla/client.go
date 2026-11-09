@@ -1,7 +1,7 @@
 // Package vyla implements provider.Provider against the self-hosted Vyla
-// Stream API (https://gitlab.com/vyla-entertainment/stream-api), querying 44
-// upstream streaming scrapers with real-time stream verification, HLS playlist
-// rewriting, and Server-Sent Event (SSE) progressive candidate delivery.
+// Stream API (https://gitlab.com/vyla-entertainment/stream-api), using its
+// active SDK source catalog with real-time verification, HLS rewriting, and
+// Server-Sent Event (SSE) progressive candidate delivery.
 package vyla
 
 import (
@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -40,27 +41,9 @@ var defaultDemuxerArgs = []string{
 	"--demuxer-lavf-o=extension_picky=0",
 }
 
-// curatedVylaSources lists verified, working sources from Vyla SDK that Kari
-// does not already provide natively, excluding dead backends and native duplicates
-// (cno, movy, pengu, bcine, vidora, 111477).
-var curatedVylaSources = []string{
-	"xdownloader",
-	"hexa",
-	"dulo",
-	"lookmovie",
-	"vidapi",
-	"vidfast",
-	"vidup",
-	"vidy",
-	"rivo",
-	"yapgrid",
-	"pstream",
-	"streamaggregator",
-	"lmscript",
-	"flaxmovies",
-	"vidvault",
-	"movenerds",
-}
+// fallbackVylaSources keeps known non-native sources available when the API's
+// dynamic source catalog cannot be fetched.
+const fallbackVylaSources = "xdownloader,hexa,dulo,lookmovie,vidapi,vidfast,vidup,vidy,rivo,yapgrid,pstream,streamaggregator,lmscript,flaxmovies,vidvault,movenerds"
 
 // Client implements provider.Provider against a self-hosted Vyla Stream API instance.
 type Client struct {
@@ -173,7 +156,12 @@ func (c *Client) ResolveStream(
 		return err
 	}
 
-	endpoint := c.buildStreamURL(tmdbID, isTv, season, epNum)
+	sources, err := c.availableSources(ctx)
+	if err != nil {
+		vyLog.Debug("vyla source catalog unavailable; using fallback sources", "err", err)
+		sources = strings.Split(fallbackVylaSources, ",")
+	}
+	endpoint := c.buildStreamURL(tmdbID, isTv, season, epNum, sources)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("create vyla stream request: %w", err)
@@ -282,8 +270,8 @@ func (c *Client) ResolveStream(
 	return nil
 }
 
-func (c *Client) buildStreamURL(tmdbID int, isTv bool, season, episode int) string {
-	sourcesParam := strings.Join(curatedVylaSources, ",")
+func (c *Client) buildStreamURL(tmdbID int, isTv bool, season, episode int, sources []string) string {
+	sourcesParam := strings.Join(sources, ",")
 	if isTv {
 		params := url.Values{}
 		params.Set("id", strconv.Itoa(tmdbID))
@@ -296,6 +284,51 @@ func (c *Client) buildStreamURL(tmdbID int, isTv bool, season, episode int) stri
 	params.Set("id", strconv.Itoa(tmdbID))
 	params.Set("sources", sourcesParam)
 	return fmt.Sprintf("%s/api/movie?%s", c.apiBase, params.Encode())
+}
+
+// availableSources uses Vyla's live test index so newly added sources are
+// included without duplicating providers Kari already resolves natively.
+func (c *Client) availableSources(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/test", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create vyla source catalog request: %w", err)
+	}
+	req.Header.Set("User-Agent", config.DesktopUserAgent)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("vyla source catalog request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: req.URL.String()}
+	}
+
+	var catalog map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&catalog); err != nil {
+		return nil, fmt.Errorf("decode vyla source catalog: %w", err)
+	}
+	sources := make([]string, 0, len(catalog))
+	for source := range catalog {
+		if !isNativeVylaSource(source) {
+			sources = append(sources, source)
+		}
+	}
+	if len(sources) == 0 {
+		return nil, provider.ErrNoSources
+	}
+	sort.Strings(sources)
+	return sources, nil
+}
+
+// isNativeVylaSource excludes Vyla backends already queried through Kari's
+// dedicated provider routes.
+func isNativeVylaSource(source string) bool {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "111477", "cno", "movy", "pengu":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseCoords(mediaID string, episode provider.Episode) (int, bool, int, int, error) {
