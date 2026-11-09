@@ -21,6 +21,7 @@ const (
 	CategoryProviders
 	CategoryAccounts
 	CategoryInterface
+	CategoryHistory
 )
 
 var SettingsCategoryNames = []string{
@@ -31,6 +32,7 @@ var SettingsCategoryNames = []string{
 	"Providers",
 	"Accounts",
 	"Interface",
+	"History",
 }
 
 // ProviderRow represents one provider toggle row in Settings > Providers.
@@ -42,7 +44,7 @@ type ProviderRow struct {
 	Key       string
 	Enabled   bool
 	Available bool
-	// Radio is true for modes that enforce a single active provider (manga).
+	// Radio is true when a mode permits only one enabled provider.
 	// The renderer shows ◉/○ instead of ●/○ to signal mutually-exclusive selection.
 	Radio bool
 }
@@ -91,6 +93,8 @@ type SettingsData struct {
 	// Modes values
 	DefaultModeName string
 	ModesRows       []ModeRow
+	HistoryDisabled bool
+	HistoryModes    []HistoryModeRow
 	// Providers values
 	ProviderRows []ProviderRow
 	// Accounts values
@@ -113,6 +117,13 @@ type SettingsData struct {
 	Transitions         bool   // on / off
 	StartupSearchActive bool   // on / off
 	AutoUpdate          bool   // on / off
+}
+
+// HistoryModeRow describes local history recording for one content mode.
+type HistoryModeRow struct {
+	Key     string
+	Label   string
+	Enabled bool
 }
 
 // RenderSettingsScreen renders the responsive Settings screen.
@@ -217,6 +228,16 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 			desc = "Default mode opened when Kari starts up."
 		} else {
 			desc = "The order here is the order tab / shift+tab cycles modes on Search. [←]/[→] reorders, [Space]/[Enter] toggles."
+		}
+	case CategoryHistory:
+		rows = append(rows, renderSettingRow("All modes", formatVal(boolOnOff(!data.HistoryDisabled), data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))
+		for i, mode := range data.HistoryModes {
+			rows = append(rows, renderSettingRow(mode.Label, formatVal(boolOnOff(mode.Enabled), data.FocusedRowIndex == i+1, st), data.FocusedRowIndex == i+1, width, st))
+		}
+		if data.FocusedRowIndex == 0 {
+			desc = "Stop or resume saving playback progress locally."
+		} else {
+			desc = "Choose which content modes save playback progress."
 		}
 	case CategoryProviders:
 		var lastSection string

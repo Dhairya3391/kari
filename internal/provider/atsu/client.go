@@ -75,7 +75,7 @@ func (c *Client) Features(mode provider.ContentType) provider.Features {
 	if mode != provider.ModeManga {
 		return provider.Features{}
 	}
-	return provider.Features{SearchPlaceholder: "Search manga…"}
+	return provider.Features{SearchPlaceholder: "Search manga, novels & comics…"}
 }
 
 type searchResponse struct {
@@ -159,10 +159,9 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 			continue
 		}
 
-		// Prefer JPEG Poster over AVIF PosterMedium so Go's image decoder succeeds
-		cover := doc.Poster
+		cover := doc.PosterMedium
 		if cover == "" {
-			cover = doc.PosterMedium
+			cover = doc.Poster
 		}
 		coverURL := c.formatAssetURL(cover)
 
@@ -360,6 +359,7 @@ func (c *Client) FetchPages(ctx context.Context, chapter provider.MangaChapter) 
 		pages = append(pages, provider.MangaPage{
 			URL:       imgURL,
 			Referer:   c.baseURL + "/",
+			Origin:    c.baseURL,
 			UserAgent: config.DesktopUserAgent,
 			Width:     p.Width,
 			Height:    p.Height,

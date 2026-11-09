@@ -153,3 +153,25 @@ func TestResultTypeLabelAndSeriesToItemsLive(t *testing.T) {
 		t.Errorf("row desc = %q, want 2026-09-20 10:00", row.desc)
 	}
 }
+
+func TestMangaModeKeepsNovelAndComicCategories(t *testing.T) {
+	for _, test := range []struct {
+		mediaType string
+		want      string
+	}{
+		{provider.MediaTypeManga, "Manga"},
+		{provider.MediaTypeNovel, "Novel"},
+		{provider.MediaTypeComic, "Comic"},
+	} {
+		item := provider.SearchResult{Type: provider.ModeManga, MediaType: test.mediaType}
+		if item.Type != provider.ModeManga {
+			t.Fatalf("category %q escaped manga mode", test.mediaType)
+		}
+		if got := resultTypeLabel(item); got != test.want {
+			t.Errorf("resultTypeLabel(%q) = %q, want %q", test.mediaType, got, test.want)
+		}
+		if got := historyKindLabel(string(provider.ModeManga), test.mediaType); got != test.want {
+			t.Errorf("historyKindLabel(%q) = %q, want %q", test.mediaType, got, test.want)
+		}
+	}
+}

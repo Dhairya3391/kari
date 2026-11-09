@@ -18,6 +18,7 @@ type ChaptersData struct {
 	Width         int
 	Height        int
 	Accent        lipgloss.AdaptiveColor
+	Loading       bool
 }
 
 const chaptersStoryMaxLines = 3
@@ -37,6 +38,13 @@ func RenderChaptersScreen(data ChaptersData) string {
 	}
 	if len(data.Genres) > 0 {
 		rows = append(rows, st.Dim.Render(truncate(strings.Join(data.Genres, " · "), data.Width)))
+	}
+
+	// While loading with no rows yet, the body stays header-only: the
+	// fixed loading row above the footer carries the spinner, so no
+	// premature "no chapters" flashes.
+	if data.Loading {
+		return strings.Join(rows, "\n")
 	}
 
 	if data.ChaptersCount == 0 {

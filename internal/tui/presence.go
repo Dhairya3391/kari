@@ -117,7 +117,7 @@ func (m *modelImpl) reportReading(chapter provider.MangaChapter) {
 	media := model.ResolvedMedia{
 		SeriesTitle:  series,
 		EpisodeTitle: label,
-		MediaType:    provider.MediaTypeManga,
+		MediaType:    m.selectedMangaMediaType(),
 	}
 	m.presenceSession.Add(1)
 	m.presence.SetNowPlaying(presence.NowPlaying{

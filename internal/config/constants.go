@@ -78,9 +78,14 @@ const (
 	CinecatBase = "https://beta.cinecat.eu"
 	// CinecatReferer satisfies the hotlink protection on Cinecat stream requests.
 	CinecatReferer = "https://beta.cinecat.eu/"
-	// CinecatCDNBase is the primary multi-quality HLS streaming backend for Cinecat.
-	CinecatCDNBase  = "https://zcdn1.iamwatchingyou.site"
-	CinecatSubsBase = "https://sub.vdrk.site"
+	// CinecatCDNBase is the current ZCDN edge for Cinecat's adaptive HLS lane.
+	// Older zcdn*.iamwatchingyou.site and *.bluevelvet.space hosts were retired
+	// and now redirect to the workers.dev deployment.
+	CinecatCDNBase = "https://zcdn1.2wwlgkfo-31a.workers.dev"
+	// CinecatSourcesAPIBase is Cinecat's multi-lane sources API. It lists the
+	// available streaming backends and resolves each one by TMDB coordinates.
+	CinecatSourcesAPIBase = "https://edge.cinecat.eu"
+	CinecatSubsBase       = "https://sub.vdrk.site"
 
 	// CnoBase is the main web and API base for Cno (https://cno.to).
 	CnoBase = "https://cno.to"
@@ -96,6 +101,14 @@ const (
 	// serves both the embed document and its /api/source lanes.
 	VidRiftSiteBase  = "https://vidrift.net"
 	VidRiftEmbedBase = "https://embed.vidrift.net"
+
+	// AniDreamBase is the AniDream web application (https://anidream.to).
+	// It is a TanStack Start SPA whose catalog, playback, and reader data
+	// are served by hashed /_serverFn endpoints.
+	AniDreamBase = "https://anidream.to"
+	// AniDreamReferer is sent on server-function and media requests; the
+	// upstream gateway keys its session on the site origin.
+	AniDreamReferer = "https://anidream.to/"
 
 	// BingrAPIBase is the REST API endpoint for Bingr (https://bingr.one).
 	BingrAPIBase = "https://api.bingr.one/api"
@@ -128,6 +141,23 @@ const (
 	FamelackTVChannelsURL = FamelackDataBase + "/tv/compressed/categories/all.json"
 	// FamelackTVCountriesURL maps ISO country codes to display names.
 	FamelackTVCountriesURL = FamelackDataBase + "/tv/compressed/countries_metadata.json"
+)
+
+// IPTV-org publishes a community-maintained live TV catalog as public JSON
+// endpoints on GitHub Pages. Channels and stream URLs are separate documents
+// joined by channel ID.
+const (
+	// IPTVOrgAPIBase is the root of the public IPTV-org API.
+	IPTVOrgAPIBase = "https://iptv-org.github.io/api"
+	// IPTVOrgChannelsURL lists every known channel with country, category,
+	// and lifecycle metadata.
+	IPTVOrgChannelsURL = IPTVOrgAPIBase + "/channels.json"
+	// IPTVOrgStreamsURL lists direct stream URLs keyed by channel ID.
+	IPTVOrgStreamsURL = IPTVOrgAPIBase + "/streams.json"
+	// IPTVOrgCategoriesURL maps category IDs to display names.
+	IPTVOrgCategoriesURL = IPTVOrgAPIBase + "/categories.json"
+	// IPTVOrgCountriesURL maps country codes to display names and languages.
+	IPTVOrgCountriesURL = IPTVOrgAPIBase + "/countries.json"
 )
 
 // TimStreams exposes sports events and 24/7 channels through its public API.

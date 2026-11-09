@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"kari/internal/logging"
+	"kari/internal/provider"
 	"kari/internal/util"
 )
 
@@ -471,10 +472,16 @@ func (s *Store) Close() {
 }
 
 func groupKeyForEntry(entry Entry) GroupKey {
+	mediaType := entry.MediaType
+	title := FirstNonEmpty(entry.Title, entry.Key.Title)
+	if entry.Mode == string(provider.ModeManga) {
+		mediaType = provider.MediaTypeManga
+		title = normalizeKeyPart(title)
+	}
 	return GroupKey{
 		Mode:      entry.Mode,
-		MediaType: entry.MediaType,
-		Title:     FirstNonEmpty(entry.Title, entry.Key.Title),
+		MediaType: mediaType,
+		Title:     title,
 	}
 }
 

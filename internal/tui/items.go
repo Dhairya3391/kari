@@ -42,6 +42,9 @@ func seriesToItemsIndexed(items []provider.SearchResult, idxs []int) []list.Item
 			idx = idxs[pos]
 		}
 		desc := strings.TrimSpace(it.Year)
+		if len(it.SourceOptions) > 1 {
+			desc = fmt.Sprintf("%d sources", len(it.SourceOptions))
+		}
 		badge := resultTypeLabel(it)
 		title := "[" + badge + "]  " + it.Title
 

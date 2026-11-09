@@ -97,12 +97,32 @@ func TestTabAndShiftTabUsePortableKeyTypes(t *testing.T) {
 	m.activeView = viewSettings
 	m.settingsCategory = CategoryPlayback
 	m.updateSettings(tea.KeyMsg{Type: tea.KeyShiftTab})
-	if m.settingsCategory != CategoryInterface {
-		t.Fatalf("Shift+Tab selected settings category %d, want Interface", m.settingsCategory)
+	if m.settingsCategory != CategoryHistory {
+		t.Fatalf("Shift+Tab selected settings category %d, want History", m.settingsCategory)
 	}
 	m.updateSettings(tea.KeyMsg{Type: tea.KeyTab})
 	if m.settingsCategory != CategoryPlayback {
 		t.Fatalf("Tab selected settings category %d, want Playback", m.settingsCategory)
+	}
+}
+
+func TestHistoryAllModesReflectsIndividualToggles(t *testing.T) {
+	m := &modelImpl{
+		configuredModes: []string{"anime", "tv"},
+	}
+	if !m.historyAllModesEnabled() {
+		t.Fatal("all modes should start enabled")
+	}
+	m.settingsCategory = CategoryHistory
+	m.settingsIndex = 1
+	m.cycleCurrentSetting(1)
+	if m.historyAllModesEnabled() {
+		t.Fatal("all modes should be off when one mode is disabled")
+	}
+	m.settingsIndex = 0
+	m.cycleCurrentSetting(1)
+	if !m.historyAllModesEnabled() || len(m.disabledHistoryModes) != 0 {
+		t.Fatal("enabling All modes should re-enable every mode")
 	}
 }
 

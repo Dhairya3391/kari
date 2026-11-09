@@ -63,6 +63,10 @@ func mediaTypeLabel(mediaType string) string {
 		return "Cartoon"
 	case provider.MediaTypeManga:
 		return "Manga"
+	case provider.MediaTypeNovel:
+		return "Novel"
+	case provider.MediaTypeComic:
+		return "Comic"
 	case provider.MediaTypeLive:
 		return "Live"
 	default:

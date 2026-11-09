@@ -106,7 +106,7 @@ func TestPreviewOmitsPlayingBanner(t *testing.T) {
 }
 
 // The sources table carries an audio column for non-anime modes — every
-// row names its language (defaulting to English) so the column never
+// row names its language (or shows a dash when unknown) so the column never
 // shifts. Anime keeps the sub/dub header row instead.
 func TestPreviewSourcesAudioColumn(t *testing.T) {
 	ranked := func() []ranking.ScoredSource {
@@ -128,8 +128,8 @@ func TestPreviewSourcesAudioColumn(t *testing.T) {
 		if !strings.Contains(out, "audio") {
 			t.Errorf("audio column header missing, got:\n%s", out)
 		}
-		if !strings.Contains(out, "English") {
-			t.Errorf("default English audio missing, got:\n%s", out)
+		if !strings.Contains(out, "—") {
+			t.Errorf("unknown audio language should show a dash, got:\n%s", out)
 		}
 		if !strings.Contains(out, "Hindi") {
 			t.Errorf("Hindi audio missing, got:\n%s", out)

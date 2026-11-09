@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"kari/internal/history"
 	"kari/internal/provider"
@@ -141,17 +142,10 @@ func centerBlock(content string, width, maxW int) string {
 	return strings.Join(lines, "\n")
 }
 func truncate(s string, maxLen int) string {
-	if lipgloss.Width(s) <= maxLen {
-		return s
+	if maxLen <= 0 {
+		return ""
 	}
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	if maxLen <= 1 {
-		return "…"
-	}
-	return string(runes[:maxLen-1]) + "…"
+	return ansi.Truncate(s, maxLen, "…")
 }
 func formatContinuePosition(entry history.Entry) string {
 	if entry.Mode == string(provider.ModeManga) {
@@ -208,7 +202,7 @@ func wrapText(text string, width, maxLines int) string {
 	for _, word := range words {
 		if curLine.Len() == 0 {
 			curLine.WriteString(word)
-		} else if curLine.Len()+1+len(word) <= width {
+		} else if ansi.StringWidth(curLine.String())+1+ansi.StringWidth(word) <= width {
 			curLine.WriteByte(' ')
 			curLine.WriteString(word)
 		} else {

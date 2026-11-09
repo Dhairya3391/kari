@@ -30,7 +30,7 @@ func TestAtsuMetadata(t *testing.T) {
 	}
 
 	f := c.Features(provider.ModeManga)
-	if f.SearchPlaceholder != "Search manga…" {
+	if f.SearchPlaceholder != "Search manga, novels & comics…" {
 		t.Errorf("unexpected SearchPlaceholder: %q", f.SearchPlaceholder)
 	}
 	if c.Features(provider.ModeAnime).SearchPlaceholder != "" {
@@ -115,8 +115,8 @@ func TestAtsuSearchAndChapters(t *testing.T) {
 	if len(results) != 1 || results[0].ID != "rSmmf" {
 		t.Fatalf("unexpected search results: %+v", results)
 	}
-	// Verify JPEG poster was preferred over AVIF
-	if results[0].CoverURL != "https://cdn.atsu.moe/static/posters/poster.jpg" {
+	// Verify the medium AVIF poster is preferred when present.
+	if results[0].CoverURL != "https://cdn.atsu.moe/static/posters/poster-medium.avif" {
 		t.Errorf("unexpected cover URL: %s", results[0].CoverURL)
 	}
 
@@ -148,6 +148,9 @@ func TestAtsuSearchAndChapters(t *testing.T) {
 	}
 	if pages[1].URL != "https://cdn.atsu.moe/static/pages/rSmmf/ch1/1.webp" {
 		t.Errorf("unexpected page 1 URL: %s", pages[1].URL)
+	}
+	if pages[0].Referer != srv.URL+"/" || pages[0].Origin != srv.URL {
+		t.Errorf("page request headers = Referer %q, Origin %q", pages[0].Referer, pages[0].Origin)
 	}
 }
 

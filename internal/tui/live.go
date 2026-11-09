@@ -111,6 +111,9 @@ func RenderLiveResultsScreen(data ResultsData) string {
 	// Header
 	var rows []string
 	rows = append(rows, queryLine(data))
+	if data.PosterBlock != "" {
+		rows = append(rows, data.PosterBlock)
+	}
 	rows = append(rows, "")
 
 	if len(data.Results) == 0 {

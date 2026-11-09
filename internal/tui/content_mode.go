@@ -29,6 +29,10 @@ func resultTypeLabel(item provider.SearchResult) string {
 		return "Cartoon"
 	case provider.MediaTypeManga:
 		return "Manga"
+	case provider.MediaTypeNovel:
+		return "Novel"
+	case provider.MediaTypeComic:
+		return "Comic"
 	case provider.MediaTypeLive:
 		return "Live"
 	default:
@@ -56,8 +60,14 @@ func historyKindLabel(mode, mediaType string) string {
 		return "Movie"
 	case mt == provider.MediaTypeCartoon || mode == string(provider.ModeCartoon):
 		return "Cartoon"
-	case mt == provider.MediaTypeManga || mode == string(provider.ModeManga):
+	case mt == provider.MediaTypeNovel:
+		return "Novel"
+	case mt == provider.MediaTypeComic:
+		return "Comic"
+	case mt == provider.MediaTypeManga:
 		return "Manga"
+	case mode == string(provider.ModeManga):
+		return "Reading"
 	case mt == provider.MediaTypeLive || mode == string(provider.ModeLive):
 		return "Live"
 	case mt == provider.MediaTypeTV:

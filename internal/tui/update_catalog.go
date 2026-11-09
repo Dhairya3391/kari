@@ -62,7 +62,15 @@ func (m *modelImpl) onSearchDone(msg searchDoneMsg) (tea.Model, tea.Cmd) {
 		m.queryInput.Blur()
 	}
 	m.setStatus(statusInfo, "")
-	return m, m.triggerSearchPoster(m.selectedSeriesIndex())
+	cmds := []tea.Cmd{m.triggerSearchPoster(m.selectedSeriesIndex())}
+	if m.appMode == provider.ModeManga {
+		if idx := m.selectedSeriesIndex(); idx >= 0 && idx < len(m.seriesResults) && m.isMangaProvider(m.seriesResults[idx].Provider) {
+			if prefetch := m.prefetchMangaChaptersCmd(m.seriesResults[idx]); prefetch != nil {
+				cmds = append(cmds, prefetch)
+			}
+		}
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {

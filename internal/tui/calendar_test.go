@@ -96,7 +96,6 @@ func newTestCalendarModel(t *testing.T) *modelImpl {
 	return m
 }
 
-
 func TestRenderCalendarScreen(t *testing.T) {
 	m := newTestCalendarModel(t)
 	accent := lipgloss.AdaptiveColor{Light: "#7AA2F7", Dark: "#7AA2F7"}

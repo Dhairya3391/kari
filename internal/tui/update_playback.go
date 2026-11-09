@@ -408,7 +408,7 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 		tuiLog.Debug("local playback finished", "opID", msg.opID)
 		return m, nil
 	}
-	if m.historyStore != nil && m.resolved != nil {
+	if m.historyRecordingEnabled() && m.resolved != nil {
 		audioMode := m.audioMode
 		if m.selectedEpisode != nil && m.selectedEpisode.Audio != "" {
 			audioMode = m.selectedEpisode.Audio

@@ -25,11 +25,12 @@ import (
 )
 
 var (
-	_ provider.Provider       = (*Client)(nil)
-	_ provider.DeadlineSource = (*Client)(nil)
-	_ provider.EpisodeSource  = (*Client)(nil)
-	_ provider.FeatureSource  = (*Client)(nil)
-	_ provider.Presenter      = (*Client)(nil)
+	_ provider.Provider           = (*Client)(nil)
+	_ provider.DeadlineSource     = (*Client)(nil)
+	_ provider.EpisodeSource      = (*Client)(nil)
+	_ provider.FeatureSource      = (*Client)(nil)
+	_ provider.Presenter          = (*Client)(nil)
+	_ provider.LiveStreamVerifier = (*Client)(nil)
 )
 
 var stabilityLog = logging.With("provider", "stability")
@@ -285,6 +286,11 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		return nil, provider.ErrNoSources
 	}
 	return sources, nil
+}
+
+// VerifyLiveStream implements provider.LiveStreamVerifier.
+func (c *Client) VerifyLiveStream(ctx context.Context, _ provider.ContentType, source provider.MediaSource) error {
+	return provider.VerifyLiveStream(ctx, c.httpClient, source)
 }
 
 func (c *Client) resolveEventSources(ctx context.Context, eventID string, addSource func(string, string)) {

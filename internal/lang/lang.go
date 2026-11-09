@@ -285,3 +285,23 @@ func Name(raw string) string {
 	}
 	return strings.ToUpper(code)
 }
+
+// Names returns the display names of the given language tags, de-duplicated
+// and joined for a single UI label. Unknown tags render as their uppercased
+// code so a multi-language channel never hides languages the catalog lists.
+func Names(raw []string) string {
+	seen := make(map[string]struct{}, len(raw))
+	display := make([]string, 0, len(raw))
+	for _, tag := range raw {
+		code := Normalize(tag)
+		if code == "" {
+			continue
+		}
+		if _, dup := seen[code]; dup {
+			continue
+		}
+		seen[code] = struct{}{}
+		display = append(display, Name(code))
+	}
+	return strings.Join(display, " · ")
+}

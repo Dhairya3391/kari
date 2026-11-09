@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"context"
 	"testing"
 
 	"kari/internal/provider"
+	"kari/internal/service"
+	"kari/internal/util"
 )
 
 // aliasProvider advertises a Presenter alias so settings rows can be checked
@@ -14,6 +17,16 @@ type aliasProvider struct {
 }
 
 func (p *aliasProvider) Alias() string { return p.alias }
+
+type mangaSettingsProvider struct{ fakeProviderForSwitch }
+
+func (*mangaSettingsProvider) FetchChapters(context.Context, provider.SearchResult) ([]provider.MangaChapter, error) {
+	return nil, nil
+}
+
+func (*mangaSettingsProvider) FetchPages(context.Context, provider.MangaChapter) ([]provider.MangaPage, error) {
+	return nil, nil
+}
 
 func TestProviderRowsIncludeLiveProviders(t *testing.T) {
 	registry := &provider.Registry{}
@@ -45,5 +58,53 @@ func TestProviderRowsIncludeLiveProviders(t *testing.T) {
 	rows = m.providerRows()
 	if len(rows) != 1 || rows[0].Enabled {
 		t.Errorf("mode-scoped disable must turn the live row off: %+v", rows)
+	}
+}
+
+func TestReadingProviderToggleIsIndependentAndClearsSearchCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	registry := &provider.Registry{}
+	registry.Register(&mangaSettingsProvider{fakeProviderForSwitch{
+		name:  "weebcentral",
+		modes: []provider.Mode{{Name: provider.ModeManga, Priority: 1}},
+	}})
+	registry.Register(&mangaSettingsProvider{fakeProviderForSwitch{
+		name:  "atsu",
+		modes: []provider.Mode{{Name: provider.ModeManga, Priority: 2}},
+	}})
+	cache := util.NewBoundedCache[searchCacheEntry](10)
+	cache.Set("manga:one piece", searchCacheEntry{
+		results: []provider.SearchResult{{Title: "cached from WeebCentral", Provider: "weebcentral"}},
+	})
+	m := &modelImpl{
+		registry:          registry,
+		mediaService:      service.NewMediaService(registry),
+		disabledProviders: make(map[string]bool),
+		searchCache:       cache,
+	}
+
+	index := -1
+	for i, row := range m.providerRows() {
+		if row.Mode == provider.ModeManga && row.ID == "atsu" {
+			if row.Radio {
+				t.Fatal("reading providers must use independent toggles")
+			}
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		t.Fatal("Atsu manga provider row not found")
+	}
+	m.toggleProviderAtIndex(index)
+
+	if _, ok := cache.Get("manga:one piece"); ok {
+		t.Fatal("provider toggle must clear cached manga search results")
+	}
+	if !m.isProviderDisabledKey(provider.ModeManga, "atsu") {
+		t.Fatal("toggling Atsu off should disable Atsu")
+	}
+	if m.isProviderDisabledKey(provider.ModeManga, "weebcentral") {
+		t.Fatal("toggling Atsu should leave WeebCentral enabled")
 	}
 }

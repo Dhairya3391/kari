@@ -152,7 +152,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		// Direct category jumps via 1-7 keys
+		// Direct category jumps via 1-8 keys
 		case "1":
 			m.settingsCategory = CategoryPlayback
 			m.settingsIndex = 0
@@ -179,6 +179,10 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "7":
 			m.settingsCategory = CategoryInterface
+			m.settingsIndex = 0
+			return m, nil
+		case "8":
+			m.settingsCategory = CategoryHistory
 			m.settingsIndex = 0
 			return m, nil
 		case "K", "shift+up":
@@ -313,6 +317,8 @@ func (m *modelImpl) maxRowsForCategory(cat SettingsCategory) int {
 		return 7
 	case CategoryModes:
 		return len(m.configuredModes) + 1
+	case CategoryHistory:
+		return len(m.configuredModes) + 1
 	case CategoryProviders:
 		return len(m.providerRows())
 	case CategoryAccounts:
@@ -391,6 +397,30 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 		} else if m.settingsIndex > 0 {
 			m.reorderMode(delta)
 		}
+	case CategoryHistory:
+		if m.settingsIndex == 0 {
+			m.toggleAllHistoryModes()
+		} else {
+			modeIndex := m.settingsIndex - 1
+			if modeIndex < len(m.configuredModes) {
+				if m.disabledHistoryModes == nil {
+					m.disabledHistoryModes = make(map[string]bool)
+				}
+				mode := m.configuredModes[modeIndex]
+				if m.disableHistory {
+					m.disabledHistoryModes = make(map[string]bool, len(m.configuredModes))
+					for _, configuredMode := range m.configuredModes {
+						m.disabledHistoryModes[configuredMode] = true
+					}
+					m.disableHistory = false
+				}
+				if m.disabledHistoryModes[mode] {
+					delete(m.disabledHistoryModes, mode)
+				} else {
+					m.disabledHistoryModes[mode] = true
+				}
+			}
+		}
 	case CategoryAccounts:
 		switch m.settingsIndex {
 		case 2:
@@ -415,6 +445,19 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.autoUpdate = !m.autoUpdate
 		}
 	}
+}
+
+func (m *modelImpl) toggleAllHistoryModes() {
+	if m.historyAllModesEnabled() {
+		m.disableHistory = true
+		return
+	}
+	m.disableHistory = false
+	m.disabledHistoryModes = make(map[string]bool)
+}
+
+func (m *modelImpl) historyAllModesEnabled() bool {
+	return !m.disableHistory && len(m.disabledHistoryModes) == 0
 }
 
 type startupModeOption struct {
@@ -569,7 +612,7 @@ var providerSections = []struct {
 	{Section: "Movies", Mode: provider.ModeMovies},
 	{Section: "TV Shows", Mode: provider.ModeTV},
 	{Section: "Live", Mode: provider.ModeLive},
-	{Section: "Manga", Mode: provider.ModeManga},
+	{Section: "Reading", Mode: provider.ModeManga},
 }
 
 func (m *modelImpl) isProviderDisabledKey(mode provider.ContentType, id string) bool {
@@ -607,7 +650,7 @@ func (m *modelImpl) providerRows() []ProviderRow {
 				Key:       key,
 				Enabled:   !m.isProviderDisabledKey(sec.Mode, id),
 				Available: avail,
-				Radio:     sec.Mode == provider.ModeManga,
+				Radio:     false,
 			})
 		}
 	}
@@ -628,20 +671,7 @@ func (m *modelImpl) toggleProviderAtIndex(index int) (tea.Model, tea.Cmd) {
 	if m.disabledProviders == nil {
 		m.disabledProviders = make(map[string]bool)
 	}
-	if row.Mode == provider.ModeManga {
-		for _, r := range rows {
-			if r.Mode == provider.ModeManga {
-				k := strings.ToLower(strings.TrimSpace(r.Key))
-				otherID := strings.ToLower(strings.TrimSpace(r.ID))
-				if otherID == id {
-					delete(m.disabledProviders, k)
-					delete(m.disabledProviders, otherID)
-				} else {
-					m.disabledProviders[k] = true
-				}
-			}
-		}
-	} else if m.isProviderDisabledKey(row.Mode, id) {
+	if m.isProviderDisabledKey(row.Mode, id) {
 		delete(m.disabledProviders, key)
 		delete(m.disabledProviders, id)
 	} else {
@@ -653,6 +683,21 @@ func (m *modelImpl) toggleProviderAtIndex(index int) (tea.Model, tea.Cmd) {
 }
 
 func (m *modelImpl) syncDisabledProvidersToService() {
+	if m.searchQueryCancel != nil {
+		m.searchQueryCancel()
+		m.searchQueryCancel = nil
+	}
+	if m.searchOpID != 0 {
+		m.searchOpID = m.newOpID()
+		if m.activeView == viewSearch {
+			m.loading = false
+			m.loadingText = ""
+		}
+	}
+	m.searchCacheGeneration.Add(1)
+	if m.searchCache != nil {
+		m.searchCache.Clear()
+	}
 	if m.mediaService == nil {
 		return
 	}
@@ -664,35 +709,4 @@ func (m *modelImpl) syncDisabledProvidersToService() {
 	}
 	slices.Sort(list)
 	m.mediaService.SetDisabledProviders(list)
-}
-
-// enforceSingleMangaProvider ensures at most one manga provider is enabled.
-// It runs at init time so a fresh install (no saved settings) or a settings
-// file written before the radio invariant existed never shows both on.
-// If no manga provider is already explicitly disabled, the highest-priority
-// one (first returned by the registry) is kept and the rest are disabled.
-// If one is already disabled the state is already valid and nothing changes.
-func (m *modelImpl) enforceSingleMangaProvider() {
-	if m.registry == nil {
-		return
-	}
-	providers := m.registry.ProvidersForMode(provider.ModeManga)
-	if len(providers) <= 1 {
-		return
-	}
-	// Check whether any manga provider is already explicitly disabled —
-	// if so the user (or a previous session) already chose one; respect it.
-	for _, p := range providers {
-		if m.isProviderDisabledKey(provider.ModeManga, p.Name()) {
-			return
-		}
-	}
-	// Nothing disabled yet: keep index-0 (highest priority), disable the rest.
-	if m.disabledProviders == nil {
-		m.disabledProviders = make(map[string]bool)
-	}
-	for _, p := range providers[1:] {
-		key := string(provider.ModeManga) + ":" + strings.ToLower(p.Name())
-		m.disabledProviders[key] = true
-	}
 }

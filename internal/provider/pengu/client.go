@@ -512,6 +512,15 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	return c.resolveStreams(ctx, mediaType, stremioID, tmdbID, false)
 }
 
+// VerifyLiveStream implements provider.LiveStreamVerifier. Pengu serves
+// several modes, so only live-mode rows are probed.
+func (c *Client) VerifyLiveStream(ctx context.Context, mode provider.ContentType, source provider.MediaSource) error {
+	if mode != provider.ModeLive {
+		return nil
+	}
+	return provider.VerifyLiveStream(ctx, c.httpClient, source)
+}
+
 func (c *Client) resolveLiveSource(ctx context.Context, stremioID string) ([]provider.MediaSource, error) {
 	resp, err := c.fetchPenguStreams(ctx, provider.MediaTypeTV, stremioID, false)
 	if err != nil {
@@ -1491,4 +1500,7 @@ func isEmoji(r rune) bool {
 		r == 0xFE0F || r == 0xFE0E || r == 0x200D
 }
 
-var _ provider.DeadlineSource = (*Client)(nil)
+var (
+	_ provider.DeadlineSource     = (*Client)(nil)
+	_ provider.LiveStreamVerifier = (*Client)(nil)
+)

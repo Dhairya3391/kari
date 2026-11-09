@@ -24,6 +24,20 @@ func mangaTestModel() *modelImpl {
 	}
 }
 
+// TestChaptersScreenLoading pins the pending state: with a load in flight
+// and no rows yet, the body must not flash a "no chapters" verdict.
+func TestChaptersScreenLoading(t *testing.T) {
+	out := RenderChaptersScreen(ChaptersData{
+		SeriesTitle:   "Classroom of the Elite: Year 2",
+		ProviderName:  "AniDream",
+		ChaptersCount: 0,
+		Loading:       true,
+	})
+	if strings.Contains(out, "No chapters available.") {
+		t.Errorf("loading chapters screen must not render the empty verdict:\n%s", out)
+	}
+}
+
 // TestChaptersScreenOrdering pins the stacked layout: title first,
 // chapter rows before the Story synopsis.
 func TestChaptersScreenOrdering(t *testing.T) {

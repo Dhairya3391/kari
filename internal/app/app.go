@@ -190,8 +190,8 @@ func Run() error {
 	if savedSettings != nil && len(savedSettings.DisabledProviders) > 0 {
 		mediaService.SetDisabledProviders(savedSettings.DisabledProviders)
 	}
-	mangaService := service.NewMangaService(registry)
 	mangaClient := manga.NewClient()
+	mangaService := service.NewMangaService(registry, mangaClient)
 	players := player.NewRegistry(cfg.PreferredPlayer, skipClients, skipSettings)
 	subtitleService := service.NewSubtitleService(cfg)
 	downloadService := service.NewDownloadService(cfg.DownloadDir, downloader.NewYTDLPDownloader(), mediaService, subtitleService)

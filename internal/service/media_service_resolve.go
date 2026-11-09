@@ -265,7 +265,15 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 						if !ok {
 							break streamLoop
 						}
+						// Live providers declare reachability probes so dead
+						// mirrors are dropped before the first snapshot reaches
+						// the player. Verification stays inside the provider's
+						// own source deadline.
+						if verifier, ok := p.(provider.LiveStreamVerifier); ok && len(batch) > 0 {
+							batch = verifyLiveSources(pCtx, mode, verifier, batch)
+						}
 						if len(batch) > 0 {
+							batch = discoverManifestAudio(pCtx, batch)
 							gotSources = true
 						}
 						mu.Lock()

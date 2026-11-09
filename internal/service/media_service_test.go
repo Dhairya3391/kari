@@ -927,6 +927,8 @@ func TestMediaServiceSearchMangaQueriesEveryEnabledProvider(t *testing.T) {
 	}}
 	atsu := &stubProvider{name: "atsu", mode: provider.ModeManga, results: []provider.SearchResult{
 		{Title: "One Piece", ID: "2", MediaType: provider.MediaTypeManga},
+		{Title: "One Piece Novel", ID: "3", MediaType: provider.MediaTypeNovel},
+		{Title: "One Piece Comic", ID: "4", MediaType: provider.MediaTypeComic},
 	}}
 
 	svc := NewMediaService(newTestRegistry(weebcentral, atsu))
@@ -935,10 +937,13 @@ func TestMediaServiceSearchMangaQueriesEveryEnabledProvider(t *testing.T) {
 		t.Fatalf("search failed: %v", err)
 	}
 	if len(results) != 2 {
-		t.Fatalf("expected 2 manga results, got %d: %+v", len(results), results)
+		t.Fatalf("expected grouped manga and novel results, got %d: %+v", len(results), results)
 	}
-	if results[0].Provider != "weebcentral" || results[1].Provider != "atsu" {
-		t.Fatalf("expected both providers queried, got %+v", results)
+	if results[0].Provider != "weebcentral" || len(results[0].SourceOptions) != 2 {
+		t.Fatalf("expected one manga result with both providers as sources, got %+v", results[0])
+	}
+	if results[1].MediaType != provider.MediaTypeNovel {
+		t.Fatalf("expected novel result to remain visible, got %+v", results[1])
 	}
 }
 

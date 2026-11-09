@@ -13,7 +13,7 @@
 ## 0. Registration (single source today)
 
 - `internal/provider/defaults/defaults.go` is the only registration
-  list: `anicine, movysx, anikoto, anipm, anivault, miruro, moovie, solis, cinecat, weebcentral, pengu, jellyfin`.
+  list: `anicine, movysx, anikoto, anipm, anivault, anidream, miruro, moovie, solis, cinecat, weebcentral, pengu, jellyfin`.
 - `jellyfin.When` gates on `JellyfinURL && JellyfinAPIKey`
   (`defaults.go:60-62`); factory failure skips with log, never fatal
   (`defaults.go:80-84`).
@@ -24,10 +24,10 @@ Declared modes/priorities:
 
 | mode | providers (priority) | evidence |
 | --- | --- | --- |
-| anime | anicine P1, anikoto P2, anipm P1, anivault P2, miruro P2, pengu P3 | `anicine`, `anikoto`, `anipm`, `anivault`, `miruro`, `pengu` `client.go` `Modes()` |
+| anime | anicine P1, anikoto P2, anipm P1, anivault P2, anidream P2, miruro P2, pengu P3 | `anicine`, `anikoto`, `anipm`, `anivault`, `anidream`, `miruro`, `pengu` `client.go` `Modes()` |
 | movies/tv/cartoon | movysx P2, pengu P2, moovie P2, solis P2, cinecat P2 | `movysx`, `pengu`, `moovie`, `solis`, `cinecat` `client.go` `Modes()` |
 | live | pengu P1 only | `pengu/client.go:162` |
-| manga | weebcentral P1 only | `weebcentral/client.go:48-50` |
+| reading (internal mode `manga`) | weebcentral P1, anidream P2, atsu P2 | `weebcentral`, `anidream`, `atsu` `Modes()` |
 | jellyfin | jellyfin P1 only | `jellyfin/client.go:55-59` |
 
 Cartoon search reuses TMDB multi-search + genre-16 filter via streambase
@@ -94,7 +94,7 @@ Cartoon search reuses TMDB multi-search + genre-16 filter via streambase
   strings or `ErrNoSources`. Failures are strings; ranking later reads
   `FailedProviders map[string]time.Time` but resolve does not feed it.
 
-### Manga: single-owner + sequential cross-source fallback
+### Reading: merged catalog + sequential cross-source fallback
 
 - `service/manga_service.go:28-40` capability assert, no name switch.
 - `FetchChapters 30s` (`43-59`), `FetchPages 30s` (`170-183`).
@@ -157,14 +157,15 @@ Unified shapes: `provider.SearchResult` (`provider.go:64-97`),
 | --- | --- | --- |
 | anikoto | `/search?q=` JSON `{id(json.Number),name,format,year}` → `Title/ID/MediaType(movie iff format==MOVIE)/Year`; episodes JSON `{number float64}` → `Episode.Episode`; watch `/watch/<srv>/<id>/<cat>/<n>` via `kit.FetchFirst` servers `l,light,mello,vid`-like list → `MediaSource{URL,Quality:"Auto (…)",Referer: megaplay.buzz, Type hls/mp4 by ext}` | quality strings are server labels (`"Auto (HD1)"`), not heights; audio from handle category sub/dub only; subtitle langs via `kit.Subtitles` + `lang.Normalize`; size absent; headers per-source Referer, no Cookie |
 | anivault | `/api/search?q=` AniList-keyed JSON `{id,title,coverImage,format}` → `Title/ID/MediaType`; `/api/episodes?anilistId=&source=anivault` (AnimeHeaven fallback) → sub/dub handles; `/api/watch/<source>/<anilistId>/<ep>/<sub\|dub>` → `m3u8`/`mp4`, proxy-unwrapped direct CDN URL, proxy `ref` as Referer, external VTT subtitles | sub resolves Anikoto soft-subbed HLS and AnimeHeaven hard-subbed MP4 in parallel; dub availability verified per episode; quality label is `Auto (<server>)`, not a height |
+| anidream | TanStack Start `/_serverFn/<hash>` calls carrying a Seroval `payload`; AniList-keyed browse/episodes/playback plus manga/light-novel chapters/pages; sub/dub handles `watch/anidream/<anilistID>/<audio>/<ep>`; signed multi-bitrate HLS, soft subtitles, chapter-derived skip times | search capped at 25; server-function hashes are bundle-specific and must be refreshed after an AniDream deploy; light novels share the manga reader; quality fixed `Auto`; empty episode audio flags fall back to sub |
 | anilight | same shape, base `noob3`, referer `anilight.live`, servers `[l,light,mello,vid]` (`anilight/client.go:237`); `cleanAniLightText`, `pickTitle` | same gaps as anikoto; title cleaning ad-hoc per provider |
 | reanime | same shape, base `noob4`, referer `flixcloud.cc`, servers `[hd1,hd2]` (`reanime/client.go:230`); `ArgPolicy{KeepHeaderFieldArgs,SkipURLArgs,StripQuotes}` (`reanime/client.go:254`) | same gaps; MPV arg filtering differs per provider |
 | movysx | search/items delegate to `streambase.Base` (TMDB); resolve `?tmdb=&type=movie\|tv&s=&e=` JSON `{sources[],audio[],subtitles[]}` → `MediaSource{URL,Quality raw,Referer movy.sx,Type declared-first (hls/mp4/dash/auto)}`; `audio[]` dubbed rows append as `Language`-tagged sources (`Auto (Hindi)`); 504 → `ErrTimeout` | quality raw upstream; main rows untagged, dubbed rows ISO (`hi`, `und` kept); subtitles ISO via `lang.Normalize`; no size; key-pool rotation in streambase (`isAuthError 401/429`) |
 | pengu | TMDB base for search/items + own `/api/...` resolve; live catalog fan-out (`client.go:399-411`); `Quality "4K [4KHDHub] (Hindi)"` (`client_test.go:126`); `mapAudioLanguage("Hindi, English")→"hi"` (`client_test.go:231-233`); `Type hls/mp4` by ext (`client.go:700`); `Referer` per-stream host, `UserAgent DesktopUA`, `CookieHeader` passthrough | language normalized to ISO in one helper but quality embeds `[TAG]` + `(Lang)`; live `StartsAt` parsed by `parseLiveStart` (local-time conversion must be verified live); deflated `z…` config token (`buildConfigSegment`); 429 → `ErrRateLimited` |
 | weebcentral | HTMX scrape `weebcentral.com`; search ≤25; chapters from series page + `chapter-select` merge; pages `pageImgSrcRe`; `MangaPage{URL,Referer: site, UserAgent: DesktopUA}` | `FetchEpisodes/ResolveSource` return sentinels (correct for Reader); chapter numbers strings (`"10.5"`); year/genres scraped (`yearRe`, `seriesTitleRe`); throttle 300ms mutex (`client.go:89-103`) |
 | jellyfin | `X-Emby-Token` `authGET`; library cached 5m (`library.go:20`), `maxSearchResults 50`; `rankLibrary/matchScore/hasWordPrefix/containsAllWords/isSubsequence`; resolve synthetic `/Videos/{id}/stream?static=true&api_key=` `Type mp4 Quality "Jellyfin"` (`client.go:237-239`) | quality fixed string; no audio/subtitle langs from server yet; search falls back to `searchHints` when cache misses |
-| solis | TMDB base for search/items + hosted Solis API resolve (`https://solis-api.vercel.app`); multi-tier HLS streaming + multi-language subtitles | API 1.1.0: per-source `subtitles` merge with response-level/SSE `subtitles` (per-source first, deduped by URL+language, either event order); backend encoded in `quality` (`"1080p (Dexter)"`); per-source `extraArgs`/`referer`/`userAgent`; legacy `backend`/`source` fields still read; progressive SSE stream resolution; mpv plays directly |
-| cinecat | TMDB base for search/items + ZCDN (zcdn.bluevelvet.space) multi-tier HLS streaming (4K, 1080p, 720p, 480p, Auto) + Granite (sub.vdrk.site) subtitles | direct multi-bitrate HLS streams; mpv plays directly; Referer hotlink protection |
+| solis | TMDB base for search/items + hosted Solis API resolve (`https://solis-api.vercel.app`); multi-tier HLS/DASH streaming + multi-language subtitles | API 1.2.0: stable per-lane `backend` (`"Dexter"`, `"Gumball"`, …) alongside the legacy composite `quality` (`"1080p (Dexter)"`); shard playlists are probed server-side so `quality` reports the real top tier and 404/410 lanes are dropped; DASH lanes ship DASH demuxer args; subtitles normalized to short language codes (deduped by URL+language, per-source and stream-level); 20s fan-out budget; 45s batch result cache (`fresh=1` bypass, `validate=false` opt-out); `meta` reports version/cache/timing; progressive SSE stream resolution; mpv plays directly |
+| cinecat | TMDB base for search/items + ZCDN edge (zcdn1.2wwlgkfo-31a.workers.dev) multi-tier HLS (4K, 1080p, 720p, 480p, Auto) + every lane advertised by the sources API (edge.cinecat.eu) + Granite (sub.vdrk.site) subtitles | parallel ZCDN + per-lane fan-out; lane tiers tagged with the lane `backend` and an `Auto (<Lane>)` master; one failing lane never fails resolution; mpv plays directly; Referer hotlink protection |
 | streambase | TMDB multi-search + details + `errgroup` seasons sem 5 (`base.go:35-472`); key rotation `NextKey/MarkFailed` on 401/429 | movie → synthetic single episode; cartoon filter genre 16; `reEpisodeNum/reSeasonNum` package regexps (`base.go:28-29`) |
 
 Normalization gaps (repo-wide): quality strings mix heights (`1080p`),

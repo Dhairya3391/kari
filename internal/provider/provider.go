@@ -43,6 +43,8 @@ const (
 	MediaTypeAnime   = "anime"
 	MediaTypeCartoon = "cartoon"
 	MediaTypeManga   = "manga"
+	MediaTypeNovel   = "novel"
+	MediaTypeComic   = "comic"
 	MediaTypeLive    = "live"
 )
 
@@ -105,6 +107,9 @@ type SearchResult struct {
 	// screens render without extra requests.
 	Overview string
 	Genres   []string
+	// SourceOptions contains same-title results from other manga providers.
+	// Each option retains the provider-owned handle needed to fetch chapters.
+	SourceOptions []SearchResult
 
 	// Live TV / Sports scheduling fields. Populated only by live providers;
 	// zero for all other modes so callers can check `Live || !StartsAt.IsZero()`.
@@ -199,6 +204,13 @@ type MediaSource struct {
 	UserAgent    string
 	CookieHeader string
 	Language     string
+	// AudioLabel is the display-only audio language description for sources
+	// whose audio is not a single selectable track: live channels that
+	// broadcast in several languages, or sources whose language is inferred
+	// from metadata rather than a stream tag. It may name more than one
+	// language, so it must never drive --alang selection; Language remains
+	// the canonical single code for that.
+	AudioLabel string
 	// SubType marks the anime subtitle kind the upstream declares for this
 	// stream: "hard" (burned in), "soft" (toggleable), or "" unknown.
 	// Non-anime sources leave it blank; subtitle delivery is independent.
@@ -314,9 +326,10 @@ type MangaChapter struct {
 // MangaPage is one page image of a chapter.
 type MangaPage struct {
 	URL string
-	// Referer/UserAgent are sent with the image request when the image
-	// host requires them (WeebCentral's CDN needs its site as Referer).
+	// Referer, Origin, and UserAgent are sent with image requests when the
+	// image host requires browser-like source headers.
 	Referer   string
+	Origin    string
 	UserAgent string
 	Width     int
 	Height    int
@@ -486,6 +499,16 @@ type Deps struct {
 type StreamingProvider interface {
 	EpisodeSource
 	ResolveStream(ctx context.Context, mediaID string, episode Episode, updates chan<- []MediaSource) error
+}
+
+// LiveStreamVerifier is implemented by providers serving live content whose
+// resolved rows can be probed for reachability before playback. The service
+// calls it per source so dead mirrors never reach the player. Providers
+// supply their own transport (HTTP client, request headers) through the
+// shared VerifyLiveStream helper. Implementations must return nil for modes
+// they do not consider live.
+type LiveStreamVerifier interface {
+	VerifyLiveStream(ctx context.Context, mode ContentType, source MediaSource) error
 }
 
 // StatusCodedError is implemented by errors carrying an HTTP status code,

@@ -193,6 +193,7 @@ func (m *modelImpl) collectChaptersData(width, height int, accent lipgloss.Adapt
 		Width:         width,
 		Height:        height,
 		Accent:        accent,
+		Loading:       m.loading,
 	}
 }
 
@@ -535,6 +536,7 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 
 	// Build modes rows for Settings > Modes
 	var modeRows []ModeRow
+	var historyModes []HistoryModeRow
 	for _, modeKey := range m.configuredModes {
 		kind := model.FromKey(modeKey)
 		modeThm := ThemeFor(kind, "Auto")
@@ -558,6 +560,10 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 			Available:   avail,
 			UnavailNote: unavailNote,
 			Accent:      modeThm.Accent,
+		})
+		historyModes = append(historyModes, HistoryModeRow{
+			Key: modeKey, Label: label,
+			Enabled: !m.disableHistory && !m.disabledHistoryModes[modeKey],
 		})
 	}
 
@@ -604,6 +610,8 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		AutoUpdate:          m.autoUpdate,
 		DefaultModeName:     defaultModeName,
 		ModesRows:           modeRows,
+		HistoryDisabled:     !m.historyAllModesEnabled(),
+		HistoryModes:        historyModes,
 		ProviderRows:        m.providerRows(),
 	}
 }

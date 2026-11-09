@@ -52,7 +52,7 @@ var kindSpecs = map[Kind]*KindSpec{
 	KindAnime:    {Key: "anime", Label: "Anime", Tab: 0, HasItems: true, ItemNoun: "episode"},
 	KindCartoon:  {Key: "cartoon", Label: "Cartoon", Tab: 1, HasItems: true, ItemNoun: "episode"},
 	KindLive:     {Key: "live", Label: "Live", Tab: 2, Live: true, ItemNoun: "episode"},
-	KindManga:    {Key: "manga", Label: "Manga", Tab: 3, Reader: true, HasItems: true, ItemNoun: "chapter"},
+	KindManga:    {Key: "manga", Label: "Reading", Tab: 3, Reader: true, HasItems: true, ItemNoun: "chapter"},
 	KindMovie:    {Key: "movies", Label: "Movies", Tab: 4, ItemNoun: "episode"},
 	KindTV:       {Key: "tv", Label: "TV", Tab: 5, HasItems: true, ItemNoun: "episode"},
 	KindJellyfin: {Key: "jellyfin", Label: "Jellyfin", Tab: 6, HasItems: true, ItemNoun: "episode"},

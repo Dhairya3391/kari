@@ -10,7 +10,10 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/gen2brain/avif"
 
 	"kari/internal/provider"
 )
@@ -29,6 +32,22 @@ func TestDecodeWebP(t *testing.T) {
 	}
 	if got := img.Bounds().Dx(); got != 2 {
 		t.Errorf("webp width = %d, want 2", got)
+	}
+}
+
+func TestDecodeAVIF(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 2, 3))
+	var data bytes.Buffer
+	if err := avif.Encode(&data, source); err != nil {
+		t.Fatalf("encode AVIF fixture: %v", err)
+	}
+
+	img, err := decode(data.Bytes())
+	if err != nil {
+		t.Fatalf("decode AVIF: %v", err)
+	}
+	if got := img.Bounds().Size(); got.X != 2 || got.Y != 3 {
+		t.Errorf("AVIF dimensions = %v, want (2, 3)", got)
 	}
 }
 
@@ -105,5 +124,30 @@ func TestFetchImageFatalAborts(t *testing.T) {
 	}
 	if *fallbackHits != 0 {
 		t.Errorf("fatal error must abort: fallback hits = %d", *fallbackHits)
+	}
+}
+
+func TestFetchImageSendsOriginAndAVIFAccept(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	wantReferer := "https://atsu.example/"
+	wantOrigin := "https://atsu.example"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Referer") != wantReferer || r.Header.Get("Origin") != wantOrigin {
+			t.Errorf("Referer/Origin = %q/%q", r.Header.Get("Referer"), r.Header.Get("Origin"))
+		}
+		if !strings.Contains(r.Header.Get("Accept"), "image/avif") {
+			t.Errorf("Accept = %q, want AVIF support", r.Header.Get("Accept"))
+		}
+		_, _ = w.Write(pngBytes(t))
+	}))
+	defer server.Close()
+
+	_, err := NewClient().FetchImage(context.Background(), provider.MangaPage{
+		URL:     server.URL + "/page.webp",
+		Referer: wantReferer,
+		Origin:  wantOrigin,
+	})
+	if err != nil {
+		t.Fatalf("FetchImage: %v", err)
 	}
 }

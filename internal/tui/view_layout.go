@@ -16,6 +16,8 @@ func (m *modelImpl) currentKind() model.Kind {
 	switch m.activeView {
 	case viewSearch:
 		return model.FromKey(string(m.appMode))
+	case viewMangaSources:
+		return model.KindManga
 	case viewEpisodes, viewPreview:
 		if m.selectedSeries != nil && m.selectedSeries.MediaType != "" {
 			return model.FromKey(m.selectedSeries.MediaType)
@@ -384,7 +386,13 @@ func (m *modelImpl) activeCrumbsForView(v viewState) []string {
 		if m.selectedSeries != nil && m.selectedSeries.Title != "" {
 			title = m.selectedSeries.Title
 		}
-		return []string{"kari", "manga", strings.ToLower(title)}
+		return []string{"kari", "reading", strings.ToLower(title)}
+	case viewMangaSources:
+		title := "sources"
+		if m.selectedSeries != nil && m.selectedSeries.Title != "" {
+			title = m.selectedSeries.Title
+		}
+		return []string{"kari", "reading", strings.ToLower(title), "sources"}
 	case viewPreview:
 		seriesTitle := "preview"
 		if m.selectedSeries != nil && m.selectedSeries.Title != "" {
@@ -491,6 +499,12 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			{Key: "/", Action: "filter"},
 			{Key: "g/G", Action: "top/bottom"},
 			{Key: "?", Action: "help"},
+			{Key: "esc", Action: "back"},
+		}
+	case viewMangaSources:
+		return []KeyBinding{
+			{Key: "↑↓ j k", Action: "choose provider"},
+			{Key: "enter", Action: "open title"},
 			{Key: "esc", Action: "back"},
 		}
 	case viewPreview:
@@ -643,6 +657,8 @@ func (m *modelImpl) renderScreenBody(dims Dims, accent lipgloss.AdaptiveColor) s
 
 	case viewChapters:
 		return RenderChaptersScreen(m.collectChaptersData(dims.ContentWidth, dims.BodyHeight, accent))
+	case viewMangaSources:
+		return m.renderMangaSources(dims.ContentWidth)
 	case viewPreview:
 		return RenderPreviewScreen(m.collectPreviewData(dims.ContentWidth, dims.BodyHeight, accent))
 
@@ -688,6 +704,13 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 				{Key: "s", Action: "settings"},
 				{Key: "c", Action: "calendar"},
 			}
+		}
+	case viewMangaSources:
+		screenName = "Manga sources"
+		contextKeys = []KeyBinding{
+			{Key: "↑↓ j k", Action: "choose provider"},
+			{Key: "enter", Action: "open title"},
+			{Key: "esc", Action: "back to results"},
 		}
 	case viewEpisodes:
 		screenName = "Episodes"

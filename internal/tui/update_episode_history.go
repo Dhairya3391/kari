@@ -40,7 +40,7 @@ func (m *modelImpl) isEpisodeComplete(ep provider.Episode) bool {
 }
 
 func (m *modelImpl) markEpisodeComplete(ep provider.Episode) error {
-	if m.historyStore == nil {
+	if !m.historyRecordingEnabled() {
 		return nil
 	}
 	key := m.episodeHistoryKey(ep)
@@ -118,6 +118,10 @@ func (m *modelImpl) markEpisodeComplete(ep provider.Episode) error {
 	}
 	m.triggerScrobble(entry, media)
 	return nil
+}
+
+func (m *modelImpl) historyRecordingEnabled() bool {
+	return m.historyStore != nil && !m.disableHistory && !m.disabledHistoryModes[string(m.appMode)]
 }
 
 func (m *modelImpl) unmarkEpisode(ep provider.Episode) error {

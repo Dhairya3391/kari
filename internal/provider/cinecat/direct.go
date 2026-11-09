@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"kari/internal/config"
 	"kari/internal/lang"
@@ -24,6 +26,7 @@ var (
 	reResolution        = regexp.MustCompile(`(?i)\bRESOLUTION=(\d+)x(\d+)\b`)
 	reBandwidth         = regexp.MustCompile(`(?i)\bBANDWIDTH=(\d+)\b`)
 	reSubtitleLabelTrim = regexp.MustCompile(`(?i)\s*(?:hi\d*|\d+)$`)
+	reLaneName          = regexp.MustCompile(`^[A-Za-z0-9_-]{1,40}$`)
 )
 
 type zcdnResponse struct {
@@ -38,6 +41,26 @@ type variantStream struct {
 	Quality   string
 	Bandwidth int
 	Height    int
+}
+
+// sourceCandidate is one playable master playlist discovered upstream.
+// Backend identifies the lane that produced it; empty means the ZCDN edge.
+type sourceCandidate struct {
+	URL     string
+	Backend string
+}
+
+type sourcesListResponse struct {
+	Sources []struct {
+		Name string `json:"name"`
+	} `json:"sources"`
+}
+
+type laneStreamsResponse struct {
+	Streams []struct {
+		Kind string `json:"kind"`
+		URL  string `json:"url"`
+	} `json:"streams"`
 }
 
 func parseCoordinates(mediaID string, episode provider.Episode) (int, string, int, int, error) {
@@ -86,16 +109,26 @@ func (c *Client) fetchSources(
 	updates chan<- []provider.MediaSource,
 ) error {
 	var (
-		wg        sync.WaitGroup
-		masterURL string
-		zcdnErr   error
-		subtitles []provider.SubtitleOption
+		wg             sync.WaitGroup
+		masterURL      string
+		zcdnErr        error
+		laneCandidates []sourceCandidate
+		lanesErr       error
+		subtitles      []provider.SubtitleOption
 	)
 
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		masterURL, zcdnErr = c.fetchZCDN(ctx, tmdbID, mediaType, season, epNum)
+	}()
+
+	go func() {
+		defer wg.Done()
+		laneCandidates, lanesErr = c.fetchSourceLanes(ctx, tmdbID, mediaType, season, epNum)
+		if lanesErr != nil && !errors.Is(lanesErr, provider.ErrNoSources) {
+			logging.Debug("cinecat source lanes failed", "tmdb", tmdbID, "err", lanesErr)
+		}
 	}()
 
 	go func() {
@@ -109,41 +142,27 @@ func (c *Client) fetchSources(
 
 	wg.Wait()
 
-	if zcdnErr != nil {
-		return zcdnErr
+	candidates := make([]sourceCandidate, 0, len(laneCandidates)+1)
+	if strings.TrimSpace(masterURL) != "" {
+		candidates = append(candidates, sourceCandidate{URL: masterURL})
 	}
-	if strings.TrimSpace(masterURL) == "" {
+	candidates = append(candidates, laneCandidates...)
+	candidates = dedupeCandidates(candidates)
+
+	if len(candidates) == 0 {
+		if zcdnErr != nil {
+			return zcdnErr
+		}
+		if lanesErr != nil {
+			return lanesErr
+		}
 		return provider.ErrNoSources
 	}
 
-	variants, err := c.fetchVariants(ctx, masterURL)
-	if err != nil {
-		logging.Debug("cinecat variant parsing failed; falling back to master", "url", masterURL, "err", err)
+	sources := c.buildSources(ctx, candidates, subtitles)
+	if len(sources) == 0 {
+		return provider.ErrNoSources
 	}
-
-	var sources []provider.MediaSource
-	for _, v := range variants {
-		sources = append(sources, provider.MediaSource{
-			URL:            v.URL,
-			Quality:        v.Quality,
-			Type:           provider.SourceTypeHLS,
-			Referer:        c.siteBase + "/",
-			UserAgent:      config.DesktopUserAgent,
-			SuppressOrigin: true,
-			Subtitles:      subtitles,
-		})
-	}
-
-	// Always offer the adaptive master playlist alongside individual tiers.
-	sources = append(sources, provider.MediaSource{
-		URL:            masterURL,
-		Quality:        "Auto (Adaptive)",
-		Type:           provider.SourceTypeHLS,
-		Referer:        c.siteBase + "/",
-		UserAgent:      config.DesktopUserAgent,
-		SuppressOrigin: true,
-		Subtitles:      subtitles,
-	})
 
 	select {
 	case updates <- sources:
@@ -151,6 +170,236 @@ func (c *Client) fetchSources(
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// dedupeCandidates drops repeated master playlists while preserving upstream order.
+func dedupeCandidates(in []sourceCandidate) []sourceCandidate {
+	out := in[:0]
+	seen := make(map[string]bool, len(in))
+	for _, cand := range in {
+		u := strings.TrimSpace(cand.URL)
+		if u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		out = append(out, sourceCandidate{URL: u, Backend: cand.Backend})
+	}
+	return out
+}
+
+// buildSources expands every candidate master into quality tiers in parallel,
+// keeping candidate order stable so output does not depend on response timing.
+func (c *Client) buildSources(ctx context.Context, candidates []sourceCandidate, subtitles []provider.SubtitleOption) []provider.MediaSource {
+	groups := make([][]provider.MediaSource, len(candidates))
+	var wg sync.WaitGroup
+	for i, cand := range candidates {
+		wg.Add(1)
+		go func(i int, cand sourceCandidate) {
+			defer wg.Done()
+			variants, err := c.fetchVariants(ctx, cand.URL)
+			if err != nil {
+				logging.Debug("cinecat variant parsing failed; falling back to master", "url", cand.URL, "backend", cand.Backend, "err", err)
+			}
+			groups[i] = c.candidateSources(cand, variants, subtitles)
+		}(i, cand)
+	}
+	wg.Wait()
+
+	sources := make([]provider.MediaSource, 0, len(candidates)*4)
+	for _, group := range groups {
+		sources = append(sources, group...)
+	}
+	return sources
+}
+
+func (c *Client) candidateSources(cand sourceCandidate, variants []variantStream, subtitles []provider.SubtitleOption) []provider.MediaSource {
+	autoLabel := "Auto (Adaptive)"
+	if cand.Backend != "" {
+		autoLabel = fmt.Sprintf("Auto (%s)", cand.Backend)
+	}
+	sources := make([]provider.MediaSource, 0, len(variants)+1)
+	for _, v := range variants {
+		sources = append(sources, c.newMediaSource(v.URL, v.Quality, cand.Backend, subtitles))
+	}
+	// Always offer the adaptive master alongside individual tiers.
+	sources = append(sources, c.newMediaSource(cand.URL, autoLabel, cand.Backend, subtitles))
+	return sources
+}
+
+func (c *Client) newMediaSource(target, quality, backend string, subtitles []provider.SubtitleOption) provider.MediaSource {
+	return provider.MediaSource{
+		URL:            target,
+		Quality:        quality,
+		Backend:        backend,
+		Type:           provider.SourceTypeHLS,
+		Referer:        c.siteBase + "/",
+		UserAgent:      config.DesktopUserAgent,
+		SuppressOrigin: true,
+		Subtitles:      subtitles,
+	}
+}
+
+// fetchSourceLanes fans out across every lane the sources API advertises and
+// collects their HLS masters. One broken lane never fails the resolution.
+func (c *Client) fetchSourceLanes(ctx context.Context, tmdbID int, mediaType string, season, epNum int) ([]sourceCandidate, error) {
+	names, err := c.fetchLaneNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, provider.ErrNoSources
+	}
+
+	results := make([][]string, len(names))
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		lastErr error
+	)
+	for i, name := range names {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			urls, err := c.fetchLaneStreams(ctx, name, tmdbID, mediaType, season, epNum)
+			if err != nil {
+				if !errors.Is(err, provider.ErrNoSources) {
+					mu.Lock()
+					lastErr = err
+					mu.Unlock()
+				}
+				return
+			}
+			results[i] = urls
+		}(i, name)
+	}
+	wg.Wait()
+
+	var candidates []sourceCandidate
+	for i, name := range names {
+		for _, u := range results[i] {
+			candidates = append(candidates, sourceCandidate{URL: u, Backend: laneLabel(name)})
+		}
+	}
+	if len(candidates) == 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, provider.ErrNoSources
+	}
+	return candidates, nil
+}
+
+// laneLabel turns an upstream lane identifier into a display-friendly backend name.
+func laneLabel(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	runes := []rune(name)
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
+}
+
+// fetchLaneNames asks the sources API which lanes are currently available.
+func (c *Client) fetchLaneNames(ctx context.Context) ([]string, error) {
+	if strings.TrimSpace(c.sourcesBase) == "" {
+		return nil, provider.ErrNoSources
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	target := c.sourcesBase + "/sources"
+	req, err := c.newRequest(reqCtx, target)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cinecat sources: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: target}
+	}
+
+	var data sourcesListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("cinecat sources decode: %w", err)
+	}
+
+	names := make([]string, 0, len(data.Sources))
+	for _, src := range data.Sources {
+		name := strings.TrimSpace(src.Name)
+		if reLaneName.MatchString(name) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+// fetchLaneStreams resolves one lane's HLS masters for the requested title.
+func (c *Client) fetchLaneStreams(ctx context.Context, lane string, tmdbID int, mediaType string, season, epNum int) ([]string, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	params := url.Values{}
+	params.Set("tmdb", strconv.Itoa(tmdbID))
+	params.Set("type", mediaType)
+	if mediaType == provider.MediaTypeTV {
+		params.Set("season", strconv.Itoa(season))
+		params.Set("episode", strconv.Itoa(epNum))
+	}
+
+	base, err := url.Parse(c.sourcesBase + "/")
+	if err != nil {
+		return nil, fmt.Errorf("parse sources base: %w", err)
+	}
+	target := fmt.Sprintf("%s/sources/%s?%s", c.sourcesBase, url.PathEscape(lane), params.Encode())
+
+	req, err := c.newRequest(reqCtx, target)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("cinecat lane %s: %w", lane, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, provider.ErrNoSources
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: target}
+	}
+
+	var data laneStreamsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, fmt.Errorf("cinecat lane %s decode: %w", lane, err)
+	}
+
+	var urls []string
+	for _, stream := range data.Streams {
+		if stream.Kind != "" && stream.Kind != "hls" {
+			continue
+		}
+		raw := strings.TrimSpace(stream.URL)
+		if raw == "" {
+			continue
+		}
+		ref, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		urls = append(urls, base.ResolveReference(ref).String())
+	}
+	return urls, nil
 }
 
 func (c *Client) fetchZCDN(ctx context.Context, tmdbID int, mediaType string, season, epNum int) (string, error) {

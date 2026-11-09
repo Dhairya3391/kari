@@ -19,6 +19,9 @@ import (
 // per-provider failures become warnings rather than errors; partial
 // results are returned together with the failed-provider list.
 func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, query string) ([]provider.SearchResult, string, []string, error) {
+	s.disabledMu.RLock()
+	providerGeneration := s.providerGeneration
+	s.disabledMu.RUnlock()
 	cacheKey := fmt.Sprintf("%s:%s", mode, strings.ToLower(strings.TrimSpace(query)))
 	if s.searchCache != nil {
 		if entry, ok := s.searchCache.Get(cacheKey); ok && time.Since(entry.cachedAt) < searchCacheTTL {
@@ -62,12 +65,16 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 			SortLiveResults(allResults, time.Now())
 		}
 		if s.searchCache != nil && len(warnings) == 0 {
-			s.searchCache.Set(cacheKey, searchCacheEntry{
-				results:  allResults,
-				query:    query,
-				warnings: warnings,
-				cachedAt: time.Now(),
-			})
+			s.disabledMu.RLock()
+			if providerGeneration == s.providerGeneration {
+				s.searchCache.Set(cacheKey, searchCacheEntry{
+					results:  allResults,
+					query:    query,
+					warnings: warnings,
+					cachedAt: time.Now(),
+				})
+			}
+			s.disabledMu.RUnlock()
 		}
 		return allResults, query, warnings, nil
 	}
@@ -139,6 +146,7 @@ collectResults:
 		warnings   []string
 	)
 	seenTitles := make(map[string]struct{})
+	mangaTitleIndex := make(map[string]int)
 	for _, route := range routes {
 		p := route.Provider
 		res, ok := resultsMap[p.Name()]
@@ -155,6 +163,24 @@ collectResults:
 		}
 		for _, r := range res.results {
 			r.Provider = res.provider
+			if mode == provider.ModeManga {
+				if r.MediaType == provider.MediaTypeComic {
+					continue
+				}
+				key := strings.ToLower(strings.Join(strings.Fields(r.Title), " ")) + "\x00" + r.MediaType
+				if index, exists := mangaTitleIndex[key]; exists {
+					current := &allResults[index]
+					if current.Provider != r.Provider {
+						if len(current.SourceOptions) == 0 {
+							current.SourceOptions = []provider.SearchResult{*current}
+							current.SourceOptions[0].SourceOptions = nil
+						}
+						current.SourceOptions = append(current.SourceOptions, r)
+					}
+					continue
+				}
+				mangaTitleIndex[key] = len(allResults)
+			}
 			key := fmt.Sprintf("%s:%s", r.Type, strings.TrimSpace(r.ID))
 			if r.ID != "" {
 				if _, seen := seenTitles[key]; seen {

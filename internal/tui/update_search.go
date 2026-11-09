@@ -111,10 +111,10 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "up", "k":
 				m.seriesList.CursorUp()
-				return m, m.triggerSearchPoster(m.selectedSeriesIndex())
+				return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
 			case "down", "j":
 				m.seriesList.CursorDown()
-				return m, m.triggerSearchPoster(m.selectedSeriesIndex())
+				return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
 			}
 			if len(keyMsg.String()) == 1 {
 				m.resultsFilter += keyMsg.String()
@@ -165,28 +165,28 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case keyMsg.String() == "up" || keyMsg.String() == "k":
 			m.seriesList.CursorUp()
-			return m, m.triggerSearchPoster(m.selectedSeriesIndex())
+			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
 		case keyMsg.String() == "down" || keyMsg.String() == "j":
 			m.seriesList.CursorDown()
-			return m, m.triggerSearchPoster(m.selectedSeriesIndex())
+			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
 		case keyMsg.String() == "g" || keyMsg.String() == "home":
 			m.seriesList.Select(0)
-			return m, m.triggerSearchPoster(m.selectedSeriesIndex())
+			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
 		case keyMsg.String() == "G" || keyMsg.String() == "end":
 			if items := m.seriesList.Items(); len(items) > 0 {
 				m.seriesList.Select(len(items) - 1)
 			}
-			return m, m.triggerSearchPoster(m.selectedSeriesIndex())
+			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
 		case keyMsg.String() == "pgup":
 			for range 5 {
 				m.seriesList.CursorUp()
 			}
-			return m, m.triggerSearchPoster(m.selectedSeriesIndex())
+			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
 		case keyMsg.String() == "pgdown":
 			for range 5 {
 				m.seriesList.CursorDown()
 			}
-			return m, m.triggerSearchPoster(m.selectedSeriesIndex())
+			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
 		default:
 			if s := keyMsg.String(); len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
 				digitIdx := int(s[0] - '1')
@@ -204,6 +204,7 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{cmd}
 	if newSel := m.selectedSeriesIndex(); newSel != prevSel {
 		cmds = append(cmds, m.triggerSearchPoster(newSel))
+		cmds = append(cmds, m.prefetchSelectedReadingChapters())
 	}
 	return m, tea.Batch(cmds...)
 }

@@ -186,7 +186,7 @@ func historyModeLabel(mode provider.ContentType) string {
 	case provider.ModeLive:
 		return "Live"
 	case provider.ModeManga:
-		return "Manga"
+		return "Reading"
 	case provider.ModeMovies:
 		return "Movies"
 	case provider.ModeTV:

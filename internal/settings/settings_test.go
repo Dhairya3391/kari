@@ -42,6 +42,14 @@ func TestDisabledModeSet(t *testing.T) {
 	}
 }
 
+func TestDisabledHistoryModeSet(t *testing.T) {
+	d := &Data{HistoryModesDisabled: []string{" TV ", "MANGA", ""}}
+	set := d.DisabledHistoryModeSet()
+	if !set["tv"] || !set["manga"] || set[""] || set["anime"] {
+		t.Fatalf("unexpected disabled history set: %+v", set)
+	}
+}
+
 func TestDisabledProviderSet(t *testing.T) {
 	var nilData *Data
 	if set := nilData.DisabledProviderSet(); len(set) != 0 {

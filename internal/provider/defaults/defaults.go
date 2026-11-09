@@ -6,6 +6,7 @@ import (
 	"kari/internal/provider"
 	"kari/internal/provider/a11"
 	"kari/internal/provider/anicine"
+	"kari/internal/provider/anidream"
 	"kari/internal/provider/anikoto"
 	"kari/internal/provider/anipm"
 	"kari/internal/provider/anivault"
@@ -14,6 +15,7 @@ import (
 	"kari/internal/provider/cinecat"
 	"kari/internal/provider/cno"
 	"kari/internal/provider/famelack"
+	"kari/internal/provider/iptvorg"
 	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/mapple"
 	"kari/internal/provider/miruro"
@@ -113,6 +115,12 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
+		ID: "anidream",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return anidream.NewClient()
+		},
+	},
+	{
 		ID: "weebcentral",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return weebcentral.NewClient()
@@ -134,6 +142,12 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "famelack",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return famelack.NewClient()
+		},
+	},
+	{
+		ID: "iptvorg",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return iptvorg.NewClient()
 		},
 	},
 	{

@@ -19,6 +19,26 @@ import (
 )
 
 func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
+	if m.activeView == viewMangaSources {
+		switch msg.String() {
+		case "up", "k":
+			if m.mangaSourceIndex > 0 {
+				m.mangaSourceIndex--
+			}
+			return nil, true
+		case "down", "j":
+			if m.selectedSeries != nil && m.mangaSourceIndex < len(m.selectedSeries.SourceOptions)-1 {
+				m.mangaSourceIndex++
+			}
+			return nil, true
+		case "enter":
+			_, cmd := m.selectMangaSource(m.mangaSourceIndex)
+			return cmd, true
+		case "esc", "backspace":
+			m.goBackOne()
+			return nil, true
+		}
+	}
 	if !key.Matches(msg, m.keys.Quit) {
 		m.confirmQuit = false
 	}
@@ -139,7 +159,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return tea.Batch(m.spinner.Tick, historyCmd, func() tea.Msg {
 				return historyLoadedMsg{}
 			}), true
-		case viewEpisodes, viewPreview, viewDownloads, viewSettings, viewChapters:
+		case viewEpisodes, viewPreview, viewDownloads, viewSettings, viewChapters, viewMangaSources:
 			m.loading = true
 			m.loadingText = "Loading history..."
 			_, historyCmd := m.refreshHistory()
@@ -155,7 +175,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			}
 			m.pushView(viewSettings)
 			return nil, true
-		case viewEpisodes, viewPreview, viewDownloads, viewChapters, viewCalendar:
+		case viewEpisodes, viewPreview, viewDownloads, viewChapters, viewMangaSources, viewCalendar:
 			m.pushView(viewSettings)
 			return nil, true
 		}
@@ -166,7 +186,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 				return nil, false
 			}
 			return m.openCalendar(), true
-		case viewEpisodes, viewPreview, viewDownloads, viewSettings, viewChapters, viewHistory:
+		case viewEpisodes, viewPreview, viewDownloads, viewSettings, viewChapters, viewMangaSources, viewHistory:
 			return m.openCalendar(), true
 		}
 	case key.Matches(msg, m.keys.Stop):
@@ -526,6 +546,13 @@ func (m *modelImpl) saveSettings() {
 		}
 	}
 	slices.Sort(disabledProvList)
+	disabledHistoryModes := make([]string, 0)
+	for mode, disabled := range m.disabledHistoryModes {
+		if disabled {
+			disabledHistoryModes = append(disabledHistoryModes, mode)
+		}
+	}
+	slices.Sort(disabledHistoryModes)
 
 	accentSetting := "auto"
 	if m.accentIndex > 0 && m.accentIndex < len(accentPresets) {
@@ -585,6 +612,8 @@ func (m *modelImpl) saveSettings() {
 		SkipRecap:                   m.skipRecap,
 		SkipPreview:                 m.skipPreview,
 		StartupSync:                 m.startupSync,
+		DisableHistory:              m.disableHistory,
+		HistoryModesDisabled:        disabledHistoryModes,
 		DiscordPresence:             m.discordPresence,
 		DefaultMode:                 defaultMode,
 		Modes:                       modes,

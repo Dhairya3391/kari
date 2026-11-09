@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/gen2brain/avif"
 	_ "golang.org/x/image/webp"
 
 	"kari/internal/config"
@@ -154,8 +155,12 @@ func (c *Client) download(ctx context.Context, page provider.MangaPage, rawURL s
 		ua = config.DesktopUserAgent
 	}
 	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/png,image/jpeg,image/*,*/*")
 	if page.Referer != "" {
 		req.Header.Set("Referer", page.Referer)
+	}
+	if page.Origin != "" {
+		req.Header.Set("Origin", page.Origin)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

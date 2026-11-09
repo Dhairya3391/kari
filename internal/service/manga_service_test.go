@@ -1,10 +1,17 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"kari/internal/manga"
 	"kari/internal/provider"
 )
 
@@ -96,6 +103,45 @@ func TestResolveReadableChapterFallsOver(t *testing.T) {
 	}
 	if got.Series.Provider != "stubB" || len(got.Pages) != 1 {
 		t.Errorf("fell over to %+v", got.Series)
+	}
+}
+
+func TestResolveReadableChapterRejectsBrokenImageURL(t *testing.T) {
+	var pngBytes bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.White)
+	if err := png.Encode(&pngBytes, img); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/bad" {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<html>missing page</html>"))
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pngBytes.Bytes())
+	}))
+	defer server.Close()
+
+	registry := &provider.Registry{}
+	registry.Register(&stubManga{name: "broken",
+		chapters: []provider.MangaChapter{{ID: "broken-1", Number: "1"}},
+		pages:    []provider.MangaPage{{URL: server.URL + "/bad"}},
+	})
+	registry.Register(&stubManga{name: "working",
+		chapters: []provider.MangaChapter{{ID: "working-1", Number: "1"}},
+		pages:    []provider.MangaPage{{URL: server.URL + "/good"}},
+	})
+	svc := NewMangaService(registry, manga.NewClient())
+	got, err := svc.ResolveReadableChapter(context.Background(),
+		provider.SearchResult{ID: "series", Title: "T", Provider: "broken"},
+		provider.MangaChapter{ID: "broken-1", Number: "1"})
+	if err != nil {
+		t.Fatalf("ResolveReadableChapter: %v", err)
+	}
+	if got.Series.Provider != "working" {
+		t.Fatalf("selected provider %q, want working", got.Series.Provider)
 	}
 }
 

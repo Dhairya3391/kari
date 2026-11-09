@@ -313,6 +313,8 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			model.subtitleService.SetDisableAnimeSubtitles(model.disableAnimeSubtitles)
 		}
 		model.startupSync = s.StartupSync
+		model.disableHistory = s.DisableHistory
+		model.disabledHistoryModes = s.DisabledHistoryModeSet()
 		model.discordPresence = s.DiscordPresence
 		model.defaultMode = s.DefaultMode
 		model.configuredModes = s.NormalizedModes()
@@ -344,10 +346,6 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 			}
 		}
 	}
-	// Enforce the single-provider invariant for manga after settings load:
-	// fresh installs and older settings files may leave every manga provider
-	// enabled, while the radio control only permits one.
-	model.enforceSingleMangaProvider()
 	model.syncDisabledProvidersToService()
 	model.updateQueryPlaceholder()
 	for i, code := range lang.SubtitleOptions {

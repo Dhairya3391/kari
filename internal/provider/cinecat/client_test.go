@@ -96,7 +96,7 @@ https://cdn.example.com/play/550/v3/index.m3u8
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL)
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -179,7 +179,7 @@ https://cdn.example.com/play/1396-s2e5/v1/index.m3u8
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL)
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -198,6 +198,89 @@ https://cdn.example.com/play/1396-s2e5/v1/index.m3u8
 	}
 }
 
+func TestCinecatResolveLanes(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/cdn", func(w http.ResponseWriter, r *http.Request) {
+		// ZCDN unavailable; lanes alone must still resolve playback.
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	mux.HandleFunc("/sources", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sourcesListResponse{
+			Sources: []struct {
+				Name string `json:"name"`
+			}{
+				{Name: "abyssinia"},
+				{Name: "calico"},
+			},
+		})
+	})
+
+	mux.HandleFunc("/sources/abyssinia", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("tmdb") != "27205" || q.Get("type") != "movie" {
+			http.Error(w, "bad lane query", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(laneStreamsResponse{
+			Streams: []struct {
+				Kind string `json:"kind"`
+				URL  string `json:"url"`
+			}{
+				{Kind: "hls", URL: fmt.Sprintf("http://%s/lane-a/master.m3u8", r.Host)},
+			},
+		})
+	})
+
+	mux.HandleFunc("/sources/calico", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "no_streams"}})
+	})
+
+	mux.HandleFunc("/lane-a/master.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		_, _ = w.Write([]byte(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080
+https://cdn.example.com/lane-a/v1/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720
+https://cdn.example.com/lane-a/v2/index.m3u8
+`))
+	})
+
+	mux.HandleFunc("/v1/movie/27205", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
+
+	sources, err := client.ResolveSource(context.Background(), "27205", provider.Episode{TMDBID: 27205})
+	if err != nil {
+		t.Fatalf("ResolveSource failed: %v", err)
+	}
+
+	// Two tiers from the only working lane; the Auto master and the broken lane
+	// are dropped by FilterDirectSources or the lane 404 respectively.
+	if len(sources) != 2 {
+		t.Fatalf("expected 2 sources, got %d: %+v", len(sources), sources)
+	}
+	for i, want := range []string{"1080p", "720p"} {
+		if sources[i].Quality != want {
+			t.Errorf("sources[%d].Quality = %q, want %q", i, sources[i].Quality, want)
+		}
+		if sources[i].Backend != "Abyssinia" {
+			t.Errorf("sources[%d].Backend = %q, want Abyssinia", i, sources[i].Backend)
+		}
+	}
+}
+
 func TestCinecatBuildingOrNotReady(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/cdn", func(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +294,7 @@ func TestCinecatBuildingOrNotReady(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL)
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}

@@ -139,6 +139,37 @@ func TestLiveResultsShowProviderAndChannelDetails(t *testing.T) {
 	}
 }
 
+func TestLiveResultsRenderSelectedChannelArtwork(t *testing.T) {
+	out := RenderLiveResultsScreen(ResultsData{
+		Query:       "news",
+		Mode:        provider.ModeLive,
+		Results:     []provider.SearchResult{{Title: "News", Group: "Channel", Live: true}},
+		PosterBlock: "CHANNEL_ART",
+		Width:       80,
+		Height:      20,
+	})
+	if !strings.Contains(out, "CHANNEL_ART") {
+		t.Fatalf("live results should render selected channel artwork, got:\n%s", out)
+	}
+}
+
+func TestReadingResultsOmitProviderName(t *testing.T) {
+	out := RenderResultsScreen(ResultsData{
+		Query:         "one piece",
+		Mode:          provider.ModeManga,
+		Results:       []provider.SearchResult{{Title: "One Piece", Year: "1997", Provider: "weebcentral", MediaType: provider.MediaTypeManga}},
+		ProviderNames: map[string]string{"weebcentral": "WeebCentral"},
+		SelectedIndex: 0,
+		Width:         80,
+		TermWidth:     80,
+		Height:        20,
+		Accent:        ResolveAccent(model.KindManga, "Auto"),
+	})
+	if strings.Contains(out, "WeebCentral") {
+		t.Fatalf("reading result should omit provider name, got:\n%s", out)
+	}
+}
+
 func TestResultsOmitRedundantTypeInTVAndMovieModes(t *testing.T) {
 	tests := []struct {
 		mode      provider.ContentType

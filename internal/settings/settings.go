@@ -63,6 +63,10 @@ type Data struct {
 	SkipPreview bool `json:"skip_preview"`
 	// StartupSync controls whether watched history is synced from AniList/Trakt on startup.
 	StartupSync bool `json:"startup_sync"`
+	// DisableHistory stops saving local playback progress for every mode.
+	DisableHistory bool `json:"disable_history,omitempty"`
+	// HistoryModesDisabled lists modes whose playback progress is not saved.
+	HistoryModesDisabled []string `json:"history_modes_disabled,omitempty"`
 	// DiscordPresence publishes playback as Discord Rich Presence. Off by
 	// default so nothing leaves the machine unless the user opts in.
 	DiscordPresence bool `json:"discord_presence"`
@@ -84,6 +88,21 @@ type Data struct {
 	StartupSearchActive *bool `json:"startup_search_active"`
 	// AutoUpdate controls whether Kari automatically updates in the background when a new version is available (default false).
 	AutoUpdate bool `json:"auto_update"`
+}
+
+// DisabledHistoryModeSet returns a set of modes excluded from local history.
+func (d *Data) DisabledHistoryModeSet() map[string]bool {
+	set := make(map[string]bool)
+	if d == nil {
+		return set
+	}
+	for _, raw := range d.HistoryModesDisabled {
+		mode := strings.ToLower(strings.TrimSpace(raw))
+		if mode != "" {
+			set[mode] = true
+		}
+	}
+	return set
 }
 
 // NormalizedModes returns the ordered list of known modes, preserving the user's

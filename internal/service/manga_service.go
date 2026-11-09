@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"kari/internal/logging"
+	"kari/internal/manga"
 	"kari/internal/provider"
 )
 
@@ -18,11 +19,17 @@ var mangaLog = logging.With("component", "service.manga")
 // on MediaService, which is already mode-generic.
 type MangaService struct {
 	registry *provider.Registry
+	images   *manga.Client
 }
 
-// NewMangaService constructs a MangaService.
-func NewMangaService(registry *provider.Registry) *MangaService {
-	return &MangaService{registry: registry}
+// NewMangaService constructs a MangaService. An image client enables
+// validation of the first page before a cross-provider fallback is selected.
+func NewMangaService(registry *provider.Registry, images ...*manga.Client) *MangaService {
+	service := &MangaService{registry: registry}
+	if len(images) > 0 {
+		service.images = images[0]
+	}
+	return service
 }
 
 // mangaSource resolves the named provider and asserts the MangaSource
@@ -42,7 +49,10 @@ func (s *MangaService) FetchChapters(ctx context.Context, series provider.Search
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// AniDream's chapter endpoint is cold-cached upstream and can take over
+	// 30s to produce a first listing, so the bound must clear the provider's
+	// own client timeout instead of truncating legitimate cold fetches.
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	chapters, err := ms.FetchChapters(ctx, series)
 	if err != nil {
@@ -136,6 +146,11 @@ func (s *MangaService) ResolveReadableChapter(ctx context.Context, series provid
 		}
 		pgCtx, pgCancel := context.WithTimeout(ctx, 20*time.Second)
 		pages, err := ms.FetchPages(pgCtx, cand.chapters[cand.index])
+		if err == nil && len(pages) > 0 && s.images != nil {
+			if _, err = s.images.FetchImage(pgCtx, pages[0]); err != nil {
+				mangaLog.Debug("comic page image failed validation", "title", cand.series.Title, "provider", cand.series.Provider, "err", err)
+			}
+		}
 		pgCancel()
 		if err != nil || len(pages) == 0 {
 			continue

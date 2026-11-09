@@ -68,6 +68,9 @@ func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) {
 	if dst.Language == "" {
 		dst.Language = src.Language
 	}
+	if dst.AudioLabel == "" {
+		dst.AudioLabel = src.AudioLabel
+	}
 	if len(dst.ExtraArgs) == 0 {
 		dst.ExtraArgs = src.ExtraArgs
 	}

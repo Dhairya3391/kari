@@ -49,7 +49,6 @@ func (m *modelImpl) selectMangaSeries(idx int) (tea.Model, tea.Cmd) {
 	if !m.guardLoad() {
 		return m, nil
 	}
-	m.selectedSeries = &m.seriesResults[idx]
 	m.searchIndex = idx
 	m.chapters = nil
 	m.selectedChapter = nil
@@ -78,21 +77,63 @@ func (m *modelImpl) chaptersCmd(opID int, series provider.SearchResult) tea.Cmd 
 	}
 }
 
+// prefetchMangaChaptersCmd warms the provider's chapter cache for the
+// initially selected result while the user reviews search results.
+func (m *modelImpl) prefetchMangaChaptersCmd(series provider.SearchResult) tea.Cmd {
+	if m.mangaService == nil {
+		return nil
+	}
+	parent := m.appCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
+	return func() tea.Msg {
+		defer cancel()
+		if _, err := m.mangaService.FetchChapters(ctx, series); err != nil {
+			tuiLog.Debug("manga chapter prefetch failed", "title", series.Title, "provider", series.Provider, "err", err)
+		}
+		return nil
+	}
+}
+
+// prefetchSelectedReadingChapters warms the selected provider's chapter
+// listing while the user browses results, so slow first requests start
+// before the title is opened.
+func (m *modelImpl) prefetchSelectedReadingChapters() tea.Cmd {
+	if m.appMode != provider.ModeManga {
+		return nil
+	}
+	idx := m.selectedSeriesIndex()
+	if idx < 0 || idx >= len(m.seriesResults) || !m.isMangaProvider(m.seriesResults[idx].Provider) {
+		return nil
+	}
+	return m.prefetchMangaChaptersCmd(m.seriesResults[idx])
+}
+
 // mangaResumeEntry returns the saved reading position for the selected
 // series, or the zero entry when history is unavailable or has no record.
 func (m *modelImpl) mangaResumeEntry() history.Entry {
 	if m.historyStore == nil || m.selectedSeries == nil {
 		return history.Entry{}
 	}
-	entry, ok := m.historyStore.Get(history.EntryKey{
-		Title:     m.selectedSeries.Title,
-		Mode:      string(provider.ModeManga),
-		MediaType: provider.MediaTypeManga,
-	})
-	if !ok {
-		return history.Entry{}
+	var latest history.Entry
+	for _, entry := range m.historyStore.All() {
+		if entry.Mode != string(provider.ModeManga) || !strings.EqualFold(entry.Title, m.selectedSeries.Title) {
+			continue
+		}
+		if latest.WatchedAt.IsZero() || entry.WatchedAt.After(latest.WatchedAt) {
+			latest = entry
+		}
 	}
-	return entry
+	return latest
+}
+
+func (m *modelImpl) selectedMangaMediaType() string {
+	if m.selectedSeries != nil && m.selectedSeries.MediaType == provider.MediaTypeNovel {
+		return provider.MediaTypeNovel
+	}
+	return provider.MediaTypeManga
 }
 
 // onChaptersDone installs the chapter listing or reports the failure.
@@ -400,7 +441,7 @@ func (m *modelImpl) gotoReaderPage(idx int) tea.Cmd {
 // of the history file and for the shared history-row formatter.
 // Fire-and-forget; a nil store means history is unavailable this session.
 func (m *modelImpl) saveMangaProgress(page, total int) {
-	if m.historyStore == nil || m.selectedSeries == nil || m.selectedChapter == nil || total <= 0 {
+	if !m.historyRecordingEnabled() || m.selectedSeries == nil || m.selectedChapter == nil || total <= 0 {
 		return
 	}
 	key := history.EntryKey{
@@ -412,8 +453,13 @@ func (m *modelImpl) saveMangaProgress(page, total int) {
 	// not drop it, or later scrobbles lose the reliable id and fall back to
 	// ambiguous title matching.
 	anilistID := m.selectedSeries.AniListID
-	if existing, ok := m.historyStore.Get(key); ok && anilistID == 0 {
-		anilistID = existing.AniListID
+	if anilistID == 0 {
+		for _, existing := range m.historyStore.All() {
+			if existing.Mode == string(provider.ModeManga) && strings.EqualFold(existing.Title, m.selectedSeries.Title) && existing.AniListID != 0 {
+				anilistID = existing.AniListID
+				break
+			}
+		}
 	}
 	chapter := strings.TrimSpace(m.selectedChapter.Number)
 	if err := m.historyStore.Upsert(history.Entry{
@@ -541,6 +587,18 @@ func (m *modelImpl) onReaderPage(msg readerPageMsg) (tea.Model, tea.Cmd) {
 				opID := m.newOpID()
 				m.pagesOpID = opID
 				return m, tea.Batch(m.spinner.Tick, m.pagesCmd(opID, *m.selectedChapter))
+			}
+			// A source can list stale image URLs while still returning a
+			// successful chapter listing. Check another provider after a
+			// page download or decode failure, not only after page listing
+			// failures.
+			if !m.fallbackTried && m.selectedSeries != nil && m.selectedChapter != nil {
+				m.fallbackTried = true
+				m.loading = true
+				m.loadingText = "Trying other sources…"
+				opID := m.newOpID()
+				m.pagesOpID = opID
+				return m, tea.Batch(m.spinner.Tick, m.fallbackCmd(opID, *m.selectedSeries, *m.selectedChapter))
 			}
 			m.loading = false
 			m.loadingText = ""

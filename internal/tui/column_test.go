@@ -7,10 +7,22 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func testDims() Dims {
 	return ComputeDims(120, 30)
+}
+
+func TestRenderFrameClipsWideRowsToContentWidth(t *testing.T) {
+	dims := ComputeDims(80, 24)
+	frame := RenderFrame(dims, strings.Repeat("界", 60), strings.Repeat("界", 60), "", strings.Repeat("界", 60))
+	for i, line := range strings.Split(frame, "\n") {
+		if width := lipgloss.Width(line); width > dims.ContentStart+dims.ContentWidth {
+			t.Errorf("line %d width = %d, want at most %d", i+1, width, dims.ContentStart+dims.ContentWidth)
+		}
+	}
 }
 
 // A two-line status block (loading + toast stacked) keeps the footer

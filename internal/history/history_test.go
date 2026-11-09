@@ -37,6 +37,20 @@ func TestStore_ConcurrentMutationsRace(t *testing.T) {
 	s.Close()
 }
 
+func TestBuildGroupsCombinesMangaAndNovelHistoryForOneTitle(t *testing.T) {
+	entries := []Entry{
+		{Key: EntryKey{Title: "One Piece", Mode: "manga", MediaType: "manga"}, Title: "One Piece", Mode: "manga", MediaType: "manga"},
+		{Key: EntryKey{Title: "one piece", Mode: "manga", MediaType: "novel"}, Title: "one piece", Mode: "manga", MediaType: "novel"},
+	}
+	groups := BuildGroups(entries)
+	if len(groups) != 1 {
+		t.Fatalf("BuildGroups returned %d groups, want 1", len(groups))
+	}
+	if groups[0].Key.MediaType != "manga" || len(groups[0].Entries) != 2 {
+		t.Fatalf("unexpected combined group: %+v", groups[0])
+	}
+}
+
 // TestStore_CloseWaitsForPendingSave confirms Close() actually blocks until
 // the async save from the last mutation has written to disk — the fix for
 // the "quit right after playback finishes" data-loss window.

@@ -61,7 +61,8 @@ const (
 	viewDownloads viewState = "downloads"
 	// viewChapters lists manga/comic chapters for the selected title —
 	// the manga equivalent of the episodes screen and its preview page.
-	viewChapters viewState = "chapters"
+	viewChapters     viewState = "chapters"
+	viewMangaSources viewState = "manga_sources"
 	// viewReader is the fullscreen black-background page viewer.
 	viewReader   viewState = "reader"
 	viewCalendar viewState = "calendar"
@@ -365,6 +366,7 @@ type modelImpl struct {
 	episodeCache     episodeListCache
 	episodeHistory   episodeHistoryIndexCache
 	selectedSeries   *provider.SearchResult
+	mangaSourceIndex int
 	selectedEpisode  *provider.Episode
 	resolved         *model.ResolvedMedia
 
@@ -465,10 +467,13 @@ type modelImpl struct {
 	traktDeviceCode      string
 	traktCancel          context.CancelFunc
 	startupSync          bool
+	disableHistory       bool
+	disabledHistoryModes map[string]bool
 	discordPresence      bool
 	// presenceSession tags the current now-playing card so a late background
 	// artwork lookup can't revive a card that was already cleared or replaced.
 	presenceSession             atomic.Int64
+	searchCacheGeneration       atomic.Uint64
 	settingsIndex               int
 	searchCache                 *util.BoundedCache[searchCacheEntry]
 	audioMode                   string

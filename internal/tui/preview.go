@@ -244,13 +244,19 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 	// sub/dub track choice shown in the header instead. Size stays out —
 	// sizes are unreliable across providers.
 	showAudio := data.Mode != provider.ModeAnime
+	audioWidth := 10
+	if data.Mode == provider.ModeLive {
+		// Live channels often list several broadcast languages; a narrow
+		// column would truncate them into a misleading single name.
+		audioWidth = 26
+	}
 	cursorH := "  "
 	qualityH := fmt.Sprintf("%-12s", "quality")
 	providerH := fmt.Sprintf("%-14s", "provider")
 	sourceH := fmt.Sprintf("%-18s", "source")
 	headerRow := fmt.Sprintf("%s%s  %s  %s", cursorH, st.Dim.Render(qualityH), st.Dim.Render(providerH), st.Dim.Render(sourceH))
 	if showAudio {
-		headerRow += "  " + st.Dim.Render(fmt.Sprintf("%-10s", "audio"))
+		headerRow += "  " + st.Dim.Render(fmt.Sprintf("%-*s", audioWidth, "audio"))
 	}
 	rows = append(rows, headerRow)
 
@@ -310,7 +316,7 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 
 		row := fmt.Sprintf("%s%s  %s  %s", cursor, qualityStr, providerStr, sourceStr)
 		if showAudio {
-			audioStr := fmt.Sprintf("%-10s", truncate(formatSourceAudio(src), 10))
+			audioStr := fmt.Sprintf("%-*s", audioWidth, truncate(formatSourceAudio(src), audioWidth))
 			if isFocused {
 				row = fmt.Sprintf("%s%s  %s  %s  %s", cursor,
 					st.Current.Render(qualityStr), providerStr, sourceStr, st.Current.Render(audioStr))
@@ -330,14 +336,18 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 	return strings.Join(rows, "\n")
 }
 
-// formatSourceAudio names the audio language for the sources table: the
-// detected track language, defaulting to English for the main track so
-// every row carries a value and the column never shifts.
+// formatSourceAudio names the audio language for the sources table. A display
+// label wins because live channels may broadcast in several languages; then a
+// single detected track language; then a dash when the stream does not
+// advertise language metadata.
 func formatSourceAudio(src provider.MediaSource) string {
+	if label := strings.TrimSpace(src.AudioLabel); label != "" {
+		return label
+	}
 	if l := strings.TrimSpace(src.Language); l != "" {
 		return lang.Name(l)
 	}
-	return "English"
+	return "—"
 }
 
 func formatSourceQuality(raw string) string {

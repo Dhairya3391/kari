@@ -48,8 +48,9 @@ type MediaService struct {
 	lastMu       sync.Mutex
 	lastFailures []string
 
-	disabledMu        sync.RWMutex
-	disabledProviders map[string]bool
+	disabledMu         sync.RWMutex
+	disabledProviders  map[string]bool
+	providerGeneration uint64
 
 	searchCache   *util.BoundedCache[searchCacheEntry]
 	episodesCache *util.BoundedCache[episodesCacheEntry]
@@ -113,6 +114,7 @@ func (s *MediaService) setLastFailures(names []string) {
 func (s *MediaService) SetDisabledProviders(names []string) {
 	s.disabledMu.Lock()
 	defer s.disabledMu.Unlock()
+	s.providerGeneration++
 	s.disabledProviders = make(map[string]bool, len(names))
 	for _, n := range names {
 		p := strings.ToLower(strings.TrimSpace(n))

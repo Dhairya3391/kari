@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -75,11 +76,18 @@ func ComputeDims(width, height int) Dims {
 // is budgeted so the body never shifts and the footer stays pinned.
 func RenderFrame(dims Dims, header, body, toast, footer string) string {
 	padStyle := lipgloss.NewStyle().MarginLeft(dims.ContentStart).Width(dims.ContentWidth)
+	fit := func(block string) string {
+		lines := strings.Split(block, "\n")
+		for i, line := range lines {
+			lines[i] = ansi.Truncate(line, dims.ContentWidth, "…")
+		}
+		return strings.Join(lines, "\n")
+	}
 
 	var rows []string
 
 	// 1. Header (Row 1)
-	rows = append(rows, padStyle.Render(header))
+	rows = append(rows, padStyle.Render(fit(header)))
 
 	// 2. Blank spacer row (if height >= 24)
 	if dims.ShowSpacer {
@@ -91,7 +99,7 @@ func RenderFrame(dims Dims, header, body, toast, footer string) string {
 	if toast != "" {
 		statusLines = len(strings.Split(toast, "\n"))
 	}
-	bodyLines := strings.Split(body, "\n")
+	bodyLines := strings.Split(fit(body), "\n")
 	availableBodyLines := dims.BodyHeight - statusLines
 
 	for i := 0; i < len(bodyLines) && i < availableBodyLines; i++ {
@@ -105,11 +113,11 @@ func RenderFrame(dims Dims, header, body, toast, footer string) string {
 
 	// 4. Status block (directly above footer)
 	if toast != "" {
-		rows = append(rows, padStyle.Render(toast))
+		rows = append(rows, padStyle.Render(fit(toast)))
 	}
 
 	// 5. Footer (pinned to bottom row)
-	rows = append(rows, padStyle.Render(footer))
+	rows = append(rows, padStyle.Render(fit(footer)))
 
 	// Truncate to exact terminal height to avoid terminal scroll jitter
 	if len(rows) > dims.TermHeight {

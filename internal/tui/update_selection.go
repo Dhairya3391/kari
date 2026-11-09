@@ -31,6 +31,11 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 	// and the fullscreen reader instead of episode resolution. The
 	// branch is on the MangaSource capability, never on names or modes.
 	if m.isMangaProvider(m.selectedSeries.Provider) {
+		if len(m.selectedSeries.SourceOptions) > 1 {
+			m.mangaSourceIndex = 0
+			m.pushView(viewMangaSources)
+			return m, nil
+		}
 		tuiLog.Debug("manga result; loading chapters", "title", m.selectedSeries.Title)
 		return m.selectMangaSeries(idx)
 	}
@@ -86,6 +91,22 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 	opID := m.newOpID()
 	m.episodesOpID = opID
 	return m, tea.Batch(m.spinner.Tick, m.episodesCmd(opID, *m.selectedSeries))
+}
+
+func (m *modelImpl) selectMangaSource(index int) (tea.Model, tea.Cmd) {
+	if m.selectedSeries == nil || index < 0 || index >= len(m.selectedSeries.SourceOptions) {
+		return m, nil
+	}
+	selected := m.selectedSeries.SourceOptions[index]
+	selected.SourceOptions = nil
+	m.selectedSeries = &selected
+	for i := range m.seriesResults {
+		if m.seriesResults[i].Title == selected.Title && m.seriesResults[i].MediaType == selected.MediaType {
+			m.searchIndex = i
+			break
+		}
+	}
+	return m.selectMangaSeries(m.searchIndex)
 }
 
 func (m *modelImpl) selectEpisode(idx int) (tea.Model, tea.Cmd) {
@@ -312,6 +333,10 @@ func modeForHistoryEntry(entry history.Entry) provider.ContentType {
 	case string(provider.ModeCartoon):
 		return provider.ModeCartoon
 	case provider.MediaTypeManga:
+		return provider.ModeManga
+	case provider.MediaTypeNovel:
+		return provider.ModeManga
+	case provider.MediaTypeComic:
 		return provider.ModeManga
 	case provider.MediaTypeLive:
 		return provider.ModeLive

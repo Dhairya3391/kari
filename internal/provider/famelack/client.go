@@ -29,10 +29,11 @@ import (
 )
 
 var (
-	_ provider.Provider      = (*Client)(nil)
-	_ provider.EpisodeSource = (*Client)(nil)
-	_ provider.FeatureSource = (*Client)(nil)
-	_ provider.Presenter     = (*Client)(nil)
+	_ provider.Provider           = (*Client)(nil)
+	_ provider.EpisodeSource      = (*Client)(nil)
+	_ provider.FeatureSource      = (*Client)(nil)
+	_ provider.Presenter          = (*Client)(nil)
+	_ provider.LiveStreamVerifier = (*Client)(nil)
 )
 
 // famelackLog scopes every line from this package with its identity.
@@ -205,16 +206,23 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			break
 		}
 		sources := make([]provider.MediaSource, 0, len(streams))
+		audioLabel := lang.Names(ch.Languages)
 		for _, streamURL := range streams {
 			sources = append(sources, provider.MediaSource{
-				URL:     streamURL,
-				Quality: "Auto",
-				Type:    streamType(streamURL),
+				URL:        streamURL,
+				Quality:    "Auto",
+				Type:       streamType(streamURL),
+				AudioLabel: audioLabel,
 			})
 		}
 		return sources, nil
 	}
 	return nil, fmt.Errorf("famelack channel %q not in directory: %w", nanoid, provider.ErrNoSources)
+}
+
+// VerifyLiveStream implements provider.LiveStreamVerifier.
+func (c *Client) VerifyLiveStream(ctx context.Context, _ provider.ContentType, source provider.MediaSource) error {
+	return provider.VerifyLiveStream(ctx, c.httpClient, source)
 }
 
 // directory returns the cached playable catalog, refreshing it when stale.

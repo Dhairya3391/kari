@@ -29,9 +29,10 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 
 	mode := m.appMode
 	cacheable := !m.modeFeatures().NoCachedSearches
+	cacheGeneration := m.searchCacheGeneration.Load()
 	return func() tea.Msg {
 		cacheKey := fmt.Sprintf("%s:%s", mode, query)
-		if cacheable {
+		if cacheable && cacheGeneration == m.searchCacheGeneration.Load() {
 			if entry, ok := m.searchCache.Get(cacheKey); ok {
 				logging.Debug("search cache hit", "mode", mode, "query", query)
 				return searchDoneMsg{results: entry.results, usedQuery: entry.usedQuery, warnings: entry.warnings, opID: opID, err: nil}
@@ -40,7 +41,7 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 
 		logging.Debug("search start", "mode", mode, "query", query)
 		results, usedQuery, warnings, err := m.mediaService.Search(searchCtx, mode, query)
-		if err == nil && cacheable && len(warnings) == 0 {
+		if err == nil && cacheable && len(warnings) == 0 && cacheGeneration == m.searchCacheGeneration.Load() {
 			m.searchCache.Set(cacheKey, searchCacheEntry{
 				results:   results,
 				usedQuery: usedQuery,

@@ -53,7 +53,7 @@ func (c *Client) Features(mode provider.ContentType) provider.Features {
 	if mode != provider.ModeManga {
 		return provider.Features{}
 	}
-	return provider.Features{SearchPlaceholder: "Search manga…"}
+	return provider.Features{SearchPlaceholder: "Search manga, novels & comics…"}
 }
 
 // NewClient constructs the WeebCentral provider against production.
