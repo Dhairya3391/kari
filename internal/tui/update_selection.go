@@ -98,7 +98,9 @@ func (m *modelImpl) selectMangaSource(index int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	selected := m.selectedSeries.SourceOptions[index]
-	selected.SourceOptions = nil
+	// Keep the aggregate choices on the selected result so backing out of
+	// chapters can reopen the source picker with its original rows.
+	selected.SourceOptions = m.selectedSeries.SourceOptions
 	m.selectedSeries = &selected
 	for i := range m.seriesResults {
 		if m.seriesResults[i].Title == selected.Title && m.seriesResults[i].MediaType == selected.MediaType {

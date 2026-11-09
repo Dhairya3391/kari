@@ -24,6 +24,38 @@ func mangaTestModel() *modelImpl {
 	}
 }
 
+func TestMangaSourceChoicesSurviveChapterNavigation(t *testing.T) {
+	primary := provider.SearchResult{
+		Title: "One Piece", Provider: "provider-a",
+		SourceOptions: []provider.SearchResult{
+			{Title: "One Piece", Provider: "provider-a"},
+			{Title: "One Piece", Provider: "provider-b"},
+		},
+	}
+	m := mangaTestModel()
+	m.seriesResults = []provider.SearchResult{primary}
+	m.selectedSeries = &m.seriesResults[0]
+	m.activeView = viewMangaSources
+
+	if _, cmd := m.selectMangaSource(1); cmd == nil {
+		t.Fatal("selecting a source should start chapter loading")
+	}
+	if m.activeView != viewChapters {
+		t.Fatalf("active view = %q, want chapters", m.activeView)
+	}
+	if got := len(m.selectedSeries.SourceOptions); got != 2 {
+		t.Fatalf("selected series has %d source options, want 2 after opening chapters", got)
+	}
+
+	m.goBackOne()
+	if m.activeView != viewMangaSources {
+		t.Fatalf("back view = %q, want manga sources", m.activeView)
+	}
+	if got := len(m.selectedSeries.SourceOptions); got != 2 {
+		t.Fatalf("source picker has %d rows after backing out, want 2", got)
+	}
+}
+
 // TestChaptersScreenLoading pins the pending state: with a load in flight
 // and no rows yet, the body must not flash a "no chapters" verdict.
 func TestChaptersScreenLoading(t *testing.T) {
