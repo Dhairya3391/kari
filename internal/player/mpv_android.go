@@ -63,7 +63,7 @@ func playSingleSourceWithMPVAndroid(
 	// (see parseIntentExtras in the upstream app). Use -t video/any so the URL
 	// is opened regardless of a missing/odd file extension, and pass title and
 	// resume position as supported extras.
-	args := []string{"start", "-p", mpvAndroidPackageName(), "-a", "android.intent.action.VIEW", "-t", "video/any", "-d", source.URL}
+	args := []string{"start", "-p", mpvAndroidPackageName(), "-a", "android.intent.action.VIEW", "-t", "video/any", "-d", intentDataURI(source.URL)}
 
 	if title := sanitizeMediaTitle(media.DisplayTitle()); title != "" {
 		args = append(args, "--es", "title", title)

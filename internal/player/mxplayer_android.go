@@ -67,7 +67,7 @@ func buildMXPlayerAndroidIntent(
 	source provider.MediaSource,
 	media model.ResolvedMedia,
 ) ([]string, error) {
-	args := []string{"start", "-n", mxPlayerPackage + "/com.mxtech.videoplayer.ad.ActivityScreen", "-a", "android.intent.action.VIEW", "-t", "video/*", "-d", source.URL}
+	args := []string{"start", "-n", mxPlayerPackage + "/com.mxtech.videoplayer.ad.ActivityScreen", "-a", "android.intent.action.VIEW", "-t", "video/*", "-d", intentDataURI(source.URL)}
 
 	title := sanitizeMediaTitle(media.DisplayTitle())
 	if title != "" {
