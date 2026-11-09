@@ -193,8 +193,10 @@ Default: auto-detected from
 .B KARI_DOWNLOAD_DIR
 Directory where downloaded episodes are saved.
 Default:
+.I ~/Downloads/kari
+(or
 .I ./downloads
-(relative to the working directory at launch).
+if the home directory is unavailable).
 .TP
 .B KARI_LOG_FILE
 Path for the application log file.
@@ -335,7 +337,7 @@ faster downloads.
 Files are saved to
 .B KARI_DOWNLOAD_DIR
 (default
-.IR ./downloads ).
+.IR ~/Downloads/kari ).
 .\" ────────────────────────────────────────────────
 .SH SCROBBLING
 Kari supports native device-flow OAuth authorization for two services.

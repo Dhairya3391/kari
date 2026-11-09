@@ -88,7 +88,7 @@ func Load() (*Config, error) {
 func defaultDownloadDir() string {
 	home, err := os.UserHomeDir()
 	if err == nil && strings.TrimSpace(home) != "" {
-		return filepath.Join(home, "Downloads")
+		return filepath.Join(home, "Downloads", "kari")
 	}
 	return filepath.Join(".", "downloads")
 }

@@ -15,7 +15,7 @@ func TestLoadUsesUserDownloadsDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	want := filepath.Join(home, "Downloads")
+	want := filepath.Join(home, "Downloads", "kari")
 	if cfg.DownloadDir != want {
 		t.Fatalf("DownloadDir = %q, want %q", cfg.DownloadDir, want)
 	}
