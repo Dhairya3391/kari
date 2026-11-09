@@ -126,6 +126,20 @@ func (s *DownloadService) CompletedDownloads() []CompletedDownload {
 		if _, ok := knownExts[ext]; !ok {
 			return nil
 		}
+		rel, err := filepath.Rel(s.downloadDir, path)
+		if err != nil {
+			return nil //nolint:nilerr // an unrelatable file cannot be a Kari download
+		}
+		// Only files recorded by a successful Kari download belong in this
+		// view. The folder layout also identifies files downloaded before
+		// markers were introduced.
+		_, markerErr := os.Stat(completedDownloadMarker(path))
+		if markerErr != nil && !os.IsNotExist(markerErr) {
+			return fmt.Errorf("check completed download marker: %w", markerErr)
+		}
+		if markerErr != nil && !isLegacyKariDownload(rel) {
+			return nil
+		}
 
 		// Incomplete download check: .aria2, .part, or .ytdl control/partial files
 		// beside the target or staged in its temp directory.
@@ -152,14 +166,6 @@ func (s *DownloadService) CompletedDownloads() []CompletedDownload {
 		if err != nil || info.Size() <= 0 {
 			// A vanished or unreadable entry must not hide the rest of
 			// the completed downloads.
-			return nil //nolint:nilerr // intentional per-entry skip
-		}
-
-		rel, err := filepath.Rel(s.downloadDir, path)
-		if err != nil {
-			// WalkDir rooted at downloadDir should always yield relative
-			// paths; skip rather than abort the whole listing on a path
-			// that cannot be made relative.
 			return nil //nolint:nilerr // intentional per-entry skip
 		}
 
@@ -199,6 +205,19 @@ func (s *DownloadService) CompletedDownloads() []CompletedDownload {
 	})
 
 	return completed
+}
+
+func isLegacyKariDownload(relativePath string) bool {
+	parts := strings.Split(filepath.ToSlash(relativePath), "/")
+	switch len(parts) {
+	case 2:
+		fileTitle := strings.TrimSuffix(parts[1], filepath.Ext(parts[1]))
+		return strings.EqualFold(parts[0], fileTitle)
+	case 3:
+		return strings.HasPrefix(strings.ToLower(parts[1]), "season ")
+	default:
+		return false
+	}
 }
 
 func formatDiskFileSize(bytes int64) string {
@@ -306,9 +325,43 @@ func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.Reso
 	if err := s.dl.Download(ctx, req); err != nil {
 		return err
 	}
+	if err := s.markCompletedDownload(outputDir, title); err != nil {
+		logging.Debug("record completed download failed", "title", title, "err", err)
+	}
 
 	removeEmptyDirs(tempDir, s.downloadDir)
 	s.saveSidecarSubtitle(ctx, resolved, outputDir, title)
+	return nil
+}
+
+func completedDownloadMarker(path string) string {
+	return path + ".kari"
+}
+
+func (s *DownloadService) markCompletedDownload(outputDir, title string) error {
+	baseTitle, _ := downloader.SplitTitleExt(title)
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		return fmt.Errorf("read completed download directory: %w", err)
+	}
+	knownExts := map[string]struct{}{
+		".mp4": {}, ".mkv": {}, ".webm": {}, ".m4v": {},
+		".mov": {}, ".avi": {}, ".ts": {},
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		ext := strings.ToLower(filepath.Ext(name))
+		if _, ok := knownExts[ext]; !ok || !strings.EqualFold(strings.TrimSuffix(name, filepath.Ext(name)), baseTitle) {
+			continue
+		}
+		marker := completedDownloadMarker(filepath.Join(outputDir, name))
+		if err := os.WriteFile(marker, nil, 0o600); err != nil {
+			return fmt.Errorf("write completed download marker: %w", err)
+		}
+	}
 	return nil
 }
 

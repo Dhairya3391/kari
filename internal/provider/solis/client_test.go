@@ -7,12 +7,29 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"kari/internal/provider"
 	"kari/internal/tmdb"
 )
+
+type solisTestRoundTripper struct {
+	target string
+}
+
+func (rt solisTestRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Host == "cdn.example.com" {
+		cloned := req.Clone(req.Context())
+		urlCopy := *req.URL
+		urlCopy.Scheme = "http"
+		urlCopy.Host = rt.target
+		cloned.URL = &urlCopy
+		return http.DefaultTransport.RoundTrip(cloned)
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
 
 func TestClientMetadata(t *testing.T) {
 	pool := tmdb.NewKeyPool([]string{"dummy-key"})
@@ -98,6 +115,80 @@ func TestResolveSourceSuccess(t *testing.T) {
 	}
 	if sources[0].Subtitles[0].Language != "en" {
 		t.Errorf("subtitle language = %q, want en", sources[0].Subtitles[0].Language)
+	}
+}
+
+func TestResolveSourceDropsExplicitWarpPlaceholder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/resolve":
+			resp := apiResolveResponse{Sources: []apiSource{
+				{URL: "https://cdn.example.com/blocked", Quality: "4K (Mordecai)", Type: "hls"},
+				{URL: "https://cdn.example.com/playlist", Quality: "1080p (Plankton)", Type: "hls"},
+			}}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/blocked":
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = fmt.Fprint(w, "Please disable Cloudflare WARP VPN to continue")
+		case "/playlist":
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = fmt.Fprint(w, "#EXTM3U\n#EXT-X-VERSION:3\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClientWithURL(tmdb.NewKeyPool([]string{"dummy-key"}), server.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURL failed: %v", err)
+	}
+	client.httpClient.Transport = solisTestRoundTripper{target: strings.TrimPrefix(server.URL, "http://")}
+	sources, err := client.ResolveSource(context.Background(), "550", provider.Episode{TMDBID: 550})
+	if err != nil {
+		t.Fatalf("ResolveSource failed: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("len(sources) = %d, want 1: %+v", len(sources), sources)
+	}
+	if sources[0].Backend != "Plankton" || sources[0].Quality != "1080p" {
+		t.Errorf("source = %q %q, want Plankton 1080p", sources[0].Backend, sources[0].Quality)
+	}
+}
+
+func TestResolveStreamDropsExplicitWarpPlaceholder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/resolve":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, "event: source\ndata: {\"url\":\"https://cdn.example.com/blocked\",\"quality\":\"4K (Mordecai)\",\"type\":\"hls\"}\n\n")
+			_, _ = fmt.Fprint(w, "event: source\ndata: {\"url\":\"https://cdn.example.com/playlist\",\"quality\":\"1080p (Plankton)\",\"type\":\"hls\"}\n\n")
+			_, _ = fmt.Fprint(w, "event: done\ndata: {}\n\n")
+		case "/blocked":
+			_, _ = fmt.Fprint(w, "Please disable Cloudflare WARP VPN to continue")
+		case "/playlist":
+			_, _ = fmt.Fprint(w, "#EXTM3U\n#EXT-X-VERSION:3\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClientWithURL(tmdb.NewKeyPool([]string{"dummy-key"}), server.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURL failed: %v", err)
+	}
+	client.httpClient.Transport = solisTestRoundTripper{target: strings.TrimPrefix(server.URL, "http://")}
+	updates := make(chan []provider.MediaSource, 2)
+	if err := client.ResolveStream(context.Background(), "550", provider.Episode{TMDBID: 550}, updates); err != nil {
+		t.Fatalf("ResolveStream failed: %v", err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("updates = %d, want 1 playable lane", len(updates))
+	}
+	if sources := <-updates; len(sources) != 1 || sources[0].Backend != "Plankton" {
+		t.Fatalf("sources = %+v, want Plankton lane only", sources)
 	}
 }
 

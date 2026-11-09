@@ -9,10 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
@@ -137,11 +140,71 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			sources = append(sources, src)
 		}
 	}
+	sources = c.filterWarpPlaceholderSources(ctx, sources)
 
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources
 	}
 	return provider.FilterDirectSources(sources), nil
+}
+
+// filterWarpPlaceholderSources removes 4K lanes only when their proxied
+// manifest explicitly contains the Cloudflare WARP block shown by some hosts.
+func (c *Client) filterWarpPlaceholderSources(ctx context.Context, sources []provider.MediaSource) []provider.MediaSource {
+	blocked := make([]bool, len(sources))
+	var wg sync.WaitGroup
+	for i := range sources {
+		if !is4KQuality(sources[i].Quality) {
+			continue
+		}
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			blocked[index] = c.isWarpPlaceholder(checkCtx, sources[index])
+		}(i)
+	}
+	wg.Wait()
+
+	filtered := make([]provider.MediaSource, 0, len(sources))
+	for i, source := range sources {
+		if blocked[i] {
+			logging.Debug("dropping Solis lane blocked by Cloudflare WARP", "backend", source.Backend, "quality", source.Quality)
+			continue
+		}
+		filtered = append(filtered, source)
+	}
+	return filtered
+}
+
+func (c *Client) isWarpPlaceholder(ctx context.Context, source provider.MediaSource) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.URL, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Range", "bytes=0-16383")
+	req.Header.Set("User-Agent", source.UserAgent)
+	if source.Referer != "" {
+		req.Header.Set("Referer", source.Referer)
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+	if err != nil {
+		return false
+	}
+	text := strings.ToLower(string(body))
+	return strings.Contains(text, "cloudflare") && strings.Contains(text, "warp") &&
+		(strings.Contains(text, "vpn") || strings.Contains(text, "disable") || strings.Contains(text, "turn off"))
+}
+
+func is4KQuality(quality string) bool {
+	quality = strings.ToLower(strings.TrimSpace(quality))
+	return quality == "4k" || quality == "uhd" || quality == "2160p"
 }
 
 // ResolveStream implements provider.StreamingProvider, consuming progressive SSE
@@ -221,12 +284,21 @@ func (c *Client) ResolveStream(
 			if !provider.IsDirectURL(cleanURL) {
 				continue
 			}
+			src := toMediaSource(s, currentSubs)
+			if is4KQuality(src.Quality) {
+				checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+				blocked := c.isWarpPlaceholder(checkCtx, src)
+				cancel()
+				if blocked {
+					logging.Debug("dropping Solis lane blocked by Cloudflare WARP", "backend", src.Backend, "quality", src.Quality)
+					continue
+				}
+			}
 			if _, ok := seenURLs[cleanURL]; ok {
 				continue
 			}
 			seenURLs[cleanURL] = struct{}{}
 
-			src := toMediaSource(s, currentSubs)
 			emitted = append(emitted, src)
 			delivered++
 

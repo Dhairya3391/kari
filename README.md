@@ -55,11 +55,14 @@ Type a query, press `Space`, pick a result, press `Enter` to play. `Tab` switche
 | **Manga reader** | In-terminal, Kitty / iTerm2 / Sixel / Unicode block graphics |
 | **Sub / Dub** | Toggle with `a`; the track sticks for following episodes, subtitles side-loaded automatically |
 | **Downloads** | Single or batch via yt-dlp, 16-connection with aria2 |
+| **Stremio add-ons** | Add compatible stream manifests and browse their catalogs in Stremio mode |
 | **Discord presence** | Optional, local only |
 | **Self-update** | `kari -u` |
 
 Players: mpv, IINA, VLC, MPV Android, MX Player. Capability matrix in [docs/PLAYERS.md](docs/PLAYERS.md).
 Providers per mode: [docs/PROVIDERS.md](docs/PROVIDERS.md).
+
+To add an add-on, open Settings with `s`, choose **Add-ons**, then **Add Stremio addon manifest**. Kari checks the manifest and a sample stream before saving it.
 
 ## Essential keys
 

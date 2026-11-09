@@ -596,6 +596,12 @@ func TestCompletedDownloads(t *testing.T) {
 	}
 	_ = os.Chtimes(doneFile2, now, now)
 
+	// A video copied into the same download folder by the user is not a
+	// Kari download and must not appear in Kari's Downloads view.
+	if err := os.WriteFile(filepath.Join(root, "Shrek.mkv"), []byte("user media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	// 3. Video file with .aria2 incomplete marker
 	incompleteFile1 := filepath.Join(seasonDir, "S01E02 - Hunter.mp4")
 	if err := os.WriteFile(incompleteFile1, []byte("partial"), 0o644); err != nil {
@@ -649,6 +655,48 @@ func TestCompletedDownloads(t *testing.T) {
 	}
 	if completed[0].Size == "" || completed[1].Size == "" {
 		t.Errorf("completed size expected non-empty")
+	}
+}
+
+func TestCompletedDownloadsOwnership(t *testing.T) {
+	root := t.TempDir()
+	legacyMovieDir := filepath.Join(root, "Shrek")
+	if err := os.MkdirAll(legacyMovieDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyMovie := filepath.Join(legacyMovieDir, "Shrek.mkv")
+	if err := os.WriteFile(legacyMovie, []byte("legacy Kari movie"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "untracked.mp4"), []byte("user media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unrelatedDir := filepath.Join(root, "Movies")
+	if err := os.MkdirAll(unrelatedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unrelatedDir, "Other.mkv"), []byte("user media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	newDownload := filepath.Join(root, "New Title.mp4")
+	if err := os.WriteFile(newDownload, []byte("new Kari download"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := testDownloadService(root, &fakeDownloader{})
+	if err := svc.markCompletedDownload(root, "New Title"); err != nil {
+		t.Fatal(err)
+	}
+	completed := svc.CompletedDownloads()
+	if len(completed) != 2 {
+		t.Fatalf("completed downloads = %d, want 2: %+v", len(completed), completed)
+	}
+	paths := map[string]bool{}
+	for _, download := range completed {
+		paths[download.Path] = true
+	}
+	if !paths[legacyMovie] || !paths[newDownload] {
+		t.Errorf("Kari downloads missing: %+v", completed)
 	}
 }
 

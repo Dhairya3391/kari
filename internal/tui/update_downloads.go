@@ -243,6 +243,7 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 					item := data.Done[doneIdx]
 					if item.Path != "" {
 						_ = os.Remove(item.Path)
+						_ = os.Remove(item.Path + ".kari")
 						dir := filepath.Dir(item.Path)
 						baseTitle, _ := downloader.SplitTitleExt(filepath.Base(item.Path))
 						if entries, err := os.ReadDir(dir); err == nil {

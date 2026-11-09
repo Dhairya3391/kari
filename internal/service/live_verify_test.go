@@ -3,19 +3,29 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"kari/internal/provider"
 )
 
 type fakeLiveVerifier struct {
+	mu     sync.Mutex
 	verify func(provider.MediaSource) error
 	mode   provider.ContentType
 }
 
 func (f *fakeLiveVerifier) VerifyLiveStream(_ context.Context, mode provider.ContentType, source provider.MediaSource) error {
+	f.mu.Lock()
 	f.mode = mode
+	f.mu.Unlock()
 	return f.verify(source)
+}
+
+func (f *fakeLiveVerifier) verifiedMode() provider.ContentType {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mode
 }
 
 func TestVerifyLiveSourcesKeepsReachableRows(t *testing.T) {
@@ -38,8 +48,8 @@ func TestVerifyLiveSourcesKeepsReachableRows(t *testing.T) {
 	if kept[0].URL != sources[0].URL || kept[1].URL != sources[2].URL {
 		t.Errorf("order not preserved: %+v", kept)
 	}
-	if verifier.mode != provider.ModeLive {
-		t.Errorf("mode = %q, want live", verifier.mode)
+	if got := verifier.verifiedMode(); got != provider.ModeLive {
+		t.Errorf("mode = %q, want live", got)
 	}
 }
 

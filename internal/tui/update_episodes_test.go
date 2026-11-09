@@ -811,6 +811,7 @@ func TestCollectDownloadsData_PathCorrelation(t *testing.T) {
 	root := t.TempDir()
 	filePath := filepath.Join(root, "Loki S01E01.mp4")
 	_ = os.WriteFile(filePath, []byte("video"), 0o644)
+	_ = os.WriteFile(filePath+".kari", nil, 0o600)
 
 	svc := service.NewDownloadService(root, nil, nil, nil)
 
