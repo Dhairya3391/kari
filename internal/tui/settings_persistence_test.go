@@ -200,6 +200,35 @@ func TestSettings_VerifyDownloadsToggle(t *testing.T) {
 	}
 }
 
+func TestProviderPriorityCanBeSetForEachMode(t *testing.T) {
+	m := newTestSwitchModel()
+	m.settingsCategory = CategoryPlayback
+	m.openProviderPriorityEditor()
+	for modes := m.providerPriorityModes(); modes[m.providerPriorityIndex] != provider.ModeMovies; {
+		m.updateProviderPriorityPicker("down")
+	}
+	if m.providerPriorityModes()[m.providerPriorityIndex] != provider.ModeMovies {
+		t.Fatalf("provider mode = %q, want movies", m.providerPriorityModes()[m.providerPriorityIndex])
+	}
+	m.cycleProviderPriority(provider.ModeMovies, 1)
+	if got := m.preferredProviderForMode(provider.ModeMovies); got != "movie_p" {
+		t.Fatalf("movies preferred provider = %q, want movie_p", got)
+	}
+	if got := m.preferredProviderForMode(provider.ModeAnime); got != "" {
+		t.Fatalf("anime preferred provider changed unexpectedly: %q", got)
+	}
+}
+
+func TestProviderPriorityEscapeReturnsToSettings(t *testing.T) {
+	m := newTestSwitchModel()
+	m.activeView = viewSettings
+	m.openProviderPriorityEditor()
+	_, handled := m.handleGlobalKeys(tea.KeyMsg{Type: tea.KeyEsc})
+	if !handled || m.providerPriorityOpen || m.activeView != viewSettings {
+		t.Fatalf("Escape state: handled=%v picker=%v view=%q", handled, m.providerPriorityOpen, m.activeView)
+	}
+}
+
 func TestGlobalPlayerSwitchPersistsAcrossRestart(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	players := player.NewRegistry("", player.SkipClients{}, player.SkipSettings{})
@@ -292,11 +321,11 @@ func TestNewModelRestoresSettingsAfterRestart(t *testing.T) {
 		t.Errorf("m.downloadQuality = %d, want %d", m.downloadQuality, downloadQuality4K)
 	}
 	m.appMode = provider.ModeTV
-	if got := m.preferredProviderForMode(); got != "tv_p" {
+	if got := m.preferredProviderForMode(provider.ModeTV); got != "tv_p" {
 		t.Errorf("TV preferred provider = %q, want tv_p", got)
 	}
 	m.appMode = provider.ModeMovies
-	if got := m.preferredProviderForMode(); got != "movie_p" {
+	if got := m.preferredProviderForMode(provider.ModeMovies); got != "movie_p" {
 		t.Errorf("movie preferred provider = %q, want movie_p", got)
 	}
 	m.appMode = provider.ModeTV

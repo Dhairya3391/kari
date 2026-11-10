@@ -100,6 +100,10 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		}
+		if m.providerPriorityOpen {
+			m.updateProviderPriorityPicker(msg.String())
+			return m, nil
+		}
 		// 1. Audio Language Picker Modal
 		if m.audioPickerOpen {
 			allLangs := m.availableLanguages()
@@ -336,6 +340,10 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "left", "h":
+			if m.settingsCategory == CategoryPlayback && m.settingsIndex == 3 {
+				m.openProviderPriorityEditor()
+				return m, nil
+			}
 			if m.settingsCategory == CategoryProviders {
 				return m.toggleProviderAtIndex(m.settingsIndex)
 			}
@@ -344,6 +352,10 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.triggerSubtitleSync()
 
 		case "right", "l":
+			if m.settingsCategory == CategoryPlayback && m.settingsIndex == 3 {
+				m.openProviderPriorityEditor()
+				return m, nil
+			}
 			if m.settingsCategory == CategoryProviders {
 				return m.toggleProviderAtIndex(m.settingsIndex)
 			}
@@ -351,6 +363,10 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.saveSettings()
 			return m, m.triggerSubtitleSync()
 		case "enter", "space", " ":
+			if m.settingsCategory == CategoryPlayback && m.settingsIndex == 3 {
+				m.openProviderPriorityEditor()
+				return m, nil
+			}
 			if m.settingsCategory == CategoryAddons {
 				if m.settingsIndex == 0 {
 					m.addonInputOpen = true
@@ -472,28 +488,6 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.qualityMode = (m.qualityMode + delta + 4) % 4
 		case 2: // Download quality
 			m.downloadQuality = (m.downloadQuality + delta + 5) % 5
-		case 3: // Provider priority
-			options := m.preferredProviderOptions()
-			if len(options) > 0 {
-				index := 0
-				preferred := m.preferredProviderForMode()
-				for i, option := range options {
-					if option.ID == preferred {
-						index = i
-						break
-					}
-				}
-				selected := options[(index+delta+len(options))%len(options)].ID
-				if m.preferredProviders == nil {
-					m.preferredProviders = make(map[string]string)
-				}
-				mode := string(m.appMode)
-				if selected == "" {
-					delete(m.preferredProviders, mode)
-				} else {
-					m.preferredProviders[mode] = selected
-				}
-			}
 		case 4: // Autoplay next episode
 			m.autoplay = !m.autoplay
 		case 5: // Verify downloads
@@ -599,23 +593,138 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 	}
 }
 
-func (m *modelImpl) preferredProviderForMode() string {
+func (m *modelImpl) providerPriorityModes() []provider.ContentType {
+	if m.registry == nil {
+		return nil
+	}
+	return m.registry.AllModes()
+}
+
+func (m *modelImpl) providerPriorityRows() []ProviderPriorityRow {
+	modes := m.providerPriorityModes()
+	rows := make([]ProviderPriorityRow, 0, len(modes))
+	for _, mode := range modes {
+		modeName := providerPriorityModeLabel(mode)
+		providerName := "Auto"
+		for _, option := range m.preferredProviderOptions(mode) {
+			if option.ID == m.preferredProviderForMode(mode) {
+				providerName = option.Name
+				break
+			}
+		}
+		rows = append(rows, ProviderPriorityRow{ModeName: modeName, ProviderName: providerName})
+	}
+	return rows
+}
+
+func providerPriorityModeLabel(mode provider.ContentType) string {
+	switch mode {
+	case provider.ModeAnime:
+		return "Anime"
+	case provider.ModeCartoon:
+		return "Cartoon"
+	case provider.ModeStremio:
+		return "Stremio"
+	case provider.ModeMovies:
+		return "Movies"
+	case provider.ModeTV:
+		return "TV Shows"
+	case provider.ModeJellyfin:
+		return "Jellyfin"
+	case provider.ModeLive:
+		return "Live"
+	case provider.ModeManga:
+		return "Manga"
+	default:
+		return string(mode)
+	}
+}
+
+func (m *modelImpl) openProviderPriorityEditor() {
+	m.providerPriorityOpen = true
+	m.providerPriorityIndex = 0
+	for i, mode := range m.providerPriorityModes() {
+		if mode == m.appMode {
+			m.providerPriorityIndex = i
+			break
+		}
+	}
+}
+
+func (m *modelImpl) updateProviderPriorityPicker(key string) {
+	modes := m.providerPriorityModes()
+	if len(modes) == 0 {
+		m.providerPriorityOpen = false
+		return
+	}
+	last := len(modes) - 1
+	switch key {
+	case "up", "k":
+		m.providerPriorityIndex = max(0, m.providerPriorityIndex-1)
+	case "down", "j":
+		m.providerPriorityIndex = min(last, m.providerPriorityIndex+1)
+	case "home", "g":
+		m.providerPriorityIndex = 0
+	case "end", "G":
+		m.providerPriorityIndex = last
+	case "left", "h":
+		m.cycleProviderPriority(modes[m.providerPriorityIndex], -1)
+		m.saveSettings()
+	case "right", "l":
+		m.cycleProviderPriority(modes[m.providerPriorityIndex], 1)
+		m.saveSettings()
+	case "enter", "esc":
+		m.providerPriorityOpen = false
+	}
+}
+
+func (m *modelImpl) cycleProviderPriority(mode provider.ContentType, delta int) {
+	options := m.preferredProviderOptions(mode)
+	if len(options) == 0 {
+		return
+	}
+	index := 0
+	for i, option := range options {
+		if option.ID == m.preferredProviderForMode(mode) {
+			index = i
+			break
+		}
+	}
+	selected := options[(index+delta+len(options))%len(options)].ID
+	if m.preferredProviders == nil {
+		m.preferredProviders = make(map[string]string)
+	}
+	if selected == "" {
+		delete(m.preferredProviders, string(mode))
+	} else {
+		m.preferredProviders[string(mode)] = selected
+	}
+}
+
+func (m *modelImpl) preferredProviderForMode(mode provider.ContentType) string {
 	if m.preferredProviders == nil {
 		return ""
 	}
-	return m.preferredProviders[string(m.appMode)]
+	return m.preferredProviders[string(mode)]
 }
 
-func (m *modelImpl) preferredProviderOptions() []ProviderRow {
+func (m *modelImpl) preferredProviderOptions(mode provider.ContentType) []ProviderRow {
 	options := []ProviderRow{{ID: "", Name: "Auto"}}
 	seen := map[string]bool{"": true}
-	for _, row := range m.providerRows() {
-		id := strings.ToLower(strings.TrimSpace(row.ID))
-		if id == "" || seen[id] || !row.Available || !row.Enabled || row.Mode != m.appMode {
+	if m.registry == nil {
+		return options
+	}
+	for _, source := range m.registry.ProvidersForMode(mode) {
+		id := strings.TrimSpace(source.Name())
+		key := strings.ToLower(id)
+		if id == "" || seen[key] || m.isProviderDisabledKey(mode, id) {
 			continue
 		}
-		seen[id] = true
-		options = append(options, ProviderRow{ID: row.ID, Name: row.Name})
+		if id == "jellyfin" && !m.isModeAvailable("jellyfin") {
+			continue
+		}
+		seen[key] = true
+		options = append(options, ProviderRow{ID: id, Name: m.registry.DisplayName(id)})
 	}
 	return options
 }

@@ -504,6 +504,8 @@ type modelImpl struct {
 	qualityMode                 int
 	downloadQuality             int
 	preferredProviders          map[string]string
+	providerPriorityOpen        bool
+	providerPriorityIndex       int
 	disableDownloadVerification bool
 	languageFilter              map[string]bool
 	subtitleLanguage            string

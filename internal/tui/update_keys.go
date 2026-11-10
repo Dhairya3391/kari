@@ -19,6 +19,10 @@ import (
 )
 
 func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
+	if m.activeView == viewSettings && m.providerPriorityOpen && key.Matches(msg, m.keys.Back) {
+		m.providerPriorityOpen = false
+		return nil, true
+	}
 	if m.activeView == viewMangaSources {
 		switch msg.String() {
 		case "up", "k":

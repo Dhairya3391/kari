@@ -119,7 +119,7 @@ func (m *modelImpl) batchDownloadCmd(
 		totalBatchCount = len(episodes)
 	}
 	qualityMode := m.effectiveDownloadQuality()
-	preferredProvider := m.preferredProviderForMode()
+	preferredProvider := m.preferredProviderForMode(mode)
 	languageFilter := make(map[string]bool, len(m.languageFilter))
 	for lang, enabled := range m.languageFilter {
 		languageFilter[lang] = enabled

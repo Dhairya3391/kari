@@ -519,16 +519,7 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 	default:
 		downloadQualityName = "Auto (same as stream)"
 	}
-	preferredProviderName := "Auto"
-	for _, option := range m.preferredProviderOptions() {
-		if option.ID == m.preferredProviderForMode() {
-			preferredProviderName = option.Name
-			break
-		}
-	}
-	if mode := string(m.appMode); mode != "" {
-		preferredProviderName = strings.ToUpper(mode[:1]) + mode[1:] + " · " + preferredProviderName
-	}
+	priorityRows := m.providerPriorityRows()
 	accentName := "Auto (per mode)"
 	if m.accentIndex > 0 && m.accentIndex < len(accentPresets) {
 		accentName = accentPresets[m.accentIndex].name
@@ -586,7 +577,9 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		PlayerName:            m.selectedPlayerName(),
 		QualityName:           qualityName,
 		DownloadQualityName:   downloadQualityName,
-		PreferredProviderName: preferredProviderName,
+		ProviderPriorityOpen:  m.providerPriorityOpen,
+		ProviderPriorityIndex: m.providerPriorityIndex,
+		ProviderPriorityRows:  priorityRows,
 		Autoplay:              m.autoplay,
 		VerifyDownloads:       !m.disableDownloadVerification,
 		AudioSummary:          audioSummary,

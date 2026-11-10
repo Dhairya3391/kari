@@ -73,9 +73,11 @@ type SettingsData struct {
 	PlayerName            string // "mpv", "iina"
 	QualityName           string // "Highest", "All", "Data Saver", "Lowest"
 	DownloadQualityName   string // "Same as stream", "Highest", "Data Saver", "Lowest"
-	PreferredProviderName string // "Auto" or a provider's display name
-	Autoplay              bool   // on / off
-	VerifyDownloads       bool   // on / off
+	ProviderPriorityOpen  bool
+	ProviderPriorityIndex int
+	ProviderPriorityRows  []ProviderPriorityRow
+	Autoplay              bool // on / off
+	VerifyDownloads       bool // on / off
 	// Languages values
 	AudioSummary     string // e.g. "English · Hindi · Japanese"
 	SubtitleLanguage string // e.g. "English"
@@ -133,6 +135,12 @@ type HistoryModeRow struct {
 	Enabled bool
 }
 
+// ProviderPriorityRow contains the preferred provider for one content mode.
+type ProviderPriorityRow struct {
+	ModeName     string
+	ProviderName string
+}
+
 // RenderSettingsScreen renders the responsive Settings screen.
 func RenderSettingsScreen(data SettingsData) string {
 	st := NewStyles(data.Accent)
@@ -141,6 +149,9 @@ func RenderSettingsScreen(data SettingsData) string {
 	// If Audio Picker modal overlay is active, render it directly
 	if data.AudioPickerOpen {
 		return fitSettingsLines(renderAudioLanguagePicker(data, st), width)
+	}
+	if data.ProviderPriorityOpen {
+		return fitSettingsLines(renderProviderPriorityPicker(data, st), width)
 	}
 
 	navigation := renderSettingsNavigation(data.ActiveCategory, width, st)
@@ -166,11 +177,11 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 
 	switch data.ActiveCategory {
 	case CategoryPlayback:
-		// 0: Preferred player, 1: Stream quality, 2: Download quality, 3: Provider priority, 4: Autoplay next episode, 5: Verify downloads
+		// 0: Preferred player, 1: Stream quality, 2: Download quality, 3: Provider priorities, 4: Autoplay, 5: Verify downloads
 		rows = append(rows, renderSettingRow("Preferred player", formatVal(data.PlayerName, data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))
 		rows = append(rows, renderSettingRow("Stream quality", formatVal(data.QualityName, data.FocusedRowIndex == 1, st), data.FocusedRowIndex == 1, width, st))
 		rows = append(rows, renderSettingRow("Download quality", formatVal(data.DownloadQualityName, data.FocusedRowIndex == 2, st), data.FocusedRowIndex == 2, width, st))
-		rows = append(rows, renderSettingRow("Provider priority", formatVal(data.PreferredProviderName, data.FocusedRowIndex == 3, st), data.FocusedRowIndex == 3, width, st))
+		rows = append(rows, renderSettingRow("Provider priorities", formatVal(providerPrioritySummary(data.ProviderPriorityRows), data.FocusedRowIndex == 3, st), data.FocusedRowIndex == 3, width, st))
 		rows = append(rows, renderSettingRow("Autoplay next episode", formatVal(boolOnOff(data.Autoplay), data.FocusedRowIndex == 4, st), data.FocusedRowIndex == 4, width, st))
 		rows = append(rows, renderSettingRow("Verify downloads", formatVal(boolOnOff(data.VerifyDownloads), data.FocusedRowIndex == 5, st), data.FocusedRowIndex == 5, width, st))
 
@@ -182,7 +193,7 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		case 2:
 			desc = "Target download resolution: 4K (2160p), FHD (1080p), HD (720p), SD (480p), or Auto (same as stream)."
 		case 3:
-			desc = "Preferred provider for this mode is ranked first and tried first for playback and downloads."
+			desc = "Set a preferred provider for each mode. Enter opens the priority editor."
 		case 4:
 			desc = "Autoplay picks the best source and skips the preview."
 		case 5:
@@ -351,6 +362,52 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		rows = append(rows, "", st.Dim.Render(wrapText(desc, width, 3)))
 	}
 
+	return strings.Join(rows, "\n")
+}
+
+func providerPrioritySummary(rows []ProviderPriorityRow) string {
+	configured := 0
+	for _, row := range rows {
+		if row.ProviderName != "Auto" {
+			configured++
+		}
+	}
+	if configured == 0 {
+		return "Configure"
+	}
+	return fmt.Sprintf("Configure · %d set", configured)
+}
+
+func renderProviderPriorityPicker(data SettingsData, st Styles) string {
+	rows := []string{
+		st.Bold.Render("Provider priorities"),
+		st.Dim.Render("Choose which provider Kari tries first in each mode."),
+		"",
+	}
+	start, end, above, below := 0, len(data.ProviderPriorityRows), 0, 0
+	if data.Height > 0 {
+		start, end, above, below = windowRange(len(data.ProviderPriorityRows), data.ProviderPriorityIndex, data.Height, 5)
+	}
+	if hint := windowHint(above, true, st); hint != "" {
+		rows = append(rows, hint)
+	}
+	for i := start; i < end; i++ {
+		row := data.ProviderPriorityRows[i]
+		cursor := "  "
+		if i == data.ProviderPriorityIndex {
+			cursor = st.Cursor.Render("▌ ")
+		}
+		mode := fmt.Sprintf("%-14s", row.ModeName)
+		value := row.ProviderName
+		if i == data.ProviderPriorityIndex {
+			value = st.Current.Render("‹ " + value + " ›")
+		}
+		rows = append(rows, cursor+mode+"  "+value)
+	}
+	if hint := windowHint(below, false, st); hint != "" {
+		rows = append(rows, hint)
+	}
+	rows = append(rows, "", st.Dim.Render("↑↓ mode   ←→ provider   Enter / Esc done"))
 	return strings.Join(rows, "\n")
 }
 func renderModeSettingRow(row ModeRow, isFocused bool, width int, st Styles) string {

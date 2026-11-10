@@ -92,6 +92,27 @@ func TestRenderSettingsScreenDoesNotRepeatCategoryHeading(t *testing.T) {
 	}
 }
 
+func TestProviderPriorityEditorShowsAllModesAndControls(t *testing.T) {
+	data := SettingsData{
+		ProviderPriorityOpen: true,
+		ProviderPriorityRows: []ProviderPriorityRow{
+			{ModeName: "Anime", ProviderName: "AniKoto"},
+			{ModeName: "Movies", ProviderName: "Vyla"},
+			{ModeName: "TV", ProviderName: "Auto"},
+		},
+		ProviderPriorityIndex: 1,
+		Width:                 80,
+		Height:                24,
+		Accent:                ResolveAccent(model.KindTV, "Auto"),
+	}
+	rendered := RenderSettingsScreen(data)
+	for _, want := range []string{"Provider priorities", "Anime", "AniKoto", "Movies", "Vyla", "TV", "↑↓ mode", "←→ provider"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("provider priority editor missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestRenderSettingsScreenFitsNarrowTerminal(t *testing.T) {
 	for category := range SettingsCategoryNames {
 		data := SettingsData{
