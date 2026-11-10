@@ -316,7 +316,7 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 
 		row := fmt.Sprintf("%s%s  %s  %s", cursor, qualityStr, providerStr, sourceStr)
 		if showAudio {
-			audioStr := fmt.Sprintf("%-*s", audioWidth, truncate(formatSourceAudio(src), audioWidth))
+			audioStr := fmt.Sprintf("%-*s", audioWidth, truncate(formatSourceAudio(src, audioWidth), audioWidth))
 			if isFocused {
 				row = fmt.Sprintf("%s%s  %s  %s  %s", cursor,
 					st.Current.Render(qualityStr), providerStr, sourceStr, st.Current.Render(audioStr))
@@ -340,8 +340,14 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 // label wins because live channels may broadcast in several languages; then a
 // single detected track language; then a dash when the stream does not
 // advertise language metadata.
-func formatSourceAudio(src provider.MediaSource) string {
+func formatSourceAudio(src provider.MediaSource, width int) string {
 	if label := strings.TrimSpace(src.AudioLabel); label != "" {
+		languages := strings.Split(label, " · ")
+		if len(languages) > 1 {
+			// Keep the multiple-language cue visible even when the full
+			// broadcast label cannot fit in the audio column.
+			return truncate(strings.TrimSpace(languages[0]), max(1, width-3)) + fmt.Sprintf(" +%d", len(languages)-1)
+		}
 		return label
 	}
 	if l := strings.TrimSpace(src.Language); l != "" {

@@ -7,15 +7,56 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
-    name: Test & Lint
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    outputs:
+      code_changed: ${{ steps.filter.outputs.code_changed }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.1
+
+      - name: Check changed paths
+        id: filter
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "code_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA" || {
+              echo "Could not fetch the base commit; running full CI."
+              echo "code_changed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            }
+          fi
+
+          mapfile -d '' changed_paths < <(git diff --name-only -z "$BASE_SHA" "$HEAD_SHA")
+          code_changed=false
+          for path in "${changed_paths[@]}"; do
+            case "$path" in
+              docs/*|*.md) ;;
+              *) code_changed=true; break ;;
+            esac
+          done
+          echo "code_changed=$code_changed" >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: Vet, build & lint
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -28,17 +69,41 @@ jobs:
         run: CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -buildmode=pie ./cmd/kari
 
       - name: Staticcheck
-        uses: dominikh/staticcheck-action@v1.3.1
+        uses: dominikh/staticcheck-action@v1.4.1
         with:
           version: "latest"
           install-go: false
 
+  test:
+    name: Tests
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
       - name: Run Tests with Race Detector
         run: go test -race -v -cover ./...
 
+  security:
+    name: Vulnerability scan
+    needs: changes
+    if: needs.changes.outputs.code_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
       - name: Govulncheck
-        uses: golang/govulncheck-action@v1
+        uses: golang/govulncheck-action@v1.1.0
         with:
-          cache: false
+          cache: true
+          cache-dependency-path: go.sum
+          go-version-file: go.mod
+          check-latest: false
           go-package: ./...
-

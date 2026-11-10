@@ -162,16 +162,22 @@ func TestFilterPlaybackIndicesQualityModes(t *testing.T) {
 	}
 }
 
-func TestFilterPlaybackIndicesGuaranteesPerResolver(t *testing.T) {
-	// A resolver whose only source is far below the requested tier must
-	// still survive the filter.
+func TestFilterPlaybackIndicesHighestFallsBackOnlyWhenNeeded(t *testing.T) {
 	playback := []provider.MediaSource{
 		{URL: "big-1080", Quality: "1080p", Resolver: "strong"},
 		{URL: "tiny-240", Quality: "240p", Resolver: "weak"},
 	}
 	got := FilterPlaybackIndices(playback, 1, nil)
-	if len(got) != 2 {
-		t.Fatalf("weak resolver dropped entirely: %v", got)
+	if len(got) != 1 || playback[got[0]].URL != "big-1080" {
+		t.Fatalf("lower fallback shown despite FHD availability: %v", got)
+	}
+	playback = []provider.MediaSource{
+		{URL: "hd", Quality: "720p", Resolver: "a"},
+		{URL: "sd", Quality: "480p", Resolver: "b"},
+	}
+	got = FilterPlaybackIndices(playback, 1, nil)
+	if len(got) != 1 || playback[got[0]].URL != "hd" {
+		t.Fatalf("best lower fallback missing: %v", got)
 	}
 }
 

@@ -23,7 +23,7 @@ func FilterPlaybackIndices(playback []provider.MediaSource, qualityMode int, lan
 
 	switch qualityMode {
 	case 1:
-		return filterByQuality(playback, candidates, keepHighestTier)
+		return filterHighestResolution(playback, candidates)
 	case 2:
 		return filterByQuality(playback, candidates, keepBelowMax)
 	case 3:
@@ -70,15 +70,6 @@ func FilterPlaybackSources(playback []provider.MediaSource, qualityMode int, lan
 		sources = append(sources, playback[idx])
 	}
 	return sources
-}
-
-// Tier predicates: q is the source tier, maxQ/minQ the resolver's best and
-// worst parsed tiers, secondQ the best tier below maxQ.
-func keepHighestTier(q, maxQ, _ int, secondQ int) bool {
-	if q == maxQ {
-		return true
-	}
-	return maxQ >= 2160 && secondQ > 0 && q == secondQ
 }
 
 func keepBelowMax(q, maxQ, minQ, _ int) bool { return maxQ == minQ || q < maxQ }
@@ -169,6 +160,25 @@ func filterByQuality(playback []provider.MediaSource, candidates []int, keep fun
 		}
 	}
 	return result
+}
+
+func filterHighestResolution(playback []provider.MediaSource, candidates []int) []int {
+	maxQuality := 0
+	for _, idx := range candidates {
+		maxQuality = max(maxQuality, SourceQuality(playback[idx].Quality))
+	}
+	target := maxQuality
+	if maxQuality >= 1080 {
+		target = 1080
+	}
+	filtered := make([]int, 0, len(candidates))
+	for _, idx := range candidates {
+		quality := SourceQuality(playback[idx].Quality)
+		if quality >= target {
+			filtered = append(filtered, idx)
+		}
+	}
+	return filtered
 }
 
 // SourceQuality extracts a numeric resolution (2160/1080/…) from a quality

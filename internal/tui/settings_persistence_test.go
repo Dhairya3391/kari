@@ -25,6 +25,7 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	m.subtitleLanguage = "ja"
 	m.qualityMode = qualityHighest
 	m.downloadQuality = downloadQualityFHD
+	m.preferredProviders = map[string]string{"movies": "vyla", "anime": "anikoto"}
 	m.autoplay = true
 	m.startupSync = true
 	m.defaultMode = "movies"
@@ -59,6 +60,9 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	}
 	if saved.DownloadQuality != downloadQualityFHD {
 		t.Errorf("saved.DownloadQuality = %d, want %d", saved.DownloadQuality, downloadQualityFHD)
+	}
+	if !reflect.DeepEqual(saved.PreferredProviders, m.preferredProviders) {
+		t.Errorf("saved.PreferredProviders = %v, want %v", saved.PreferredProviders, m.preferredProviders)
 	}
 	if !saved.Autoplay {
 		t.Errorf("saved.Autoplay = false, want true")
@@ -169,7 +173,7 @@ func TestSettings_VerifyDownloadsToggle(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	m := newTestSwitchModel()
 	m.settingsCategory = CategoryPlayback
-	m.settingsIndex = 4
+	m.settingsIndex = 5
 
 	if m.disableDownloadVerification {
 		t.Fatalf("expected disableDownloadVerification to be false initially")
@@ -248,6 +252,7 @@ func TestNewModelRestoresSettingsAfterRestart(t *testing.T) {
 		SubtitleLanguage:      "ja",
 		QualityMode:           qualityLowest,
 		DownloadQuality:       downloadQuality4K,
+		PreferredProviders:    map[string]string{"tv": "tv_p", "movies": "movie_p"},
 		Autoplay:              true,
 		StartupSync:           true,
 		DefaultMode:           "tv",
@@ -286,6 +291,15 @@ func TestNewModelRestoresSettingsAfterRestart(t *testing.T) {
 	if m.downloadQuality != downloadQuality4K {
 		t.Errorf("m.downloadQuality = %d, want %d", m.downloadQuality, downloadQuality4K)
 	}
+	m.appMode = provider.ModeTV
+	if got := m.preferredProviderForMode(); got != "tv_p" {
+		t.Errorf("TV preferred provider = %q, want tv_p", got)
+	}
+	m.appMode = provider.ModeMovies
+	if got := m.preferredProviderForMode(); got != "movie_p" {
+		t.Errorf("movie preferred provider = %q, want movie_p", got)
+	}
+	m.appMode = provider.ModeTV
 	if !m.autoplay {
 		t.Errorf("m.autoplay = false, want true")
 	}

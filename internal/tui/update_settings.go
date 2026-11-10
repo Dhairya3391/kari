@@ -438,7 +438,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *modelImpl) maxRowsForCategory(cat SettingsCategory) int {
 	switch cat {
 	case CategoryPlayback:
-		return 5
+		return 6
 	case CategoryLanguages:
 		return 2
 	case CategoryAnime:
@@ -472,9 +472,31 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.qualityMode = (m.qualityMode + delta + 4) % 4
 		case 2: // Download quality
 			m.downloadQuality = (m.downloadQuality + delta + 5) % 5
-		case 3: // Autoplay next episode
+		case 3: // Provider priority
+			options := m.preferredProviderOptions()
+			if len(options) > 0 {
+				index := 0
+				preferred := m.preferredProviderForMode()
+				for i, option := range options {
+					if option.ID == preferred {
+						index = i
+						break
+					}
+				}
+				selected := options[(index+delta+len(options))%len(options)].ID
+				if m.preferredProviders == nil {
+					m.preferredProviders = make(map[string]string)
+				}
+				mode := string(m.appMode)
+				if selected == "" {
+					delete(m.preferredProviders, mode)
+				} else {
+					m.preferredProviders[mode] = selected
+				}
+			}
+		case 4: // Autoplay next episode
 			m.autoplay = !m.autoplay
-		case 4: // Verify downloads
+		case 5: // Verify downloads
 			m.disableDownloadVerification = !m.disableDownloadVerification
 			if m.downloadService != nil {
 				m.downloadService.SetVerifyDownloads(!m.disableDownloadVerification)
@@ -575,6 +597,27 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.autoUpdate = !m.autoUpdate
 		}
 	}
+}
+
+func (m *modelImpl) preferredProviderForMode() string {
+	if m.preferredProviders == nil {
+		return ""
+	}
+	return m.preferredProviders[string(m.appMode)]
+}
+
+func (m *modelImpl) preferredProviderOptions() []ProviderRow {
+	options := []ProviderRow{{ID: "", Name: "Auto"}}
+	seen := map[string]bool{"": true}
+	for _, row := range m.providerRows() {
+		id := strings.ToLower(strings.TrimSpace(row.ID))
+		if id == "" || seen[id] || !row.Available || !row.Enabled || row.Mode != m.appMode {
+			continue
+		}
+		seen[id] = true
+		options = append(options, ProviderRow{ID: row.ID, Name: row.Name})
+	}
+	return options
 }
 
 func (m *modelImpl) toggleAllHistoryModes() {

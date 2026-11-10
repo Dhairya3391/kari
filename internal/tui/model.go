@@ -278,6 +278,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		if s.DownloadQuality >= downloadQualityAuto && s.DownloadQuality <= downloadQualitySD {
 			model.downloadQuality = s.DownloadQuality
 		}
+		model.preferredProviders = s.PreferredProviders
 		model.disableDownloadVerification = s.DisableDownloadVerification
 		if len(s.LanguageFilter) > 0 {
 			// Saved filters only ever record overrides (a language the user

@@ -135,6 +135,19 @@ func TestPreviewSourcesAudioColumn(t *testing.T) {
 			t.Errorf("Hindi audio missing, got:\n%s", out)
 		}
 	})
+	t.Run("multiple audio languages are explicit", func(t *testing.T) {
+		data := PreviewData{
+			RankedSources: []ranking.ScoredSource{{Source: provider.MediaSource{
+				URL: "https://cdn.example.com/live.m3u8", AudioLabel: "English · Hindi · Tamil",
+			}}},
+			Mode: provider.ModeTV, Width: 100,
+			Accent: ResolveAccent(model.KindTV, "Auto"),
+		}
+		out := RenderPreviewScreen(data)
+		if !strings.Contains(out, "English +2") {
+			t.Errorf("multiple audio languages should have an explicit count, got:\n%s", out)
+		}
+	})
 	t.Run("anime hides audio column", func(t *testing.T) {
 		data := PreviewData{
 			SeriesTitle:   "Solo Leveling",

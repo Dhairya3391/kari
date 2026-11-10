@@ -30,6 +30,8 @@ var settingsLog = logging.With("component", "settings")
 type Data struct {
 	QualityMode     int `json:"quality_mode"`
 	DownloadQuality int `json:"download_quality"`
+	// PreferredProviders maps content modes to their preferred playback and download provider.
+	PreferredProviders map[string]string `json:"preferred_providers,omitempty"`
 	// DisableDownloadVerification turns off post-download video integrity checks.
 	DisableDownloadVerification bool            `json:"disable_download_verification,omitempty"`
 	LanguageFilter              map[string]bool `json:"language_filter"`

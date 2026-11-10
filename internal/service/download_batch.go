@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"kari/internal/downloader"
 	"kari/internal/provider"
+	"kari/internal/ranking"
 )
 
 func (s *DownloadService) BatchDownload(
@@ -29,6 +30,22 @@ func (s *DownloadService) BatchDownloadWithActive(
 	mode provider.ContentType,
 	qualityMode int,
 	languages map[string]bool,
+	onActive func(outputDir, title string),
+	onProgress func(current, total int, epTitle string, dp downloader.DownloadProgress),
+) []BatchDownloadResult {
+	return s.BatchDownloadWithActiveAndPreferred(ctx, series, episodes, mode, qualityMode, languages, "", onActive, onProgress)
+}
+
+// BatchDownloadWithActiveAndPreferred also moves the preferred provider first
+// after quality and language filtering.
+func (s *DownloadService) BatchDownloadWithActiveAndPreferred(
+	ctx context.Context,
+	series provider.SearchResult,
+	episodes []provider.Episode,
+	mode provider.ContentType,
+	qualityMode int,
+	languages map[string]bool,
+	preferredProvider string,
 	onActive func(outputDir, title string),
 	onProgress func(current, total int, epTitle string, dp downloader.DownloadProgress),
 ) []BatchDownloadResult {
@@ -80,6 +97,7 @@ func (s *DownloadService) BatchDownloadWithActive(
 			results[i].Err = fmt.Errorf("filter %s: no playback source available", epTitle)
 			continue
 		}
+		resolved.Playback = ranking.PreferProvider(resolved.Playback, preferredProvider)
 
 		if onActive != nil {
 			outputDir, title := s.OrganizedPath(resolved)

@@ -7,6 +7,29 @@ import (
 	"kari/internal/provider"
 )
 
+// PreferProvider moves the selected provider's rows before other providers,
+// preserving the relative order of all sources.
+func PreferProvider(sources []provider.MediaSource, preferred string) []provider.MediaSource {
+	if preferred == "" || len(sources) < 2 {
+		return sources
+	}
+	ordered := make([]provider.MediaSource, 0, len(sources))
+	for _, source := range sources {
+		if strings.EqualFold(strings.TrimSpace(source.Resolver), strings.TrimSpace(preferred)) {
+			ordered = append(ordered, source)
+		}
+	}
+	if len(ordered) == 0 || len(ordered) == len(sources) {
+		return sources
+	}
+	for _, source := range sources {
+		if !strings.EqualFold(strings.TrimSpace(source.Resolver), strings.TrimSpace(preferred)) {
+			ordered = append(ordered, source)
+		}
+	}
+	return ordered
+}
+
 // GroupSourcesByProvider orders each provider's rows by playability and
 // quality while preserving the order in which providers were selected.
 func GroupSourcesByProvider(sources []ScoredSource, qualityMode int, mode provider.ContentType) []ScoredSource {

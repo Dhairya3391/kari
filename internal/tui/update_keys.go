@@ -597,6 +597,7 @@ func (m *modelImpl) saveSettings() {
 	settings.Save(&settings.Data{
 		QualityMode:                 m.qualityMode,
 		DownloadQuality:             m.downloadQuality,
+		PreferredProviders:          m.preferredProviders,
 		DisableDownloadVerification: m.disableDownloadVerification,
 		LanguageFilter:              langFilter,
 		SubtitleLanguage:            subLang,

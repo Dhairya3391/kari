@@ -17,6 +17,7 @@ func (m *modelImpl) rankAndSelectSources() {
 	m.rankedSources = service.PreparePlaybackSources(m.resolved.Playback, service.PlaybackOptions{
 		Mode:                  m.appMode,
 		QualityMode:           m.qualityMode,
+		PreferredProvider:     m.preferredProviderForMode(),
 		EnabledAudioLanguages: m.languageFilter,
 		SubtitlesEnabled:      !m.disableAnimeSubtitles,
 	})

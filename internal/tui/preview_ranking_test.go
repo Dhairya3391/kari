@@ -33,17 +33,17 @@ func TestMergeResolvedReranksProgressiveArrivals(t *testing.T) {
 		t.Fatalf("ranked = %d rows, want 1", len(m.rankedSources))
 	}
 
-	// Second provider adds 4K: Highest keeps the first provider's best
-	// available fallback alongside the second provider's better source.
+	// Second provider adds 4K: Highest hides the SD fallback because FHD+
+	// sources are now available.
 	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: []provider.MediaSource{sd, uhd}})
-	if len(m.rankedSources) != 2 {
-		t.Fatalf("ranked = %d rows, want each provider's best tier under Highest", len(m.rankedSources))
+	if len(m.rankedSources) != 1 {
+		t.Fatalf("ranked = %d rows, want only FHD+ under Highest", len(m.rankedSources))
 	}
-	if got := m.rankedSources[1].Source.URL; got != uhd.URL {
-		t.Errorf("second provider source = %s, want %s", got, uhd.URL)
+	if got := m.rankedSources[0].Source.URL; got != uhd.URL {
+		t.Errorf("source = %s, want %s", got, uhd.URL)
 	}
-	if m.previewSelectedIndex != 0 || m.rankedSources[0].Source.URL != sd.URL {
-		t.Errorf("cursor should remain on the first provider while preserving its fallback, got index %d source %+v", m.previewSelectedIndex, m.rankedSources[0].Source)
+	if m.previewSelectedIndex != 0 {
+		t.Errorf("cursor should reset to the available source, got index %d", m.previewSelectedIndex)
 	}
 }
 
@@ -143,9 +143,8 @@ func TestMergeResolvedAppendsOnRetry(t *testing.T) {
 	}
 }
 
-// Highest keeps FHD and above per provider and retains a provider's best
-// available lower tier when that provider has no FHD source.
-func TestMergeResolvedQualitySettingOrdersNotHides(t *testing.T) {
+// Highest keeps only FHD and above, regardless of provider availability.
+func TestMergeResolvedQualitySettingHidesBelowFHD(t *testing.T) {
 	m := rankingTestModel()
 	mixed := []provider.MediaSource{
 		{URL: "https://cdn.example.com/sd.m3u8", Quality: "480p", Resolver: "A"},
@@ -154,11 +153,11 @@ func TestMergeResolvedQualitySettingOrdersNotHides(t *testing.T) {
 		{URL: "https://cdn.example.com/4k.m3u8", Quality: "4K", Resolver: "B"},
 	}
 
-	// Highest: keep FHD and above from B, plus A's best available tier.
+	// Highest: keep FHD and above, excluding A because it only offers SD/HD.
 	m.qualityMode = qualityHighest
 	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: mixed})
-	if len(m.rankedSources) != 3 {
-		t.Fatalf("highest must preserve each provider's best tier, got %+v", m.rankedSources)
+	if len(m.rankedSources) != 2 {
+		t.Fatalf("highest must hide sources below FHD, got %+v", m.rankedSources)
 	}
 
 	// Lowest: all rows in arrival order.
@@ -174,7 +173,7 @@ func TestMergeResolvedQualitySettingOrdersNotHides(t *testing.T) {
 	if len(m.rankedSources) != 4 {
 		t.Errorf("data saver must keep every row, got %d", len(m.rankedSources))
 	}
-	// A mid-only provider under Highest keeps its best tier only.
+	// If no FHD+ source exists anywhere, Highest falls back to the best lower tier.
 	mid := []provider.MediaSource{
 		{URL: "https://cdn.example.com/hd.m3u8", Quality: "720p", Resolver: "A"},
 		{URL: "https://cdn.example.com/sd.m3u8", Quality: "480p", Resolver: "A"},
@@ -183,7 +182,7 @@ func TestMergeResolvedQualitySettingOrdersNotHides(t *testing.T) {
 	m.qualityMode = qualityHighest
 	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: mid})
 	if len(m.rankedSources) != 1 || m.rankedSources[0].Source.Quality != "720p" {
-		t.Errorf("highest-available 720p must be the only row, got %+v", m.rankedSources)
+		t.Errorf("720p should be the best available fallback, got %+v", m.rankedSources)
 	}
 }
 

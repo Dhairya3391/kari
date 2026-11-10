@@ -10,6 +10,7 @@ import (
 type PlaybackOptions struct {
 	Mode                  provider.ContentType
 	QualityMode           int
+	PreferredProvider     string
 	EnabledAudioLanguages map[string]bool
 	SubtitlesEnabled      bool
 }
@@ -21,6 +22,7 @@ func PreparePlaybackSources(sources []provider.MediaSource, options PlaybackOpti
 	if options.QualityMode == ranking.QualityHighest {
 		sources = ranking.KeepHighestVisible(sources)
 	}
+	sources = ranking.PreferProvider(sources, options.PreferredProvider)
 
 	scored := make([]ranking.ScoredSource, len(sources))
 	for i, source := range sources {

@@ -153,35 +153,38 @@ func ParseFileSizeMB(raw string) float64 {
 // Adaptive "Auto" masters parse as 1080 via ParseResolution, so they stay.
 const fullHDThreshold = 1080
 
-// KeepHighestVisible keeps FHD and better rows per provider. A provider with
-// no FHD row keeps its best available tier, so one provider's better source
-// does not hide every fallback from the others.
+// KeepHighestVisible keeps FHD and better rows when available, otherwise the
+// best lower tier available across providers.
 func KeepHighestVisible(sources []provider.MediaSource) []provider.MediaSource {
 	if len(sources) == 0 {
 		return nil
 	}
 
-	bestByProvider := make(map[string]int)
-	resolutions := make([]int, len(sources))
-	for i, src := range sources {
+	bestLower := 0
+	hasFullHD := false
+	for _, src := range sources {
 		resolution := ParseResolution(src.Quality)
-		resolutions[i] = resolution
-		if resolution > bestByProvider[src.Resolver] {
-			bestByProvider[src.Resolver] = resolution
+		if resolution >= fullHDThreshold {
+			hasFullHD = true
+		}
+		if resolution > bestLower && resolution < fullHDThreshold {
+			bestLower = resolution
+		}
+	}
+	if hasFullHD {
+		bestLower = 0
+	}
+	allUnknown := true
+	for _, src := range sources {
+		if ParseResolution(src.Quality) > 0 {
+			allUnknown = false
+			break
 		}
 	}
 	kept := make([]provider.MediaSource, 0, len(sources))
-	for i, src := range sources {
-		best := bestByProvider[src.Resolver]
-		if best == 0 {
-			kept = append(kept, src)
-			continue
-		}
-		threshold := fullHDThreshold
-		if best < fullHDThreshold {
-			threshold = best
-		}
-		if resolutions[i] >= threshold {
+	for _, src := range sources {
+		resolution := ParseResolution(src.Quality)
+		if resolution >= fullHDThreshold || (bestLower > 0 && resolution == bestLower) || allUnknown {
 			kept = append(kept, src)
 		}
 	}

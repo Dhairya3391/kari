@@ -8,6 +8,7 @@ import (
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/ranking"
 	"kari/internal/service"
 	"strings"
 	"time"
@@ -244,6 +245,7 @@ func (m *modelImpl) loadStartupAddonCmd(manifestURL string) tea.Cmd {
 }
 
 func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
+	resolved.Playback = ranking.PreferProvider(resolved.Playback, m.preferredProviderForMode())
 	if len(resolved.Subtitles) == 0 && len(m.rawSubtitles) > 0 {
 		resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
 	}
@@ -332,6 +334,7 @@ func (m *modelImpl) resumePendingDownloadCmd(opID int, job service.DownloadJob) 
 			}
 			resolved, err := m.mediaService.Resolve(ctx, job.Mode, job.Series, job.Episode, nil, service.ResolveOptions{})
 			if err == nil {
+				resolved.Playback = ranking.PreferProvider(resolved.Playback, m.preferredProviderForMode())
 				err = m.downloadService.Download(ctx, resolved, func(dp downloader.DownloadProgress) {
 					select {
 					case m.downloadChan <- downloadProgressMsg{opID: opID, progress: dp.Percent, totalSize: dp.TotalSize, speed: dp.Speed, downloaded: dp.Downloaded, eta: dp.ETA}:

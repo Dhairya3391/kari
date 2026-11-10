@@ -503,6 +503,7 @@ type modelImpl struct {
 	audioMode                   string
 	qualityMode                 int
 	downloadQuality             int
+	preferredProviders          map[string]string
 	disableDownloadVerification bool
 	languageFilter              map[string]bool
 	subtitleLanguage            string
