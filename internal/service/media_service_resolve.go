@@ -29,6 +29,11 @@ type ResolveOptions struct {
 // reporting each aggregated snapshot through onResult as batches arrive.
 func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, series provider.SearchResult, episode provider.Episode, onResult func(model.ResolvedMedia), opts ResolveOptions) (model.ResolvedMedia, error) {
 	allRoutes := s.registry.PlanForMode(mode).Playback
+	// mirrorRoutes keeps every registered provider for the live fallback:
+	// the ResolutionID filter below narrows the primary batch to the selected
+	// provider's native handle, which is exactly why a dead channel needs a
+	// title-keyed search on the siblings.
+	mirrorRoutes := allRoutes
 	// Filter to providers capable of resolving this specific title so
 	// provider-specific handles (e.g. live sports, non-TMDB items) do not
 	// spawn dead goroutines that falsely report completed or failed resolvers.
@@ -321,6 +326,23 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		if err := runBatch(disabledRoutes); err != nil {
 			s.setLastFailures(failedOrder)
 			return model.ResolvedMedia{}, err
+		}
+	}
+
+	mu.Lock()
+	stillEmpty := len(agg.sources) == 0
+	mu.Unlock()
+	if stillEmpty && mode == provider.ModeLive && ctx.Err() == nil {
+		mediaLog.Debug("live resolve empty; searching other providers by title", "title", series.Title)
+		for _, mirror := range s.resolveLiveMirrors(ctx, mode, series, mirrorRoutes, opts.Exclude) {
+			mu.Lock()
+			agg.add(mirror.provider, mirror.sources)
+			noteCompleted(mirror.provider)
+			current := snapshot()
+			mu.Unlock()
+			if onResult != nil {
+				onResult(current)
+			}
 		}
 	}
 

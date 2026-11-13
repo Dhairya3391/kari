@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestVerifyLiveSourcesKeepsReachableRows(t *testing.T) {
 	}
 }
 
-func TestVerifyLiveSourcesKeepsAllWhenNothingVerifies(t *testing.T) {
+func TestVerifyLiveSourcesDropsBatchWhenAllDefinitelyFail(t *testing.T) {
 	verifier := &fakeLiveVerifier{verify: func(provider.MediaSource) error {
 		return errors.New("unreachable")
 	}}
@@ -63,8 +64,41 @@ func TestVerifyLiveSourcesKeepsAllWhenNothingVerifies(t *testing.T) {
 	}
 
 	kept := verifyLiveSources(context.Background(), provider.ModeLive, verifier, sources)
+	if len(kept) != 0 {
+		t.Fatalf("kept = %d, want none", len(kept))
+	}
+}
+
+func TestVerifyLiveSourcesKeepsBatchWhenProbeInconclusive(t *testing.T) {
+	verifier := &fakeLiveVerifier{verify: func(provider.MediaSource) error {
+		return fmt.Errorf("probe: %w", context.DeadlineExceeded)
+	}}
+	sources := []provider.MediaSource{
+		{URL: "https://slow.example/live.m3u8"},
+		{URL: "https://slower.example/live.m3u8"},
+	}
+
+	kept := verifyLiveSources(context.Background(), provider.ModeLive, verifier, sources)
 	if len(kept) != len(sources) {
 		t.Fatalf("kept = %d, want all %d", len(kept), len(sources))
+	}
+}
+
+func TestLiveTitleKey(t *testing.T) {
+	cases := map[string]string{
+		"Cartoon Network HD+":       "cartoon network",
+		"Cartoon Network":           "cartoon network",
+		"Disney Channel":            "disney channel",
+		"Disney Channel FHD":        "disney channel",
+		"BBC One HD":                "bbc one",
+		"Cartoon Network (US)":      "cartoon network us",
+		"Cartoon Network Plus":      "cartoon network",
+		"  Cartoon   Network  4K  ": "cartoon network",
+	}
+	for title, want := range cases {
+		if got := liveTitleKey(title); got != want {
+			t.Errorf("liveTitleKey(%q) = %q, want %q", title, got, want)
+		}
 	}
 }
 

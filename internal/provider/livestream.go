@@ -29,9 +29,10 @@ const (
 // first segment, so a manifest that points only at dead lanes is rejected
 // before the player opens it.
 //
-// A successful probe proves reachability, not that every buffer will arrive;
-// callers must treat a probe failure as soft evidence and never use it to hide
-// the only available source.
+// A successful probe proves reachability, not that every buffer will arrive.
+// Callers must treat a timeout or cancellation as soft evidence, but a
+// definite failure (refused connection, HTTP error, invalid playlist) means
+// the source is not playable right now.
 func VerifyLiveStream(ctx context.Context, hc *http.Client, source MediaSource) error {
 	rawURL := strings.TrimSpace(source.URL)
 	if rawURL == "" {

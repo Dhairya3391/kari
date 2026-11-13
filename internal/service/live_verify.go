@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kari/internal/provider"
@@ -19,10 +21,12 @@ const (
 )
 
 // verifyLiveSources probes sources through the provider's declared verifier
-// and keeps the reachable rows in their original order. When nothing verifies,
-// the original batch is returned unchanged: a probe can fail for transient or
-// geo reasons, and showing unverified rows is better than hiding playback
-// entirely. Providers without the capability pass through untouched.
+// and keeps the reachable rows in their original order. When every probe fails
+// for a definite reason (refused connection, HTTP error, invalid playlist) the
+// batch is dropped so the service can try another provider or report the
+// channel as unavailable. Inconclusive probes (timeout or cancellation) keep
+// the original batch: a slow or geo-restricted probe is not proof of death.
+// Providers without the capability pass through untouched.
 func verifyLiveSources(ctx context.Context, mode provider.ContentType, verifier provider.LiveStreamVerifier, sources []provider.MediaSource) []provider.MediaSource {
 	if len(sources) == 0 {
 		return sources
@@ -31,6 +35,7 @@ func verifyLiveSources(ctx context.Context, mode provider.ContentType, verifier 
 	defer cancel()
 
 	reachable := make([]bool, len(sources))
+	var inconclusive atomic.Bool
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, liveVerifyParallelism)
 	for i := range sources {
@@ -44,6 +49,9 @@ func verifyLiveSources(ctx context.Context, mode provider.ContentType, verifier 
 			}
 			defer func() { <-sem }()
 			if err := verifier.VerifyLiveStream(ctx, mode, sources[i]); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+					inconclusive.Store(true)
+				}
 				mediaLog.Debug("live source failed verification", "url", sources[i].URL, "err", err)
 				return
 			}
@@ -59,8 +67,12 @@ func verifyLiveSources(ctx context.Context, mode provider.ContentType, verifier 
 		}
 	}
 	if len(verified) == 0 {
-		mediaLog.Debug("no live source passed verification; keeping unverified rows", "sources", len(sources))
-		return sources
+		if inconclusive.Load() {
+			mediaLog.Debug("live verification inconclusive; keeping unverified rows", "sources", len(sources))
+			return sources
+		}
+		mediaLog.Debug("no live source passed verification; dropping batch", "sources", len(sources))
+		return nil
 	}
 	if dropped := len(sources) - len(verified); dropped > 0 {
 		mediaLog.Debug("dropped unreachable live sources", "kept", len(verified), "dropped", dropped)
