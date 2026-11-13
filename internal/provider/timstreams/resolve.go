@@ -102,6 +102,13 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	return sources, nil
 }
 
+// VerifyLiveStream implements provider.LiveStreamVerifier. TimStreams issues
+// short-lived signed playlists whose lanes fail independently, so dead lanes
+// are dropped before the player opens them.
+func (c *Client) VerifyLiveStream(ctx context.Context, _ provider.ContentType, source provider.MediaSource) error {
+	return provider.VerifyLiveStream(ctx, c.httpClient, source)
+}
+
 func parseHandle(handle string) (kind, slug string, ok bool) {
 	if !strings.HasPrefix(handle, handlePrefix) {
 		return "", "", false
@@ -131,6 +138,7 @@ func (c *Client) resolveLane(ctx context.Context, lane stream) (provider.MediaSo
 		resp.Body.Close()
 		return provider.MediaSource{}, fmt.Errorf("player page redirected outside TimStreams short-link host: %w", provider.ErrUpstreamChanged)
 	}
+	playPageURL := resp.Request.URL.String()
 	page, err := httpclient.ReadCapped(resp)
 	if err != nil {
 		return provider.MediaSource{}, fmt.Errorf("read player page: %w", err)
@@ -142,7 +150,7 @@ func (c *Client) resolveLane(ctx context.Context, lane stream) (provider.MediaSo
 	if err != nil {
 		return provider.MediaSource{}, err
 	}
-	signedURL, err := c.fetchSignedURL(ctx, ticketURL, resp.Request.URL.String())
+	signedURL, err := c.fetchSignedURL(ctx, ticketURL, playPageURL)
 	if err != nil {
 		return provider.MediaSource{}, err
 	}
@@ -151,7 +159,7 @@ func (c *Client) resolveLane(ctx context.Context, lane stream) (provider.MediaSo
 		Quality:   "Auto",
 		Backend:   lane.Name,
 		Type:      provider.SourceTypeHLS,
-		Referer:   config.TimStreamsBase + "/",
+		Referer:   playPageURL,
 		UserAgent: config.DesktopUserAgent,
 	}, nil
 }

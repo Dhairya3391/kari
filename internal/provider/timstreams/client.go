@@ -21,11 +21,12 @@ import (
 )
 
 var (
-	_ provider.Provider       = (*Client)(nil)
-	_ provider.EpisodeSource  = (*Client)(nil)
-	_ provider.FeatureSource  = (*Client)(nil)
-	_ provider.DeadlineSource = (*Client)(nil)
-	_ provider.Presenter      = (*Client)(nil)
+	_ provider.Provider           = (*Client)(nil)
+	_ provider.EpisodeSource      = (*Client)(nil)
+	_ provider.FeatureSource      = (*Client)(nil)
+	_ provider.DeadlineSource     = (*Client)(nil)
+	_ provider.Presenter          = (*Client)(nil)
+	_ provider.LiveStreamVerifier = (*Client)(nil)
 )
 
 var timStreamsLog = logging.With("provider", "timstreams")
