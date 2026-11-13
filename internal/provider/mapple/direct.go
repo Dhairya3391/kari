@@ -229,15 +229,15 @@ func (c *Client) resolveStreamURL(
 	}
 	initResp.Body.Close()
 
-	// Step 2: Request UI session token
-	sessReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.siteBase+"/api/ui/session", strings.NewReader("{}"))
+	// Step 2: Request the UI session token. This mirrors the page's inline
+	// bootstrap exactly: no body, no Content-Type, and same-origin only.
+	sessReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.siteBase+"/api/ui/session", nil)
 	if err != nil {
 		return nil, fmt.Errorf("mapple session request: %w", err)
 	}
 	sessReq.Header.Set("User-Agent", config.DesktopUserAgent)
-	sessReq.Header.Set("Origin", c.siteBase)
 	sessReq.Header.Set("Referer", watchURL)
-	sessReq.Header.Set("Content-Type", "application/json")
+	sessReq.Header.Set("Accept", "application/json")
 
 	sessResp, err := sessionClient.Do(sessReq)
 	if err != nil {
@@ -246,12 +246,20 @@ func (c *Client) resolveStreamURL(
 	defer sessResp.Body.Close()
 
 	if sessResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("mapple session status %d", sessResp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(sessResp.Body, 512))
+		return nil, fmt.Errorf("mapple session status %d: %s", sessResp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var session sessionResponse
 	if err := json.NewDecoder(sessResp.Body).Decode(&session); err != nil || session.Token == "" {
 		return nil, fmt.Errorf("mapple invalid session token: %w", err)
+	}
+
+	// Step 2b: Bind the request token to a device session. The page posts a
+	// screen_view track immediately after bootstrapping; without it the
+	// media-session endpoint rejects the token as invalid.
+	if err := c.syncSession(ctx, sessionClient, watchURL); err != nil {
+		logging.Debug("mapple session sync failed; continuing", "err", err)
 	}
 
 	// Step 3: Request media session token (with PoW if required)
@@ -267,7 +275,6 @@ func (c *Client) resolveStreamURL(
 		return nil, fmt.Errorf("mapple media session request: %w", err)
 	}
 	mediaReq.Header.Set("User-Agent", config.DesktopUserAgent)
-	mediaReq.Header.Set("Origin", c.siteBase)
 	mediaReq.Header.Set("Referer", watchURL)
 	mediaReq.Header.Set("Content-Type", "application/json")
 
@@ -308,7 +315,6 @@ func (c *Client) resolveStreamURL(
 			return nil, fmt.Errorf("mapple pow request: %w", err)
 		}
 		powReq.Header.Set("User-Agent", config.DesktopUserAgent)
-		powReq.Header.Set("Origin", c.siteBase)
 		powReq.Header.Set("Referer", watchURL)
 		powReq.Header.Set("Content-Type", "application/json")
 
@@ -332,84 +338,55 @@ func (c *Client) resolveStreamURL(
 		return nil, fmt.Errorf("mapple missing stream token")
 	}
 
-	// Step 4: Encrypt endpoint parameters
-	encPayload, _ := json.Marshal(map[string]any{
-		"data": map[string]any{
-			"mediaId":   tmdbID,
-			"mediaType": mediaType,
-			"tv_slug":   tvSlug,
-			"source":    "mapple",
-		},
-		"endpoint":     "stream-encrypted",
-		"requestToken": session.Token,
-	})
-
-	encReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.siteBase+"/api/encrypt", bytes.NewReader(encPayload))
-	if err != nil {
-		return nil, fmt.Errorf("mapple encrypt request: %w", err)
-	}
-	encReq.Header.Set("User-Agent", config.DesktopUserAgent)
-	encReq.Header.Set("Origin", c.siteBase)
-	encReq.Header.Set("Referer", watchURL)
-	encReq.Header.Set("Content-Type", "application/json")
-
-	encResp, err := sessionClient.Do(encReq)
-	if err != nil {
-		return nil, fmt.Errorf("mapple encrypt call: %w", err)
-	}
-	defer encResp.Body.Close()
-
-	var encData encryptResponse
-	if err := json.NewDecoder(encResp.Body).Decode(&encData); err != nil || encData.URL == "" {
-		return nil, fmt.Errorf("mapple encrypt response invalid: %w", err)
-	}
-
-	// Step 5: Resolve final stream URL
-	u, err := url.Parse(encData.URL)
-	if err != nil {
-		return nil, fmt.Errorf("mapple parse stream query url: %w", err)
-	}
-	if !u.IsAbs() {
-		baseParsed, err := url.Parse(c.siteBase)
-		if err != nil {
-			return nil, fmt.Errorf("mapple parse siteBase: %w", err)
+	// Step 4: Encrypt endpoint parameters and resolve every advertised lane.
+	// The page exposes short source IDs (s2, s25); some titles carry useful
+	// mirrors on more than one, so merge them instead of stopping at the
+	// first success.
+	sourceIDs := []string{"s2", "s25"}
+	var (
+		sources []provider.MediaSource
+		seen    = make(map[string]struct{})
+		lastErr = provider.ErrNoSources
+	)
+	for _, sourceID := range sourceIDs {
+		masterURL, sourceLabel, laneErr := c.resolveEncryptedSource(ctx, sessionClient, watchURL,
+			tmdbID, mediaType, tvSlug, sourceID, session.Token, streamToken)
+		if laneErr != nil {
+			lastErr = laneErr
+			continue
 		}
-		u = baseParsed.ResolveReference(u)
+		if masterURL == "" {
+			continue
+		}
+		laneSources, laneErr := c.fetchMasterSources(ctx, sessionClient, masterURL, sourceLabel)
+		if laneErr != nil {
+			lastErr = laneErr
+			continue
+		}
+		for _, src := range laneSources {
+			if _, ok := seen[src.URL]; ok {
+				continue
+			}
+			seen[src.URL] = struct{}{}
+			sources = append(sources, src)
+		}
 	}
-	q := u.Query()
-	q.Set("requestToken", session.Token)
-	q.Set("token", streamToken)
-	u.RawQuery = q.Encode()
-
-	streamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("mapple stream resolve request: %w", err)
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("mapple no stream source resolved: %w", lastErr)
 	}
-	streamReq.Header.Set("User-Agent", config.DesktopUserAgent)
-	streamReq.Header.Set("Origin", c.siteBase)
-	streamReq.Header.Set("Referer", watchURL)
+	return sources, nil
+}
 
-	streamHTTPResp, err := sessionClient.Do(streamReq)
-	if err != nil {
-		return nil, fmt.Errorf("mapple stream resolve call: %w", err)
-	}
-	defer streamHTTPResp.Body.Close()
-
-	var sResp streamResponse
-	if err := json.NewDecoder(streamHTTPResp.Body).Decode(&sResp); err != nil || sResp.Data.StreamURL == "" {
-		return nil, fmt.Errorf("mapple stream URL missing in response: %w", err)
-	}
-
-	masterURL := sResp.Data.StreamURL
-
-	// Step 6: Parse variants from master playlist
+// fetchMasterSources loads a lane's master playlist and expands it into one
+// source per advertised variant, falling back to a single quality-probed
+// source when the master carries no variant list.
+func (c *Client) fetchMasterSources(ctx context.Context, sessionClient *http.Client, masterURL, sourceLabel string) ([]provider.MediaSource, error) {
 	masterReq, err := http.NewRequestWithContext(ctx, http.MethodGet, masterURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("mapple master request: %w", err)
 	}
 	masterReq.Header.Set("User-Agent", config.DesktopUserAgent)
 	masterReq.Header.Set("Referer", c.siteBase+"/")
-	masterReq.Header.Set("Origin", c.siteBase)
 
 	masterHTTPResp, err := sessionClient.Do(masterReq)
 	if err != nil {
@@ -423,12 +400,12 @@ func (c *Client) resolveStreamURL(
 
 	variants, err := parseHLSVariants(masterHTTPResp.Body, masterURL)
 	if err == nil && len(variants) > 0 {
-		var sources []provider.MediaSource
+		sources := make([]provider.MediaSource, 0, len(variants))
 		for _, v := range variants {
 			sources = append(sources, provider.MediaSource{
 				URL:            v.URL,
 				Quality:        v.Quality,
-				Backend:        strings.TrimSpace(sResp.Data.Source),
+				Backend:        sourceLabel,
 				Type:           provider.SourceTypeHLS,
 				Referer:        c.siteBase + "/",
 				UserAgent:      config.DesktopUserAgent,
@@ -449,13 +426,139 @@ func (c *Client) resolveStreamURL(
 		{
 			URL:            masterURL,
 			Quality:        quality,
-			Backend:        strings.TrimSpace(sResp.Data.Source),
+			Backend:        sourceLabel,
 			Type:           provider.SourceTypeHLS,
 			Referer:        c.siteBase + "/",
 			UserAgent:      config.DesktopUserAgent,
 			SuppressOrigin: false,
 		},
 	}, nil
+}
+
+// syncSession performs the page's post-bootstrap tracking call, which binds
+// the request token to a device session. The page fires this immediately
+// after obtaining the token; media-session rejects tokens that were never
+// bound to a device.
+func (c *Client) syncSession(ctx context.Context, sessionClient *http.Client, watchURL string) error {
+	payload, _ := json.Marshal(map[string]any{
+		"type": "track",
+		"payload": map[string]any{
+			"name": "screen_view",
+			"properties": map[string]string{
+				"__referrer": "",
+				"__path":     watchURL,
+				"__title":    "Movie | Mapple",
+			},
+		},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.siteBase+"/api/ui/sync/track", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("mapple sync request: %w", err)
+	}
+	req.Header.Set("User-Agent", config.DesktopUserAgent)
+	req.Header.Set("Referer", watchURL)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := sessionClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("mapple sync call: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("mapple sync status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+// resolveEncryptedSource asks the gateway to encrypt one lane's parameters,
+// then resolves that lane to its master HLS URL. The upstream labels lanes
+// with short source IDs (s2, s25, …); callers try them in order.
+func (c *Client) resolveEncryptedSource(
+	ctx context.Context,
+	sessionClient *http.Client,
+	watchURL string,
+	tmdbID int,
+	mediaType, tvSlug, sourceID, requestToken, streamToken string,
+) (masterURL, backend string, err error) {
+	encPayload, _ := json.Marshal(map[string]any{
+		"data": map[string]any{
+			"mediaId":   tmdbID,
+			"mediaType": mediaType,
+			"tv_slug":   tvSlug,
+			"source":    sourceID,
+		},
+		"endpoint":     "stream-encrypted",
+		"requestToken": requestToken,
+	})
+
+	encReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.siteBase+"/api/encrypt", bytes.NewReader(encPayload))
+	if err != nil {
+		return "", "", fmt.Errorf("mapple encrypt request: %w", err)
+	}
+	encReq.Header.Set("User-Agent", config.DesktopUserAgent)
+	encReq.Header.Set("Referer", watchURL)
+	encReq.Header.Set("Content-Type", "application/json")
+
+	encResp, err := sessionClient.Do(encReq)
+	if err != nil {
+		return "", "", fmt.Errorf("mapple encrypt call: %w", err)
+	}
+	defer encResp.Body.Close()
+
+	encBody, _ := io.ReadAll(io.LimitReader(encResp.Body, 1<<20))
+	if encResp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("mapple encrypt (%s) status %d: %s", sourceID, encResp.StatusCode, snippet(encBody))
+	}
+	var encData encryptResponse
+	if err := json.Unmarshal(encBody, &encData); err != nil || encData.URL == "" {
+		return "", "", fmt.Errorf("mapple encrypt (%s) response invalid: %s", sourceID, snippet(encBody))
+	}
+
+	u, err := url.Parse(encData.URL)
+	if err != nil {
+		return "", "", fmt.Errorf("mapple parse stream query url: %w", err)
+	}
+	if !u.IsAbs() {
+		baseParsed, err := url.Parse(c.siteBase)
+		if err != nil {
+			return "", "", fmt.Errorf("mapple parse siteBase: %w", err)
+		}
+		u = baseParsed.ResolveReference(u)
+	}
+	q := u.Query()
+	q.Set("requestToken", requestToken)
+	q.Set("token", streamToken)
+	u.RawQuery = q.Encode()
+
+	streamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", "", fmt.Errorf("mapple stream resolve request: %w", err)
+	}
+	streamReq.Header.Set("User-Agent", config.DesktopUserAgent)
+	streamReq.Header.Set("Referer", watchURL)
+
+	streamResp, err := sessionClient.Do(streamReq)
+	if err != nil {
+		return "", "", fmt.Errorf("mapple stream resolve call: %w", err)
+	}
+	defer streamResp.Body.Close()
+
+	streamBody, _ := io.ReadAll(io.LimitReader(streamResp.Body, 1<<20))
+	var sResp streamResponse
+	if err := json.Unmarshal(streamBody, &sResp); err != nil || sResp.Data.StreamURL == "" {
+		return "", "", fmt.Errorf("mapple stream (%s) status %d missing URL: %s", sourceID, streamResp.StatusCode, snippet(streamBody))
+	}
+	return strings.TrimSpace(sResp.Data.StreamURL), strings.TrimSpace(sResp.Data.Source), nil
+}
+
+// snippet trims an upstream response for a redacted error message.
+func snippet(body []byte) string {
+	text := strings.TrimSpace(string(body))
+	if len(text) > 300 {
+		return text[:300]
+	}
+	return text
 }
 
 func (c *Client) fetchSubtitles(

@@ -23,9 +23,24 @@ func TestKeepHighestVisible(t *testing.T) {
 			want:      []string{"1440p"},
 		},
 		{
-			name:      "auto master parses as fhd and stays",
+			name:      "adaptive is unknown so a known hd tier wins",
 			qualities: []string{"Auto", "720p", "360p"},
-			want:      []string{"Auto"},
+			want:      []string{"720p"},
+		},
+		{
+			name:      "adaptive hidden when fhd is known",
+			qualities: []string{"1080p", "Auto"},
+			want:      []string{"1080p"},
+		},
+		{
+			name:      "adaptive stays when no resolution is known",
+			qualities: []string{"Auto", "Master"},
+			want:      []string{"Auto", "Master"},
+		},
+		{
+			name:      "adaptive with an explicit resolution is a real tier",
+			qualities: []string{"Auto 1080p", "720p"},
+			want:      []string{"Auto 1080p"},
 		},
 		{
 			name:      "no fhd keeps the best lower tier",

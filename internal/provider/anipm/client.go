@@ -249,6 +249,9 @@ func (c *Client) FetchAvailableEpisodes(ctx context.Context, series provider.Sea
 			})
 		}
 	}
+	if len(episodes) == 0 {
+		return nil, provider.ErrNoEpisodes
+	}
 
 	return episodes, nil
 }

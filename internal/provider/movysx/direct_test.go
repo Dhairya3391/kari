@@ -65,6 +65,7 @@ func TestDecryptPayloadRejects(t *testing.T) {
 func TestNormalizeQuality(t *testing.T) {
 	cases := map[string]string{
 		"1080p": "1080p", "FHD": "1080p", "4K": "2160p", "HD": "720p",
+		"1440p": "1440p", "QHD": "1440p", "576p": "576p",
 		"SD": "480p", "360p": "360p", "Auto": "auto", "weird": "auto",
 	}
 	for in, want := range cases {
@@ -122,6 +123,27 @@ func TestMergeProviderResults(t *testing.T) {
 	}
 	if len(m.subtitles) != 1 {
 		t.Errorf("video m3u8 must be filtered from subtitles: %+v", m.subtitles)
+	}
+}
+
+func TestMergeProviderResultsKeepsShardBackend(t *testing.T) {
+	payloads := []*upstreamPayload{
+		{
+			backend: "miami",
+			Sources: []upstreamSource{{URL: "https://cdn.example.com/miami.m3u8", Quality: "1080p"}},
+		},
+		{
+			backend: "delhi",
+			Sources: []upstreamSource{{URL: "https://cdn.example.com/delhi.m3u8", Quality: "Hindi"}},
+		},
+	}
+
+	merged := mergeProviderResults(payloads)
+	if len(merged.sources) != 1 || merged.sources[0].backend != "Miami" {
+		t.Fatalf("source backend = %+v, want Miami", merged.sources)
+	}
+	if len(merged.audio) != 1 || merged.audio[0].backend != "Delhi" {
+		t.Fatalf("audio backend = %+v, want Delhi", merged.audio)
 	}
 }
 

@@ -154,6 +154,52 @@ func TestFamelackMetadata(t *testing.T) {
 	}
 }
 
+func TestDecodeCatalogBodySupportsPlainJSON(t *testing.T) {
+	want := []byte(`[{"nanoid":"one","name":"Channel"}]`)
+	got, err := decodeCatalogBody(want)
+	if err != nil {
+		t.Fatalf("decodeCatalogBody: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("decoded body = %q, want %q", got, want)
+	}
+}
+
+func TestFamelackSearchReadsPlainCatalog(t *testing.T) {
+	channels, err := json.Marshal(testChannels())
+	if err != nil {
+		t.Fatalf("marshal channels: %v", err)
+	}
+	countries, err := json.Marshal(testCountries())
+	if err != nil {
+		t.Fatalf("marshal countries: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/all.json":
+			_, _ = w.Write(channels)
+		case "/countries.json":
+			_, _ = w.Write(countries)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClientWithURLs(server.URL+"/all.json", server.URL+"/countries.json", server.Client())
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
+	results, err := client.Search(context.Background(), "cartoon", provider.ModeLive)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 || results[0].Title != "Cartoon Network HD+" {
+		t.Fatalf("Search results = %+v, want Cartoon Network HD+", results)
+	}
+}
+
 func TestFamelackSearchBrowsesAndFilters(t *testing.T) {
 	var requests atomic.Int32
 	client := newTestClient(t, catalogHandler(t, &requests))

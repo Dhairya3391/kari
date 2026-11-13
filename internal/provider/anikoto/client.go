@@ -15,7 +15,7 @@ import (
 )
 
 // Client implements provider.Provider by scraping the Anikoto site directly:
-// AniList supplies the search index and title candidates, anikototv.to
+// AniList supplies the search index and title candidates, anikototv.se
 // supplies episode listings and server embeds, and Megaplay's getSources
 // supplies AES-encrypted streams decrypted in crypto.go. No intermediary
 // API or proxy is involved; every returned URL is a direct CDN address

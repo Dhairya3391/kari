@@ -1,7 +1,10 @@
 package config
 
 const (
-	AnikotoBase      = "https://anikototv.to"
+	// AnikotoBase is the primary Anikoto domain. The site also serves
+	// anikoto.cz (regional), anikoto.me (short TLD), and anikoto.net as
+	// mirrors of the same ajax/watch endpoints.
+	AnikotoBase      = "https://anikototv.se"
 	MovyReferer      = "https://www.movy.sx/"
 	PenguAPIBase     = "https://pengu.uk"
 	TMDBAPIBase      = "https://api.themoviedb.org/3"
@@ -87,6 +90,14 @@ const (
 	CinecatSourcesAPIBase = "https://edge.cinecat.eu"
 	CinecatSubsBase       = "https://sub.vdrk.site"
 
+	// SweetFoxPlayerBase is the VidQueen player origin SweetFox embeds. The
+	// player exposes seven internal stream lanes (Bloodstone, Obsidian,
+	// Garnet, Ruby, Jet, Amethyst, Nightshade).
+	SweetFoxPlayerBase = "https://player.vidqueen.st"
+	// SweetFoxAPIBase is the VidQueen stream resolution API. Every lane is
+	// addressed through it with the TMDB id plus a sources key (s1–s7).
+	SweetFoxAPIBase = "https://api.vidqueen.st"
+
 	// CnoBase is the main web and API base for Cno (https://cno.to).
 	CnoBase = "https://cno.to"
 	// CnoReferer satisfies hotlink and header protection on Cno API and stream requests.
@@ -110,12 +121,12 @@ const (
 	// upstream gateway keys its session on the site origin.
 	AniDreamReferer = "https://anidream.to/"
 
-	// BingrAPIBase is the REST API endpoint for Bingr (https://bingr.one).
-	BingrAPIBase = "https://api.bingr.one/api"
+	// BingrAPIBase is the REST API endpoint for Bingr (https://bingr.st).
+	BingrAPIBase = "https://api.bingr.st/api"
 	// BingrOrigin is the Origin header sent to Bingr API endpoints.
-	BingrOrigin = "https://bingr.one"
+	BingrOrigin = "https://bingr.st"
 	// BingrReferer satisfies hotlink and referer requirements on Bingr API requests.
-	BingrReferer = "https://bingr.one/"
+	BingrReferer = "https://bingr.st/"
 	// FilmuAPIBase is the HiAnime/MegaPlay token and stream gateway used by Bingr for anime.
 	FilmuAPIBase = "https://hianime.filmu.in"
 	// MegaPlayReferer satisfies hotlink protection on MegaPlay stream and subtitle requests.
@@ -133,14 +144,14 @@ const (
 )
 
 // Famelack live TV catalog endpoints. Famelack (formerly TV.Garden) publishes
-// its directory as gzip-compressed JSON in a public GitHub data repository.
+// its directory as JSON from its public data host.
 const (
-	// FamelackDataBase is the root of the public Famelack data repository.
-	FamelackDataBase = "https://raw.githubusercontent.com/famelack/famelack-data/main"
+	// FamelackDataBase is the root of Famelack's public data host.
+	FamelackDataBase = "https://data.famelack.com"
 	// FamelackTVChannelsURL is the complete live TV channel catalog.
-	FamelackTVChannelsURL = FamelackDataBase + "/tv/compressed/categories/all.json"
+	FamelackTVChannelsURL = FamelackDataBase + "/tv/categories/all.json"
 	// FamelackTVCountriesURL maps ISO country codes to display names.
-	FamelackTVCountriesURL = FamelackDataBase + "/tv/compressed/countries_metadata.json"
+	FamelackTVCountriesURL = FamelackDataBase + "/tv/countries_metadata.json"
 )
 
 // IPTV-org publishes a community-maintained live TV catalog as public JSON

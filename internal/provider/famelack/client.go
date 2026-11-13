@@ -1,7 +1,7 @@
 // Package famelack implements provider.Provider for the Famelack live TV
 // directory (https://famelack.com, formerly TV.Garden). Famelack publishes
-// its channel catalog as gzip-compressed JSON in a public GitHub data
-// repository; each channel carries direct HTTP(S) stream URLs. Kari reads
+// its channel catalog as JSON from its public data host; each channel carries
+// direct HTTP(S) stream URLs. Kari reads
 // that catalog, exposes it through the live mode, and resolves the channel's
 // streams without a proxy.
 package famelack
@@ -286,8 +286,8 @@ func (c *Client) cachedChannels() []channel {
 	return c.channels
 }
 
-// fetchDirectory downloads and decodes the gzip-compressed catalog, keeping
-// only entries Kari can actually play.
+// fetchDirectory downloads and decodes the catalog, keeping only entries Kari
+// can actually play.
 func (c *Client) fetchDirectory(ctx context.Context) ([]channel, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.channelsURL, nil)
 	if err != nil {
@@ -308,15 +308,9 @@ func (c *Client) fetchDirectory(ctx context.Context) ([]channel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read catalog body: %w", err)
 	}
-	gz, err := gzip.NewReader(bytes.NewReader(body))
+	raw, err := decodeCatalogBody(body)
 	if err != nil {
-		return nil, fmt.Errorf("open catalog gzip: %w", err)
-	}
-	defer gz.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(gz, maxDirectoryBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("decompress catalog: %w", err)
+		return nil, fmt.Errorf("decode catalog body: %w", err)
 	}
 	if len(raw) > maxDirectoryBytes {
 		return nil, fmt.Errorf("catalog exceeds %d bytes: %w", maxDirectoryBytes, provider.ErrUpstreamChanged)
@@ -374,16 +368,9 @@ func (c *Client) fetchCountryNames(ctx context.Context) map[string]string {
 		famelackLog.Debug("country metadata read failed", "err", err)
 		return nil
 	}
-	gz, err := gzip.NewReader(bytes.NewReader(body))
+	raw, err := decodeCatalogBody(body)
 	if err != nil {
-		famelackLog.Debug("country metadata gzip failed", "err", err)
-		return nil
-	}
-	defer gz.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(gz, maxDirectoryBytes+1))
-	if err != nil {
-		famelackLog.Debug("country metadata decompress failed", "err", err)
+		famelackLog.Debug("country metadata decode failed", "err", err)
 		return nil
 	}
 
@@ -399,6 +386,27 @@ func (c *Client) fetchCountryNames(ctx context.Context) map[string]string {
 		}
 	}
 	return names
+}
+
+// decodeCatalogBody accepts the current plain JSON feed and older gzip feed
+// snapshots so a cache or upstream compression change does not break search.
+func decodeCatalogBody(body []byte) ([]byte, error) {
+	if !bytes.HasPrefix(body, []byte{0x1f, 0x8b}) {
+		return body, nil
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+	raw, err := io.ReadAll(io.LimitReader(gz, maxDirectoryBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxDirectoryBytes {
+		return nil, fmt.Errorf("catalog exceeds %d bytes: %w", maxDirectoryBytes, provider.ErrUpstreamChanged)
+	}
+	return raw, nil
 }
 
 // matches reports whether query (already lowercased) names the channel, its

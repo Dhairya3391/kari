@@ -5,9 +5,11 @@ package downloader
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -95,6 +97,9 @@ func TestVerifyFile_NotFound(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "output file not found") {
 		t.Fatalf("expected output file not found error, got %v", err)
 	}
+	if !errors.Is(err, errVerificationFileMissing) {
+		t.Fatalf("expected missing-file sentinel, got %v", err)
+	}
 }
 
 func TestVerifyFile_NoFFmpeg(t *testing.T) {
@@ -108,6 +113,123 @@ func TestVerifyFile_NoFFmpeg(t *testing.T) {
 	dl := NewYTDLPDownloader()
 	if err := dl.verifyFile(context.Background(), dir, "video"); err != nil {
 		t.Fatalf("expected nil when ffmpeg is missing, got %v", err)
+	}
+}
+
+func TestClassifyVerificationOutput(t *testing.T) {
+	cases := []struct {
+		name   string
+		stderr string
+		want   verifyVerdict
+	}{
+		{"clean", "", verifyPassed},
+		{"benign decoder noise", "[h264] co located POCs unavailable", verifyPassed},
+		{"missing decoder", "Decoder (codec h264) not found", verifyUnavailable},
+		{"unsupported codec", "Unsupported codec with id 0 for input stream 0", verifyUnavailable},
+		{"missing moov", "moov atom not found", verifyCorrupt},
+		{"premature eof", "File ended prematurely", verifyCorrupt},
+		{"bad nal", "Invalid NAL unit size (12 > 3)", verifyCorrupt},
+		{"corrupt frame", "corrupt decoded frame", verifyCorrupt},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyVerificationOutput(tc.stderr); got != tc.want {
+				t.Fatalf("classifyVerificationOutput(%q) = %v, want %v", tc.stderr, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClassifyTailOutputIgnoresDecoderNoise(t *testing.T) {
+	cases := []struct {
+		name   string
+		stderr string
+		want   verifyVerdict
+	}{
+		{"clean", "", verifyPassed},
+		{"mid-gop noise", "Invalid NAL unit size (12 > 3)", verifyPassed},
+		{"decode error", "Error while decoding stream #0:0: Invalid data found", verifyPassed},
+		{"premature eof", "File ended prematurely", verifyCorrupt},
+		{"missing moov", "moov atom not found", verifyCorrupt},
+		{"cannot open input", "Error opening input files: Invalid data found", verifyCorrupt},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyTailOutput(tc.stderr); got != tc.want {
+				t.Fatalf("classifyTailOutput(%q) = %v, want %v", tc.stderr, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyFile_UnavailableFFmpegKeepsVerdictOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ffmpeg shell script is POSIX-only")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "video.mp4"), []byte("media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho 'Decoder (codec h264) not found' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "ffmpeg"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+
+	err := NewYTDLPDownloader().verifyFile(context.Background(), dir, "video")
+	if !errors.Is(err, errVerificationUnavailable) {
+		t.Fatalf("expected unavailable verification error, got %v", err)
+	}
+}
+
+func TestDownloadKeepsFileWhenVerificationCannotRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake downloader shell scripts are POSIX-only")
+	}
+	dir := t.TempDir()
+	bin := t.TempDir()
+	countPath := filepath.Join(dir, "attempts.log")
+
+	ytdlp := "#!/bin/sh\n" +
+		"echo attempt >> \"$KARI_TEST_ATTEMPTS\"\n" +
+		"out=\"\"\n" +
+		"for arg in \"$@\"; do\n" +
+		"  case \"$arg\" in home:*) out=\"${arg#home:}\" ;; esac\n" +
+		"done\n" +
+		"printf media > \"$out/video.mp4\"\n" +
+		"exit 0\n"
+	ffmpeg := "#!/bin/sh\necho 'Decoder (codec h264) not found' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "yt-dlp"), []byte(ytdlp), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "ffmpeg"), []byte(ffmpeg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("KARI_TEST_ATTEMPTS", countPath)
+
+	req := DownloadRequest{
+		Sources: []provider.MediaSource{
+			{URL: "https://example.com/one.mp4", Type: "mp4"},
+			{URL: "https://example.com/two.mp4", Type: "mp4"},
+		},
+		Title:     "video",
+		OutputDir: dir,
+		Verify:    true,
+	}
+	if err := NewYTDLPDownloader().Download(context.Background(), req); err != nil {
+		t.Fatalf("Download returned error for inconclusive verification: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "video.mp4")); err != nil {
+		t.Fatalf("downloaded file must be kept when verification cannot run: %v", err)
+	}
+	attempts, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(attempts), "attempt"); got != 1 {
+		t.Fatalf("expected one download attempt, got %d; verification must not loop over sources", got)
 	}
 }
 

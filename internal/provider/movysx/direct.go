@@ -45,6 +45,13 @@ const (
 	sourceGraceMS    = 800
 	sourceQuorum     = 3
 	seedTTLMS        = 30000
+
+	// Mirror copies are collapsed by probing only the opening bytes of each
+	// HLS manifest. Probes run concurrently and only for rows that can change
+	// the list, so the caps stay low: a slow manifest is simply left visible as
+	// an unverified row instead of delaying the source list.
+	mirrorProbeTimeout = 2 * time.Second
+	mirrorProbeTotal   = 3 * time.Second
 )
 
 // --- Stream cipher (ported from temp/movy/server.mjs) ---
@@ -188,6 +195,7 @@ type upstreamSubtitle struct {
 type upstreamPayload struct {
 	Sources   []upstreamSource   `json:"sources"`
 	Subtitles []upstreamSubtitle `json:"subtitles"`
+	backend   string
 }
 
 type seedResp struct {
@@ -435,6 +443,7 @@ func (c *Client) fetchSourcesDirect(ctx context.Context, mediaType string, tmdbI
 			if p == nil {
 				return
 			}
+			p.backend = endpoint
 			results <- shardResult{payload: p}
 		}(ep)
 	}
@@ -500,13 +509,16 @@ type mergedSource struct {
 	url     string
 	quality string
 	typ     string
+	backend string
 }
 
 type mergedAudio struct {
-	url   string
-	lang  string
-	label string
-	typ   string
+	url     string
+	lang    string
+	label   string
+	typ     string
+	quality string
+	backend string
 }
 
 type mergedSubtitle struct {
@@ -522,7 +534,14 @@ type mergedResults struct {
 }
 
 var qualityRank = map[string]int{
-	"2160p": 0, "4k": 0, "1080p": 1, "720p": 2, "480p": 3, "360p": 4, "auto": 5,
+	"2160p": 0, "4k": 0,
+	"1440p": 1,
+	"1080p": 2,
+	"720p":  3,
+	"576p":  4,
+	"480p":  5,
+	"360p":  6,
+	"auto":  7,
 }
 
 // normalizeQuality folds upstream quality labels to the canonical set.
@@ -530,10 +549,14 @@ func normalizeQuality(quality string) string {
 	switch key := strings.ToLower(strings.TrimSpace(quality)); key {
 	case "2160p", "4k", "uhd":
 		return "2160p"
+	case "1440p", "qhd", "2k":
+		return "1440p"
 	case "1080p", "fhd", "fullhd", "full-hd":
 		return "1080p"
 	case "720p", "hd":
 		return "720p"
+	case "576p":
+		return "576p"
 	case "480p", "sd":
 		return "480p"
 	case "360p":
@@ -562,12 +585,24 @@ func cleanURL(value string) string {
 	return strings.TrimSpace(value)
 }
 
+// canonicalSourceKey identifies a stream asset by origin and path, ignoring
+// volatile signed query strings. Movy's city lanes often serve the same
+// underlying file behind different per-lane signatures; without this the
+// catalogue shows several rows that all play the same media.
+func canonicalSourceKey(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return rawURL
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host) + u.EscapedPath()
+}
+
 // mergeProviderResults aggregates shard payloads: unique sources
 // best-first, dub-labeled rows as audio tracks, real subtitles only.
 func mergeProviderResults(payloads []*upstreamPayload) *mergedResults {
 	out := &mergedResults{}
-	sourceSet := map[string]struct{}{}
 	audioSet := map[string]struct{}{}
+	var candidates []mergedSource
 
 	for _, data := range payloads {
 		if data == nil {
@@ -582,23 +617,39 @@ func mergeProviderResults(payloads []*upstreamPayload) *mergedResults {
 				continue
 			}
 			if dl := kit.DubLangOf(s.Quality); dl != "" {
-				if _, ok := audioSet[u]; ok {
+				key := canonicalSourceKey(u)
+				if _, ok := audioSet[key]; ok {
 					continue
 				}
-				audioSet[u] = struct{}{}
-				out.audio = append(out.audio, mergedAudio{url: u, lang: dl, label: strings.TrimSpace(s.Quality), typ: streamContainer(u)})
+				audioSet[key] = struct{}{}
+				out.audio = append(out.audio, mergedAudio{
+					url: u, lang: dl, label: strings.TrimSpace(s.Quality),
+					typ: streamContainer(u), quality: "auto", backend: laneDisplayName(data.backend),
+				})
 				continue
 			}
-			if _, ok := sourceSet[u]; ok {
-				continue
-			}
-			sourceSet[u] = struct{}{}
-			out.sources = append(out.sources, mergedSource{url: u, quality: normalizeQuality(s.Quality), typ: streamContainer(u)})
+			candidates = append(candidates, mergedSource{
+				url: u, quality: normalizeQuality(s.Quality),
+				typ: streamContainer(u), backend: laneDisplayName(data.backend),
+			})
 		}
 	}
 
 	// Best-first: quality rank, then mp4 preferred over HLS at parity.
-	sortMergedSources(out.sources)
+	sortMergedSources(candidates)
+
+	// Collapse the same asset served under several city lanes. Sorting
+	// first keeps the highest-ranked label (e.g. 1080p over auto) for the
+	// shared URL.
+	sourceSet := map[string]struct{}{}
+	for _, src := range candidates {
+		key := canonicalSourceKey(src.url)
+		if _, ok := sourceSet[key]; ok {
+			continue
+		}
+		sourceSet[key] = struct{}{}
+		out.sources = append(out.sources, src)
+	}
 
 	subSet := map[string]struct{}{}
 	for _, data := range payloads {
@@ -634,6 +685,209 @@ func mergeProviderResults(payloads []*upstreamPayload) *mergedResults {
 	return out
 }
 
+// laneDisplayName turns a shard path into the label shown for its source.
+func laneDisplayName(lane string) string {
+	if lane == "" {
+		return ""
+	}
+	return strings.ToUpper(lane[:1]) + lane[1:]
+}
+
+// collapseMirrors removes city lanes that serve the same HLS asset. Movy
+// mirrors one encode across several shards with different signed URLs, which
+// otherwise fills the source list with copies. Each unique manifest gets one
+// row; rows whose manifest could not be read are always kept, because a failed
+// probe does not prove the row is a repeat.
+//
+// Only rows that can change the list are probed: adaptive labels (their real
+// tier is unknown) and rows whose quality or audio language appears more than
+// once (a mirror is possible). A uniquely labelled row cannot be collapsed, so
+// skipping its probe keeps the resolve fast.
+func (c *Client) collapseMirrors(ctx context.Context, merged *mergedResults) *mergedResults {
+	if merged == nil {
+		return nil
+	}
+
+	sourceCounts := qualityCounts(merged.sources)
+	audioCounts := audioLangCounts(merged.audio)
+
+	urls := make([]string, 0, len(merged.sources)+len(merged.audio))
+	for _, source := range merged.sources {
+		if rowNeedsProbe(source.quality, sourceCounts[normalizeQuality(source.quality)]) {
+			urls = append(urls, probeURL(source.url, source.typ))
+			continue
+		}
+		urls = append(urls, "")
+	}
+	for _, row := range merged.audio {
+		if rowNeedsProbe(row.quality, audioCounts[row.lang]) {
+			urls = append(urls, probeURL(row.url, row.typ))
+			continue
+		}
+		urls = append(urls, "")
+	}
+
+	probes := c.hlsProbes(ctx, urls)
+	sourceCount := len(merged.sources)
+	applyProbedQuality(merged.sources, merged.audio, probes)
+	fingerprints := make([]string, len(probes))
+	for i, probe := range probes {
+		fingerprints[i] = probe.Fingerprint
+	}
+	merged.sources = collapseSourceCopies(merged.sources, fingerprints[:sourceCount])
+	merged.audio = collapseAudioCopies(merged.audio, fingerprints[sourceCount:])
+	return merged
+}
+
+// qualityCounts tallies normalized source qualities.
+func qualityCounts(sources []mergedSource) map[string]int {
+	counts := make(map[string]int, len(sources))
+	for _, source := range sources {
+		counts[normalizeQuality(source.quality)]++
+	}
+	return counts
+}
+
+// audioLangCounts tallies audio languages.
+func audioLangCounts(audio []mergedAudio) map[string]int {
+	counts := make(map[string]int, len(audio))
+	for _, row := range audio {
+		counts[row.lang]++
+	}
+	return counts
+}
+
+// rowNeedsProbe reports whether a probe can change the source list: adaptive
+// labels may reveal a real tier, and rows sharing a group may be mirrors.
+func rowNeedsProbe(quality string, groupSize int) bool {
+	return normalizeQuality(quality) == "auto" || groupSize > 1
+}
+
+// applyProbedQuality replaces vague API labels with a master playlist's real
+// best rendition. Media playlists carry no resolution metadata, so their labels
+// are left untouched.
+func applyProbedQuality(sources []mergedSource, audio []mergedAudio, probes []kit.HLSAssetInfo) {
+	for i := range sources {
+		if i >= len(probes) {
+			return
+		}
+		if quality := qualityFromDimension(probes[i].Dimension); quality != "" {
+			sources[i].quality = quality
+		}
+	}
+	offset := len(sources)
+	for i := range audio {
+		if offset+i >= len(probes) {
+			return
+		}
+		if quality := qualityFromDimension(probes[offset+i].Dimension); quality != "" {
+			audio[i].quality = quality
+		}
+	}
+}
+
+// qualityFromDimension buckets a rendition dimension into the labels Kari
+// ranks and displays. dimension is the master's largest side (max of
+// width/height), matching kit.HLSAssetInfo, so the thresholds sit between the
+// widths of the standard ladders rather than their heights. Zero means the
+// manifest did not declare a resolution.
+func qualityFromDimension(dimension int) string {
+	switch {
+	case dimension >= 3600:
+		return "2160p"
+	case dimension >= 2400:
+		return "1440p"
+	case dimension >= 1700:
+		return "1080p"
+	case dimension >= 1100:
+		return "720p"
+	case dimension >= 700:
+		return "480p"
+	case dimension > 0:
+		return "360p"
+	default:
+		return ""
+	}
+}
+
+// probeURL returns the URL to fingerprint, or "" when the row is not HLS and
+// therefore cannot be compared cheaply.
+func probeURL(rawURL, typ string) string {
+	if strings.EqualFold(strings.TrimSpace(typ), provider.SourceTypeHLS) {
+		return rawURL
+	}
+	return ""
+}
+
+// hlsProbes fingerprints every URL concurrently. Empty fingerprints mean the
+// row was not HLS or its manifest could not be read.
+func (c *Client) hlsProbes(ctx context.Context, urls []string) []kit.HLSAssetInfo {
+	probes := make([]kit.HLSAssetInfo, len(urls))
+	probeCtx, cancel := context.WithTimeout(ctx, mirrorProbeTotal)
+	defer cancel()
+
+	headers := map[string]string{
+		"Referer": movyReferer,
+		"Origin":  "https://www.movy.sx",
+	}
+
+	var wg sync.WaitGroup
+	for i, u := range urls {
+		if u == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, u string) {
+			defer wg.Done()
+			reqCtx, cancel := context.WithTimeout(probeCtx, mirrorProbeTimeout)
+			defer cancel()
+			probes[i] = kit.ProbeHLSAsset(reqCtx, c.httpClient, u, headers)
+		}(i, u)
+	}
+	wg.Wait()
+	return probes
+}
+
+// collapseSourceCopies keeps one row per (quality, manifest fingerprint).
+func collapseSourceCopies(sources []mergedSource, signatures []string) []mergedSource {
+	out := make([]mergedSource, 0, len(sources))
+	seen := make(map[string]struct{}, len(sources))
+	for i, source := range sources {
+		signature := signatures[i]
+		if signature == "" {
+			out = append(out, source)
+			continue
+		}
+		key := source.quality + "\x00" + signature
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, source)
+	}
+	return out
+}
+
+// collapseAudioCopies keeps one row per (audio language, manifest fingerprint).
+func collapseAudioCopies(audio []mergedAudio, signatures []string) []mergedAudio {
+	out := make([]mergedAudio, 0, len(audio))
+	seen := make(map[string]struct{}, len(audio))
+	for i, row := range audio {
+		signature := signatures[i]
+		if signature == "" {
+			out = append(out, row)
+			continue
+		}
+		key := row.lang + "\x00" + signature
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, row)
+	}
+	return out
+}
+
 func sortMergedSources(sources []mergedSource) {
 	rankOf := func(q string) int {
 		if r, ok := qualityRank[q]; ok {
@@ -647,7 +901,17 @@ func sortMergedSources(sources []mergedSource) {
 			ra, rb := rankOf(a.quality), rankOf(b.quality)
 			swap := ra < rb
 			if ra == rb {
-				swap = kit.IsMp4URL(a.url) && !kit.IsMp4URL(b.url)
+				aMP4, bMP4 := kit.IsMp4URL(a.url), kit.IsMp4URL(b.url)
+				switch {
+				case aMP4 != bMP4:
+					swap = aMP4
+				case a.backend != b.backend:
+					// Stable tie-break so mirror collapsing keeps the same
+					// row across resolves instead of following arrival order.
+					swap = a.backend < b.backend
+				default:
+					swap = a.url < b.url
+				}
 			}
 			if !swap {
 				break

@@ -1,4 +1,4 @@
-// Package bingr implements provider.Provider for Bingr (https://bingr.one),
+// Package bingr implements provider.Provider for Bingr (https://bingr.st),
 // a multi-format media catalog providing movies, television series,
 // animation/cartoons, and anime.
 //

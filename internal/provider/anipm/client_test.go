@@ -3,6 +3,7 @@ package anipm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -113,6 +114,21 @@ func TestFetchEpisodes(t *testing.T) {
 	}
 }
 
+func TestFetchEpisodesWithoutAudioVariantsReturnsNoEpisodes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(seriesResponse{
+			Episodes: []episodeItem{{Number: 1, Title: "Episode 1"}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL(server.URL, server.URL)
+	episodes, err := client.FetchEpisodes(context.Background(), provider.SearchResult{ID: "21"})
+	if len(episodes) != 0 || !errors.Is(err, provider.ErrNoEpisodes) {
+		t.Fatalf("FetchEpisodes() = %v, %v; want no episodes and ErrNoEpisodes", episodes, err)
+	}
+}
+
 func TestResolveSource(t *testing.T) {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -171,5 +187,59 @@ func TestResolveSource(t *testing.T) {
 	}
 	if len(s.Subtitles) != 1 || s.Subtitles[0].Language != "en" {
 		t.Errorf("Subtitles = %+v", s.Subtitles)
+	}
+}
+
+func TestResolveSourceSubAndDubCarryAudioLanguage(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/anime/playback-bootstrap/anilist/21":
+			channel := r.URL.Query().Get("lang")
+			_ = json.NewEncoder(w).Encode(bootstrapResponse{SettlarSelection: "selection-" + channel})
+		case "/api/anime/settlar/session":
+			channel := r.URL.Query().Get("channel")
+			if r.URL.Query().Get("selection") != "selection-"+channel {
+				http.Error(w, "mismatched audio selection", http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(sessionResponse{EmbedURL: server.URL + "/embed?t=" + channel})
+		case "/api/embed/session":
+			language := map[string]string{"sub": "ja", "dub": "en"}[r.URL.Query().Get("t")]
+			if language == "" {
+				http.Error(w, "unknown audio selection", http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(playbackSession{
+				Source:    "https://media.settlar.io/" + language + ".m3u8",
+				AudioLang: language,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClientWithBaseURL(server.URL, server.URL)
+	for _, tc := range []struct {
+		channel string
+		lang    string
+	}{
+		{channel: provider.AudioSub, lang: "ja"},
+		{channel: provider.AudioDub, lang: "en"},
+	} {
+		t.Run(tc.channel, func(t *testing.T) {
+			sources, err := client.ResolveSource(context.Background(), "21", provider.Episode{
+				Episode: 1,
+				Audio:   tc.channel,
+				ID:      "watch/anipm/21/" + tc.channel + "/1",
+			})
+			if err != nil {
+				t.Fatalf("ResolveSource: %v", err)
+			}
+			if len(sources) != 1 || sources[0].Language != tc.lang || sources[0].URL != "https://media.settlar.io/"+tc.lang+".m3u8" {
+				t.Fatalf("ResolveSource() = %+v, want %s audio source", sources, tc.lang)
+			}
+		})
 	}
 }

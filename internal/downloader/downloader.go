@@ -72,6 +72,107 @@ var extendedProgressRe = regexp.MustCompile(
 	`^KARI_PROGRESS:\s*(\S+?)\|\s*FRAG:\s*(\S+?)\|\s*TOTAL:\s*(.*?)\|\s*TOTAL_EST:\s*(.+?)\|\s*SPEED:\s*(.+?)\|\s*ETA:\s*(.+?)\|\s*DOWNLOADED:\s*(.+)$`,
 )
 
+// errVerificationUnavailable marks an integrity check that could not reach a
+// verdict (timeout, missing decoder, unsupported container). Download keeps
+// the file in that case: treating an inconclusive check as corruption would
+// delete a valid download and start the same source over again.
+var errVerificationUnavailable = errors.New("verification unavailable")
+
+// errVerificationFileMissing marks a successful download whose output could
+// not be located. Retrying another source cannot fix a path/naming problem, so
+// Download aborts instead of looping through the remaining sources.
+var errVerificationFileMissing = errors.New("verification file missing")
+
+// verifyVerdict is the outcome of inspecting ffmpeg's stderr.
+type verifyVerdict int
+
+const (
+	// verifyPassed means the output contains no corruption signal.
+	verifyPassed verifyVerdict = iota
+	// verifyCorrupt means the output names a definite integrity failure.
+	verifyCorrupt
+	// verifyUnavailable means the local ffmpeg cannot judge the file.
+	verifyUnavailable
+)
+
+// verifyUnavailableMarkers identify failures caused by the local ffmpeg build
+// or environment rather than by the downloaded bytes.
+var verifyUnavailableMarkers = []string{
+	"decoder (codec",
+	"decoder not found",
+	"unknown decoder",
+	"no decoder found",
+	"unsupported codec",
+	"not implemented in ffmpeg",
+	"unknown encoder",
+	"no such filter",
+	"protocol not found",
+	"does not support seeking",
+	"cannot seek",
+	"seek to position",
+}
+
+// verifyCorruptionMarkers identify definite corrupt or truncated media.
+var verifyCorruptionMarkers = []string{
+	"moov atom not found",
+	"file ended prematurely",
+	"truncated",
+	"partial file",
+	"invalid data found when processing input",
+	"invalid nal unit size",
+	"error splitting the input into nal units",
+	"packet corrupt",
+	"corrupt",
+	"error while decoding stream",
+	"error submitting packet to decoder: invalid data",
+	"invalid frame size",
+	"could not find codec parameters",
+	"error opening input",
+}
+
+// verifyTruncationMarkers are the subset safe to trust at the tail. Decoder
+// noise from seeking into the middle of a GOP is common on valid files, so the
+// tail only fails on container-level evidence of a missing or short file.
+var verifyTruncationMarkers = []string{
+	"moov atom not found",
+	"file ended prematurely",
+	"truncated",
+	"partial file",
+	"error opening input",
+}
+
+func classifyVerificationOutput(stderr string) verifyVerdict {
+	msg := strings.ToLower(stderr)
+	for _, marker := range verifyUnavailableMarkers {
+		if strings.Contains(msg, marker) {
+			return verifyUnavailable
+		}
+	}
+	for _, marker := range verifyCorruptionMarkers {
+		if strings.Contains(msg, marker) {
+			return verifyCorrupt
+		}
+	}
+	return verifyPassed
+}
+
+func classifyTailOutput(stderr string) verifyVerdict {
+	msg := strings.ToLower(stderr)
+	for _, marker := range verifyTruncationMarkers {
+		if strings.Contains(msg, marker) {
+			return verifyCorrupt
+		}
+	}
+	return verifyPassed
+}
+
+func ffmpegErrorText(stderr string, err error) string {
+	if msg := strings.TrimSpace(stderr); msg != "" {
+		return msg
+	}
+	return err.Error()
+}
+
 func downloadParallelism() int {
 	n := runtime.NumCPU() * 2
 	if n < 16 {
@@ -228,11 +329,22 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 					if ctx.Err() != nil {
 						return ctx.Err()
 					}
-					d.removeDownloadedFile(req.OutputDir, baseTitle)
-					d.CleanupPartial(req.OutputDir, req.Title, req.TempDir)
-					errs = append(errs, fmt.Errorf("source %d (%s): integrity check failed: %w", i+1, source.Quality, err))
-					ytdlpLog.Warn("source failed integrity check; trying next", "index", i+1, "total", len(req.Sources), "err", err)
-					continue
+					if errors.Is(err, errVerificationFileMissing) {
+						return fmt.Errorf("source %d (%s): %w", i+1, source.Quality, err)
+					}
+					if errors.Is(err, errVerificationUnavailable) {
+						// The bytes downloaded fine but the local checker cannot
+						// judge them. Keeping the file breaks the download loop;
+						// deleting it would fetch the same bytes again and hit
+						// the same inconclusive check.
+						ytdlpLog.Warn("download integrity check unavailable; keeping file", "index", i+1, "total", len(req.Sources), "err", err)
+					} else {
+						d.removeDownloadedFile(req.OutputDir, baseTitle)
+						d.CleanupPartial(req.OutputDir, req.Title, req.TempDir)
+						errs = append(errs, fmt.Errorf("source %d (%s): integrity check failed: %w", i+1, source.Quality, err))
+						ytdlpLog.Warn("source failed integrity check; trying next", "index", i+1, "total", len(req.Sources), "err", err)
+						continue
+					}
 				}
 			}
 			if req.Progress != nil {
@@ -313,7 +425,7 @@ func (d *YTDLPDownloader) removeDownloadedFile(outputDir, baseTitle string) {
 func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle string) error {
 	path := d.findOutputPath(outputDir, baseTitle)
 	if path == "" {
-		return fmt.Errorf("output file not found for verification")
+		return fmt.Errorf("%w: output file not found", errVerificationFileMissing)
 	}
 
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
@@ -332,13 +444,22 @@ func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle s
 	headCmd.Stderr = &headStderr
 	if err := headCmd.Run(); err != nil {
 		if verifyCtx.Err() != nil {
-			return fmt.Errorf("video integrity check timed out: %w", verifyCtx.Err())
+			return fmt.Errorf("%w: video integrity check timed out: %w", errVerificationUnavailable, verifyCtx.Err())
 		}
-		errMsg := strings.TrimSpace(headStderr.String())
-		if errMsg == "" {
-			errMsg = err.Error()
+		errMsg := ffmpegErrorText(headStderr.String(), err)
+		switch classifyVerificationOutput(errMsg) {
+		case verifyCorrupt:
+			return fmt.Errorf("video integrity check failed: %s", errMsg)
+		case verifyUnavailable:
+			return fmt.Errorf("%w: %s", errVerificationUnavailable, errMsg)
+		default:
+			// An unexplained ffmpeg failure is not proof that the bytes are
+			// corrupt. Keep the file instead of re-downloading it forever.
+			return fmt.Errorf("%w: %s", errVerificationUnavailable, errMsg)
 		}
-		return fmt.Errorf("video integrity check failed: %s", errMsg)
+	}
+	if classifyVerificationOutput(headStderr.String()) == verifyCorrupt {
+		return fmt.Errorf("video integrity check failed: %s", strings.TrimSpace(headStderr.String()))
 	}
 
 	// 2. Tail sample verification: seek to the end of the timeline and decode final frames.
@@ -348,24 +469,28 @@ func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle s
 	tailCmd.Stderr = &tailStderr
 	if err := tailCmd.Run(); err != nil {
 		if verifyCtx.Err() != nil {
-			return fmt.Errorf("video integrity check timed out: %w", verifyCtx.Err())
+			return fmt.Errorf("%w: video integrity check timed out: %w", errVerificationUnavailable, verifyCtx.Err())
 		}
-		errMsg := strings.TrimSpace(tailStderr.String())
+		errMsg := ffmpegErrorText(tailStderr.String(), err)
 		// Some container formats (e.g. raw unindexed streams) cannot seek backwards with -sseof.
 		// If head passed and the failure is purely a seeking limitation, log and treat as valid.
 		if strings.Contains(errMsg, "does not support seeking") || strings.Contains(errMsg, "cannot seek") || strings.Contains(errMsg, "seek to position") {
 			ytdlpLog.Debug("container does not support tail seek; head verified successfully", "path", path, "err", errMsg)
 			return nil
 		}
-		if errMsg == "" {
-			errMsg = err.Error()
+		if classifyTailOutput(errMsg) == verifyCorrupt {
+			return fmt.Errorf("video integrity check failed: %s", errMsg)
 		}
-		return fmt.Errorf("video integrity check failed: %s", errMsg)
+		// Seeking into the last GOP often makes decoders log errors on files
+		// that are perfectly playable. Only container-level evidence proves a
+		// truncated tail, so keep the file when the failure is decoder noise.
+		ytdlpLog.Debug("tail verification inconclusive; head verified successfully", "path", path, "err", errMsg)
+		return nil
 	}
 
 	// Certain container demuxers (e.g. Matroska/WebM) log premature EOF to stderr
 	// without returning a non-zero exit code when seek lands beyond available clusters.
-	if strings.Contains(tailStderr.String(), "File ended prematurely") {
+	if classifyTailOutput(tailStderr.String()) == verifyCorrupt {
 		return fmt.Errorf("video integrity check failed: file ended prematurely (truncated download)")
 	}
 
@@ -475,9 +600,12 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	wg.Add(2)
 	var maxProgress atomic.Int64
 
-	scanPipe := func(pipe io.Reader, isStderr bool) {
+	scanPipe := func(pipe io.Reader, isStderr bool, scanErr *error) {
 		defer wg.Done()
 		scanner := bufio.NewScanner(pipe)
+		defer func() {
+			*scanErr = scanner.Err()
+		}()
 		for scanner.Scan() {
 			line := scanner.Text()
 			if isStderr {
@@ -567,14 +695,21 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 			}
 		}
 	}
-	go scanPipe(stdout, false)
-	go scanPipe(stderr, true)
+	var stdoutScanErr, stderrScanErr error
+	go scanPipe(stdout, false, &stdoutScanErr)
+	go scanPipe(stderr, true, &stderrScanErr)
 
-	err = cmd.Wait()
+	// Drain both pipes before Wait: Wait closes them, and closing a pipe
+	// while the scanners are still reading truncates progress and surfaces
+	// spurious read errors.
 	wg.Wait()
+	err = cmd.Wait()
 
 	if err != nil {
 		return fmt.Errorf("ytdlp: failed: %w, stderr: %s", err, stderrBuf.String())
+	}
+	if scanErr := errors.Join(stdoutScanErr, stderrScanErr); scanErr != nil {
+		return fmt.Errorf("ytdlp: read output: %w", scanErr)
 	}
 	if req.TempDir != "" && req.TempDir != req.OutputDir {
 		_ = os.RemoveAll(req.TempDir)

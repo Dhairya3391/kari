@@ -27,6 +27,7 @@ import (
 	"kari/internal/provider/solis"
 	"kari/internal/provider/stability"
 	"kari/internal/provider/stremioaddon"
+	"kari/internal/provider/sweetfox"
 	"kari/internal/provider/timstreams"
 	"kari/internal/provider/vidrift"
 	"kari/internal/provider/vyla"
@@ -91,6 +92,12 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "cinecat",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return cinecat.NewClient(d.KeyPool)
+		},
+	},
+	{
+		ID: "sweetfox",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return sweetfox.NewClient(d.KeyPool)
 		},
 	},
 	{

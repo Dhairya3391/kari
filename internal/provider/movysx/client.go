@@ -157,6 +157,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	if err != nil {
 		return nil, err
 	}
+	merged = c.collapseMirrors(ctx, merged)
 	sources := provider.FilterDirectSources(c.mapMerged(merged))
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources
@@ -179,16 +180,18 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 	sources := make([]provider.MediaSource, 0, len(m.sources)+len(m.audio))
 	seen := make(map[string]struct{}, len(m.sources)+len(m.audio))
 	for _, s := range m.sources {
-		if _, ok := seen[s.url]; ok {
+		key := canonicalSourceKey(s.url)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[s.url] = struct{}{}
+		seen[key] = struct{}{}
 		if !c.languageEnabled("en") {
 			continue
 		}
 		sources = append(sources, provider.MediaSource{
 			URL:       s.url,
 			Quality:   s.quality,
+			Backend:   s.backend,
 			Type:      streamType(s.url, s.typ),
 			Referer:   movyReferer,
 			UserAgent: config.DesktopUserAgent,
@@ -197,16 +200,22 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 		})
 	}
 	for _, a := range m.audio {
-		if _, ok := seen[a.url]; ok {
+		key := canonicalSourceKey(a.url)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[a.url] = struct{}{}
+		seen[key] = struct{}{}
 		if !c.languageEnabled(a.lang) {
 			continue
 		}
+		quality := strings.TrimSpace(a.quality)
+		if quality == "" {
+			quality = "auto"
+		}
 		sources = append(sources, provider.MediaSource{
 			URL:       a.url,
-			Quality:   "Auto",
+			Quality:   quality,
+			Backend:   a.backend,
 			Type:      streamType(a.url, a.typ),
 			Referer:   movyReferer,
 			UserAgent: config.DesktopUserAgent,

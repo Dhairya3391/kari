@@ -85,10 +85,6 @@ func ParseResolution(raw string) int {
 	case "576p", "576":
 		return 576
 	}
-	if strings.Contains(lower, "auto") || strings.Contains(lower, "master") {
-		return 1080
-	}
-
 	if reQuality4K.MatchString(lower) {
 		return 2160
 	}
@@ -116,6 +112,14 @@ func ParseResolution(raw string) int {
 			return n
 		}
 	}
+
+	// A bare adaptive label ("Auto", "Master", "Auto (Hindi)") names no
+	// tier, so keep the optimistic FHD guess. Labels that also name a real
+	// resolution ("Auto 2160p", "Master 4K") are handled above.
+	if strings.Contains(lower, "auto") || strings.Contains(lower, "master") {
+		return 1080
+	}
+
 	if m := reQualityNum.FindStringSubmatch(lower); len(m) >= 2 {
 		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
 			return n
@@ -148,13 +152,46 @@ func ParseFileSizeMB(raw string) float64 {
 	}
 }
 
+// IsAdaptiveQuality reports whether a label only advertises an adaptive
+// ("Auto"/"Master") stream without naming a real resolution. The manifest
+// picks the tier at playback time, so ranking the row as a known resolution
+// would be a guess.
+func IsAdaptiveQuality(raw string) bool {
+	stripped := raw
+	if strings.IndexByte(raw, '[') >= 0 {
+		stripped = reBracketTag.ReplaceAllString(raw, "")
+	}
+	lower := strings.ToLower(strings.TrimSpace(stripped))
+	if !strings.Contains(lower, "auto") && !strings.Contains(lower, "master") {
+		return false
+	}
+	for _, re := range []*regexp.Regexp{
+		reQuality4K, reQualityQHD, reQualityFHD, reQualityHD,
+		reQuality576, reQualitySD, reQuality360, reQualityP,
+	} {
+		if re.MatchString(lower) {
+			return false
+		}
+	}
+	return true
+}
+
+// knownResolution is ParseResolution with adaptive labels treated as unknown.
+func knownResolution(raw string) int {
+	if IsAdaptiveQuality(raw) {
+		return 0
+	}
+	return ParseResolution(raw)
+}
+
 // fullHDThreshold is the minimum parsed resolution kept visible under the
 // Highest quality mode: FHD (1080p) and anything above it (QHD, 4K).
-// Adaptive "Auto" masters parse as 1080 via ParseResolution, so they stay.
 const fullHDThreshold = 1080
 
 // KeepHighestVisible keeps FHD and better rows when available, otherwise the
-// best lower tier available across providers.
+// best lower tier available across providers. Adaptive-only rows are treated
+// as unknown: they stay only when no source declares a resolution, because
+// their real tier is decided at playback time.
 func KeepHighestVisible(sources []provider.MediaSource) []provider.MediaSource {
 	if len(sources) == 0 {
 		return nil
@@ -163,7 +200,7 @@ func KeepHighestVisible(sources []provider.MediaSource) []provider.MediaSource {
 	bestLower := 0
 	hasFullHD := false
 	for _, src := range sources {
-		resolution := ParseResolution(src.Quality)
+		resolution := knownResolution(src.Quality)
 		if resolution >= fullHDThreshold {
 			hasFullHD = true
 		}
@@ -176,14 +213,14 @@ func KeepHighestVisible(sources []provider.MediaSource) []provider.MediaSource {
 	}
 	allUnknown := true
 	for _, src := range sources {
-		if ParseResolution(src.Quality) > 0 {
+		if knownResolution(src.Quality) > 0 {
 			allUnknown = false
 			break
 		}
 	}
 	kept := make([]provider.MediaSource, 0, len(sources))
 	for _, src := range sources {
-		resolution := ParseResolution(src.Quality)
+		resolution := knownResolution(src.Quality)
 		if resolution >= fullHDThreshold || (bestLower > 0 && resolution == bestLower) || allUnknown {
 			kept = append(kept, src)
 		}

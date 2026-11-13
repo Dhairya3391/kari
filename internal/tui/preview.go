@@ -357,6 +357,9 @@ func formatSourceAudio(src provider.MediaSource, width int) string {
 }
 
 func formatSourceQuality(raw string) string {
+	if ranking.IsAdaptiveQuality(raw) {
+		return "Auto"
+	}
 	res := ranking.ParseResolution(raw)
 	switch {
 	case res >= 2160:

@@ -21,6 +21,11 @@ func TestParseResolution(t *testing.T) {
 		{"576p PAL", 576},
 		{"480p SD", 480},
 		{"360p", 360},
+		{"Auto", 1080},
+		{"Auto (HD1)", 1080},
+		{"Auto 2160p", 2160},
+		{"Master 4K", 2160},
+		{"Auto 540p", 540},
 		{"Unknown", 0},
 		{"", 0},
 	}
@@ -29,6 +34,27 @@ func TestParseResolution(t *testing.T) {
 		got := ParseResolution(tt.input)
 		if got != tt.want {
 			t.Errorf("ParseResolution(%q) = %d, want %d", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestIsAdaptiveQuality(t *testing.T) {
+	cases := map[string]bool{
+		"Auto":            true,
+		"auto":            true,
+		"Master":          true,
+		"Auto (Hindi)":    true,
+		"Auto [Provider]": true,
+		"1080p":           false,
+		"FHD":             false,
+		"Auto 1080p":      false,
+		"Master 4K":       false,
+		"Direct":          false,
+		"":                false,
+	}
+	for input, want := range cases {
+		if got := IsAdaptiveQuality(input); got != want {
+			t.Errorf("IsAdaptiveQuality(%q) = %v, want %v", input, got, want)
 		}
 	}
 }
