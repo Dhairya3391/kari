@@ -14,31 +14,6 @@ import (
 // unwrapping the API's proxy URLs so mpv always receives direct CDN
 // addresses and the upstream referer those CDNs require.
 
-// episodeSource returns the playback source named by an episode handle.
-// Handles from other anime providers have no AniVault source segment; those
-// default to AniVault's own catalog source.
-func episodeSource(episodeID string) string {
-	parts := strings.Split(strings.TrimSpace(episodeID), "/")
-	if len(parts) >= 5 && parts[0] == "watch" &&
-		strings.EqualFold(strings.TrimSpace(parts[1]), sourceAnimeHeaven) {
-		return sourceAnimeHeaven
-	}
-	return sourceAniVault
-}
-
-// candidateSources returns the sources to try for one resolution, in order.
-// Subtitles fall back from AniVault to AnimeHeaven; dubs never use
-// AnimeHeaven, which has no dub catalog.
-func candidateSources(source, category string) []string {
-	if source == sourceAnimeHeaven {
-		return []string{sourceAnimeHeaven, sourceAniVault}
-	}
-	if category == provider.AudioSub {
-		return []string{sourceAniVault, sourceAnimeHeaven}
-	}
-	return []string{sourceAniVault}
-}
-
 // watchSources maps a watch payload to direct playable sources. Iframe-only
 // payloads carry no stream and are dropped.
 func watchSources(watch watchResponse) []provider.MediaSource {
@@ -84,9 +59,8 @@ func watchSources(watch watchResponse) []provider.MediaSource {
 }
 
 // watchSubType labels the subtitle kind carried by a stream. AnimeHeaven's
-// MP4s have burned-in subtitles and no sidecar tracks; Anikoto-backed HLS
-// streams are clean video with separate VTT tracks. Streams with neither a
-// known hard-sub origin nor sidecar captions stay unlabelled.
+// MP4s have burned-in subtitles and no sidecar tracks. Streams with neither
+// a known hard-sub origin nor sidecar captions stay unlabelled.
 func watchSubType(watch watchResponse, subtitles []provider.SubtitleOption) string {
 	if strings.EqualFold(strings.TrimSpace(watch.Source), sourceAnimeHeaven) ||
 		strings.Contains(strings.ToLower(watch.Server), "animeheaven") {
@@ -98,14 +72,15 @@ func watchSubType(watch watchResponse, subtitles []provider.SubtitleOption) stri
 	return ""
 }
 
-// directStream prefers the API's direct URL and borrows the upstream referer
-// from its matching proxy URL. When only a proxy is present, the proxy is
-// unwrapped to the direct address it forwards to.
+// directStream unwraps either field because the current site can put its
+// proxy in the primary stream field. Bypassing that proxy requires retaining
+// its exact upstream referer, including any episode-specific path and query.
 func directStream(direct, proxy string) (string, string) {
 	direct = strings.TrimSpace(direct)
 	proxy = strings.TrimSpace(proxy)
 	if direct != "" {
-		return direct, proxyReferer(proxy)
+		target, referer := unwrapProxy(direct)
+		return target, firstNonEmpty(referer, proxyReferer(proxy))
 	}
 	return unwrapProxy(proxy)
 }

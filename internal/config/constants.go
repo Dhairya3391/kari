@@ -61,10 +61,9 @@ const (
 	// SvelteKit deployment while www.miruro.cx hosts the React/API v1 SPA.
 	MiruroBase = "https://miruro.cx"
 
-	// AniVaultAPIBase is AniVault's public scraper API. The anivault.tv
-	// frontend is Cloudflare-challenged for non-browser clients; this
-	// deployment serves the same AniList-keyed catalog and playback routes.
-	AniVaultAPIBase = "https://anivault-api-production.up.railway.app"
+	// AniVaultAPIBase exposes the current site's public Hoshika catalog and
+	// playback routes without requiring the private scraper's API key.
+	AniVaultAPIBase = "https://www.anivault.co"
 
 	// AniPMBase is the public web application for Ani.pm (https://ani.pm).
 	AniPMBase = "https://ani.pm"

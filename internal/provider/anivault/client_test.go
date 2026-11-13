@@ -2,443 +2,646 @@ package anivault
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"kari/internal/provider"
 )
 
-const searchFixture = `{"results":[
-	{"id":20,"title":"Naruto","coverImage":"https://cover.example.com/naruto.jpg","format":"TV"},
-	{"id":null,"title":"MAL only result","coverImage":"","format":"TV"},
-	{"id":936,"title":"Naruto the Movie","coverImage":"https://cover.example.com/movie.jpg","format":"MOVIE"}
-]}`
-
-const episodesFixture = `{"episodes":[
-	{"num":1,"title":"Enter"},
-	{"num":2,"title":""}
-]}`
-
-const animeHeavenEpisodesFixture = `{"episodes":[{"num":1,"title":"Heaven Ep"}]}`
-
-const hlsWatchFixture = `{
-	"server":"HD-1",
-	"source":"anivault",
-	"embedUrl":"https://megaplay.buzz/",
-	"m3u8":"https://cdn.example.com/master.m3u8?token=abc",
-	"hlsProxyUrl":"https://api.example.com/api/proxy/hls?url=https%3A%2F%2Fcdn.example.com%2Fmaster.m3u8%3Ftoken%3Dabc&ref=https%3A%2F%2Fmegaplay.buzz%2F",
-	"iframeOnly":false,
-	"subtitles":[
-		{"url":"https://api.example.com/api/proxy/subtitle?url=https%3A%2F%2Fsubs.example.com%2Fen.vtt&ref=https%3A%2F%2Fmegaplay.buzz%2F","lang":"English","default":true},
-		{"url":"https://api.example.com/api/proxy/subtitle?url=https%3A%2F%2Fsubs.example.com%2Fthumbnails.vtt&ref=https%3A%2F%2Fmegaplay.buzz%2F","lang":"Unknown","default":false}
-	]
-}`
-
-const proxyOnlyWatchFixture = `{
-	"server":"HD-1",
-	"source":"anivault",
-	"embedUrl":"https://megaplay.buzz/",
-	"m3u8":null,
-	"hlsProxyUrl":"https://api.example.com/api/proxy/hls?url=https%3A%2F%2Fcdn.example.com%2Fmaster.m3u8%3Ftoken%3Dabc&ref=https%3A%2F%2Fmegaplay.buzz%2F",
-	"iframeOnly":false,
-	"subtitles":[]
-}`
-
-const mp4WatchFixture = `{
-	"server":"AnimeHeaven",
-	"source":"animeheaven",
-	"embedUrl":"https://animeheaven.me/gate.php",
-	"mp4":"https://cdn.example.com/video.mp4?token=abc",
-	"mp4ProxyUrl":"https://api.example.com/api/proxy/video?url=https%3A%2F%2Fcdn.example.com%2Fvideo.mp4%3Ftoken%3Dabc&ref=https%3A%2F%2Fanimeheaven.me%2F",
-	"rawStreamUrl":"https://cdn.example.com/video.mp4?token=abc",
-	"streamUrl":"https://api.example.com/api/proxy/video?url=https%3A%2F%2Fcdn.example.com%2Fvideo.mp4%3Ftoken%3Dabc&ref=https%3A%2F%2Fanimeheaven.me%2F",
-	"iframeOnly":false,
-	"subtitles":[]
-}`
-
-const iframeOnlyWatchFixture = `{"iframeOnly":true,"subtitles":[]}`
-
-// fixture controls the canned API's failure modes.
-type fixture struct {
-	anivaultEpisodesStatus int
-	anivaultWatchSubStatus int
-	animeHeavenWatchStatus int
-	iframeOnly             bool
-	proxyOnly              bool
-}
-
-// newFixture serves canned AniVault API payloads on one httptest server.
-func newFixture(t *testing.T, options ...func(*fixture)) *Client {
+func newPlaybackFixture(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
-	f := fixture{
-		anivaultEpisodesStatus: http.StatusOK,
-		anivaultWatchSubStatus: http.StatusOK,
-		animeHeavenWatchStatus: http.StatusOK,
-	}
-	for _, option := range options {
-		option(&f)
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/search", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("q") == "" {
-			http.Error(w, `{"error":"Missing ?q="}`, http.StatusBadRequest)
-			return
-		}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, searchFixture)
-	})
-	mux.HandleFunc("/api/episodes", func(w http.ResponseWriter, r *http.Request) {
-		source := r.URL.Query().Get("source")
-		if source == sourceAniVault {
-			if f.anivaultEpisodesStatus != http.StatusOK {
-				http.Error(w, `{"error":"Not indexed on Anikoto"}`, f.anivaultEpisodesStatus)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, episodesFixture)
+		if !checkPlaybackRequest(t, r) {
+			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, animeHeavenEpisodesFixture)
-	})
-	mux.HandleFunc("/api/watch/", func(w http.ResponseWriter, r *http.Request) {
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/watch/"), "/")
-		if len(parts) != 4 {
-			http.Error(w, `{"error":"bad path"}`, http.StatusBadRequest)
-			return
-		}
-		source, category := parts[0], parts[3]
-		switch {
-		case source == sourceAniVault && category == provider.AudioDub:
-			http.Error(w, `{"error":"No dub stream available"}`, http.StatusNotFound)
-		case source == sourceAniVault && f.anivaultWatchSubStatus != http.StatusOK:
-			http.Error(w, `{"error":"upstream failed"}`, f.anivaultWatchSubStatus)
-		case source == sourceAniVault && f.iframeOnly:
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, iframeOnlyWatchFixture)
-		case source == sourceAniVault && f.proxyOnly:
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, proxyOnlyWatchFixture)
-		case source == sourceAniVault:
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, hlsWatchFixture)
-		case f.animeHeavenWatchStatus != http.StatusOK:
-			http.Error(w, `{"error":"upstream failed"}`, f.animeHeavenWatchStatus)
-		default:
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, mp4WatchFixture)
-		}
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	c, err := NewClientWithBase(srv.URL)
+		handler(w, r)
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewClientWithBase(server.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithBase: %v", err)
 	}
-	return c
+	client.http = server.Client()
+	client.anilistEndpoint = server.URL + "/graphql"
+	return client
 }
 
-func TestAniVaultCapabilities(t *testing.T) {
-	c, err := NewClient()
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
+// checkPlaybackRequest rejects obsolete endpoints and namespace mix-ups in every
+// explicit-ID fixture, including unexpected AniList lookups and Anikoto calls.
+func checkPlaybackRequest(t *testing.T, r *http.Request) bool {
+	t.Helper()
+	paths := []string{
+		"/api/animeheaven_stream.php",
+		"/api/reanime_stream.php",
+		"/api/aniwaves_stream.php",
+		"/api/animenosub_stream.php",
+		"/api/anizone_stream.php",
+		"/api/animesalt_stream.php",
+		"/api/watchanimeworld_stream.php",
 	}
-	if c.Name() != "anivault" || c.Alias() != "AniVault" {
-		t.Errorf("identity = %q %q", c.Name(), c.Alias())
+	if r.Method != http.MethodGet || !slices.Contains(paths, r.URL.Path) {
+		t.Errorf("unexpected playback request: %s %s", r.Method, r.URL)
+		return false
 	}
-	if len(c.Modes()) != 1 || c.Modes()[0].Name != provider.ModeAnime {
-		t.Errorf("modes = %+v, want anime only", c.Modes())
+	query := r.URL.Query()
+	if query.Get("hoshikaId") != "58090" || query.Get("ep") != "1" {
+		t.Errorf("playback identity = %s, want hoshikaId=58090&ep=1", r.URL)
+		return false
 	}
-	if !c.RequiresEpisodeListForMovies() {
-		t.Error("movies must go through the episode flow")
+	audio := query.Get("audio")
+	if audio != provider.AudioSub && audio != provider.AudioDub {
+		t.Errorf("audio = %q, want sub or dub", audio)
+		return false
 	}
-	if !c.Features(provider.ModeAnime).AudioSelection {
-		t.Error("anime must declare audio selection")
+	if audio == provider.AudioDub && r.URL.Path == "/api/animeheaven_stream.php" {
+		t.Error("AnimeHeaven must never be queried for dub")
+		return false
 	}
-	if c.Features(provider.ModeMovies).AudioSelection {
-		t.Error("non-anime modes must not declare audio selection")
-	}
+	return true
 }
 
-func TestAniVaultSearchKeepsAniListIDs(t *testing.T) {
-	c := newFixture(t)
-	results, err := c.Search(context.Background(), "naruto", provider.ModeAnime)
-	if err != nil {
-		t.Fatalf("Search: %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("results = %d, want 2 (null AniList id skipped)", len(results))
-	}
-	if results[0].ID != "20" || results[0].Title != "Naruto" {
-		t.Errorf("first result = %+v", results[0])
-	}
-	if results[0].CoverURL != "https://cover.example.com/naruto.jpg" {
-		t.Errorf("CoverURL = %q", results[0].CoverURL)
-	}
-	if results[0].MediaType != provider.MediaTypeAnime {
-		t.Errorf("MediaType = %q, want anime", results[0].MediaType)
-	}
-	if results[1].MediaType != provider.MediaTypeMovie {
-		t.Errorf("movie MediaType = %q, want movie", results[1].MediaType)
-	}
+func playbackUnavailable(w http.ResponseWriter) {
+	_, _ = fmt.Fprint(w, `{"error":"stream unavailable"}`)
 }
 
-func TestAniVaultSearchEmptyQuery(t *testing.T) {
-	c := newFixture(t)
-	if _, err := c.Search(context.Background(), "  ", provider.ModeAnime); err == nil {
-		t.Error("empty query must fail")
-	}
-}
-
-func TestAniVaultFetchEpisodes(t *testing.T) {
-	c := newFixture(t)
-	eps, err := c.FetchEpisodes(context.Background(), provider.SearchResult{ID: "20", Title: "Naruto"})
-	if err != nil {
-		t.Fatalf("FetchEpisodes: %v", err)
-	}
-	if len(eps) != 4 {
-		t.Fatalf("episodes = %d, want 4 (2 episodes × sub/dub)", len(eps))
-	}
-	if eps[0].Audio != provider.AudioSub || eps[1].Audio != provider.AudioDub {
-		t.Errorf("audios = %q %q, want sub dub", eps[0].Audio, eps[1].Audio)
-	}
-	if eps[0].Title != "Enter" {
-		t.Errorf("title = %q, want Enter", eps[0].Title)
-	}
-	if eps[2].Title != "Episode 2" {
-		t.Errorf("untitled episode = %q, want fallback title", eps[2].Title)
-	}
-	if eps[0].ID != "watch/anivault/20/sub/1" || eps[1].ID != "watch/anivault/20/dub/1" {
-		t.Errorf("handles = %q %q", eps[0].ID, eps[1].ID)
-	}
-	if eps[0].Season != 1 || eps[0].Episode != 1 {
-		t.Errorf("episode = S%dE%d, want S1E1", eps[0].Season, eps[0].Episode)
-	}
-}
-
-func TestAniVaultFetchEpisodesFallsBackToAnimeHeaven(t *testing.T) {
-	c := newFixture(t, func(f *fixture) {
-		f.anivaultEpisodesStatus = http.StatusNotFound
-	})
-	eps, err := c.FetchEpisodes(context.Background(), provider.SearchResult{ID: "20", Title: "Naruto"})
-	if err != nil {
-		t.Fatalf("FetchEpisodes: %v", err)
-	}
-	if len(eps) != 1 {
-		t.Fatalf("episodes = %d, want 1 sub-only fallback", len(eps))
-	}
-	if eps[0].Audio != provider.AudioSub {
-		t.Errorf("audio = %q, want sub", eps[0].Audio)
-	}
-	if eps[0].ID != "watch/animeheaven/20/sub/1" {
-		t.Errorf("handle = %q, want animeheaven source", eps[0].ID)
-	}
-}
-
-func TestAniVaultResolveSub(t *testing.T) {
-	c := newFixture(t)
-	sources, err := c.ResolveSource(context.Background(), "20", provider.Episode{
-		ID:      "watch/anivault/20/sub/1",
+func playbackEpisode(audio string) provider.Episode {
+	return provider.Episode{
+		ID:      "watch/anivault/hoshika/58090/" + audio + "/1",
 		Episode: 1,
-		Audio:   provider.AudioSub,
+		Audio:   audio,
+	}
+}
+
+// startPlayback keeps updates unbuffered so receipt proves incremental delivery,
+// rather than merely inspecting buffered results after resolution completes.
+func startPlayback(ctx context.Context, client *Client) (<-chan []provider.MediaSource, <-chan error) {
+	updates := make(chan []provider.MediaSource)
+	// A terminal result must not block cleanup when an assertion aborts the test.
+	done := make(chan error, 1)
+	go func() {
+		err := client.ResolveStream(ctx, "hoshika/58090", playbackEpisode(provider.AudioSub), updates)
+		close(updates)
+		done <- err
+	}()
+	return updates, done
+}
+
+// TestPlaybackCurrentEndpoints ensures explicit Hoshika identities bypass AniList
+// and fan out only to the current site's seven playback integrations.
+func TestPlaybackCurrentEndpoints(t *testing.T) {
+	var mu sync.Mutex
+	seen := make(map[string]int)
+	client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen[r.URL.Path]++
+		mu.Unlock()
+		if r.URL.Path == "/api/reanime_stream.php" {
+			_, _ = fmt.Fprint(w, `{"server":"Fast","mp4":"https://cdn.example/fast.mp4"}`)
+			return
+		}
+		playbackUnavailable(w)
 	})
-	if err != nil {
-		t.Fatalf("ResolveSource: %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	sources, err := client.ResolveSource(ctx, "hoshika/58090", playbackEpisode(provider.AudioSub))
+	if err != nil || len(sources) != 1 {
+		t.Fatalf("ResolveSource = %+v, %v; want one playable source", sources, err)
 	}
-	if len(sources) != 2 {
-		t.Fatalf("sources = %d, want soft and hard variants", len(sources))
+	if sources[0].URL != "https://cdn.example/fast.mp4" || sources[0].Type != provider.SourceTypeMP4 {
+		t.Errorf("source = %+v, want direct MP4", sources[0])
 	}
-	var soft, hard *provider.MediaSource
-	for i := range sources {
-		switch sources[i].SubType {
-		case provider.SubTypeSoft:
-			soft = &sources[i]
-		case provider.SubTypeHard:
-			hard = &sources[i]
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 7 {
+		t.Errorf("queried endpoints = %v, want all seven current endpoints", seen)
+	}
+	for path, count := range seen {
+		if count != 1 {
+			t.Errorf("%s requested %d times, want one initial request", path, count)
 		}
 	}
-	if soft == nil || hard == nil {
-		t.Fatalf("subtypes = %q %q, want soft and hard", sources[0].SubType, sources[1].SubType)
-	}
-	if soft.URL != "https://cdn.example.com/master.m3u8?token=abc" {
-		t.Errorf("soft URL = %q", soft.URL)
-	}
-	if soft.Quality != "Auto" || soft.Backend != "HD-1" {
-		t.Errorf("soft quality/backend = %q/%q, want Auto/HD-1", soft.Quality, soft.Backend)
-	}
-	if soft.Referer != "https://megaplay.buzz/" {
-		t.Errorf("soft Referer = %q", soft.Referer)
-	}
-	if soft.Type != provider.SourceTypeHLS {
-		t.Errorf("soft Type = %q, want hls", soft.Type)
-	}
-	if len(soft.ExtraArgs) != 0 {
-		t.Errorf("extensioned playlists need no demuxer quirk, got %v", soft.ExtraArgs)
-	}
-	if len(soft.Subtitles) != 1 {
-		t.Fatalf("soft subtitles = %d, want 1 (thumbnail track dropped)", len(soft.Subtitles))
-	}
-	sub := soft.Subtitles[0]
-	if sub.URL != "https://subs.example.com/en.vtt" || sub.Language != "en" || !sub.Default {
-		t.Errorf("subtitle = %+v", sub)
-	}
-	if sub.Referer != "https://megaplay.buzz/" {
-		t.Errorf("subtitle referer = %q", sub.Referer)
-	}
-	if hard.URL != "https://cdn.example.com/video.mp4?token=abc" || hard.Type != provider.SourceTypeMP4 {
-		t.Errorf("hard source = %+v, want direct mp4", hard)
-	}
-	if hard.Referer != "https://animeheaven.me/" {
-		t.Errorf("hard Referer = %q", hard.Referer)
-	}
-	if len(hard.Subtitles) != 0 {
-		t.Errorf("hard subtitles = %d, want burned-in only", len(hard.Subtitles))
+}
+
+// TestPlaybackOwnedHandleUsesHoshikaIdentity exercises the six-part owned
+// handle independently of the canonical media ID and episode-number fallback.
+func TestPlaybackOwnedHandleUsesHoshikaIdentity(t *testing.T) {
+	client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/reanime_stream.php" {
+			_, _ = fmt.Fprint(w, `{"mp4":"https://cdn.example/owned.mp4"}`)
+			return
+		}
+		playbackUnavailable(w)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	episode := provider.Episode{ID: "watch/anivault/hoshika/58090/sub/1"}
+	sources, err := client.ResolveSource(ctx, "151807", episode)
+	if err != nil || len(sources) != 1 || sources[0].URL != "https://cdn.example/owned.mp4" {
+		t.Fatalf("owned handle resolution = %+v, %v", sources, err)
 	}
 }
 
-func TestAniVaultResolveDubUnavailable(t *testing.T) {
-	c := newFixture(t)
-	_, err := c.ResolveSource(context.Background(), "20", provider.Episode{
-		ID:      "watch/anivault/20/dub/1",
-		Episode: 1,
-		Audio:   provider.AudioDub,
+// TestPlaybackStreamsBeforeSlowEndpointCompletes guards against buffered-only
+// delivery and the retired early-return grace window dropping late sources.
+func TestPlaybackStreamsBeforeSlowEndpointCompletes(t *testing.T) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/reanime_stream.php":
+			_, _ = fmt.Fprint(w, `{"server":"Fast","mp4":"https://cdn.example/fast.mp4"}`)
+		case "/api/aniwaves_stream.php":
+			select {
+			case <-release:
+				_, _ = fmt.Fprint(w, `{"server":"Slow","m3u8":"https://cdn.example/slow.m3u8"}`)
+			case <-r.Context().Done():
+			}
+		default:
+			playbackUnavailable(w)
+		}
 	})
-	if !errors.Is(err, provider.ErrAudioUnavailable) {
-		t.Fatalf("err = %v, want ErrAudioUnavailable", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	updates, done := startPlayback(ctx, client)
+	select {
+	case batch, ok := <-updates:
+		if !ok || len(batch) != 1 || batch[0].URL != "https://cdn.example/fast.mp4" {
+			t.Fatalf("first incremental batch = %+v, open=%v", batch, ok)
+		}
+	case <-ctx.Done():
+		t.Fatal("no source delivered while the slow endpoint was gated")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("resolution returned before the slow endpoint completed: %v", err)
+	case <-time.After(1700 * time.Millisecond):
+		// The old resolver discarded outstanding work after 1500ms.
+	case <-ctx.Done():
+		t.Fatal("context expired while holding the slow endpoint")
+	}
+	unblock()
+	remaining := make([]provider.MediaSource, 0)
+	for batch := range updates {
+		remaining = append(remaining, batch...)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("ResolveStream: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].URL != "https://cdn.example/slow.m3u8" {
+		t.Fatalf("late sources = %+v, want the slow endpoint's HLS source", remaining)
 	}
 }
 
-func TestAniVaultResolveFallsBackToAnimeHeaven(t *testing.T) {
-	c := newFixture(t, func(f *fixture) {
-		f.anivaultWatchSubStatus = http.StatusBadGateway
-	})
-	sources, err := c.ResolveSource(context.Background(), "20", provider.Episode{
-		ID:      "watch/anivault/20/sub/1",
-		Episode: 1,
-		Audio:   provider.AudioSub,
-	})
-	if err != nil {
-		t.Fatalf("ResolveSource: %v", err)
-	}
-	if len(sources) != 1 {
-		t.Fatalf("sources = %d, want 1", len(sources))
-	}
-	s := sources[0]
-	if s.Type != provider.SourceTypeMP4 || s.URL != "https://cdn.example.com/video.mp4?token=abc" {
-		t.Errorf("source = %+v, want direct mp4", s)
-	}
-	if s.Referer != "https://animeheaven.me/" {
-		t.Errorf("Referer = %q", s.Referer)
-	}
-	if s.SubType != provider.SubTypeHard {
-		t.Errorf("SubType = %q, want hard", s.SubType)
-	}
-}
-
-func TestAniVaultResolveAnimeHeavenEpisode(t *testing.T) {
-	c := newFixture(t)
-	sources, err := c.ResolveSource(context.Background(), "20", provider.Episode{
-		ID:      "watch/animeheaven/20/sub/1",
-		Episode: 1,
-		Audio:   provider.AudioSub,
-	})
-	if err != nil {
-		t.Fatalf("ResolveSource: %v", err)
-	}
-	if len(sources) != 1 {
-		t.Fatalf("sources = %d, want the hard-sub fallback only", len(sources))
-	}
-	if sources[0].SubType != provider.SubTypeHard {
-		t.Errorf("SubType = %q, want hard", sources[0].SubType)
+// TestPlaybackDeadlineRetainsSources checks both resolution entry points when
+// another endpoint remains pending until the caller's context deadline.
+func TestPlaybackDeadlineRetainsSources(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streaming=%t", streaming), func(t *testing.T) {
+			client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/reanime_stream.php":
+					_, _ = fmt.Fprint(w, `{"mp4":"https://cdn.example/retained.mp4"}`)
+				case "/api/aniwaves_stream.php":
+					<-r.Context().Done()
+				default:
+					playbackUnavailable(w)
+				}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			sources := make([]provider.MediaSource, 0)
+			var err error
+			if streaming {
+				updates, done := startPlayback(ctx, client)
+				for batch := range updates {
+					sources = append(sources, batch...)
+				}
+				err = <-done
+			} else {
+				sources, err = client.ResolveSource(ctx, "hoshika/58090", playbackEpisode(provider.AudioSub))
+			}
+			if err != nil {
+				t.Fatalf("partial success returned an error: %v", err)
+			}
+			if len(sources) != 1 || sources[0].URL != "https://cdn.example/retained.mp4" {
+				t.Fatalf("sources after deadline = %+v, want retained playable result", sources)
+			}
+			if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				t.Fatalf("resolution stopped before the deadline: %v", ctx.Err())
+			}
+		})
 	}
 }
 
-func TestAniVaultResolveCrossProviderEpisode(t *testing.T) {
-	c := newFixture(t)
-	sources, err := c.ResolveSource(context.Background(), "20", provider.Episode{
-		Episode: 1,
-		Audio:   provider.AudioSub,
+// TestPlaybackCancellationWithoutSources checks that blocked requests terminate
+// without inventing a playable result when the caller cancels.
+func TestPlaybackCancellationWithoutSources(t *testing.T) {
+	started := make(chan struct{})
+	var once sync.Once
+	client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(started) })
+		<-r.Context().Done()
 	})
-	if err != nil {
-		t.Fatalf("ResolveSource: %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	updates, done := startPlayback(ctx, client)
+	select {
+	case <-started:
+		cancel()
+	case <-ctx.Done():
+		t.Fatal("playback request never started")
 	}
-	if len(sources) != 2 {
-		t.Fatalf("sources = %d, want soft and hard variants", len(sources))
+	for batch := range updates {
+		t.Errorf("unexpected batch after cancellation: %+v", batch)
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ResolveStream error = %v, want context.Canceled", err)
 	}
 }
 
-func TestAniVaultResolveProxyOnly(t *testing.T) {
-	c := newFixture(t, func(f *fixture) {
-		f.proxyOnly = true
+// TestPlaybackInitialSourceAndServerDiscovery prevents replaying the initial
+// playable server while still resolving every other advertised server.
+func TestPlaybackInitialSourceAndServerDiscovery(t *testing.T) {
+	var mu sync.Mutex
+	requested := make(map[string]int)
+	client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/reanime_stream.php" {
+			playbackUnavailable(w)
+			return
+		}
+		server := r.URL.Query().Get("server")
+		mu.Lock()
+		requested[server]++
+		mu.Unlock()
+		switch server {
+		case "":
+			_, _ = fmt.Fprint(w, `{"server":"Primary","mp4":"https://cdn.example/primary.mp4","servers":["Primary","Mirror"]}`)
+		case "Mirror":
+			_, _ = fmt.Fprint(w, `{"server":"Mirror","mp4":"https://cdn.example/mirror.mp4"}`)
+		default:
+			t.Errorf("initial playable server requested again: %q", server)
+			playbackUnavailable(w)
+		}
 	})
-	sources, err := c.ResolveSource(context.Background(), "20", provider.Episode{
-		ID:      "watch/anivault/20/sub/1",
-		Episode: 1,
-		Audio:   provider.AudioSub,
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	sources, err := client.ResolveSource(ctx, "hoshika/58090", playbackEpisode(provider.AudioSub))
+	if err != nil || len(sources) != 2 {
+		t.Fatalf("ResolveSource = %+v, %v; want initial and mirror streams", sources, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requested) != 2 || requested[""] != 1 || requested["Mirror"] != 1 {
+		t.Errorf("server requests = %v, want only initial and Mirror", requested)
+	}
+}
+
+// TestPlaybackAudioServerFiltering exercises server-only discovery for both wire
+// shapes, handle audio defaults, and explicit audio overriding an owned handle.
+func TestPlaybackAudioServerFiltering(t *testing.T) {
+	cases := []struct {
+		name    string
+		servers string
+		audio   string
+		handle  string
+		want    []string
+		lang    string
+	}{
+		{
+			name:    "object sub includes raw",
+			servers: `[{"name":"SubOne","type":"sub","lang":"ja"},{"name":"RawOne","type":"raw","lang":"ja"},{"name":"DubOne","type":"dub","lang":"en"}]`,
+			handle:  provider.AudioSub,
+			want:    []string{"RawOne", "SubOne"},
+			lang:    "ja",
+		},
+		{
+			name:    "object explicit dub overrides sub handle",
+			servers: `[{"name":"SubOne","type":"sub","lang":"ja"},{"name":"RawOne","type":"raw","lang":"ja"},{"name":"DubOne","type":"dub","lang":"en"}]`,
+			audio:   provider.AudioDub,
+			handle:  provider.AudioSub,
+			want:    []string{"DubOne"},
+			lang:    "en",
+		},
+		{
+			name:    "string sub prefixes",
+			servers: `["Sub HD-1","Dub HD-2","Shared"]`,
+			audio:   provider.AudioSub,
+			handle:  provider.AudioDub,
+			want:    []string{"Shared", "Sub HD-1"},
+		},
+		{
+			name:    "string dub from handle",
+			servers: `["Sub HD-1","Dub HD-2","Shared"]`,
+			handle:  provider.AudioDub,
+			want:    []string{"Dub HD-2", "Shared"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wantAudio := tc.audio
+			if wantAudio == "" {
+				wantAudio = tc.handle
+			}
+			var mu sync.Mutex
+			requested := make([]string, 0)
+			client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.Query().Get("audio"); got != wantAudio {
+					t.Errorf("audio = %q, want %q", got, wantAudio)
+				}
+				if r.URL.Path != "/api/animesalt_stream.php" {
+					playbackUnavailable(w)
+					return
+				}
+				server := r.URL.Query().Get("server")
+				if server == "" {
+					_, _ = fmt.Fprintf(w, `{"servers":%s}`, tc.servers)
+					return
+				}
+				mu.Lock()
+				requested = append(requested, server)
+				mu.Unlock()
+				if tc.lang != "" && r.URL.Query().Get("lang") != tc.lang {
+					t.Errorf("server %q lang = %q, want %q", server, r.URL.Query().Get("lang"), tc.lang)
+				}
+				_, _ = fmt.Fprintf(w, `{"mp4":"https://cdn.example/%s.mp4"}`, url.PathEscape(server))
+			})
+			episode := playbackEpisode(tc.handle)
+			episode.Audio = tc.audio
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			sources, err := client.ResolveSource(ctx, "hoshika/58090", episode)
+			if err != nil || len(sources) != len(tc.want) {
+				t.Fatalf("ResolveSource = %+v, %v; want %d servers", sources, err, len(tc.want))
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			slices.Sort(requested)
+			if !slices.Equal(requested, tc.want) {
+				t.Errorf("requested servers = %v, want %v", requested, tc.want)
+			}
+		})
+	}
+}
+
+// TestPlaybackForeignHandleUsesCanonicalMediaID prevents another provider's
+// embedded show ID from being interpreted as an AniList or Hoshika identity.
+func TestPlaybackForeignHandleUsesCanonicalMediaID(t *testing.T) {
+	for _, handle := range []string{"watch/anikoto/99999/sub/1", "watch/other/hoshika/99999/sub/1"} {
+		t.Run(handle, func(t *testing.T) {
+			client := newCatalogFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/graphql":
+					var request struct {
+						Variables struct {
+							ID int `json:"id"`
+						} `json:"variables"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Error(err)
+					}
+					if request.Variables.ID != 151807 {
+						t.Errorf("AniList ID = %d, want canonical mediaID 151807", request.Variables.ID)
+					}
+					_, _ = fmt.Fprint(w, `{"data":{"Media":{"id":151807,"idMal":52299,"title":{"english":"Solo Leveling"}}}}`)
+				case "/api/hoshika/identity-by-legacy/52299":
+					_, _ = fmt.Fprint(w, `{"ok":true,"mapped":true,"data":{"shortId":"58090"}}`)
+				default:
+					if !checkPlaybackRequest(t, r) {
+						http.NotFound(w, r)
+						return
+					}
+					if r.URL.Path == "/api/reanime_stream.php" {
+						_, _ = fmt.Fprint(w, `{"mp4":"https://cdn.example/canonical.mp4"}`)
+						return
+					}
+					playbackUnavailable(w)
+				}
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			episode := provider.Episode{ID: handle, Episode: 1, Audio: provider.AudioSub}
+			sources, err := client.ResolveSource(ctx, "151807", episode)
+			if err != nil || len(sources) != 1 || sources[0].URL != "https://cdn.example/canonical.mp4" {
+				t.Fatalf("canonical resolution = %+v, %v", sources, err)
+			}
+		})
+	}
+}
+
+// TestPlaybackSourceIdentityDeduplication checks deduplication across batches
+// and endpoints without collapsing sources that require different referers.
+func TestPlaybackSourceIdentityDeduplication(t *testing.T) {
+	client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/reanime_stream.php", "/api/aniwaves_stream.php":
+			_, _ = fmt.Fprint(w, `{"server":"Shared","mp4":"https://cdn.example/shared.mp4","rawStreamUrl":"https://cdn.example/shared.mp4","embedUrl":"https://embed.example/player"}`)
+		case "/api/anizone_stream.php":
+			_, _ = fmt.Fprint(w, `{"server":"Shared","mp4":"https://cdn.example/shared.mp4","embedUrl":"https://different.example/player"}`)
+		default:
+			playbackUnavailable(w)
+		}
 	})
-	if err != nil {
-		t.Fatalf("ResolveSource: %v", err)
-	}
-	if len(sources) != 2 {
-		t.Fatalf("sources = %d, want soft and hard variants", len(sources))
-	}
-	var proxied *provider.MediaSource
-	for i := range sources {
-		if sources[i].URL == "https://cdn.example.com/master.m3u8?token=abc" {
-			proxied = &sources[i]
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	updates, done := startPlayback(ctx, client)
+	seen := make(map[string]bool)
+	for batch := range updates {
+		for _, source := range batch {
+			identity := source.TransportIdentity()
+			if seen[identity] {
+				t.Errorf("duplicate source identity delivered: %+v", source)
+			}
+			seen[identity] = true
 		}
 	}
-	if proxied == nil {
-		t.Fatalf("sources = %+v, want unwrapped direct URL", sources)
+	if err := <-done; err != nil {
+		t.Fatalf("ResolveStream: %v", err)
 	}
-	if proxied.Referer != "https://megaplay.buzz/" {
-		t.Errorf("Referer = %q", proxied.Referer)
-	}
-	if proxied.SubType != "" {
-		t.Errorf("SubType = %q, want unknown without sidecar tracks", proxied.SubType)
+	if len(seen) != 2 {
+		t.Fatalf("source identities = %d, want same URL with two distinct referers", len(seen))
 	}
 }
 
-func TestAniVaultResolveIframeOnly(t *testing.T) {
-	c := newFixture(t, func(f *fixture) {
-		f.iframeOnly = true
-		f.animeHeavenWatchStatus = http.StatusNotFound
-	})
-	_, err := c.ResolveSource(context.Background(), "20", provider.Episode{
-		ID:      "watch/anivault/20/sub/1",
-		Episode: 1,
-		Audio:   provider.AudioSub,
-	})
-	if !errors.Is(err, provider.ErrNoSources) {
-		t.Fatalf("err = %v, want ErrNoSources", err)
+// TestPlaybackPrimaryProxyFieldsKeepMaster verifies proxy URLs are unwrapped
+// even in primary fields and video-only quality entries do not replace HLS.
+func TestPlaybackPrimaryProxyFieldsKeepMaster(t *testing.T) {
+	for _, field := range []string{"mp4", "m3u8"} {
+		t.Run(field, func(t *testing.T) {
+			target := "https://cdn.example/video.mp4?token=a&b=c"
+			wantType := provider.SourceTypeMP4
+			if field == "m3u8" {
+				target = "https://cdn.example/master.m3u8?token=a&b=c"
+				wantType = provider.SourceTypeHLS
+			}
+			referer := "https://upstream.example/player?id=1"
+			proxy := "https://anivault.example/api/proxy/" + field + "?url=" + url.QueryEscape(target) +
+				"&ref=" + url.QueryEscape(referer)
+			client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/reanime_stream.php" {
+					playbackUnavailable(w)
+					return
+				}
+				_, _ = fmt.Fprintf(w,
+					`{"server":"Primary","%s":%q,"embedUrl":"https://wrong.example/embed","qualities":[{"quality":"1080p","url":"https://cdn.example/video-only.m3u8"}]}`,
+					field,
+					proxy,
+				)
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			sources, err := client.ResolveSource(ctx, "hoshika/58090", playbackEpisode(provider.AudioSub))
+			if err != nil || len(sources) != 1 {
+				t.Fatalf("ResolveSource = %+v, %v; want one primary stream", sources, err)
+			}
+			source := sources[0]
+			if source.URL != target || source.Referer != referer || source.Type != wantType {
+				t.Errorf("mapped source = %+v, want URL=%q referer=%q type=%q", source, target, referer, wantType)
+			}
+			if field == "m3u8" && source.Quality != "Auto" {
+				t.Errorf("master quality = %q, want Auto", source.Quality)
+			}
+		})
 	}
 }
 
+// TestPlaybackHTTP200ErrorIsFailure prevents error payloads from advertising
+// stale playable URLs or triggering discovery of their listed servers.
+func TestPlaybackHTTP200ErrorIsFailure(t *testing.T) {
+	client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("server") != "" {
+			t.Errorf("server discovery continued after an error payload: %s", r.URL)
+		}
+		_, _ = fmt.Fprint(w, `{"error":"upstream unavailable","mp4":"https://cdn.example/stale.mp4","servers":["Stale"]}`)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	sources, err := client.ResolveSource(ctx, "hoshika/58090", playbackEpisode(provider.AudioSub))
+	if len(sources) != 0 || !errors.Is(err, provider.ErrNoSources) {
+		t.Fatalf("ResolveSource = %+v, %v; want ErrNoSources and no stale URLs", sources, err)
+	}
+}
+
+// TestPlaybackDubAudioUnavailableAggregation distinguishes verified missing
+// audio across every backend from an outage that leaves availability unknown.
+func TestPlaybackDubAudioUnavailableAggregation(t *testing.T) {
+	cases := []struct {
+		name    string
+		blocked bool
+	}{
+		{name: "all backends list only sub servers"},
+		{name: "blocked backend preserves outage", blocked: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			requests := make(map[string]int)
+			client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("audio") != provider.AudioDub {
+					t.Errorf("audio = %q, want dub", r.URL.Query().Get("audio"))
+				}
+				if r.URL.Query().Get("server") != "" {
+					t.Errorf("incompatible sub server requested for dub: %s", r.URL)
+				}
+				mu.Lock()
+				requests[r.URL.Path]++
+				mu.Unlock()
+				if tc.blocked && r.URL.Path == "/api/reanime_stream.php" {
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = fmt.Fprint(w, `{"error":"blocked"}`)
+					return
+				}
+				_, _ = fmt.Fprint(w, `{"servers":[{"name":"Japanese","type":"sub","lang":"ja"}]}`)
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			sources, err := client.ResolveSource(ctx, "hoshika/58090", playbackEpisode(provider.AudioDub))
+			if len(sources) != 0 {
+				t.Errorf("dub sources = %+v, want none", sources)
+			}
+			if got := errors.Is(err, provider.ErrAudioUnavailable); got == tc.blocked {
+				t.Errorf("ErrAudioUnavailable match = %t, want %t; error: %v", got, !tc.blocked, err)
+			}
+			if got := errors.Is(err, provider.ErrBlocked); got != tc.blocked {
+				t.Errorf("ErrBlocked match = %t, want %t; error: %v", got, tc.blocked, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(requests) != 6 {
+				t.Errorf("dub backend requests = %v, want all six dub backends", requests)
+			}
+			for path, count := range requests {
+				if count != 1 {
+					t.Errorf("%s requested %d times, want one initial request", path, count)
+				}
+			}
+		})
+	}
+}
+
+// TestPlaybackRejectsIframeOnly prevents non-playable embed responses from
+// leaking into the player's direct-stream source list.
+func TestPlaybackRejectsIframeOnly(t *testing.T) {
+	client := newPlaybackFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"iframeOnly":true,"embedUrl":"https://embed.example/player"}`)
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	sources, err := client.ResolveSource(ctx, "hoshika/58090", playbackEpisode(provider.AudioSub))
+	if len(sources) != 0 || !errors.Is(err, provider.ErrNoSources) {
+		t.Fatalf("ResolveSource = %+v, %v; want ErrNoSources", sources, err)
+	}
+}
+
+// TestUnwrapProxy preserves the upstream referer without altering direct URLs.
 func TestUnwrapProxy(t *testing.T) {
-	direct, ref := unwrapProxy("https://cdn.example.com/master.m3u8?token=abc")
-	if direct != "https://cdn.example.com/master.m3u8?token=abc" || ref != "" {
-		t.Errorf("direct url = %q ref = %q", direct, ref)
+	target := "https://cdn.example/master.m3u8?token=abc"
+	referer := "https://upstream.example/"
+	cases := []struct {
+		name string
+		url  string
+		want string
+		ref  string
+	}{
+		{name: "direct", url: target, want: target},
+		{
+			name: "proxy",
+			url:  "https://anivault.example/api/proxy/hls?url=" + url.QueryEscape(target) + "&ref=" + url.QueryEscape(referer),
+			want: target,
+			ref:  referer,
+		},
+		{name: "empty"},
 	}
-	proxy := "https://api.example.com/api/proxy/hls?url=" + url.QueryEscape("https://cdn.example.com/m.m3u8") + "&ref=" + url.QueryEscape("https://megaplay.buzz/")
-	direct, ref = unwrapProxy(proxy)
-	if direct != "https://cdn.example.com/m.m3u8" || ref != "https://megaplay.buzz/" {
-		t.Errorf("proxy url = %q ref = %q", direct, ref)
-	}
-	if direct, ref := unwrapProxy(""); direct != "" || ref != "" {
-		t.Errorf("empty = %q %q", direct, ref)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			direct, ref := unwrapProxy(tc.url)
+			if direct != tc.want || ref != tc.ref {
+				t.Errorf("unwrapProxy(%q) = %q, %q; want %q, %q", tc.url, direct, ref, tc.want, tc.ref)
+			}
+		})
 	}
 }
 
-func TestHlsExtraArgs(t *testing.T) {
-	if got := hlsExtraArgs("https://cdn.example.com/master.m3u8?token=abc"); len(got) != 0 {
-		t.Errorf("extensioned playlist = %v, want none", got)
+// TestHLSExtraArgs keeps extensionless playlists playable without overriding
+// demuxer selection for ordinary HLS master URLs.
+func TestHLSExtraArgs(t *testing.T) {
+	if got := hlsExtraArgs("https://cdn.example/master.m3u8?token=abc"); len(got) != 0 {
+		t.Errorf("extensioned playlist args = %v, want none", got)
 	}
-	if got := hlsExtraArgs("https://cdn.example.com/hls/abc123"); len(got) != 2 {
-		t.Errorf("extensionless playlist = %v, want lavf+hls forcing", got)
+	got := hlsExtraArgs("https://cdn.example/hls/abc123")
+	if !strings.Contains(strings.Join(got, " "), "--demuxer-lavf-format=hls") {
+		t.Errorf("extensionless playlist args = %v, want forced HLS demuxer", got)
 	}
 }
