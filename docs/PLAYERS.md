@@ -13,6 +13,7 @@ Kari is a terminal frontend, not a media player. It queries streaming backends, 
 | **[VLC](https://videolan.org)** | Linux, macOS, Windows | No | No | Limited | Yes | Approximate (`--start-time`) |
 | **[MPV Android](https://play.google.com/store/apps/details?id=is.xyz.mpv)** | Android (Termux) | No | No | Yes (via config bridge) | Yes | Last played episode |
 | **[MX Player](https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.ad)** | Android (Termux) | No | No | Yes (via Intent extras) | Yes | Player-internal |
+| **[MX Player Pro](https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.pro)** | Android (Termux) | No | No | Yes (via Intent extras) | Yes | Player-internal |
 
 ---
 
@@ -58,6 +59,7 @@ VLC works across Linux, macOS, and Windows.
 
 - Launched via Android Intents targeting `com.mxtech.videoplayer.ad` (or Pro).
 - Passes the stream URL and headers bundle (`headers` string array) directly through Intent extras.
+- To use MX Player Pro, set the environment variable `KARI_MX_PLAYER_PACKAGE=com.mxtech.videoplayer.pro`.
 
 ---
 

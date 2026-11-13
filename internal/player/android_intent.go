@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	androidStartupTimeout = 5000 * time.Millisecond
-	mxPlayerPackage       = "com.mxtech.videoplayer.ad"
-	mpvAndroidDefault     = "is.xyz.mpv"
-	mpvAndroidPackageEnv  = "KARI_MPV_ANDROID_PACKAGE"
-	sharedSubtitleDir     = "/storage/emulated/0/Download/kari"
+	androidStartupTimeout  = 5000 * time.Millisecond
+	mxPlayerPackageDefault = "com.mxtech.videoplayer.ad"
+	mxPlayerPackageEnv     = "KARI_MX_PLAYER_PACKAGE"
+	mpvAndroidDefault      = "is.xyz.mpv"
+	mpvAndroidPackageEnv   = "KARI_MPV_ANDROID_PACKAGE"
+	sharedSubtitleDir      = "/storage/emulated/0/Download/kari"
 )
 
 func mpvAndroidPackageName() string {
@@ -29,6 +30,13 @@ func mpvAndroidPackageName() string {
 		return pkg
 	}
 	return mpvAndroidDefault
+}
+
+func mxPlayerPackageName() string {
+	if pkg := strings.TrimSpace(os.Getenv(mxPlayerPackageEnv)); pkg != "" {
+		return pkg
+	}
+	return mxPlayerPackageDefault
 }
 
 func mpvAndroidConfigDir() string {
