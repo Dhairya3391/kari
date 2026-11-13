@@ -65,6 +65,37 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 		return nil, fmt.Errorf("the source for this title does not support episodes")
 	}
 
+	// Naming sources already have catalog-scoped titles in their own
+	// rosters. Avoid waiting for a separate availability roster followed by
+	// a second title request. Dub still requires verified audio availability.
+	if mode == provider.ModeAnime && !strings.EqualFold(strings.TrimSpace(audioMode), provider.AudioDub) {
+		if episodes, ok := s.namedEpisodeRoster(ctx, mode, series); ok {
+			return filterEpisodesByAudio(episodes, audioMode), nil
+		}
+	}
+
+	var titleLookup episodeTitleLookup
+	var titlesDone chan struct{}
+	if mode == provider.ModeAnime && series.MediaType != provider.MediaTypeMovie {
+		titlesDone = make(chan struct{})
+		go func() {
+			defer close(titlesDone)
+			titleLookup = s.lookupCanonicalEpisodeTitles(ctx, mode, series)
+		}()
+		// Join the coordinator even when the roster fails before titles arrive.
+		defer func() {
+			cancel()
+			<-titlesDone
+		}()
+	}
+	applyTitles := func(episodes []provider.Episode) []provider.Episode {
+		if titlesDone == nil || len(episodes) == 0 {
+			return episodes
+		}
+		<-titlesDone
+		return s.applyEpisodeTitleLookup(series, episodes, titleLookup)
+	}
+
 	requestedAudio := audioMode
 	availabilitySources := s.episodeAvailabilitySources(mode, series)
 	audioSelection := s.registry.Features(mode).AudioSelection || len(availabilitySources) > 0
@@ -96,7 +127,7 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 			eps, ok, lastErr = s.firstAvailableEpisodes(ctx, disabledAvail, series)
 		}
 		if ok {
-			eps = s.applyCanonicalEpisodeTitles(ctx, mode, series, eps)
+			eps = applyTitles(eps)
 			return filterAvailableEpisodesByAudio(eps, requestedAudio), nil
 		} else if requestedAudio == provider.AudioDub {
 			if lastErr != nil {
@@ -109,12 +140,54 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 		return nil, provider.ErrNoEpisodes
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	eps, err := episodeSource.FetchEpisodes(ctx, series)
 	if err != nil {
 		return nil, err
 	}
-	eps = s.applyCanonicalEpisodeTitles(ctx, mode, series, eps)
+	eps = applyTitles(eps)
 	return filterEpisodesByAudio(eps, requestedAudio), nil
+}
+
+func (s *MediaService) namedEpisodeRoster(
+	ctx context.Context,
+	mode provider.ContentType,
+	series provider.SearchResult,
+) ([]provider.Episode, bool) {
+	for _, source := range s.episodeTitleSources(mode, series) {
+		rosterSource, ok := source.(provider.EpisodeSource)
+		if !ok || s.IsProviderDisabled(mode, rosterSource.Name()) {
+			continue
+		}
+		id, ok := series.ResolutionID(mode, rosterSource.Name())
+		if !ok {
+			continue
+		}
+		catalogSeries := series
+		catalogSeries.ID = id
+		started := time.Now()
+		episodes, err := rosterSource.FetchEpisodes(ctx, catalogSeries)
+		if err != nil || len(episodes) == 0 {
+			mediaLog.Debug("named episode roster unavailable", "provider", rosterSource.Name(), "err", err)
+			continue
+		}
+		titles := make(map[int]string, len(episodes))
+		for _, episode := range episodes {
+			if title := strings.TrimSpace(episode.Title); title != "" {
+				titles[episode.Episode] = title
+			}
+		}
+		if len(titles) > 0 {
+			cacheKey := fmt.Sprintf("titles:%s:%s", series.Type, strings.TrimSpace(series.ID))
+			s.episodeTitles.Set(cacheKey, titles)
+		}
+		mediaLog.Debug("named episode roster ready", "provider", rosterSource.Name(),
+			"episodes", len(episodes), "elapsed", time.Since(started))
+		return episodes, true
+	}
+	return nil, false
 }
 
 func (s *MediaService) applyCanonicalEpisodeTitles(ctx context.Context, mode provider.ContentType, series provider.SearchResult, episodes []provider.Episode) []provider.Episode {
@@ -124,25 +197,48 @@ func (s *MediaService) applyCanonicalEpisodeTitles(ctx context.Context, mode pro
 	if len(episodes) == 0 {
 		return episodes
 	}
+	lookup := s.lookupCanonicalEpisodeTitles(ctx, mode, series)
+	return s.applyEpisodeTitleLookup(series, episodes, lookup)
+}
+
+type episodeTitleLookup struct {
+	titles   map[int]string
+	cacheKey string
+	cached   bool
+}
+
+func (s *MediaService) lookupCanonicalEpisodeTitles(
+	ctx context.Context,
+	mode provider.ContentType,
+	series provider.SearchResult,
+) episodeTitleLookup {
 	cacheKey := fmt.Sprintf("titles:%s:%s", series.Type, strings.TrimSpace(series.ID))
-	titles, ok := s.episodeTitles.Get(cacheKey)
-	if !ok {
-		// Bounded hard so a slow naming provider can never delay the
-		// episode list; sources race in parallel and siblings are
-		// cancelled once the first usable map lands.
-		titleCtx, cancel := context.WithTimeout(ctx, episodeTitlesTimeout)
-		defer cancel()
-		titles, ok = s.firstEpisodeTitles(titleCtx, s.episodeTitleSources(mode, series), series)
-		if !ok {
+	if titles, ok := s.episodeTitles.Get(cacheKey); ok {
+		return episodeTitleLookup{titles: titles, cacheKey: cacheKey, cached: true}
+	}
+	// Start the naming budget alongside the roster, not after it finishes.
+	titleCtx, cancel := context.WithTimeout(ctx, episodeTitlesTimeout)
+	defer cancel()
+	titles, _ := s.firstEpisodeTitles(titleCtx, s.episodeTitleSources(mode, series), series)
+	return episodeTitleLookup{titles: titles, cacheKey: cacheKey}
+}
+
+func (s *MediaService) applyEpisodeTitleLookup(
+	series provider.SearchResult,
+	episodes []provider.Episode,
+	lookup episodeTitleLookup,
+) []provider.Episode {
+	titles := lookup.titles
+	if !lookup.cached {
+		if len(titles) == 0 {
 			mediaLog.Debug("canonical episode titles unavailable", "provider", series.Provider, "seriesID", series.ID)
-			if mode == provider.ModeAnime {
-				for i := range episodes {
-					episodes[i].Title = genericEpisodeTitle(episodes[i].Episode)
-				}
+			for i := range episodes {
+				episodes[i].Title = genericEpisodeTitle(episodes[i].Episode)
 			}
 			return episodes
 		}
-		s.episodeTitles.Set(cacheKey, titles)
+		// Do not populate the title cache for failed or empty roster requests.
+		s.episodeTitles.Set(lookup.cacheKey, titles)
 	}
 	for i := range episodes {
 		if title := strings.TrimSpace(titles[episodes[i].Episode]); title != "" {
@@ -190,6 +286,7 @@ func (s *MediaService) firstEpisodeTitles(ctx context.Context, sources []provide
 	type titleResult struct {
 		titles map[int]string
 	}
+	// Each source can finish even when a sibling wins or the request ends.
 	results := make(chan titleResult, len(sources))
 	for _, source := range sources {
 		go func(source provider.EpisodeTitlesSource) {
@@ -202,8 +299,13 @@ func (s *MediaService) firstEpisodeTitles(ctx context.Context, sources []provide
 		}(source)
 	}
 	for range sources {
-		if result := <-results; len(result.titles) > 0 {
-			return result.titles, true
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case result := <-results:
+			if len(result.titles) > 0 {
+				return result.titles, true
+			}
 		}
 	}
 	return nil, false
@@ -225,6 +327,7 @@ func (s *MediaService) firstAvailableEpisodes(ctx context.Context, sources []pro
 		episodes []provider.Episode
 		err      error
 	}
+	// Each source can finish even when a sibling wins or the request ends.
 	results := make(chan availabilityResult, len(sources))
 	for _, source := range sources {
 		go func(source provider.EpisodeAvailabilitySource) {
@@ -234,12 +337,16 @@ func (s *MediaService) firstAvailableEpisodes(ctx context.Context, sources []pro
 	}
 	var lastErr error
 	for range sources {
-		result := <-results
-		if result.err == nil && len(result.episodes) > 0 {
-			return result.episodes, true, nil
-		}
-		if result.err != nil {
-			lastErr = result.err
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case result := <-results:
+			if result.err == nil && len(result.episodes) > 0 {
+				return result.episodes, true, nil
+			}
+			if result.err != nil {
+				lastErr = result.err
+			}
 		}
 	}
 	return nil, false, lastErr
