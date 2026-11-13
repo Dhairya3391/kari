@@ -2,10 +2,14 @@ package miruro
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -41,6 +45,56 @@ func (c *Client) get(ctx context.Context, rawURL string) ([]byte, error) {
 	return body, nil
 }
 
+// getChunk closes the response as soon as the requested root arrives, so
+// unrelated playback backends cannot delay episode navigation. An empty key
+// requests only the initial document, which is enough for slug discovery.
+func (c *Client) getChunk(ctx context.Context, rawURL, key string) ([]byte, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("miruro: build request: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("miruro: fetch %s: %w", redactURL(rawURL), err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: redactURL(rawURL)}
+	}
+	limited := &io.LimitedReader{R: resp.Body, N: httpclient.MaxBodyBytes + 1}
+	decoder := json.NewDecoder(limited)
+	for {
+		var body json.RawMessage
+		err := decoder.Decode(&body)
+		if limited.N <= 0 {
+			return nil, httpclient.ErrBodyTooLarge
+		}
+		if errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("miruro: no %s chunk in response: %w", key, provider.ErrUpstreamChanged)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("miruro: decode streamed document: %w", err)
+		}
+		if key == "" {
+			return body, nil
+		}
+		var doc svelteDoc
+		if err := json.Unmarshal(body, &doc); err != nil {
+			return nil, fmt.Errorf("miruro: decode streamed chunk: %w", err)
+		}
+		if doc.Type == "redirect" {
+			return body, nil
+		}
+		if doc.Type == "chunk" && len(doc.Data) > 0 {
+			if root, ok := asMap(doc.Data[0]); ok && hasKey(root, key) {
+				return body, nil
+			}
+		}
+	}
+}
+
 // queryEscape encodes a search query for the URL query string.
 func queryEscape(q string) string {
 	return url.QueryEscape(strings.TrimSpace(q))
@@ -65,9 +119,14 @@ func (c *Client) resolveShow(ctx context.Context, anilistID, titleHint, knownSho
 	knownShowID = strings.TrimSpace(knownShowID)
 	c.mu.Lock()
 	if anilistID != "" {
-		if ref, ok := c.byAniList[anilistID]; ok && ref.showID != "" && ref.slug != "" {
-			c.mu.Unlock()
-			return ref, nil
+		if ref, ok := c.byAniList[anilistID]; ok && ref.showID != "" {
+			if ref.slug != "" {
+				c.mu.Unlock()
+				return ref, nil
+			}
+			if knownShowID == "" {
+				knownShowID = ref.showID
+			}
 		}
 	}
 	slug := c.slugs[knownShowID]
@@ -177,7 +236,7 @@ func (c *Client) anilistTitles(ctx context.Context, anilistID string) ([]string,
 // watchSlug returns the canonical watch slug for showID, following the
 // server's redirect from a placeholder slug.
 func (c *Client) watchSlug(ctx context.Context, showID string) (string, error) {
-	body, err := c.get(ctx, c.watchURL(showID, placeholderSlug, 1))
+	body, err := c.getChunk(ctx, c.watchURL(showID, placeholderSlug, 1), "")
 	if err != nil {
 		return "", fmt.Errorf("miruro resolve: slug probe: %w", err)
 	}
@@ -199,8 +258,8 @@ func (c *Client) watchURL(showID, slug string, episode int) string {
 
 // fetchWatch loads a watch payload, following one canonical-slug redirect
 // when the cached slug went stale.
-func (c *Client) fetchWatch(ctx context.Context, ref showRef, episode int) ([]byte, error) {
-	body, err := c.get(ctx, c.watchURL(ref.showID, ref.slug, episode))
+func (c *Client) fetchWatch(ctx context.Context, ref showRef, episode int, key string) ([]byte, error) {
+	body, err := c.getChunk(ctx, c.watchURL(ref.showID, ref.slug, episode), key)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +273,7 @@ func (c *Client) fetchWatch(ctx context.Context, ref showRef, episode int) ([]by
 			}
 		}
 		c.mu.Unlock()
-		body, err = c.get(ctx, c.watchURL(ref.showID, slug, episode))
+		body, err = c.getChunk(ctx, c.watchURL(ref.showID, slug, episode), key)
 		if err != nil {
 			return nil, err
 		}
@@ -224,7 +283,7 @@ func (c *Client) fetchWatch(ctx context.Context, ref showRef, episode int) ([]by
 
 // watchEpisodes loads the full episode roster for a show.
 func (c *Client) watchEpisodes(ctx context.Context, ref showRef, episode int) ([]episodeEntry, error) {
-	body, err := c.fetchWatch(ctx, ref, episode)
+	body, err := c.fetchWatch(ctx, ref, episode, "episodes")
 	if err != nil {
 		return nil, fmt.Errorf("miruro episodes: %w", err)
 	}
@@ -237,7 +296,7 @@ func (c *Client) watchEpisodes(ctx context.Context, ref showRef, episode int) ([
 
 // watchTracks loads the episode's audio tracks plus provider ranking.
 func (c *Client) watchTracks(ctx context.Context, ref showRef, episode int) ([]trackEntry, []string, error) {
-	body, err := c.fetchWatch(ctx, ref, episode)
+	body, err := c.fetchWatch(ctx, ref, episode, "tracks")
 	if err != nil {
 		return nil, nil, fmt.Errorf("miruro resolve: %w", err)
 	}
@@ -248,9 +307,8 @@ func (c *Client) watchTracks(ctx context.Context, ref showRef, episode int) ([]t
 	return tracks, order, nil
 }
 
-// rankStreams flattens the requested audio track's providers into direct
-// mpv sources in upstream provider order. A sub request takes the soft-sub
-// (ssub) and hard-sub (sub) pools; dub takes dub only.
+// rankStreams keeps upstream provider order within hard-sub and soft-sub
+// groups, with hard subtitles first. Dub requests retain upstream order.
 func rankStreams(tracks []trackEntry, order []string, category string) []provider.MediaSource {
 	wanted := map[string]bool{provider.AudioSub: true}
 	if category == provider.AudioDub {
@@ -286,20 +344,16 @@ func rankStreams(tracks []trackEntry, order []string, category string) []provide
 			names = append(names, n)
 		}
 	}
-	var out []provider.MediaSource
+	out := []provider.MediaSource{}
 	for _, n := range names {
-		// Soft-sub pools sort before hard-sub pools of the same backend.
-		entries := byProvider[n]
-		for i := range entries {
-			if entries[i].track == "ssub" {
-				out = append(out, serverSources(entries[i])...)
-			}
+		for _, entry := range byProvider[n] {
+			out = append(out, serverSources(entry)...)
 		}
-		for i := range entries {
-			if entries[i].track != "ssub" {
-				out = append(out, serverSources(entries[i])...)
-			}
-		}
+	}
+	if category != provider.AudioDub {
+		sort.SliceStable(out, func(i, j int) bool {
+			return out[i].SubType == provider.SubTypeHard && out[j].SubType != provider.SubTypeHard
+		})
 	}
 	// Challenged hosts stay listed; the service and ranking sorts
 	// place them last globally.

@@ -137,6 +137,13 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 		if anilistID == "" {
 			continue
 		}
+		if it.showID != "" {
+			c.mu.Lock()
+			if c.byAniList[anilistID].showID == "" {
+				c.byAniList[anilistID] = showRef{showID: it.showID, slug: c.slugs[it.showID]}
+			}
+			c.mu.Unlock()
+		}
 		title := pickTitle(it.titleEng, it.titleRomaji, it.titleNative)
 		if title == "" {
 			continue

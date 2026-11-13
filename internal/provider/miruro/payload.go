@@ -140,17 +140,39 @@ type episodeEntry struct {
 // watchEpisodes extracts the full episode roster from a watch __data.json
 // body by locating the chunk holding the episodes list.
 func watchEpisodes(body []byte) ([]episodeEntry, error) {
-	slots, err := hydratedChunk(body, "episodes")
+	docs, err := parseDoc(body)
 	if err != nil {
 		return nil, err
 	}
-	var out []episodeEntry
-	for _, slot := range slots {
-		m, ok := asMap(slot)
-		if !ok {
+	for _, doc := range docs {
+		if doc.Type != "chunk" || len(doc.Data) == 0 {
 			continue
 		}
-		if _, ok := m["episodes"]; ok {
+		root, ok := asMap(doc.Data[0])
+		if !ok || !hasKey(root, "episodes") {
+			continue
+		}
+		return decodeEpisodes(doc.Data, root["episodes"])
+	}
+	return nil, fmt.Errorf("miruro: no episodes chunk in response: %w", provider.ErrUpstreamChanged)
+}
+
+// decodeEpisodes follows only roster references; hydrating every array slot
+// would repeatedly expand the entire roster and unrelated metadata.
+func decodeEpisodes(slots []any, roster any) ([]episodeEntry, error) {
+	index, ok := toInt(roster)
+	if !ok || index < 0 || index >= len(slots) {
+		return nil, fmt.Errorf("miruro episodes: invalid roster reference: %w", provider.ErrUpstreamChanged)
+	}
+	entries, ok := asList(slots[index])
+	if !ok {
+		return nil, fmt.Errorf("miruro episodes: invalid roster: %w", provider.ErrUpstreamChanged)
+	}
+	h := hydrator{arr: slots}
+	out := make([]episodeEntry, 0, len(entries))
+	for _, entry := range entries {
+		m, ok := asMap(h.ref(entry, 0))
+		if !ok {
 			continue
 		}
 		num, ok := toInt(m["number"])
