@@ -88,8 +88,6 @@ func progressMarker(entry history.Entry) string {
 func episodesToItems(items []provider.Episode, historyStore *history.Store, seriesTitle string, mode provider.ContentType, mediaType string, selected map[int]struct{}) []list.Item {
 	out := make([]list.Item, 0, len(items))
 	historyEntries := episodeHistorySnapshot(historyStore)
-	mutedStyle := lipgloss.NewStyle().Foreground(colorMuted)
-	fillerStyle := lipgloss.NewStyle().Foreground(ColorErr)
 	for idx, it := range items {
 		marker := "[    ] "
 		if _, sel := selected[idx]; sel {
@@ -116,18 +114,9 @@ func episodesToItems(items []provider.Episode, historyStore *history.Store, seri
 			tag = fmt.Sprintf("S%02d", it.Season)
 		}
 
-		// Apply filler color if episode is marked as filler
-		titleStyle := mutedStyle
-		if it.Filler {
-			titleStyle = fillerStyle
-		}
-
-		title := mutedStyle.Render(marker) + titleStyle.Render(fmt.Sprintf("%-7s", tag)) + (func() string {
-			if it.Filler {
-				return fillerStyle.Render(it.Title)
-			}
-			return it.Title
-		}())
+		// The custom episode screen styles only visible rows. These items
+		// retain selection/filter metadata without pre-rendering the roster.
+		title := marker + tag + it.Title
 		desc := ""
 		if mediaType == provider.MediaTypeMovie {
 			desc = "Movie"

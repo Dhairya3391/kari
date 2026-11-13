@@ -464,8 +464,12 @@ func (m *modelImpl) onHistoryImport(msg historyImportMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.historyImportOpID {
 		return m, nil
 	}
-	m.loading = false
-	m.loadingText = ""
+	// Startup sync runs in the background and does not own the foreground
+	// loader; completing it must not hide an active episode/search request.
+	if !msg.quiet {
+		m.loading = false
+		m.loadingText = ""
+	}
 	if msg.err != nil {
 		if msg.quiet {
 			tuiLog.Debug("startup sync failed", "source", msg.source, "err", msg.err)
