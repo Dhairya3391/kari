@@ -8,6 +8,7 @@ package termimg
 
 import (
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/BourgeoisBear/rasterm"
@@ -127,6 +128,17 @@ func Detect() Protocol {
 	term := strings.ToLower(strings.TrimSpace(os.Getenv("TERM")))
 	termProgram := strings.ToLower(strings.TrimSpace(os.Getenv("TERM_PROGRAM")))
 
+	// WezTerm on Windows cannot receive Kitty graphics: the ConPTY layer
+	// between the app and the terminal drops the APC sequences, so images
+	// never appear (WezTerm's own Kitty implementation is also incomplete).
+	// Its iTerm2 support does pass through ConPTY and works on every
+	// platform, so prefer that over the Kitty capability it advertises.
+	// This must come before the IsKittyCapable check, which reports true
+	// for WezTerm via TERM_PROGRAM. WSL clients sit behind the same ConPTY
+	// layer, so they are gated the same way.
+	if strings.Contains(termProgram, "wezterm") && weztermNeedsIterm() {
+		return ProtocolIterm
+	}
 	// Kitty first: Kitty, Ghostty, WezTerm report Kitty capability
 	if rasterm.IsKittyCapable() || strings.Contains(termProgram, "ghostty") || strings.Contains(term, "ghostty") || strings.Contains(term, "kitty") {
 		return ProtocolKitty
@@ -161,6 +173,17 @@ func parseOverride(raw string) (Protocol, bool) {
 	default:
 		return ProtocolNone, false
 	}
+}
+
+// weztermNeedsIterm reports whether this WezTerm client is behind Windows'
+// ConPTY layer, which forwards iTerm2's OSC images but drops Kitty's APC
+// images. Native Windows and WSL both sit behind ConPTY; a native Unix
+// WezTerm can keep using the more efficient Kitty path.
+func weztermNeedsIterm() bool {
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return os.Getenv("WSL_DISTRO_NAME") != "" || os.Getenv("WSL_INTEROP") != ""
 }
 
 func isSixelCapable() bool {

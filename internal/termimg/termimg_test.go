@@ -3,6 +3,7 @@ package termimg
 import (
 	"image"
 	"image/color"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,39 @@ func TestDetectOverride(t *testing.T) {
 		if got := Detect(); got != want {
 			t.Errorf("Detect() with override %q = %v, want %v", raw, got, want)
 		}
+	}
+}
+
+// TestDetectWezTermBehindConPTYUsesIterm pins the Windows fix: WezTerm
+// advertises Kitty capability, but ConPTY drops Kitty's APC sequences, so
+// only its iTerm2 support reaches the GUI. WSL clients share that gap.
+func TestDetectWezTermBehindConPTYUsesIterm(t *testing.T) {
+	t.Setenv("KARI_IMG_PROTOCOL", "")
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("TERM_PROGRAM", "WezTerm")
+	t.Setenv("KITTY_WINDOW_ID", "")
+	t.Setenv("WSL_DISTRO_NAME", "Ubuntu")
+
+	if got := Detect(); got != ProtocolIterm {
+		t.Fatalf("Detect() for WezTerm behind ConPTY = %v, want iterm", got)
+	}
+}
+
+// TestDetectUnixWezTermKeepsKitty keeps the efficient Kitty path where it
+// actually reaches the terminal, instead of switching every WezTerm user.
+func TestDetectUnixWezTermKeepsKitty(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Windows always sits behind ConPTY")
+	}
+	t.Setenv("KARI_IMG_PROTOCOL", "")
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("TERM_PROGRAM", "WezTerm")
+	t.Setenv("KITTY_WINDOW_ID", "")
+	t.Setenv("WSL_DISTRO_NAME", "")
+	t.Setenv("WSL_INTEROP", "")
+
+	if got := Detect(); got != ProtocolKitty {
+		t.Fatalf("Detect() for native Unix WezTerm = %v, want kitty", got)
 	}
 }
 
