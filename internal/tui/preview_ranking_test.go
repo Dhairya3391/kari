@@ -1,10 +1,5 @@
 package tui
 
-// Preview must re-rank on every resolve snapshot. Providers stream in
-// progressively, and the old ensurePlaybackSelection no-op meant the first
-// snapshot's order stuck: later arrivals (e.g. 4K) never appeared and the
-// top pick stayed stale.
-
 import (
 	"testing"
 
@@ -12,6 +7,59 @@ import (
 	"kari/internal/provider"
 	"kari/internal/ranking"
 )
+
+func TestMiruroAutoRemainsVisibleAcrossQualityFilters(t *testing.T) {
+	for _, qualityMode := range []int{qualityAll, qualityHighest, qualityLowest, qualityDataSaver} {
+		m := rankingTestModel()
+		m.appMode = provider.ModeAnime
+		m.qualityMode = qualityMode
+		miruro := provider.MediaSource{
+			URL: "https://cdn.example.com/miruro.m3u8", Quality: "Auto", Resolver: "miruro",
+		}
+		bingr := provider.MediaSource{
+			URL: "https://cdn.example.com/bingr.m3u8", Quality: "1080p", Resolver: "bingr",
+		}
+		m.mergeResolved(model.ResolvedMedia{Playback: []provider.MediaSource{miruro}})
+		m.mergeResolved(model.ResolvedMedia{Playback: []provider.MediaSource{miruro, bingr}})
+		if len(m.rankedSources) != 2 || m.rankedSources[0].Source.URL != miruro.URL {
+			t.Fatalf("quality mode %d hid or reordered Miruro Auto: %v", qualityMode, urls(m.rankedSources))
+		}
+	}
+}
+
+func TestPreviewPreferredProviderFirstWithoutQualitySorting(t *testing.T) {
+	m := rankingTestModel()
+	m.appMode = provider.ModeAnime
+	m.qualityMode = qualityAll
+	m.preferredProviders = map[string]string{string(provider.ModeAnime): "miruro"}
+	bingr := provider.MediaSource{URL: "https://cdn.example.com/bingr.m3u8", Quality: "1080p", Resolver: "bingr"}
+	auto := provider.MediaSource{URL: "https://cdn.example.com/auto.m3u8", Quality: "Auto", Resolver: "miruro"}
+	hd := provider.MediaSource{URL: "https://cdn.example.com/hd.m3u8", Quality: "720p", Resolver: "miruro"}
+	m.mergeResolved(model.ResolvedMedia{Playback: []provider.MediaSource{bingr}})
+	m.previewSelectedIndex = 0
+	m.manualPlaybackSelected = true
+	m.mergeResolved(model.ResolvedMedia{Playback: []provider.MediaSource{bingr, auto, hd}})
+	want := []string{auto.URL, hd.URL, bingr.URL}
+	for i, source := range m.rankedSources {
+		if source.Source.URL != want[i] {
+			t.Fatalf("preferred-first source order = %v, want %v", urls(m.rankedSources), want)
+		}
+	}
+	if selected, ok := m.selectedPlaybackSource(); !ok || selected.URL != bingr.URL {
+		t.Fatal("later preferred-provider arrivals moved the user's selection")
+	}
+}
+
+func TestPlaybackSelectionDoesNotBypassAudioFilter(t *testing.T) {
+	m := rankingTestModel()
+	m.languageFilter = map[string]bool{"hi": false}
+	m.mergeResolved(model.ResolvedMedia{Playback: []provider.MediaSource{{
+		URL: "https://cdn.example.com/hindi.m3u8", Quality: "Auto", Language: "hi",
+	}}})
+	if _, ok := m.selectedPlaybackSource(); ok || len(m.orderedPlaybackSources()) != 0 {
+		t.Fatal("filtered sources must not become playback fallbacks")
+	}
+}
 
 func rankingTestModel() *modelImpl {
 	return &modelImpl{
@@ -33,11 +81,10 @@ func TestMergeResolvedReranksProgressiveArrivals(t *testing.T) {
 		t.Fatalf("ranked = %d rows, want 1", len(m.rankedSources))
 	}
 
-	// Second provider adds 4K: Highest hides the SD fallback because FHD+
-	// sources are now available.
+	// The quality filter applies without reordering eligible sources.
 	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: []provider.MediaSource{sd, uhd}})
 	if len(m.rankedSources) != 1 {
-		t.Fatalf("ranked = %d rows, want only FHD+ under Highest", len(m.rankedSources))
+		t.Fatalf("visible = %d rows, want the selected quality tier", len(m.rankedSources))
 	}
 	if got := m.rankedSources[0].Source.URL; got != uhd.URL {
 		t.Errorf("source = %s, want %s", got, uhd.URL)
@@ -143,8 +190,8 @@ func TestMergeResolvedAppendsOnRetry(t *testing.T) {
 	}
 }
 
-// Highest keeps only FHD and above, regardless of provider availability.
-func TestMergeResolvedQualitySettingHidesBelowFHD(t *testing.T) {
+// Quality filters remain active without changing source ordering.
+func TestMergeResolvedQualitySettingFiltersSources(t *testing.T) {
 	m := rankingTestModel()
 	mixed := []provider.MediaSource{
 		{URL: "https://cdn.example.com/sd.m3u8", Quality: "480p", Resolver: "A"},
@@ -153,25 +200,25 @@ func TestMergeResolvedQualitySettingHidesBelowFHD(t *testing.T) {
 		{URL: "https://cdn.example.com/4k.m3u8", Quality: "4K", Resolver: "B"},
 	}
 
-	// Highest: keep FHD and above, excluding A because it only offers SD/HD.
+	// Highest keeps FHD and higher fixed-resolution rows.
 	m.qualityMode = qualityHighest
 	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: mixed})
 	if len(m.rankedSources) != 2 {
-		t.Fatalf("highest must hide sources below FHD, got %+v", m.rankedSources)
+		t.Fatalf("highest must filter fixed qualities, got %+v", m.rankedSources)
 	}
 
-	// Lowest: all rows in arrival order.
+	// Lowest keeps the lowest fixed tier per provider, in arrival order.
 	m.qualityMode = qualityLowest
 	m.rankAndSelectSources()
-	if len(m.rankedSources) != 4 {
-		t.Fatalf("lowest must keep every row, got %+v", m.rankedSources)
+	if len(m.rankedSources) != 2 {
+		t.Fatalf("lowest must filter each provider's qualities, got %+v", m.rankedSources)
 	}
 
-	// Data Saver: keeps all rows in arrival order.
+	// Data Saver excludes each provider's highest fixed tier.
 	m.qualityMode = qualityDataSaver
 	m.rankAndSelectSources()
-	if len(m.rankedSources) != 4 {
-		t.Errorf("data saver must keep every row, got %d", len(m.rankedSources))
+	if len(m.rankedSources) != 2 {
+		t.Errorf("data saver must filter higher tiers, got %d", len(m.rankedSources))
 	}
 	// If no FHD+ source exists anywhere, Highest falls back to the best lower tier.
 	mid := []provider.MediaSource{
@@ -276,20 +323,10 @@ func TestGroupSourcesByProvider(t *testing.T) {
 		t.Fatalf("expected 7 sources, got %d", len(m.rankedSources))
 	}
 
-	// Verify cno group comes first with 4K then FHD
-	if m.rankedSources[0].Source.URL != "cno-4k" || m.rankedSources[1].Source.URL != "cno-fhd" {
-		t.Errorf("cno group should be 4K then FHD, got %s, %s", m.rankedSources[0].Source.URL, m.rankedSources[1].Source.URL)
-	}
-
-	// Verify vyla group comes second with 4K then FHD
-	if m.rankedSources[2].Source.URL != "vyla-4k" || m.rankedSources[3].Source.URL != "vyla-fhd" {
-		t.Errorf("vyla group should be 4K then FHD, got %s, %s", m.rankedSources[2].Source.URL, m.rankedSources[3].Source.URL)
-	}
-
-	// Verify movysx group comes third with 4K then English FHD then Hindi FHD
-	if m.rankedSources[4].Source.URL != "movy-4k" || m.rankedSources[5].Source.URL != "movy-fhd" || m.rankedSources[6].Source.URL != "movy-hi" {
-		t.Errorf("movysx group order mismatch: %s, %s, %s",
-			m.rankedSources[4].Source.URL, m.rankedSources[5].Source.URL, m.rankedSources[6].Source.URL)
+	for i, source := range m.resolved.Playback {
+		if m.rankedSources[i].Source.URL != source.URL {
+			t.Fatalf("row %d changed arrival order: got %v", i, urls(m.rankedSources))
+		}
 	}
 }
 
@@ -305,11 +342,8 @@ func TestGroupSourcesByProviderQualityLowest(t *testing.T) {
 	m.resolved = &model.ResolvedMedia{Playback: []provider.MediaSource{fhd, fourK, sd}}
 	m.rankAndSelectSources()
 
-	if len(m.rankedSources) != 3 {
-		t.Fatalf("expected 3 sources, got %d", len(m.rankedSources))
-	}
-	if m.rankedSources[0].Source.URL != "movy-480p" || m.rankedSources[1].Source.URL != "movy-fhd" || m.rankedSources[2].Source.URL != "movy-4k" {
-		t.Errorf("qualityLowest order mismatch: got %v", urls(m.rankedSources))
+	if len(m.rankedSources) != 1 || m.rankedSources[0].Source.URL != "movy-480p" {
+		t.Errorf("lowest filter must keep SD, got %v", urls(m.rankedSources))
 	}
 }
 

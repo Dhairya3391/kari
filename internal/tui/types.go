@@ -442,6 +442,7 @@ type modelImpl struct {
 	historyContinueOpID  int
 	pendingHistoryTarget *history.Entry
 	resolveOpID          int
+	resolveCancel        context.CancelFunc
 	// resolveAttempts counts automatic retries of a fully-failed resolve;
 	// reset on success and on a new episode pick.
 	resolveAttempts int

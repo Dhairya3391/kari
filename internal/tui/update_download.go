@@ -133,7 +133,12 @@ func (m *modelImpl) drainDownloadChan() {
 }
 
 func (m *modelImpl) resolveSubscription() tea.Cmd {
+	updates := m.resolveChan
 	return func() tea.Msg {
-		return <-m.resolveChan
+		msg, ok := <-updates
+		if !ok {
+			return resolveWorkerDoneMsg{}
+		}
+		return msg
 	}
 }

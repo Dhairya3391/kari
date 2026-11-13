@@ -19,29 +19,24 @@ func (m *modelImpl) rankAndSelectSources() {
 		QualityMode:           m.qualityMode,
 		PreferredProvider:     m.preferredProviderForMode(m.appMode),
 		EnabledAudioLanguages: m.languageFilter,
-		SubtitlesEnabled:      !m.disableAnimeSubtitles,
 	})
 	m.previewSelectedIndex = 0
 }
 
-// refreshRanking recomputes the ranked order from the current Playback
-// snapshot. Providers stream in progressively, so every merge must
-// re-rank, or the first snapshot's order sticks and later arrivals never
-// appear in Preview. A cursor sitting on the auto-selected top row
-// (index 0) tracks the new top pick; a cursor the user moved is kept on
-// the same source URL.
+// refreshRanking refreshes filtered, preferred-first sources. A manual or
+// active playback selection stays on the same transport as sources arrive.
 func (m *modelImpl) refreshRanking() {
-	trackBest := m.previewSelectedIndex == 0
-	selectedURL := ""
+	trackBest := m.previewSelectedIndex == 0 && !m.manualPlaybackSelected && m.playOpID == 0
+	selectedID := ""
 	if !trackBest {
 		if src, ok := m.selectedPlaybackSource(); ok {
-			selectedURL = src.URL
+			selectedID = src.TransportIdentity()
 		}
 	}
 	m.rankAndSelectSources()
-	if !trackBest && selectedURL != "" {
+	if !trackBest && selectedID != "" {
 		for i, s := range m.rankedSources {
-			if s.Source.URL == selectedURL {
+			if s.Source.TransportIdentity() == selectedID {
 				m.previewSelectedIndex = i
 				return
 			}
@@ -64,10 +59,13 @@ func (m *modelImpl) refreshRanking() {
 }
 
 func (m *modelImpl) selectedPlaybackSource() (provider.MediaSource, bool) {
-	if len(m.rankedSources) == 0 {
+	if m.rankedSources == nil {
 		if m.resolved != nil && len(m.resolved.Playback) > 0 {
 			return m.resolved.Playback[0], true
 		}
+		return provider.MediaSource{}, false
+	}
+	if len(m.rankedSources) == 0 {
 		return provider.MediaSource{}, false
 	}
 	if m.previewSelectedIndex < 0 || m.previewSelectedIndex >= len(m.rankedSources) {
@@ -77,7 +75,7 @@ func (m *modelImpl) selectedPlaybackSource() (provider.MediaSource, bool) {
 }
 
 func (m *modelImpl) orderedPlaybackSources() []provider.MediaSource {
-	if len(m.rankedSources) == 0 {
+	if m.rankedSources == nil {
 		if m.resolved == nil {
 			return nil
 		}
@@ -85,6 +83,9 @@ func (m *modelImpl) orderedPlaybackSources() []provider.MediaSource {
 	}
 
 	total := len(m.rankedSources)
+	if total == 0 {
+		return nil
+	}
 	start := m.previewSelectedIndex
 	if start < 0 || start >= total {
 		start = 0

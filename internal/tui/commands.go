@@ -77,37 +77,62 @@ func (m *modelImpl) historyContinueEpisodesCmd(opID int, group history.Group, se
 func (m *modelImpl) resolveCmd(opID int, series provider.SearchResult, episode provider.Episode, exclude, retry []string) tea.Cmd {
 	tuiLog.Debug("resolve starting", "opID", opID, "series", series.Title, "episode", episode.Title, "exclude", exclude, "retry", retry)
 	mode := m.appMode
+	if m.resolveCancel != nil {
+		m.resolveCancel()
+	}
+	parent := m.appCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	m.resolveCancel = cancel
+	// Snapshots are cumulative, so one pending update is enough. Each load
+	// owns its channel: abandoned subscriptions cannot steal a newer load.
+	updates := make(chan tea.Msg, 1)
+	m.resolveChan = updates
+	mediaService := m.mediaService
 
 	return tea.Batch(
 		func() tea.Msg {
-			ctx, cancel := context.WithTimeout(m.appCtx, 60*time.Second)
 			defer cancel()
-
+			defer close(updates)
 			onResult := func(resolved model.ResolvedMedia) {
+				msg := resolveProgressMsg{resolved: resolved, opID: opID}
 				select {
-				case m.resolveChan <- resolveProgressMsg{resolved: resolved, opID: opID}:
+				case updates <- msg:
+					return
+				default:
+				}
+				// Replace only an unread snapshot; never queue obsolete list
+				// rebuilds behind keyboard events and the terminal renderer.
+				select {
+				case <-updates:
+				default:
+				}
+				select {
+				case updates <- msg:
 				case <-ctx.Done():
 				}
 			}
-
-			resolved, err := m.mediaService.Resolve(ctx, mode, series, episode, onResult, service.ResolveOptions{Exclude: exclude, Retry: retry})
-
-			// Deliver the completion marker through the same channel the
-			// subscription reads (mirroring download/batch) so the
-			// subscription goroutine that consumes it terminates instead of
-			// blocking forever on <-resolveChan after the last progress
-			// message. Returning the marker directly here would orphan that
-			// goroutine, and stale ones would then steal the first message
-			// of the next resolve.
+			resolved, err := mediaService.Resolve(ctx, mode, series, episode, onResult,
+				service.ResolveOptions{Exclude: exclude, Retry: retry})
+			// The service owns the fetch deadline. An expired fetch must still
+			// deliver completion so the preview can stop its loading state.
 			select {
-			case m.resolveChan <- resolveDoneMsg{resolved: resolved, opID: opID, err: err}:
+			case updates <- resolveDoneMsg{resolved: resolved, opID: opID, err: err}:
 			case <-ctx.Done():
 			}
-
 			return resolveWorkerDoneMsg{}
 		},
 		m.resolveSubscription(),
 	)
+}
+
+func (m *modelImpl) cancelResolve() {
+	if m.resolveCancel != nil {
+		m.resolveCancel()
+		m.resolveCancel = nil
+	}
 }
 
 func (m *modelImpl) invalidateSubtitleSync() {

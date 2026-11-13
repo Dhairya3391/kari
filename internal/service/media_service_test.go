@@ -427,7 +427,7 @@ func TestSourceAggregatorPreservesArrivalOrder(t *testing.T) {
 	}
 }
 
-func TestSourceAggregatorSortsHardSubsBeforeSoftSubsPerProvider(t *testing.T) {
+func TestSourceAggregatorPreservesSubtitleArrivalOrder(t *testing.T) {
 	pengu := &stubProvider{name: "pengu", mode: provider.ModeAnime}
 	agg := newSourceAggregator([]provider.Provider{pengu}, func(n string) string { return n })
 
@@ -437,8 +437,8 @@ func TestSourceAggregatorSortsHardSubsBeforeSoftSubsPerProvider(t *testing.T) {
 	})
 	agg.sort()
 
-	if len(agg.sources) != 2 || agg.sources[0].URL != "http://hard" || agg.sources[1].URL != "http://soft" {
-		t.Fatalf("hard sub must sort before soft sub per provider (order=%+v)", agg.sources)
+	if len(agg.sources) != 2 || agg.sources[0].URL != "http://soft" || agg.sources[1].URL != "http://hard" {
+		t.Fatalf("subtitle type must not reorder sources (order=%+v)", agg.sources)
 	}
 }
 

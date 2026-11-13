@@ -5,32 +5,34 @@ import (
 	"kari/internal/ranking"
 )
 
-// PlaybackOptions contains the user's playback preferences applied before
-// playback sources are presented or selected.
+// PlaybackOptions contains filters applied to visible sources.
 type PlaybackOptions struct {
 	Mode                  provider.ContentType
 	QualityMode           int
 	PreferredProvider     string
 	EnabledAudioLanguages map[string]bool
-	SubtitlesEnabled      bool
 }
 
-// PreparePlaybackSources applies filtering and ordering stages in one place.
-// The TUI supplies preferences and renders the resulting ordered sources.
+// PreparePlaybackSources applies audio and quality filters, keeping the
+// preferred provider first and arrival order otherwise. Adaptive sources remain
+// eligible at every tier; no quality scoring or sorting is applied.
 func PreparePlaybackSources(sources []provider.MediaSource, options PlaybackOptions) []ranking.ScoredSource {
 	sources = ranking.FilterAudioLanguages(sources, options.Mode, options.EnabledAudioLanguages)
-	if options.QualityMode == ranking.QualityHighest {
-		sources = ranking.KeepHighestVisible(sources)
-	}
 	sources = ranking.PreferProvider(sources, options.PreferredProvider)
-
-	scored := make([]ranking.ScoredSource, len(sources))
+	indices := FilterPlaybackIndices(sources, options.QualityMode, nil)
+	visible := make([]bool, len(sources))
+	for _, index := range indices {
+		visible[index] = true
+	}
+	scored := make([]ranking.ScoredSource, 0, len(sources))
 	for i, source := range sources {
-		scored[i] = ranking.ScoredSource{
+		if !visible[i] && !ranking.IsAdaptiveQuality(source.Quality) {
+			continue
+		}
+		scored = append(scored, ranking.ScoredSource{
 			Source:        source,
 			OriginalIndex: i,
-		}
+		})
 	}
-	scored = ranking.GroupSourcesByProvider(scored, options.QualityMode, options.Mode)
-	return ranking.HardsubsFirst(options.Mode, options.QualityMode, options.SubtitlesEnabled, scored)
+	return scored
 }

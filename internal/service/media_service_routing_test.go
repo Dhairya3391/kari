@@ -382,10 +382,9 @@ func TestFetchEpisodesFiltersAudio(t *testing.T) {
 	}
 }
 
-// TestAggregatorCapsMirrorTiers proves interchangeable mirror rows
-// collapse to 3 per tier while distinct backends, heights and dubbed
-// languages each keep their own budget.
-func TestAggregatorCapsMirrorTiers(t *testing.T) {
+// TestAggregatorKeepsDistinctMirrors guards against hiding unique transports
+// just because their provider, backend, and quality labels happen to match.
+func TestAggregatorKeepsDistinctMirrors(t *testing.T) {
 	newAgg := func() *sourceAggregator {
 		return newSourceAggregator([]provider.Provider{
 			&stubProvider{name: "movysx", mode: provider.ModeMovies},
@@ -398,8 +397,8 @@ func TestAggregatorCapsMirrorTiers(t *testing.T) {
 			{URL: "https://cdn.example.com/m" + string(rune('a'+i)) + ".m3u8", Quality: "1080p"},
 		})
 	}
-	if len(mirrors.sources) != 3 {
-		t.Errorf("8 identical-tier mirrors = %d, want 3", len(mirrors.sources))
+	if len(mirrors.sources) != 8 {
+		t.Errorf("8 distinct transports = %d, want 8", len(mirrors.sources))
 	}
 
 	varied := newAgg()

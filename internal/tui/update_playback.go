@@ -8,6 +8,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/provider"
+	"reflect"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.resolveOpID = 0
+	m.cancelResolve()
 	m.endProviderWait()
 	if msg.err != nil {
 		if m.playOpID == 0 {
@@ -195,7 +197,7 @@ func (m *modelImpl) applyResumeFromHistory(resolved *model.ResolvedMedia) {
 
 func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.resolveOpID {
-		return m, m.resolveSubscription()
+		return m, nil
 	}
 
 	wasNil := m.resolved == nil
@@ -294,29 +296,37 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 		m.applyResumeFromHistory(m.resolved)
 		return
 	}
-	// Update playback sources directly from the aggregated snapshot.
-	// resolved.Playback is already sorted by MediaService with Movy.sx on top.
+	// Retry snapshots contain only the retried providers, so keep previously
+	// successful rows while updating metadata on sources already present.
 	var selectedURL string
 	if src, ok := m.selectedPlaybackSource(); ok {
 		selectedURL = src.URL
 	}
 	// Merge playback sources, deduplicating so retried or progressively
 	// reporting providers add to existing sources instead of clobbering them.
-	seenSources := make(map[string]struct{}, len(m.resolved.Playback)+len(resolved.Playback))
-	for _, p := range m.resolved.Playback {
+	playbackChanged := false
+	seenSources := make(map[string]int, len(m.resolved.Playback)+len(resolved.Playback))
+	for i, p := range m.resolved.Playback {
 		key := p.TransportIdentity()
 		if key != "" {
-			seenSources[key] = struct{}{}
+			seenSources[key] = i
 		}
 	}
 	for _, p := range resolved.Playback {
 		key := p.TransportIdentity()
-		if key != "" {
-			if _, ok := seenSources[key]; !ok {
-				m.resolved.Playback = append(m.resolved.Playback, p)
-				seenSources[key] = struct{}{}
-			}
+		if key == "" {
+			continue
 		}
+		if index, ok := seenSources[key]; ok {
+			if !reflect.DeepEqual(m.resolved.Playback[index], p) {
+				m.resolved.Playback[index] = p
+				playbackChanged = true
+			}
+			continue
+		}
+		seenSources[key] = len(m.resolved.Playback)
+		m.resolved.Playback = append(m.resolved.Playback, p)
+		playbackChanged = true
 	}
 	// Progressive snapshots may carry the TMDBID after the first one;
 	// pick it up so the details/poster retry below queries TMDB and not
@@ -368,7 +378,9 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 	if len(resolved.Subtitles) > 0 {
 		m.resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
 	}
-	m.refreshRanking()
+	if playbackChanged {
+		m.refreshRanking()
+	}
 }
 
 func subtitleCandidateIdentity(track model.SubtitleTrack) string {

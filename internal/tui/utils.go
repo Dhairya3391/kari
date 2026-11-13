@@ -179,6 +179,7 @@ func (m *modelImpl) goBackOne() bool {
 	if m.activeView == viewSearch {
 		m.playOpID = 0
 		m.resolveOpID = 0
+		m.cancelResolve()
 		m.subtitleOpID = 0
 		m.autoPlayAfterResolve = false
 		m.loading = false

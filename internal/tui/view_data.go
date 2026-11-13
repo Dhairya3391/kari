@@ -291,18 +291,6 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		sources = m.resolved.Playback
 	}
 
-	// Tripwire: ranked must never be empty while resolved sources exist
-	// (the tier filter falls back to the full list). If this ever fires,
-	// the qualities below identify the unhandled label shape.
-	if len(m.rankedSources) == 0 && len(sources) > 0 {
-		qualities := make([]string, 0, len(sources))
-		for _, s := range sources {
-			qualities = append(qualities, s.Quality)
-		}
-		tuiLog.Warn("preview desync: ranked empty with sources present",
-			"qualityMode", m.qualityMode, "sources", len(sources), "qualities", strings.Join(qualities, "|"))
-	}
-
 	// Fall back to search-stamped metadata while the async details
 	// fetch is in flight (or when it failed): providers like WeebCentral
 	// ship overview/genres at search time.

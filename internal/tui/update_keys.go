@@ -273,6 +273,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			m.loading = false
 			m.loadingText = ""
 			m.resolveOpID = 0
+			m.cancelResolve()
 			m.playOpID = 0
 			m.subtitleOpID = 0
 			m.autoPlayAfterResolve = false

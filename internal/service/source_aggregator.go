@@ -22,7 +22,6 @@ type sourceAggregator struct {
 	sourceIndex map[string]int // canonical source identity -> index in sources
 	subs        []model.SubtitleTrack
 	seenSubs    map[string]struct{}
-	tierCounts  map[string]int
 }
 
 // sourceDedupeIdentity is the identity of the media address and its required
@@ -48,7 +47,8 @@ func sourceDedupeIdentity(src provider.MediaSource) string {
 // mergeDuplicateSource folds descriptive metadata from a re-signed copy
 // into the row already kept. The kept URL and headers stay untouched so the
 // playable transport remains exactly what its provider resolved.
-func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) {
+func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) bool {
+	before := *dst
 	if dst.SubType == "" {
 		dst.SubType = src.SubType
 	}
@@ -72,7 +72,7 @@ func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) {
 		dst.AudioLabel = src.AudioLabel
 	}
 	if len(dst.ExtraArgs) == 0 {
-		dst.ExtraArgs = src.ExtraArgs
+		dst.ExtraArgs = slices.Clone(src.ExtraArgs)
 	}
 	if SourceQuality(src.Quality) > SourceQuality(dst.Quality) {
 		dst.Quality = src.Quality
@@ -89,6 +89,27 @@ func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) {
 		merged = append(merged, missing...)
 		dst.Subtitles = merged
 	}
+	return before.SubType != dst.SubType || before.Backend != dst.Backend ||
+		before.FallbackOnly != dst.FallbackOnly || before.Referer != dst.Referer ||
+		before.UserAgent != dst.UserAgent || before.CookieHeader != dst.CookieHeader ||
+		before.Language != dst.Language || before.AudioLabel != dst.AudioLabel ||
+		before.Quality != dst.Quality || !slices.Equal(before.ExtraArgs, dst.ExtraArgs) ||
+		len(before.Subtitles) != len(dst.Subtitles)
+}
+
+// cloneMediaSources detaches provider-owned data and keeps published snapshots
+// independent even when consumers change nested playback options.
+func cloneMediaSources(sources []provider.MediaSource) []provider.MediaSource {
+	cloned := slices.Clone(sources)
+	for i := range cloned {
+		cloned[i].Subtitles = slices.Clone(cloned[i].Subtitles)
+		cloned[i].ExtraArgs = slices.Clone(cloned[i].ExtraArgs)
+		if cloned[i].SkipTimes != nil {
+			skipTimes := *cloned[i].SkipTimes
+			cloned[i].SkipTimes = &skipTimes
+		}
+	}
+	return cloned
 }
 
 // hasSubtitleOption reports whether options already carries the same
@@ -141,31 +162,6 @@ func (a *sourceAggregator) retargetSubtitles(oldID, newID, newURL, newResolver s
 	}
 }
 
-// tierKey groups interchangeable mirror rows: same resolver, same
-// quality height, same backend, same audio language.
-func tierKey(src provider.MediaSource) string {
-	return strings.Join([]string{
-		strings.ToLower(strings.TrimSpace(src.Resolver)),
-		strings.TrimSpace(strings.ToLower(src.Language)),
-		strings.TrimSpace(src.Backend),
-		strconv.Itoa(SourceQuality(src.Quality)),
-	}, "\x00")
-}
-
-// tierHasRoom reports whether another row of src's tier fits, counting
-// it when it does. Callers hold the aggregation lock.
-func (a *sourceAggregator) tierHasRoom(src provider.MediaSource) bool {
-	if a.tierCounts == nil {
-		a.tierCounts = make(map[string]int)
-	}
-	key := tierKey(src)
-	if a.tierCounts[key] >= maxSourcesPerTier {
-		return false
-	}
-	a.tierCounts[key]++
-	return true
-}
-
 // newSourceAggregator builds an aggregator that preserves provider priority.
 func newSourceAggregator(providers []provider.Provider, displayName func(string) string) *sourceAggregator {
 	priority := make(map[string]int, len(providers))
@@ -180,33 +176,20 @@ func newSourceAggregator(providers []provider.Provider, displayName func(string)
 	}
 }
 
-// maxSourcesPerTier caps rows sharing one (resolver, quality height,
-// backend, language) identity: upstream mirrors multiply identical
-// rows (16 bare "1080p" from one resolver), and the first arrivals are
-// already best-first, so the cap cuts noise while keeping fallback
-// depth. Distinct backends, heights and dubbed languages each keep
-// their own budget and are never collapsed into each other.
-const maxSourcesPerTier = 3
-
 // add merges one provider batch. Independently re-signed copies of the same
 // CDN media collapse into one row, while the kept row's full transport
 // identity still owns its subtitles so playback headers and source matching
-// stay exact.
-func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource) {
+// stay exact. It reports whether any published source or subtitle changed.
+func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource) bool {
+	if len(batch) == 0 {
+		return false
+	}
+	changed := false
+	batch = cloneMediaSources(batch)
 	if a.sourceIndex == nil {
 		a.sourceIndex = make(map[string]int)
 	}
-	slices.SortStableFunc(batch, func(x, y provider.MediaSource) int {
-		xh := strings.EqualFold(strings.TrimSpace(x.SubType), provider.SubTypeHard) && !provider.ChallengedHost(x.URL)
-		yh := strings.EqualFold(strings.TrimSpace(y.SubType), provider.SubTypeHard) && !provider.ChallengedHost(y.URL)
-		if xh == yh {
-			return 0
-		}
-		if xh {
-			return -1
-		}
-		return 1
-	})
+
 	for _, src := range batch {
 		src.Resolver = providerName
 		identity := src.TransportIdentity()
@@ -222,21 +205,23 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 				kept = src
 				mergeDuplicateSource(&kept, old)
 				a.sources[index] = kept
+				changed = true
 				a.retargetSubtitles(oldIdentity, kept.TransportIdentity(), kept.URL, src.Resolver)
 			} else {
 				old := a.sources[index]
 				oldIdentity := old.TransportIdentity()
-				mergeDuplicateSource(&a.sources[index], src)
+				if mergeDuplicateSource(&a.sources[index], src) {
+					changed = true
+				}
 				kept = a.sources[index]
 				if oldIdentity != kept.TransportIdentity() {
 					a.retargetSubtitles(oldIdentity, kept.TransportIdentity(), kept.URL, kept.Resolver)
 				}
 			}
-		} else if a.tierHasRoom(src) {
+		} else {
 			a.sourceIndex[dedupeKey] = len(a.sources)
 			a.sources = append(a.sources, src)
-		} else {
-			continue
+			changed = true
 		}
 		keptIdentity := kept.TransportIdentity()
 		for _, sub := range src.Subtitles {
@@ -249,6 +234,7 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 				continue
 			}
 			a.seenSubs[key] = struct{}{}
+			changed = true
 			subLang := lang.Normalize(sub.Language)
 			referer := strings.TrimSpace(sub.Referer)
 			if referer == "" {
@@ -267,6 +253,7 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 			})
 		}
 	}
+	return changed
 }
 
 // sort preserves the arrival order of playable sources across providers,

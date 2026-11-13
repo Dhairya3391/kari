@@ -26,7 +26,8 @@ type ResolveOptions struct {
 }
 
 // Resolve resolves playback sources from supporting providers in parallel,
-// reporting each aggregated snapshot through onResult as batches arrive.
+// reporting changed aggregated snapshots serially through onResult as batches
+// arrive. Callbacks finish before Resolve returns and must return promptly.
 func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, series provider.SearchResult, episode provider.Episode, onResult func(model.ResolvedMedia), opts ResolveOptions) (model.ResolvedMedia, error) {
 	allRoutes := s.registry.PlanForMode(mode).Playback
 	// mirrorRoutes keeps every registered provider for the live fallback:
@@ -106,11 +107,13 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 
 	var completedResolvers []string
 	completedSet := make(map[string]struct{})
-	noteCompleted := func(name string) {
-		if _, ok := completedSet[name]; !ok {
-			completedSet[name] = struct{}{}
-			completedResolvers = append(completedResolvers, name)
+	noteCompleted := func(name string) bool {
+		if _, ok := completedSet[name]; ok {
+			return false
 		}
+		completedSet[name] = struct{}{}
+		completedResolvers = append(completedResolvers, name)
+		return true
 	}
 
 	totalTargetResolvers := len(primaryRoutes)
@@ -120,8 +123,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	buildResolved := func() model.ResolvedMedia {
 		completedCopy := make([]string, len(completedResolvers))
 		copy(completedCopy, completedResolvers)
-		playbackCopy := make([]provider.MediaSource, len(agg.sources))
-		copy(playbackCopy, agg.sources)
+		playbackCopy := cloneMediaSources(agg.sources)
 		subsCopy := make([]model.SubtitleTrack, len(agg.subs))
 		copy(subsCopy, agg.subs)
 		return model.ResolvedMedia{
@@ -144,15 +146,29 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		}
 	}
 
-	// snapshot sorts the aggregator and builds a detached ResolvedMedia copy.
-	// Callers must hold mu; onResult deliberately runs outside the lock so a
-	// slow callback can't stall the other provider goroutines mid-fan-out.
-	snapshot := func() model.ResolvedMedia {
-		agg.sort()
-		return buildResolved()
-	}
-
 	var mu sync.Mutex
+	var publicationMu sync.Mutex
+	// Reserve delivery order before changing the aggregate. Locking only around
+	// callbacks would still let an older snapshot overtake a newer one.
+	publish := func(update func() bool) {
+		publicationMu.Lock()
+		defer publicationMu.Unlock()
+		mu.Lock()
+		if !update() || onResult == nil {
+			mu.Unlock()
+			return
+		}
+		current := buildResolved()
+		mu.Unlock()
+		onResult(current)
+	}
+	addSources := func(name string, batch []provider.MediaSource) bool {
+		if !agg.add(name, batch) {
+			return false
+		}
+		agg.sort()
+		return true
+	}
 	var failures []string
 	var failedOrder []string
 	// audioUnavailableOnly stays true while every recorded failure is a
@@ -176,13 +192,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			episodeSource := route.Playback
 			g.Go(func() error {
 				defer func() {
-					mu.Lock()
-					noteCompleted(p.Name())
-					current := snapshot()
-					mu.Unlock()
-					if onResult != nil {
-						onResult(current)
-					}
+					publish(func() bool { return noteCompleted(p.Name()) })
 				}()
 				_, force := forcedRetry[strings.ToLower(strings.TrimSpace(p.Name()))]
 				if skipped, reason := s.health.Skipped(p.Name(), len(routes) == 1 || force); skipped {
@@ -222,45 +232,20 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 					TMDBID:  tmdbID,
 				}
 
-				var failureOnce sync.Once
 				recordFailure := func(err error) {
-					failureOnce.Do(func() {
-						if provider.BreakerFailure(err) {
-							s.health.RecordFailure(p.Name())
-						}
-						mu.Lock()
-						failures = append(failures, fmt.Sprintf("%s: %v", p.Name(), err))
-						if !errors.Is(err, provider.ErrAudioUnavailable) {
-							audioUnavailableOnly = false
-						}
-						noteFailed(p.Name())
-						mu.Unlock()
-					})
+					if provider.BreakerFailure(err) {
+						s.health.RecordFailure(p.Name())
+					}
+					mu.Lock()
+					failures = append(failures, fmt.Sprintf("%s: %v", p.Name(), err))
+					if !errors.Is(err, provider.ErrAudioUnavailable) {
+						audioUnavailableOnly = false
+					}
+					noteFailed(p.Name())
+					mu.Unlock()
 				}
 
-				var updates <-chan []provider.MediaSource
-				if sp, ok := p.(provider.StreamingProvider); ok {
-					ch := make(chan []provider.MediaSource, 4)
-					updates = ch
-					go func() {
-						defer close(ch)
-						if err := sp.ResolveStream(pCtx, mediaID, mediaEpisode, ch); err != nil {
-							mediaLog.Debug("streaming provider failed", "provider", p.Name(), "err", err)
-							recordFailure(err)
-						}
-					}()
-				} else {
-					sources, err := episodeSource.ResolveSource(pCtx, mediaID, mediaEpisode)
-					if err != nil {
-						mediaLog.Debug("provider resolve failed", "provider", p.Name(), "err", err)
-						recordFailure(err)
-						return nil
-					}
-					ch := make(chan []provider.MediaSource, 1)
-					ch <- sources
-					close(ch)
-					updates = ch
-				}
+				updates, finished := startSourceResolution(pCtx, episodeSource, mediaID, mediaEpisode)
 
 				gotSources := false
 			streamLoop:
@@ -268,8 +253,16 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 					select {
 					case batch, ok := <-updates:
 						if !ok {
+							if err := <-finished; err != nil {
+								mediaLog.Debug("provider resolve failed", "provider", p.Name(), "err", err)
+								recordFailure(err)
+							}
 							break streamLoop
 						}
+						if len(batch) == 0 {
+							continue
+						}
+						batch = cloneMediaSources(batch)
 						// Live providers declare reachability probes so dead
 						// mirrors are dropped before the first snapshot reaches
 						// the player. Verification stays inside the provider's
@@ -281,18 +274,8 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 							batch = discoverManifestAudio(pCtx, batch)
 							gotSources = true
 						}
-						mu.Lock()
-						agg.add(p.Name(), batch)
-						current := snapshot()
-						mu.Unlock()
-						if onResult != nil {
-							onResult(current)
-						}
+						publish(func() bool { return addSources(p.Name(), batch) })
 					case <-pCtx.Done():
-						go func() {
-							for range updates {
-							}
-						}()
 						if ctx.Err() == nil {
 							recordFailure(fmt.Errorf("%s: source deadline exceeded: %w", p.Name(), provider.ErrTimeout))
 						}
@@ -335,14 +318,11 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	if stillEmpty && mode == provider.ModeLive && ctx.Err() == nil {
 		mediaLog.Debug("live resolve empty; searching other providers by title", "title", series.Title)
 		for _, mirror := range s.resolveLiveMirrors(ctx, mode, series, mirrorRoutes, opts.Exclude) {
-			mu.Lock()
-			agg.add(mirror.provider, mirror.sources)
-			noteCompleted(mirror.provider)
-			current := snapshot()
-			mu.Unlock()
-			if onResult != nil {
-				onResult(current)
-			}
+			publish(func() bool {
+				changed := addSources(mirror.provider, mirror.sources)
+				completed := noteCompleted(mirror.provider)
+				return changed || completed
+			})
 		}
 	}
 
@@ -365,7 +345,41 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		return model.ResolvedMedia{}, provider.ErrNoSources
 	}
 	s.setLastFailures(failedOrder)
-	result := snapshot()
+	result := buildResolved()
 	mu.Unlock()
 	return result, nil
+}
+
+// startSourceResolution isolates provider calls from the context-bounded consumer.
+// The worker owns only its channels: a late return cannot change health, failures,
+// or snapshots. Providers must honor ctx, including on stream sends; an abandoned
+// worker cannot be forcibly stopped, but needs no unbounded drain goroutine.
+func startSourceResolution(
+	ctx context.Context,
+	source provider.EpisodeSource,
+	mediaID string,
+	episode provider.Episode,
+) (<-chan []provider.MediaSource, <-chan error) {
+	// Four batches absorb short stream bursts without unbounded queuing. One
+	// terminal result lets even a late provider return without a waiting reader.
+	updates := make(chan []provider.MediaSource, 4)
+	finished := make(chan error, 1)
+	go func() {
+		var err error
+		if streaming, ok := source.(provider.StreamingProvider); ok {
+			err = streaming.ResolveStream(ctx, mediaID, episode, updates)
+		} else {
+			var sources []provider.MediaSource
+			sources, err = source.ResolveSource(ctx, mediaID, episode)
+			if len(sources) > 0 {
+				select {
+				case updates <- sources:
+				case <-ctx.Done():
+				}
+			}
+		}
+		finished <- err
+		close(updates)
+	}()
+	return updates, finished
 }
