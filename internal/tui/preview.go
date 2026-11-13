@@ -86,17 +86,41 @@ func renderPreviewHeader(data PreviewData, st Styles) string {
 	// posterW is the total columns reserved by the poster block (image + gutter).
 	// Only count it when the poster is actually shown (same condition as the
 	// side-by-side layout below).
-	posterW := 0
-	if showPreviewPoster(data) {
-		posterW = lipgloss.Width(data.PosterBlock) + 4 // 4-char gutter
-	}
+	posterW := previewPosterWidth(data)
 	// metaW is the maximum columns available for the metadata text block.
 	// Every line appended to metaRows must fit within this so that the
 	// horizontal join never produces a line wider than data.Width — if it
 	// did, Bubble Tea's renderer would omit the end-of-line erase (\x1b[K)
 	// for that row, leaving old image cells visible on screen.
 	metaW := max(20, data.Width-posterW)
+	metaBlock := renderPreviewMeta(data, st, metaW)
 
+	if !showPreviewPoster(data) {
+		return metaBlock
+	}
+
+	// Layout side-by-side with poster on left
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		data.PosterBlock,
+		"    ",
+		metaBlock,
+	)
+}
+
+// previewPosterWidth is the number of columns the poster block reserves
+// (image plus its 4-column gutter), or 0 when the poster is hidden.
+func previewPosterWidth(data PreviewData) int {
+	if !showPreviewPoster(data) {
+		return 0
+	}
+	return lipgloss.Width(data.PosterBlock) + 4
+}
+
+// renderPreviewMeta builds the text block that sits beside the poster, or
+// fills the header when no poster is shown. It is split out of
+// renderPreviewHeader so the overlay layout key can compare exactly the
+// lines that share rows with a Sixel/iTerm2 placement (see overlayLayoutKey).
+func renderPreviewMeta(data PreviewData, st Styles, metaW int) string {
 	var metaRows []string
 
 	// Series Title
@@ -177,18 +201,7 @@ func renderPreviewHeader(data PreviewData, st Styles) string {
 	if data.ResumePosition != "" {
 		metaRows = append(metaRows, st.Dim.Render("resume     ")+st.Current.Render(data.ResumePosition))
 	}
-	metaBlock := strings.Join(metaRows, "\n")
-
-	if !showPreviewPoster(data) {
-		return metaBlock
-	}
-
-	// Layout side-by-side with poster on left
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		data.PosterBlock,
-		"    ",
-		metaBlock,
-	)
+	return strings.Join(metaRows, "\n")
 }
 
 func renderSourcesTitle(data PreviewData, st Styles) string {

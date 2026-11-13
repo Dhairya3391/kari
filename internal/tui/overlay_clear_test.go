@@ -133,6 +133,65 @@ func TestOverlayReaderHelpRequestsScreenClear(t *testing.T) {
 	}
 }
 
+// TestOverlayPreviewMetaChangeRequestsScreenClear pins the preview fix:
+// Sixel/iTerm2 posters share cells with the metadata block, which fills in
+// asynchronously. Rewriting those rows erases the part of the image under
+// them, so a metadata change must trigger the full repaint that redraws the
+// poster (observed as a poster sliced into horizontal strips on Windows
+// Terminal).
+func TestOverlayPreviewMetaChangeRequestsScreenClear(t *testing.T) {
+	for _, protocol := range []termimg.Protocol{termimg.ProtocolSixel, termimg.ProtocolIterm} {
+		m := &modelImpl{
+			activeView:        viewPreview,
+			width:             120,
+			height:            40,
+			imgProtocol:       protocol,
+			imagesEnabled:     true,
+			previewPoster:     "IMAGE-POSTER",
+			previewPosterOpID: 3,
+			previewOverview:   "old plot",
+		}
+
+		before := m.overlayLayoutKey()
+		if before == "" {
+			t.Fatalf("%v: preview poster should produce an overlay layout key", protocol)
+		}
+
+		_, cmd := m.Update(previewDetailsMsg{opID: 3, overview: "new plot"})
+		if !cmdContainsClearScreen(cmd) {
+			t.Fatalf("%v: preview metadata change must request a screen clear", protocol)
+		}
+		if m.overlayLayoutKey() == before {
+			t.Errorf("%v: metadata change left the overlay layout key unchanged", protocol)
+		}
+	}
+}
+
+// TestOverlayPreviewChurnDoesNotScreenClear keeps the clear off the steady
+// state: sources arriving and status/spinner ticks render below or outside
+// the poster, so they must not force a repaint.
+func TestOverlayPreviewChurnDoesNotScreenClear(t *testing.T) {
+	m := &modelImpl{
+		activeView:        viewPreview,
+		width:             120,
+		height:            40,
+		imgProtocol:       termimg.ProtocolSixel,
+		imagesEnabled:     true,
+		previewPoster:     "IMAGE-POSTER",
+		previewPosterOpID: 3,
+		previewOverview:   "plot",
+	}
+
+	before := m.overlayLayoutKey()
+	m.loadingProviders = 3
+	m.totalProviders = 5
+	m.statusText = "searching providers"
+	m.previewSkipInfo = ""
+	if got := m.overlayLayoutKey(); got != before {
+		t.Error("source/status churn changed the overlay layout key")
+	}
+}
+
 // TestReaderHelpReplacesPage pins the reader help contract: ? draws the help
 // overlay in the page slot, so the page beneath it is no longer an on-screen
 // placement (Kitty must delete it, Sixel/iTerm2 must clear).

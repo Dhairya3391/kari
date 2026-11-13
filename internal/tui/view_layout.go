@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"kari/internal/model"
 	"kari/internal/provider"
@@ -186,6 +187,17 @@ func (m *modelImpl) previewPosterVisible() bool {
 	return m.width >= 80 || m.contentWidth() >= 70
 }
 
+// previewHeaderSignature returns the plain text of the preview header's
+// metadata block: the lines a sixel/iterm2 poster shares rows with. Styling
+// is stripped because adaptive/crossfade colors can change without any text
+// being rewritten, and only text writes erase an overlay image.
+func (m *modelImpl) previewHeaderSignature() string {
+	accent := m.currentAccent()
+	data := m.collectPreviewData(m.contentWidth(), m.height, accent)
+	metaW := max(20, data.Width-previewPosterWidth(data))
+	return ansi.Strip(renderPreviewMeta(data, NewStyles(accent), metaW))
+}
+
 func (m *modelImpl) historyPosterVisible() bool {
 	if m.activeView != viewHistory || m.showHelp || m.animeStatusPickerOpen || !m.imagesEnabled || m.historyPoster == "" {
 		return false
@@ -236,6 +248,15 @@ func (m *modelImpl) overlayLayoutKey() string {
 	}
 	if m.previewPosterVisible() {
 		fmt.Fprintf(&placements, "|preview:%d:%d", m.previewPosterOpID, len(m.previewPoster))
+		// Sixel and iTerm2 paint into the text cells, so any line written
+		// under a poster erases that slice of the image. Unlike the search
+		// and history panes, preview metadata arrives asynchronously
+		// (overview, subtitles, skip data, resume), rewriting rows the
+		// poster covers and leaving it broken into horizontal strips.
+		// Folding the header text into the key makes such a change request
+		// the screen clear that repaints the poster over the new layout.
+		placements.WriteByte(':')
+		placements.WriteString(m.previewHeaderSignature())
 	}
 	if m.historyPosterVisible() {
 		fmt.Fprintf(&placements, "|history:%d:%d", m.historyPosterOpID, len(m.historyPoster))
