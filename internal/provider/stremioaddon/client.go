@@ -308,16 +308,12 @@ func (c *Client) searchCatalogs(ctx context.Context, query string) ([]provider.S
 					if meta.ID == "" || meta.Name == "" || (query != "" && !catalogSupportsSearch(catalog) && !metaMatchesQuery(meta, query)) {
 						continue
 					}
-					mediaType := provider.MediaTypeMovie
-					if catalog.Type == "series" {
-						mediaType = provider.MediaTypeTV
-					}
 					resultsByCatalog[index] = append(resultsByCatalog[index], provider.SearchResult{
 						Title:     meta.Name,
 						ID:        c.Name() + "/" + catalog.Type + "/" + meta.ID,
 						Type:      provider.ModeStremio,
 						Year:      meta.ReleaseInfo,
-						MediaType: mediaType,
+						MediaType: catalogMediaType(catalog.Type),
 						CoverURL:  meta.Poster,
 						Overview:  meta.Description,
 						Genres:    append([]string(nil), meta.Genres...),
@@ -433,8 +429,25 @@ func (c *Client) parseStremioHandle(raw string) (kind, itemID string, ok bool) {
 	return parts[1], parts[2], true
 }
 
+// supportedCatalogType reports whether Kari can browse and resolve a Stremio
+// catalog type. "tv" is Stremio's live-channel and live-event type, used by
+// sports and IPTV addons that have no movie or series catalogs at all.
 func supportedCatalogType(mediaType string) bool {
-	return mediaType == "movie" || mediaType == "series"
+	return mediaType == "movie" || mediaType == "series" || mediaType == "tv"
+}
+
+// catalogMediaType maps a Stremio catalog type onto Kari's media-type
+// vocabulary. Live rows resolve straight from the search result instead of
+// opening an episode list, which is the shape live catalogs describe.
+func catalogMediaType(catalogType string) string {
+	switch catalogType {
+	case "series":
+		return provider.MediaTypeTV
+	case "tv":
+		return provider.MediaTypeLive
+	default:
+		return provider.MediaTypeMovie
+	}
 }
 
 func catalogSupportsSearch(catalog addonCatalog) bool {
@@ -459,7 +472,9 @@ func metaMatchesQuery(meta addonMeta, query string) bool {
 // FetchEpisodes returns addon metadata episodes or delegates to Kari's TMDB catalog.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	if kind, itemID, ok := c.parseStremioHandle(series.ID); ok {
-		if kind == "movie" {
+		// Movie and live ("tv") catalog items are single playable rows; only
+		// series catalogs carry a video listing to fetch.
+		if kind != "series" {
 			return []provider.Episode{{ID: itemID, Title: series.Title}}, nil
 		}
 		return c.fetchCatalogEpisodes(ctx, itemID)

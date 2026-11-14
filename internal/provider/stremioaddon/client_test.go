@@ -71,6 +71,53 @@ func TestClientLoadsManifestAndResolvesStream(t *testing.T) {
 	}
 }
 
+func TestClientBrowsesLiveTVCatalogs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/manifest.json":
+			fmt.Fprint(w, `{"id":"tv.test","name":"Live Addon","types":["tv"],"resources":["catalog","meta","stream"],"catalogs":[{"type":"tv","id":"live","name":"Live Events","extra":[{"name":"search"}]}]}`)
+		case "/catalog/tv/live.json", "/catalog/tv/live/search=arsenal.json":
+			fmt.Fprint(w, `{"metas":[{"id":"stremevent_1","type":"tv","name":"Arsenal vs Chelsea"}]}`)
+		case "/stream/tv/stremevent_1.json":
+			fmt.Fprint(w, `{"streams":[{"name":"SV3","title":"HD","url":"https://cdn.example/live.m3u8","behaviorHints":{"proxyHeaders":{"request":{"Referer":"https://addon.example/"}}}}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), server.Client())
+	if err != nil {
+		t.Fatalf("NewClientWithHTTP() error = %v", err)
+	}
+	modes := client.Modes()
+	if len(modes) != 1 || modes[0].Name != provider.ModeStremio {
+		t.Fatalf("Modes() = %v, want Stremio catalog mode only", modes)
+	}
+	results, err := client.Search(context.Background(), "arsenal", provider.ModeStremio)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) != 1 || results[0].MediaType != provider.MediaTypeLive {
+		t.Fatalf("Search() = %+v, want one live result", results)
+	}
+	episodes, err := client.FetchEpisodes(context.Background(), results[0])
+	if err != nil || len(episodes) != 1 {
+		t.Fatalf("FetchEpisodes() = %+v, %v; want one playable row", episodes, err)
+	}
+	sources, err := client.ResolveSource(context.Background(), results[0].ID, episodes[0])
+	if err != nil || len(sources) != 1 {
+		t.Fatalf("ResolveSource() = %+v, %v", sources, err)
+	}
+	if sources[0].Type != provider.SourceTypeHLS || sources[0].Referer != "https://addon.example/" {
+		t.Fatalf("ResolveSource() = %+v, want HLS source with addon referer", sources[0])
+	}
+	if err := client.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe() error = %v", err)
+	}
+}
+
 func TestProbeRejectsAddonWithoutPlayableCatalogStreams(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
