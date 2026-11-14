@@ -216,6 +216,43 @@ func TestPreviewDForDownloadAndDForDownloadsTab(t *testing.T) {
 	}
 }
 
+// D downloads the highlighted row first, even when a different provider is
+// configured as the preferred one.
+func TestPreviewDDownloadsSelectedSource(t *testing.T) {
+	m := previewRetryModel()
+	m.appMode = provider.ModeAnime
+	m.qualityMode = qualityAll
+	m.preferredProviders = map[string]string{string(provider.ModeAnime): "preferred"}
+	preferred := provider.MediaSource{URL: "https://cdn.example.com/preferred.m3u8", Quality: "1080p", Resolver: "preferred"}
+	selected := provider.MediaSource{URL: "https://cdn.example.com/selected.m3u8", Quality: "720p", Resolver: "other"}
+	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "Frieren", Playback: []provider.MediaSource{preferred, selected}})
+
+	target := -1
+	for i, source := range m.rankedSources {
+		if source.Source.URL == selected.URL {
+			target = i
+			break
+		}
+	}
+	if target < 0 {
+		t.Fatalf("selected source missing from ranked list: %v", urls(m.rankedSources))
+	}
+	m.previewSelectedIndex = target
+	m.manualPlaybackSelected = true
+
+	mdl, _ := m.updatePreview(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("D")})
+	m = mdl.(*modelImpl)
+	if m.singleResolved == nil || len(m.singleResolved.Playback) == 0 {
+		t.Fatal("D did not queue a download")
+	}
+	if got := m.singleResolved.Playback[0].URL; got != selected.URL {
+		t.Errorf("download starts from %q, want highlighted source %q", got, selected.URL)
+	}
+	if got := m.manualDownloadQualityLabel(); got != "720p" {
+		t.Errorf("manual download quality label = %q, want 720p", got)
+	}
+}
+
 func TestPreviewRetryPreservesDeliveredSources(t *testing.T) {
 	m := previewRetryModel()
 	reg := &provider.Registry{}

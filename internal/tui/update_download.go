@@ -46,6 +46,9 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 	completedTitle := m.downloadTitle
 	completedSize := m.downloadTotalSize
 	qualityLabel := downloadQualityLabel(m.effectiveDownloadQuality())
+	if actual := m.manualDownloadQualityLabel(); actual != "" {
+		qualityLabel = actual
+	}
 	outputDir := m.downloadOutputDir
 
 	m.downloadProgress = 0

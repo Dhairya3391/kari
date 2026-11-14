@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"kari/internal/downloader"
 	"kari/internal/provider"
+	"kari/internal/ranking"
 	"kari/internal/service"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -83,6 +84,42 @@ func (m *modelImpl) effectiveDownloadQuality() int {
 		return m.qualityMode
 	}
 }
+
+// manualDownloadQualityLabel names the highlighted source of an active single
+// download. It is empty while no single download is tracked, such as a pending
+// job that re-resolves its sources on resume.
+func (m *modelImpl) manualDownloadQualityLabel() string {
+	if m.singleResolved == nil || len(m.singleResolved.Playback) == 0 {
+		return ""
+	}
+	return downloadSourceQualityLabel(m.singleResolved.Playback[0].Quality)
+}
+
+// downloadSourceQualityLabel names the resolution of the source a manual
+// download actually fetched. The highlighted row can differ from the
+// configured download quality tier, so the queue must not keep advertising
+// the setting's label.
+func downloadSourceQualityLabel(quality string) string {
+	if quality == "" {
+		return ""
+	}
+	if ranking.IsAdaptiveQuality(quality) {
+		return "Auto"
+	}
+	switch res := ranking.ParseResolution(quality); {
+	case res >= 2160:
+		return "4K"
+	case res >= 1080:
+		return "1080p"
+	case res >= 720:
+		return "720p"
+	case res > 0:
+		return "480p"
+	default:
+		return ""
+	}
+}
+
 func downloadQualityLabel(effectiveQuality int) string {
 	switch effectiveQuality {
 	case 10:

@@ -411,7 +411,8 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "D":
-		if m.resolved == nil || len(m.resolved.Playback) == 0 {
+		sources := m.orderedPlaybackSources()
+		if m.resolved == nil || len(sources) == 0 {
 			if m.loading {
 				m.setStatus(statusWarn, "Preparing playback, please wait...")
 			} else {
@@ -426,7 +427,10 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		opID := m.newOpID()
 		m.downloadOpID = opID
 		resolved := *m.resolved
-		resolved.Playback = m.orderedPlaybackSources()
+		// The highlighted source is the user's explicit choice, so it leads
+		// the list. The remaining rows stay as ordered fallbacks in case the
+		// selected transport fails.
+		resolved.Playback = sources
 		m.singleResolved = &resolved
 		if m.downloadService != nil && m.selectedSeries != nil && m.selectedEpisode != nil {
 			job := service.DownloadJob{Series: *m.selectedSeries, Episode: *m.selectedEpisode, Mode: m.appMode}

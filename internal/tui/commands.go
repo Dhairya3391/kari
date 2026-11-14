@@ -270,7 +270,8 @@ func (m *modelImpl) loadStartupAddonCmd(manifestURL string) tea.Cmd {
 }
 
 func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
-	resolved.Playback = ranking.PreferProvider(resolved.Playback, m.preferredProviderForMode(m.appMode))
+	// The caller preserves the highlighted source at the front. Re-applying
+	// the preferred provider here would silently download a different row.
 	if len(resolved.Subtitles) == 0 && len(m.rawSubtitles) > 0 {
 		resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
 	}

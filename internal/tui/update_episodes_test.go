@@ -973,3 +973,27 @@ func TestEpisodesFilter_CtrlF(t *testing.T) {
 		t.Errorf("ctrl+f must trigger episodeFiltering")
 	}
 }
+
+func TestDownloadSourceQualityLabel(t *testing.T) {
+	tests := []struct {
+		quality string
+		want    string
+	}{
+		{"", ""},
+		{"Unknown", ""},
+		{"Auto", "Auto"},
+		{"Auto (HD1)", "Auto"},
+		{"2160p", "4K"},
+		{"4K [MovieBox]", "4K"},
+		{"1080p", "1080p"},
+		{"1440p", "1080p"},
+		{"720p", "720p"},
+		{"480p", "480p"},
+		{"360p", "480p"},
+	}
+	for _, tt := range tests {
+		if got := downloadSourceQualityLabel(tt.quality); got != tt.want {
+			t.Errorf("downloadSourceQualityLabel(%q) = %q, want %q", tt.quality, got, tt.want)
+		}
+	}
+}

@@ -671,10 +671,14 @@ func (m *modelImpl) collectDownloadsData(width, height int, accent lipgloss.Adap
 		} else if m.resolved != nil && m.resolved.SeriesTitle != "" {
 			title = m.resolved.DisplayTitle()
 		}
+		actualQuality := qualityName
+		if label := m.manualDownloadQualityLabel(); label != "" {
+			actualQuality = label
+		}
 
 		active = append(active, ActiveDownload{
 			Title:      title,
-			Quality:    qualityName,
+			Quality:    actualQuality,
 			Progress:   m.downloadProgress / 100.0,
 			Speed:      m.downloadSpeed,
 			ETA:        m.downloadETA,
