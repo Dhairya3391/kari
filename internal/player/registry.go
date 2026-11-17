@@ -61,8 +61,6 @@ func (r *Registry) PlayWithSources(sources []provider.MediaSource, media model.R
 	}
 
 	playerLog.Debug("trying player", "player", p.Name(), "available", p.Available())
-	// If this is the explicitly preferred player, we try it even if it says it's unavailable,
-	// to bypass broken Android package detection.
 	if !p.Available() && p.Name() != playerName(preferred) {
 		return PlaybackResult{}, fmt.Errorf("player %s is not available", p.Name())
 	}

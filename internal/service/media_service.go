@@ -1,33 +1,64 @@
 package service
 
 import (
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"kari/internal/httpclient"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/timeouts"
 	"kari/internal/util"
 
 	"golang.org/x/sync/singleflight"
 )
 
 const (
-	searchCacheTTL        = 5 * time.Minute
-	searchCacheMax        = 100
-	episodesCacheTTL      = 15 * time.Minute
-	episodesCacheMax      = 200
-	searchTimeout         = 8 * time.Second
-	singleSearchTimeout   = 10 * time.Second
-	searchOverallTimeout  = 12 * time.Second
-	sourceTimeout         = 20 * time.Second
-	sourcesOverallTimeout = 45 * time.Second
+	searchCacheTTL   = 5 * time.Minute
+	searchCacheMax   = 100
+	episodesCacheTTL = 15 * time.Minute
+	episodesCacheMax = 200
+
+	// Operation budgets live in internal/timeouts. The local aliases keep
+	// call sites short and let tests reference the same names as before.
+	searchTimeout               = timeouts.SearchPerProvider
+	singleSearchTimeout         = timeouts.SearchPerProvider
+	searchOverallTimeout        = timeouts.SearchOverall
+	sourceTimeout               = timeouts.SourcePerProvider
+	sourcesOverallTimeout       = timeouts.SourceOverall
+	searchGrace                 = timeouts.SearchGrace
+	searchGraceFast             = timeouts.SearchGraceFast
+	searchFirstResultTimeout    = timeouts.SearchFirstResult
+	manifestProbeTimeout        = timeouts.ManifestRequest
+	manifestClientTimeout       = timeouts.ManifestRequest
+	manifestBatchProbeTimeout   = timeouts.ManifestBatch
+	manifestQualityProbeTimeout = timeouts.ManifestQuality
+
+	// searchGraceBulk is the result count that switches a fan-out to the fast
+	// window. One provider's full page is normally a complete answer; the
+	// remaining stragglers are still collected by the backfill pass.
+	searchGraceBulk = 8
+
+	// manifestProbeConcurrency bounds parallel playlist fetches. It must be at
+	// least as large as a provider's adaptive row count (Miruro emits ~12) so
+	// one batch completes in a single wave.
+	manifestProbeConcurrency = 16
 )
 
 type searchCacheEntry struct {
 	results  []provider.SearchResult
 	query    string
 	warnings []string
+	cachedAt time.Time
+}
+
+// searchBackfillEntry holds results that arrived after an early search
+// return. It is merged into later queries so slow providers still contribute
+// rows instead of being lost to the grace window.
+type searchBackfillEntry struct {
+	results  []provider.SearchResult
 	cachedAt time.Time
 }
 
@@ -52,20 +83,29 @@ type MediaService struct {
 	disabledProviders  map[string]bool
 	providerGeneration uint64
 
-	searchCache   *util.BoundedCache[searchCacheEntry]
-	episodesCache *util.BoundedCache[episodesCacheEntry]
-	episodeTitles *util.BoundedCache[map[int]string]
-	sf            singleflight.Group
+	searchCache    *util.BoundedCache[searchCacheEntry]
+	searchBackfill *util.BoundedCache[searchBackfillEntry]
+	// searchBackfillMu makes each collector's read-union-write of a cache key
+	// atomic, so overlapping collectors cannot overwrite one another's rows.
+	searchBackfillMu sync.Mutex
+	episodesCache    *util.BoundedCache[episodesCacheEntry]
+	episodeTitles    *util.BoundedCache[map[int]string]
+	sf               singleflight.Group
+	// manifestHTTP is shared across every resolve batch so playlist probes
+	// reuse connections instead of building a transport per batch.
+	manifestHTTP *http.Client
 }
 
 // NewMediaService constructs a MediaService.
 func NewMediaService(registry *provider.Registry) *MediaService {
 	return &MediaService{
-		registry:      registry,
-		health:        &provider.Health{},
-		searchCache:   util.NewBoundedCache[searchCacheEntry](searchCacheMax),
-		episodesCache: util.NewBoundedCache[episodesCacheEntry](episodesCacheMax),
-		episodeTitles: util.NewBoundedCache[map[int]string](200),
+		registry:       registry,
+		health:         &provider.Health{},
+		searchCache:    util.NewBoundedCache[searchCacheEntry](searchCacheMax),
+		searchBackfill: util.NewBoundedCache[searchBackfillEntry](searchCacheMax),
+		episodesCache:  util.NewBoundedCache[episodesCacheEntry](episodesCacheMax),
+		episodeTitles:  util.NewBoundedCache[map[int]string](200),
+		manifestHTTP:   httpclient.NewWithTimeout(manifestClientTimeout),
 	}
 }
 
@@ -124,6 +164,14 @@ func (s *MediaService) SetDisabledProviders(names []string) {
 	}
 	if s.searchCache != nil {
 		s.searchCache.Clear()
+	}
+	if s.searchBackfill != nil {
+		// Same lock order as collectSearchBackfill (disabledMu before
+		// searchBackfillMu): a collector cannot write stale rows between the
+		// generation bump and this clear.
+		s.searchBackfillMu.Lock()
+		s.searchBackfill.Clear()
+		s.searchBackfillMu.Unlock()
 	}
 	if s.episodesCache != nil {
 		s.episodesCache.Clear()

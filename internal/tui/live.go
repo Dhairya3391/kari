@@ -1,12 +1,13 @@
 package tui
 
 // Package screens contains pure render functions for each UI screen.
-// This file handles the Live TV / Sports results view (plan §5.5).
+// This file handles the Live TV / Sports guide view (plan §5.5).
 //
-// Live results are grouped into: "Live now", "Today", "Tomorrow", "Later",
-// and optionally "Channels". The grouping comes exclusively from the
-// explicit SearchResult.Live, SearchResult.StartsAt, and SearchResult.Group
-// fields — the Year field is never interpreted as schedule text.
+// Live is a two-pane guide: a grouped, scannable list on the left and an
+// "On now" inspector on the right. Temporal grouping and category headings
+// come from service.BuildLiveGuide; this file only renders the prepared rows.
+// The artwork slot is sized here to the same dimensions the fetch uses, so a
+// persistent terminal image can never paint over the list beneath it.
 
 import (
 	"fmt"
@@ -16,319 +17,342 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/provider"
+	"kari/internal/service"
 )
-
-// liveGroup names the display sections for live results.
-type liveGroup int
 
 const (
-	liveGroupNow      liveGroup = iota // ● live right now
-	liveGroupToday                     // scheduled for later today
-	liveGroupTomorrow                  // scheduled for tomorrow
-	liveGroupLater                     // more than a day away
-	liveGroupChannels                  // static channel entries
+	// liveInspectorMinWidth is the content width at which the guide can show
+	// the inspector without squeezing the channel list below a readable size.
+	liveInspectorMinWidth = 70
+	liveInspectorMaxWidth = 36
+	// liveInspectorGap is " │ " between the list and the inspector.
+	liveInspectorGap = 3
+	// liveHintRows reserves room for the scroll-up and scroll-down hints.
+	liveHintRows = 2
+	// livePosterInset keeps the artwork a cell off the inspector's left edge.
+	livePosterInset = 1
+	// liveMinInspectorHeight leaves room for the fixed artwork slot plus the
+	// text beneath it; below it the guide falls back to a single column.
+	liveMinInspectorHeight = 17
+	// liveStatusCellWidth is the fixed width of the LIVE / time label column.
+	liveStatusCellWidth = 6
+	// liveProviderWidth is the fixed width of the integration alias column.
+	liveProviderWidth = 10
 )
 
-// liveGroupName is the dim header shown above each group.
-var liveGroupName = map[liveGroup]string{
-	liveGroupNow:      "Live now",
-	liveGroupToday:    "Today",
-	liveGroupTomorrow: "Tomorrow",
-	liveGroupLater:    "Later",
-	liveGroupChannels: "Channels",
-}
-
-// liveEntry pairs a result with its resolved group and display time.
-type liveEntry struct {
-	result       *provider.SearchResult
-	group        liveGroup
-	timeLabel    string // "live" or "HH:MM"
-	providerName string // integration serving the stream, e.g. "Famelack"
-}
-
-type liveChannelGroup struct {
-	name    string
-	indices []int
-}
-
-// classifyLiveResult maps a SearchResult into the appropriate liveGroup
-// using only the explicit scheduling fields: Live marks live-now, a future
-// StartsAt sorts into Today/Tomorrow/Later with the local time as label,
-// and a Channel group overrides the schedule column. A result with no
-// scheduling data at all lands in Later with a placeholder label.
-func classifyLiveResult(r provider.SearchResult) (liveGroup, string) {
-	return classifyLiveResultAt(r, time.Now())
-}
-
-func classifyLiveResultAt(r provider.SearchResult, now time.Time) (liveGroup, string) {
-
-	if r.Group == "Channel" {
-		return liveGroupChannels, "—"
-	}
-	if !r.StartsAt.IsZero() {
-		diff := r.StartsAt.Sub(now)
-		if diff <= 0 {
-			if now.Sub(r.StartsAt) > provider.LiveEventMaxDuration {
-				return liveGroupLater, "Ended"
-			}
-			return liveGroupNow, "live"
-		}
-		if sameLiveDate(r.StartsAt, now) {
-			return liveGroupToday, r.StartsAt.Format("15:04")
-		}
-		tomorrow := now.AddDate(0, 0, 1)
-		if sameLiveDate(r.StartsAt, tomorrow) {
-			return liveGroupTomorrow, r.StartsAt.Format("15:04")
-		}
-		return liveGroupLater, r.StartsAt.Format("Mon 15:04")
-	}
-	if r.Live {
-		return liveGroupNow, "live"
-	}
-	return liveGroupLater, "—"
-}
-
-func sameLiveDate(left, right time.Time) bool {
-	leftYear, leftMonth, leftDay := left.Date()
-	rightYear, rightMonth, rightDay := right.Date()
-	return leftYear == rightYear && leftMonth == rightMonth && leftDay == rightDay
-}
-
-// groupOrder is the section display order per plan §5.5.
-var groupOrder = []liveGroup{
-	liveGroupNow,
-	liveGroupToday,
-	liveGroupTomorrow,
-	liveGroupLater,
-	liveGroupChannels,
-}
-
-// RenderLiveResultsScreen renders the Live TV / Sports results view.
-// Results are grouped into temporal sections with a time column.
+// RenderLiveResultsScreen renders the Live TV / Sports guide view.
 func RenderLiveResultsScreen(data ResultsData) string {
 	st := NewStyles(data.Accent)
-
-	// Header
-	var rows []string
-	rows = append(rows, queryLine(data))
-	if data.PosterBlock != "" {
-		rows = append(rows, data.PosterBlock)
-	}
-	rows = append(rows, "")
-
-	if len(data.Results) == 0 {
-		rows = append(rows,
-			"No live content available.",
-			st.Dim.Render("Press r to refresh."),
-		)
-		return strings.Join(rows, "\n")
-	}
-
-	// Keep only result indices in group buckets. Copying every SearchResult
-	// here on every cursor move creates large amounts of garbage for catalogs
-	// with thousands of channels.
-	var byGroup [liveGroupChannels + 1][]int
-	showProvider := false
 	now := time.Now()
-	selectedGroup, selectedRank := liveGroup(-1), -1
-	for i := range data.Results {
-		result := &data.Results[i]
-		group, _ := classifyLiveResultAt(*result, now)
+	width := max(20, data.Width)
+
+	// Rebuild the guide when it is missing or stale. A guide built from a
+	// different result slice would put the highlight on the wrong row.
+	if data.LiveGuide == nil || !liveGuideMatches(data) {
+		guide := service.BuildLiveGuide(data.Results, data.SelectedIndex, now)
+		data.LiveGuide = &guide
+	}
+	showProvider := false
+	for _, result := range data.Results {
 		if result.Provider != "" {
 			showProvider = true
+			break
 		}
-		if i == data.SelectedIndex {
-			selectedGroup = group
-			selectedRank = len(byGroup[group])
-		}
-		byGroup[group] = append(byGroup[group], i)
-	}
-	channelGroups := make([]liveChannelGroup, 0)
-	channelGroupIndex := make(map[string]int)
-	selectedChannelBucket, selectedChannelOffset := -1, -1
-	for _, index := range byGroup[liveGroupChannels] {
-		result := &data.Results[index]
-		name := categoryFromGenres(result.Genres)
-		if name == "" {
-			name = "Other channels"
-		}
-		bucket, ok := channelGroupIndex[name]
-		if !ok {
-			bucket = len(channelGroups)
-			channelGroupIndex[name] = bucket
-			channelGroups = append(channelGroups, liveChannelGroup{name: name})
-		}
-		if index == data.SelectedIndex {
-			selectedChannelBucket = bucket
-			selectedChannelOffset = len(channelGroups[bucket].indices)
-		}
-		channelGroups[bucket].indices = append(channelGroups[bucket].indices, index)
 	}
 
-	totalRows := 0
-	selectedPosition := -1
-	for _, group := range groupOrder {
-		count := len(byGroup[group])
-		if count == 0 {
-			continue
-		}
-		if group == selectedGroup {
-			if group != liveGroupChannels {
-				selectedPosition = totalRows + 1 + selectedRank
-			}
-		}
-		if group == liveGroupChannels {
-			totalRows += count + len(channelGroups) + 2
-			if selectedChannelBucket >= 0 {
-				selectedPosition = totalRows - count - len(channelGroups) - 2 + 1 + selectedChannelBucket + selectedChannelOffset
-				for i := 0; i < selectedChannelBucket; i++ {
-					selectedPosition += len(channelGroups[i].indices)
-				}
-			}
-		} else {
-			totalRows += count + 2 // section heading and the section spacer
+	showInspector := width >= liveInspectorMinWidth && data.Height >= liveMinInspectorHeight
+	inspectorW := 0
+	listW := width
+	if showInspector {
+		inspectorW = min(liveInspectorMaxWidth, max(24, width*30/100))
+		listW = width - inspectorW - liveInspectorGap
+		if listW < 40 {
+			listW = 40
+			inspectorW = max(20, width-listW-liveInspectorGap)
 		}
 	}
-	start, end, above, below := windowRange(totalRows, selectedPosition, data.Height, 3)
+
+	strip := renderLiveStatusStrip(data, st, width, showInspector, now)
+	if len(data.Results) == 0 {
+		return strings.Join(append(strip,
+			"",
+			"No live channels available.",
+			st.Dim.Render(liveEmptyHint(data)),
+		), "\n")
+	}
+
+	viewport := max(3, data.Height-len(strip)-1-liveHintRows)
+	guideRows, selectedRow := liveGuideRows(data, now, listW, showProvider, st)
+	visible, above, below := windowRows(guideRows, selectedRow, viewport)
+
+	var list []string
 	if hint := windowHint(above, true, st); hint != "" {
-		rows = append(rows, hint)
+		list = append(list, hint)
 	}
-	flatPosition := 0
-	for _, group := range groupOrder {
-		indices := byGroup[group]
-		if len(indices) == 0 {
-			continue
-		}
-		if flatPosition >= start && flatPosition < end {
-			heading := liveGroupName[group]
-			if group == liveGroupChannels {
-				heading = fmt.Sprintf("Channels · %d", len(indices))
-			} else {
-				heading = fmt.Sprintf("%s · %d", heading, len(indices))
-			}
-			rows = append(rows, st.Dim.Render(heading))
-		}
-		flatPosition++
-		if group == liveGroupChannels {
-			for _, channelGroup := range channelGroups {
-				if flatPosition >= start && flatPosition < end {
-					rows = append(rows, st.Dim.Render(fmt.Sprintf("  %s · %d", channelGroup.name, len(channelGroup.indices))))
-				}
-				flatPosition++
-				for _, index := range channelGroup.indices {
-					if flatPosition >= start && flatPosition < end {
-						result := &data.Results[index]
-						_, timeLabel := classifyLiveResultAt(*result, now)
-						providerName := data.ProviderNames[result.Provider]
-						if providerName == "" {
-							providerName = result.Provider
-						}
-						entry := liveEntry{result: result, group: group, timeLabel: timeLabel, providerName: providerName}
-						rows = append(rows, renderLiveRow(entry, index == data.SelectedIndex, showProvider, data.Width, st))
-					}
-					flatPosition++
-				}
-			}
-			if flatPosition >= start && flatPosition < end {
-				rows = append(rows, "")
-			}
-			flatPosition++
-			continue
-		}
-		for _, index := range indices {
-			if flatPosition >= start && flatPosition < end {
-				result := &data.Results[index]
-				_, timeLabel := classifyLiveResultAt(*result, now)
-				providerName := data.ProviderNames[result.Provider]
-				if providerName == "" {
-					providerName = result.Provider
-				}
-				entry := liveEntry{
-					result:       result,
-					group:        group,
-					timeLabel:    timeLabel,
-					providerName: providerName,
-				}
-				rows = append(rows, renderLiveRow(entry, index == data.SelectedIndex, showProvider, data.Width, st))
-			}
-			flatPosition++
-		}
-		if flatPosition >= start && flatPosition < end {
-			rows = append(rows, "")
-		}
-		flatPosition++
-	}
+	list = append(list, visible...)
 	if hint := windowHint(below, false, st); hint != "" {
-		rows = append(rows, hint)
+		list = append(list, hint)
+	}
+	list = padLines(list, viewport+liveHintRows)
+
+	body := make([]string, 0, len(strip)+1+len(list))
+	body = append(body, strip...)
+	body = append(body, "")
+
+	if !showInspector {
+		for _, line := range list {
+			body = append(body, padCells(line, width))
+		}
+		return strings.Join(body, "\n")
 	}
 
-	return strings.Join(rows, "\n")
+	inspector := renderLiveInspector(data, now, inspectorW, len(list), st)
+	for i, line := range list {
+		body = append(body, padCells(line, listW)+" │ "+padCells(inspector[i], inspectorW))
+	}
+	return strings.Join(body, "\n")
 }
 
-// renderLiveRow renders a single live result row with cursor, live indicator,
-// title, group/category, provider, and time label. The provider column is
-// omitted when showProvider is false so fixtures without provider attribution
-// keep the compact layout.
-func renderLiveRow(e liveEntry, isFocused, showProvider bool, width int, st Styles) string {
+// renderLiveStatusStrip builds the count strip that replaces the generic
+// results count. The section containing the selection is accented.
+func renderLiveStatusStrip(data ResultsData, st Styles, width int, showInspector bool, now time.Time) []string {
+	counts := service.LiveCounts{}
+	active := liveActiveSection(data)
+	if data.LiveGuide != nil {
+		counts = data.LiveGuide.Counts
+	}
+
+	tokens := []struct {
+		label string
+		count int
+		kind  service.LiveSectionKind
+	}{
+		{"LIVE NOW", counts.Now, service.LiveSectionNow},
+		{"UPCOMING", counts.Upcoming, service.LiveSectionUpcoming},
+		{"CHANNELS", counts.Channels, service.LiveSectionChannels},
+	}
+	parts := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		label := fmt.Sprintf("%s %d", token.label, token.count)
+		if token.kind == active {
+			parts = append(parts, st.Current.Render(label))
+		} else {
+			parts = append(parts, st.Dim.Render(label))
+		}
+	}
+	left := strings.Join(parts, "   ")
+
+	right := "live feed"
+	if !data.LiveUpdatedAt.IsZero() {
+		right = "updated " + data.LiveUpdatedAt.Format("15:04:05")
+	}
+	if data.LiveSources > 0 {
+		right = fmt.Sprintf("%d sources · %s", data.LiveSources, right)
+	}
+	right = st.Dim.Render(right)
+
+	var first string
+	if lipgloss.Width(left)+lipgloss.Width(right)+2 <= width {
+		first = left + strings.Repeat(" ", width-lipgloss.Width(left)-lipgloss.Width(right)) + right
+	} else {
+		first = padCells(left, max(10, width-lipgloss.Width(right)-1)) + " " + right
+	}
+
+	strip := []string{first, st.Dim.Render(strings.Repeat("─", width))}
+	if !showInspector {
+		if label, title := liveSelectedSummary(data, now); label != "" {
+			strip = append(strip, st.Current.Render(label)+" "+st.Dim.Render(truncate(title, width-lipgloss.Width(label)-1)))
+		}
+	}
+	return strip
+}
+
+// liveGuideRows renders the prepared guide rows in display order and returns
+// the rendered position of the selected row. The returned index is in the same
+// space as the rendered rows (which include section headings and spacers), so
+// it can be passed directly to windowRows; LiveGuide.SelectedRow indexes the
+// unprepared guide.Rows and is not usable for scrolling.
+func liveGuideRows(data ResultsData, now time.Time, width int, showProvider bool, st Styles) ([]string, int) {
+	if data.LiveGuide == nil {
+		return nil, -1
+	}
+	var rows []string
+	selectedRow := -1
+	for _, section := range data.LiveGuide.Sections {
+		rows = append(rows, st.Bold.Render(fmt.Sprintf("%s · %d", strings.ToUpper(section.Title), section.Count)))
+		for _, row := range data.LiveGuide.Rows {
+			if row.Section != section.Kind {
+				continue
+			}
+			if row.Kind == service.LiveRowCategory {
+				rows = append(rows, st.Dim.Render(fmt.Sprintf("  %s · %d", row.Label, row.Count)))
+				continue
+			}
+			if row.Index < 0 || row.Index >= len(data.Results) {
+				continue
+			}
+			name := liveProviderName(data, data.Results[row.Index])
+			if row.Index == data.SelectedIndex {
+				selectedRow = len(rows)
+			}
+			rows = append(rows, renderLiveRow(
+				data.Results[row.Index],
+				row.Index == data.SelectedIndex,
+				name,
+				showProvider,
+				now,
+				width,
+				st,
+			))
+		}
+		rows = append(rows, "")
+	}
+	return rows, selectedRow
+}
+
+// renderLiveRow renders one selectable stream: cursor, status, title, and the
+// integration alias when any result carries one.
+func renderLiveRow(result provider.SearchResult, focused bool, providerName string, showProvider bool, now time.Time, width int, st Styles) string {
 	cursor := "  "
-	if isFocused {
+	if focused {
 		cursor = st.Cursor.Render("▌ ")
 	}
 
-	// Live indicator: ● for live now, space otherwise.
-	liveIcon := "  "
-	if e.group == liveGroupNow {
-		liveIcon = st.Ok.Render("● ")
+	label := service.LiveTimeLabel(result, now)
+	if label == "LIVE" {
+		label = "● LIVE"
+	}
+	cell := fmt.Sprintf("%-*s", liveStatusCellWidth, label)
+	if focused || label == "● LIVE" {
+		cell = st.Current.Render(cell)
+	} else {
+		cell = st.Dim.Render(cell)
 	}
 
-	// Time label (right-aligned in a fixed column).
-	timeCol := fmt.Sprintf("%6s", e.timeLabel)
-
-	// Category / group label (dim).
-	category := e.result.Group
-	if category == "" || category == "Channel" {
-		category = categoryFromGenres(e.result.Genres)
-	}
-	catW := 14
-	catStr := st.Dim.Render(truncate(category, catW) + strings.Repeat(" ", max(0, catW-lipgloss.Width(category))))
-
-	// Title width = available space minus fixed cols.
-	provW := 10
-	fixedW := lipgloss.Width(cursor) + lipgloss.Width(liveIcon) + catW + len(timeCol) + 4
+	// cursor (2) + status (6) + two 2-cell gaps, plus the provider column
+	// when present. Every row must fit listW exactly or padCells clips it.
+	fixed := 2 + liveStatusCellWidth + 2 + 2
 	if showProvider {
-		fixedW += provW + 2
+		fixed += liveProviderWidth
 	}
-	titleW := max(20, width-fixedW)
-
-	title := e.result.Title
-	titleTrunc := truncate(title, titleW)
-	titlePadded := titleTrunc + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
-	if isFocused {
-		titlePadded = st.Current.Render(titleTrunc) + strings.Repeat(" ", max(0, titleW-lipgloss.Width(titleTrunc)))
+	titleW := max(12, width-fixed)
+	title := truncate(result.Title, titleW)
+	if focused {
+		title = st.Current.Render(title)
+	} else if title == "" {
+		title = st.Dim.Render("—")
 	}
+	titleCell := title + strings.Repeat(" ", max(0, titleW-lipgloss.Width(title)))
 
-	timeStr := st.Dim.Render(timeCol)
-	if isFocused {
-		timeStr = st.Current.Render(timeCol)
-	}
-
-	row := fmt.Sprintf("%s%s%s  %s", cursor, liveIcon, titlePadded, catStr)
+	row := cursor + cell + "  " + titleCell
 	if showProvider {
-		provider := e.providerName
-		if provider == "" {
-			provider = "—"
+		if providerName == "" {
+			providerName = "—"
 		}
-		name := truncate(provider, provW)
-		providerStr := st.Dim.Render(name + strings.Repeat(" ", max(0, provW-lipgloss.Width(name))))
-		row += "  " + providerStr
+		row += "  " + st.Dim.Render(fmt.Sprintf("%-*s", liveProviderWidth, truncate(providerName, liveProviderWidth)))
 	}
-	return row + "  " + timeStr
+	return row
 }
 
-// categoryFromGenres picks the first genre as a display category, or empty.
-func categoryFromGenres(genres []string) string {
-	if len(genres) == 0 {
+// renderLiveInspector builds the fixed-height "On now" pane beside the list.
+func renderLiveInspector(data ResultsData, now time.Time, width, height int, st Styles) []string {
+	lines := []string{st.Dim.Render("ON NOW"), ""}
+	poster := strings.Split(fixedBlock(data.PosterBlock, livePosterMaxCols, livePosterRows), "\n")
+	for _, line := range poster {
+		lines = append(lines, strings.Repeat(" ", livePosterInset)+line)
+	}
+	lines = append(lines, "")
+
+	if data.SelectedIndex < 0 || data.SelectedIndex >= len(data.Results) {
+		lines = append(lines, st.Dim.Render("Select a channel"))
+		return padLines(lines, height)
+	}
+	selected := data.Results[data.SelectedIndex]
+	lines = append(lines, strings.Split(wrapFixed(selected.Title, width, 2), "\n")...)
+
+	meta := service.LiveCategory(selected)
+	if name := liveProviderName(data, selected); name != "" {
+		meta += " · " + name
+	}
+	lines = append(lines, st.Dim.Render(truncate(meta, width)))
+
+	if service.LiveTimeLabel(selected, now) == "LIVE" {
+		elapsed := service.LiveElapsedLabel(selected, now)
+		if elapsed == "" {
+			if selected.Group == "Channel" || strings.Contains(service.LiveCategory(selected), "24/7") {
+				elapsed = "24/7"
+			} else {
+				elapsed = "now"
+			}
+		}
+		lines = append(lines, st.Current.Render("● ON AIR")+" "+st.Dim.Render(elapsed))
+	} else if !selected.StartsAt.IsZero() {
+		lines = append(lines, st.Dim.Render("STARTS "+selected.StartsAt.Format("15:04")))
+	} else {
+		lines = append(lines, st.Dim.Render("—"))
+	}
+
+	lines = append(lines, "", st.Dim.Render("UP NEXT"))
+	nextTime, nextTitle := service.LiveUpNext(data.Results, data.SelectedIndex, now)
+	if nextTime == "" {
+		lines = append(lines, st.Dim.Render("  —"))
+	} else {
+		stamp := st.Current.Render("  " + nextTime)
+		lines = append(lines, stamp+" "+st.Dim.Render(truncate(nextTitle, width-lipgloss.Width(stamp)-1)))
+	}
+	lines = append(lines, "", st.Dim.Render("Enter to watch"))
+	return padLines(lines, height)
+}
+
+// liveSelectedSummary provides the compact on-now line used when the inspector
+// is hidden on narrow terminals.
+func liveSelectedSummary(data ResultsData, now time.Time) (string, string) {
+	if data.SelectedIndex < 0 || data.SelectedIndex >= len(data.Results) {
+		return "", ""
+	}
+	selected := data.Results[data.SelectedIndex]
+	return service.LiveTimeLabel(selected, now), selected.Title
+}
+
+func liveActiveSection(data ResultsData) service.LiveSectionKind {
+	if data.LiveGuide == nil {
+		return service.LiveSectionKind(-1)
+	}
+	for _, row := range data.LiveGuide.Rows {
+		if row.Kind == service.LiveRowResult && row.Index == data.SelectedIndex {
+			return row.Section
+		}
+	}
+	return service.LiveSectionKind(-1)
+}
+
+func liveProviderName(data ResultsData, result provider.SearchResult) string {
+	if result.Provider == "" {
 		return ""
 	}
-	return genres[0]
+	if name := data.ProviderNames[result.Provider]; name != "" {
+		return name
+	}
+	return result.Provider
+}
+
+// liveGuideMatches reports whether the prepared guide's selected row still
+// points at the currently selected result.
+func liveGuideMatches(data ResultsData) bool {
+	if data.LiveGuide == nil {
+		return false
+	}
+	row := data.LiveGuide.SelectedRow
+	if row < 0 || row >= len(data.LiveGuide.Rows) {
+		return false
+	}
+	entry := data.LiveGuide.Rows[row]
+	return entry.Kind == service.LiveRowResult && entry.Index == data.SelectedIndex
+}
+
+func liveEmptyHint(data ResultsData) string {
+	if data.LiveSources > 0 {
+		return "r refresh · Space new search · Tab switch mode"
+	}
+	return "Space new search · Tab switch mode"
 }

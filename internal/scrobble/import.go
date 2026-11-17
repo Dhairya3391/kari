@@ -306,9 +306,6 @@ func (c *TraktClient) FetchWatchedHistory(ctx context.Context) ([]WatchedItem, e
 	if !c.IsAuthenticated() {
 		return nil, fmt.Errorf("trakt not connected")
 	}
-	// Best effort: a failed refresh must not block the fetch — the
-	// access token may still be valid (clock skew, transient outage).
-	// A truly dead grant surfaces as a 401 on the history call below.
 	if err := c.RefreshIfNeeded(ctx); err != nil {
 		traktLog.Debug("trakt refresh failed, trying current token", "err", err)
 	}
@@ -326,11 +323,6 @@ func (c *TraktClient) FetchWatchedHistory(ctx context.Context) ([]WatchedItem, e
 				out = append(out, item)
 			}
 		}
-		// The page is exhausted when the API returns fewer raw
-		// records than the page actually holds: mapped items can be
-		// fewer when records are skipped, which must not stop
-		// pagination, and the requested size may be capped below
-		// what was asked for.
 		if page >= pageCount || len(raw) < pageSize {
 			break
 		}

@@ -200,9 +200,6 @@ func Run(t *testing.T, s Spec) {
 	t.Helper()
 	ctx := context.Background()
 
-	// Titles carry ID, Name and a Kind within the provider's declared
-	// kinds; items are ordered and numbered; sources are unique with
-	// URLs and headers when required.
 	t.Run("shapes", func(t *testing.T) {
 		titles, err := s.Search(ctx)
 		if err != nil {
@@ -263,8 +260,6 @@ func Run(t *testing.T, s Spec) {
 		}
 	})
 
-	// Typed errors: not-found surfaces ErrNotFound (never a silent
-	// empty), and cancellation returns within 200ms.
 	t.Run("cancel", func(t *testing.T) {
 		cctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -277,11 +272,6 @@ func Run(t *testing.T, s Spec) {
 		}
 	})
 
-	// Parallel calls are race-safe and leak no goroutines. Warm-up
-	// rounds run until the count stabilizes (transport keep-alive
-	// connections linger by design and need a round or two to settle),
-	// then one measured round must add none. A provider leaking per
-	// call grows every round and still fails.
 	t.Run("race", func(t *testing.T) {
 		round := func() {
 			var wg sync.WaitGroup
@@ -302,8 +292,6 @@ func Run(t *testing.T, s Spec) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
-		// Warm up the transport connection pool so idle persistent connection
-		// goroutines (readLoop/writeLoop) stabilize before baseline measurement.
 		for range 4 {
 			round()
 			settle()

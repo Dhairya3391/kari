@@ -149,8 +149,6 @@ func TestSaveMangaProgressRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStore failed: %v", err)
 	}
-	// Saves run on a background goroutine: Close before TempDir cleanup
-	// or the async write races the directory removal (flaky unlinkat).
 	defer store.Close()
 	const anilistID = 12345
 	key := history.EntryKey{Title: "One Piece", Mode: "manga", MediaType: "manga"}

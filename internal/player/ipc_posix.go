@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// ipcDialRetryInterval is the pause between attempts to connect to mpv's
+// IPC socket. A short interval makes playback-ready detection responsive
+// while the 1s per-attempt dial timeout still tolerates a busy process.
+const ipcDialRetryInterval = 100 * time.Millisecond
+
 func dialIPC(socketPath string, timeout time.Duration) (net.Conn, error) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -20,7 +25,11 @@ func dialIPC(socketPath string, timeout time.Duration) (net.Conn, error) {
 		if err == nil {
 			return conn, nil
 		}
-		time.Sleep(200 * time.Millisecond)
+		remaining := time.Until(deadline)
+		if remaining < ipcDialRetryInterval {
+			break
+		}
+		time.Sleep(ipcDialRetryInterval)
 	}
 	return nil, fmt.Errorf("timeout connecting to mpv IPC socket: %s", socketPath)
 }

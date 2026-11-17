@@ -10,10 +10,18 @@ The full standard — structure, naming, comments, patterns — is
   doc comment; comments explain why, not what; no dead code; simple over
   clever.
 - **No Global Mutables**: no global variables, no `init()` side effects.
-  Construct everything in `internal/app/app.go` and pass it down. The one
-  sanctioned exception is `internal/tui/styles.go`'s theme/style vars
-  (`colorPrimary` and friends) — lipgloss's idiomatic pattern; see the
-  comment there.
+  Construct everything in the `internal/app` package (`app.go` is the entry
+  point) and pass it down. Two exceptions are sanctioned:
+  - `internal/tui/styles.go`'s theme/style vars (`colorPrimary` and friends) —
+    lipgloss's idiomatic pattern; see the comment there.
+  - `internal/httpclient`'s shared transport and per-host semaphore, built once
+    behind `sync.Once` in `sharedBase`. Every client across every package must
+    draw from the same connection pool — this is Kari's equivalent of Go's
+    process-wide `http.DefaultTransport`. Per-client transports lose keep-alive
+    reuse across providers and replace the single 16-request-per-host cap with
+    one cap per client. The base is immutable after construction; only its
+    internal pools and semaphore channels mutate. Do not add further globals
+    without comparable justification.
 - **Provider isolation**: provider knowledge lives only under
   `internal/provider/**`. Providers declare optional capabilities
   (`AudioLanguagesSource`, `MovieEpisodeFlow`, `FeatureSource`,

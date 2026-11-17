@@ -16,8 +16,10 @@ import (
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
+	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/kit"
 	"kari/internal/provider/streambase"
 	"kari/internal/tmdb"
 )
@@ -31,11 +33,10 @@ var (
 var a11Log = logging.With("provider", "a11")
 
 var (
-	reResolution = regexp.MustCompile(`(?i)\b(2160p|4k|1440p|1080p|720p|480p)\b`)
-	reFileSize   = regexp.MustCompile(`(?i)\b(\d+(?:\.\d+)?\s*(?:gb|mb))\b`)
-	reRemux      = regexp.MustCompile(`(?i)\bremux\b`)
-	reIMAX       = regexp.MustCompile(`(?i)\bimax\b`)
-	reBluRay     = regexp.MustCompile(`(?i)\bbluray\b`)
+	reFileSize = regexp.MustCompile(`(?i)\b(\d+(?:\.\d+)?\s*(?:gb|mb))\b`)
+	reRemux    = regexp.MustCompile(`(?i)\bremux\b`)
+	reIMAX     = regexp.MustCompile(`(?i)\bimax\b`)
+	reBluRay   = regexp.MustCompile(`(?i)\bbluray\b`)
 )
 
 const (
@@ -320,19 +321,49 @@ func parseCoords(mediaID string, episode provider.Episode) (int, bool, int, int,
 
 func toMediaSource(cleanURL string, item streamItem) provider.MediaSource {
 	title := item.Title
-	quality := extractQuality(title)
+	quality, height := extractQuality(title)
 	srcType := provider.SourceTypeMP4
 	if strings.Contains(cleanURL, ".m3u8") {
 		srcType = provider.SourceTypeHLS
 	}
 
+	audio := provider.AudioInfo{}
+	if code := labelLanguage(title); code != "" {
+		audio.Languages = []string{code}
+	}
 	return provider.MediaSource{
 		URL:       cleanURL,
 		Quality:   quality,
+		Height:    height,
 		Backend:   extractSourceName(title),
 		Type:      srcType,
+		Audio:     audio,
 		UserAgent: config.DesktopUserAgent,
 	}
+}
+
+// labelLanguage finds an audio language explicitly named in a release
+// filename. Only curated language codes count: a title word like "Dark" must
+// never become a bogus --alang tag.
+func labelLanguage(title string) string {
+	tokens := strings.FieldsFunc(title, func(r rune) bool {
+		switch r {
+		case '.', ' ', '_', '-', '[', ']', '(', ')':
+			return true
+		default:
+			return false
+		}
+	})
+	for _, token := range tokens {
+		code := lang.FromLabel(token)
+		if code == "" || code == "off" {
+			continue
+		}
+		if lang.Name(code) != strings.ToUpper(code) {
+			return code
+		}
+	}
+	return ""
 }
 
 func extractSourceName(title string) string {
@@ -352,12 +383,14 @@ func extractSourceName(title string) string {
 	return strings.Join(labels, " ")
 }
 
-func extractQuality(title string) string {
-	res := reResolution.FindString(title)
-	if res == "" {
-		res = "2160p"
-	} else {
-		res = strings.ToLower(res)
+// extractQuality names a stream from its filename label and returns the
+// declared pixel height. A label with no resolution stays unknown instead of
+// claiming a 4K tier the upstream never advertised; file size is display-only.
+func extractQuality(title string) (string, int) {
+	height := kit.QualityHeight(title)
+	label := "unknown"
+	if height > 0 {
+		label = fmt.Sprintf("%dp", height)
 	}
 
 	size := reFileSize.FindString(title)
@@ -377,5 +410,5 @@ func extractQuality(title string) string {
 		tag = fmt.Sprintf("%s %s", tag, strings.ToUpper(size))
 	}
 
-	return fmt.Sprintf("%s [%s]", strings.ToUpper(res), tag)
+	return fmt.Sprintf("%s [%s]", strings.ToUpper(label), tag), height
 }

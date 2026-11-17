@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -29,9 +30,6 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.queryInput, cmd = m.queryInput.Update(msg)
-		// Stray Kitty graphics-protocol responses (e.g. `_Gi=1;OK\`)
-		// arrive on stdin as ordinary runes; a focused box would eat
-		// them as typed text.
 		if cleaned := scrubTerminalResponses(m.queryInput.Value()); cleaned != m.queryInput.Value() {
 			m.queryInput.SetValue(cleaned)
 		}
@@ -58,8 +56,6 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setStatus(statusInfo, "")
 				return m, textinput.Blink
 			case keyMsg.String() == "space" || key.Matches(keyMsg, m.keys.Search):
-				// Fresh box for a fresh search (also purges any stale
-				// value or leaked terminal chatter).
 				m.queryInput.SetValue("")
 				m.queryInput.Focus()
 				m.setStatus(statusInfo, "")
@@ -96,8 +92,6 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// If results exist (Results screen)
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		// While a / filter is being typed, rune keys extend the query;
-		// movement still works; enter applies, esc clears (globally).
 		if m.resultsFiltering {
 			switch keyMsg.String() {
 			case "enter":
@@ -110,11 +104,9 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case "up", "k":
-				m.seriesList.CursorUp()
-				return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
+				return m, m.moveSeriesSelection(m.seriesList.CursorUp)
 			case "down", "j":
-				m.seriesList.CursorDown()
-				return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
+				return m, m.moveSeriesSelection(m.seriesList.CursorDown)
 			}
 			if len(keyMsg.String()) == 1 {
 				m.resultsFilter += keyMsg.String()
@@ -123,8 +115,14 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// Bubbles binds Left/Right to whole-page movement by default. Keep
-		// horizontal arrows from unexpectedly skipping a screenful of results.
+		if m.appMode == provider.ModeLive {
+			switch keyMsg.String() {
+			case "r":
+				return m, m.refreshLiveCmd()
+			case "1", "2", "3":
+				return m, m.jumpLiveSection(int(keyMsg.String()[0] - '1'))
+			}
+		}
 		if keyMsg.String() == "left" || keyMsg.String() == "right" {
 			return m, nil
 		}
@@ -132,11 +130,6 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(keyMsg, m.keys.Select) || keyMsg.String() == "enter":
 			return m.selectSeries(m.selectedSeriesIndex())
 		case keyMsg.String() == " " || keyMsg.String() == "space" || key.Matches(keyMsg, m.keys.Search):
-			// space starts a new search from the results list: fresh
-			// empty box (typing blind into the stale query is what
-			// the old behavior forced). The blink restarts so the
-			// cursor visibly pulses — without it a refocused input
-			// looks dead and typing feels lost.
 			m.resultsFilter = ""
 			m.resultsFiltering = false
 			m.queryInput.SetValue("")
@@ -164,29 +157,29 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearStatus()
 			return m, nil
 		case keyMsg.String() == "up" || keyMsg.String() == "k":
-			m.seriesList.CursorUp()
-			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
+			return m, m.moveSeriesSelection(m.seriesList.CursorUp)
 		case keyMsg.String() == "down" || keyMsg.String() == "j":
-			m.seriesList.CursorDown()
-			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
+			return m, m.moveSeriesSelection(m.seriesList.CursorDown)
 		case keyMsg.String() == "g" || keyMsg.String() == "home":
-			m.seriesList.Select(0)
-			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
+			return m, m.moveSeriesSelection(func() { m.seriesList.Select(0) })
 		case keyMsg.String() == "G" || keyMsg.String() == "end":
-			if items := m.seriesList.Items(); len(items) > 0 {
-				m.seriesList.Select(len(items) - 1)
+			return m, m.moveSeriesSelection(func() {
+				if items := m.seriesList.Items(); len(items) > 0 {
+					m.seriesList.Select(len(items) - 1)
+				}
+			})
+		case keyMsg.String() == "pgup" || keyMsg.String() == "ctrl+u":
+			step := m.pageStep()
+			if keyMsg.String() == "ctrl+u" {
+				step = max(1, step/2)
 			}
-			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
-		case keyMsg.String() == "pgup":
-			for range 5 {
-				m.seriesList.CursorUp()
+			return m, m.moveSeriesSelection(func() { m.pageSeriesList(-step) })
+		case keyMsg.String() == "pgdown" || keyMsg.String() == "ctrl+d":
+			step := m.pageStep()
+			if keyMsg.String() == "ctrl+d" {
+				step = max(1, step/2)
 			}
-			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
-		case keyMsg.String() == "pgdown":
-			for range 5 {
-				m.seriesList.CursorDown()
-			}
-			return m, tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
+			return m, m.moveSeriesSelection(func() { m.pageSeriesList(step) })
 		default:
 			if s := keyMsg.String(); len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
 				digitIdx := int(s[0] - '1')
@@ -209,6 +202,18 @@ func (m *modelImpl) updateSearch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// moveSeriesSelection applies a cursor move and refreshes the poster only when
+// the selection actually changed. At a list boundary the move is a no-op, so
+// redundant scroll/key events no longer cancel and refetch the same artwork.
+func (m *modelImpl) moveSeriesSelection(move func()) tea.Cmd {
+	before := m.selectedSeriesIndex()
+	move()
+	if m.selectedSeriesIndex() == before {
+		return nil
+	}
+	return tea.Batch(m.triggerSearchPoster(m.selectedSeriesIndex()), m.prefetchSelectedReadingChapters())
+}
+
 func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
@@ -217,9 +222,6 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch keyMsg.String() {
 	case "enter":
-		// Playback starts once the first source is in — subtitles are
-		// fetched in the background and attach when ready. Until the
-		// first source arrives enter only reports what is still loading.
 		if !m.mediaReady() {
 			if m.loadInFlight() {
 				m.setStatus(statusInfo, "Resolving playback streams...")
@@ -279,6 +281,25 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.triggerSubtitleSync()
 		}
 		return m, nil
+	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+		step := m.pageStep()
+		switch keyMsg.String() {
+		case "ctrl+u", "ctrl+d":
+			step = max(1, step/2)
+		}
+		delta := step
+		if keyMsg.String() == "pgup" || keyMsg.String() == "ctrl+u" {
+			delta = -delta
+		}
+		next := clampIndex(m.previewSelectedIndex+delta, len(m.rankedSources))
+		if next != m.previewSelectedIndex {
+			m.previewSelectedIndex = next
+			m.manualPlaybackSelected = true
+			m.invalidateSubtitleSync()
+			return m, m.triggerSubtitleSync()
+		}
+		return m, nil
+
 	case "r":
 		// Restart the current episode from the beginning.
 		if m.resolved == nil || len(m.orderedPlaybackSources()) == 0 || m.playOpID != 0 {
@@ -292,11 +313,6 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.spinner.Tick, m.playCmdWithStartTime(opID, 0), m.playStartedTimeoutCmd(opID))
 
 	case "R":
-		// Retry stream resolution for failed providers. Providers that
-		// already delivered are skipped — only the failed ones are
-		// asked again — and their rows are kept, so a retry only ever
-		// adds rows, never drops a working source. With no failures
-		// this is a full refresh (fresh signed URLs).
 		if m.selectedSeries != nil && m.selectedEpisode != nil {
 			if m.resolveOpID != 0 || m.playOpID != 0 {
 				m.setStatus(statusInfo, "Please wait for the current operation")
@@ -374,8 +390,6 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.playNextEpisode()
 
 	case "[":
-		// Previous episode — the same step key as season tabs on the
-		// episodes screen, one screen earlier in the flow.
 		if m.episodeIndex > 0 {
 			return m.startEpisodeResolution(m.episodeIndex-1, false)
 		}
@@ -386,8 +400,6 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.playNextEpisode()
 
 	case "p":
-		// Play is the single most expected action on this screen; give
-		// it the key every user's instinct reaches for first.
 		return m.updatePreview(tea.KeyMsg{Type: tea.KeyEnter})
 
 	case "A":
@@ -427,9 +439,6 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		opID := m.newOpID()
 		m.downloadOpID = opID
 		resolved := *m.resolved
-		// The highlighted source is the user's explicit choice, so it leads
-		// the list. The remaining rows stay as ordered fallbacks in case the
-		// selected transport fails.
 		resolved.Playback = sources
 		m.singleResolved = &resolved
 		if m.downloadService != nil && m.selectedSeries != nil && m.selectedEpisode != nil {
@@ -445,4 +454,44 @@ func (m *modelImpl) updatePreview(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(toastCmd, m.downloadCmd(opID, resolved))
 	}
 	return m, nil
+}
+
+// refreshLiveCmd re-runs the live search for the current query. Live modes
+// disable search caching, so this always reaches the upstream catalogs.
+func (m *modelImpl) refreshLiveCmd() tea.Cmd {
+	if !m.guardLoad() {
+		return nil
+	}
+	m.loading = true
+	m.loadingText = "Refreshing live guide..."
+	m.setStatus(statusInfo, "")
+	opID := m.newOpID()
+	m.searchOpID = opID
+	return tea.Batch(m.spinner.Tick, m.searchCmd(opID, m.searchQuery))
+}
+
+// jumpLiveSection moves the cursor to the first result of the requested
+// section: 0 live now, 1 upcoming, 2 channels.
+func (m *modelImpl) jumpLiveSection(section int) tea.Cmd {
+	visible, _ := m.visibleSeriesResults()
+	if len(visible) == 0 {
+		return nil
+	}
+	guide := service.BuildLiveGuide(visible, m.selectedSeriesIndex(), time.Now())
+	want := []service.LiveSectionKind{
+		service.LiveSectionNow,
+		service.LiveSectionUpcoming,
+		service.LiveSectionChannels,
+	}
+	if section < 0 || section >= len(want) {
+		return nil
+	}
+	for _, s := range guide.Sections {
+		if s.Kind == want[section] && s.Start >= 0 && s.Start < len(visible) {
+			m.seriesList.Select(s.Start)
+			return m.triggerSearchPoster(m.selectedSeriesIndex())
+		}
+	}
+	m.setStatus(statusInfo, "That section is empty")
+	return nil
 }

@@ -147,8 +147,8 @@ func TestCrossReference_Anime(t *testing.T) {
 	if items[0].NextEpisode != 6 {
 		t.Errorf("Frieren next ep = %d, want 6", items[0].NextEpisode)
 	}
-	if items[0].Badge != "Left: Ep 6-8 (3 left)" {
-		t.Errorf("Frieren badge = %q, want 'Left: Ep 6-8 (3 left)'", items[0].Badge)
+	if items[0].LastWatchedEpisode != 5 {
+		t.Errorf("Frieren last watched = %d, want 5", items[0].LastWatchedEpisode)
 	}
 
 	// Solo Leveling: watched 11, airing 12 today -> new today
@@ -164,16 +164,16 @@ func TestCrossReference_Anime(t *testing.T) {
 	if items[1].NextEpisode != 12 {
 		t.Errorf("Solo Leveling next ep = %d, want 12", items[1].NextEpisode)
 	}
-	if items[1].Badge != "▶ Ep 12 (new today)" {
-		t.Errorf("Solo Leveling badge = %q, want '▶ Ep 12 (new today)'", items[1].Badge)
+	if items[1].LastWatchedEpisode != 11 {
+		t.Errorf("Solo Leveling last watched = %d, want 11", items[1].LastWatchedEpisode)
 	}
 
 	// Bleach: watched 13, airing 13 -> up to date
 	if items[2].Status != StatusUpToDate {
 		t.Errorf("Bleach status = %q, want %q", items[2].Status, StatusUpToDate)
 	}
-	if items[2].Badge != "✓ Ep 13 watched" {
-		t.Errorf("Bleach badge = %q, want '✓ Ep 13 watched'", items[2].Badge)
+	if items[2].UnwatchedCount != 0 {
+		t.Errorf("Bleach unwatched = %d, want 0", items[2].UnwatchedCount)
 	}
 
 	// Brand New Anime: not in history
@@ -183,8 +183,9 @@ func TestCrossReference_Anime(t *testing.T) {
 	if items[3].Status != StatusNotStarted {
 		t.Errorf("Brand New Anime status = %q, want %q", items[3].Status, StatusNotStarted)
 	}
-	if items[3].Badge != "Ep 1" {
-		t.Errorf("Brand New Anime badge = %q, want 'Ep 1'", items[3].Badge)
+	if items[3].NextEpisode != 1 || items[3].UnwatchedCount != 1 {
+		t.Errorf("Brand New Anime progress = (next %d, %d left), want (1, 1)",
+			items[3].NextEpisode, items[3].UnwatchedCount)
 	}
 }
 

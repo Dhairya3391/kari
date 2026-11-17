@@ -28,6 +28,12 @@ import (
 const (
 	mpvReadinessTimeout = 10 * time.Second
 
+	// mpvReadinessPollInterval is how often the readiness loop checks IPC
+	// stats for the first playback frame. Halving the default interval
+	// shortens the gap between mpv actually starting and the UI noticing,
+	// without shortening the readiness budget itself.
+	mpvReadinessPollInterval = 50 * time.Millisecond
+
 	// mpvQuickExitThreshold bounds how long into the readiness phase mpv can
 	// exit cleanly (code 0) with no IPC evidence that media ever loaded before
 	// we stop trusting that as "the user quit on purpose" and instead treat it
@@ -58,6 +64,7 @@ type startupCheck struct {
 	sourceURL  string
 	isLive     bool
 	observer   ProgressObserver
+	skipSink   *liveSkipSink
 }
 
 type pipeStartupCheck struct {
@@ -67,6 +74,7 @@ type pipeStartupCheck struct {
 	sourceURL  string
 	isLive     bool
 	observer   ProgressObserver
+	skipSink   *liveSkipSink
 }
 
 type launchResult struct {
@@ -167,10 +175,13 @@ func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMed
 	var defaultSkipArgs []string
 	var defaultSkipScript string
 	var defaultResolved bool
+	skipSink := newLiveSkipSink(p.skipSettings)
+	skipClients := p.skipClients
+	skipClients.SkipSink = skipSink
 	getDefaultSkipArgs := func() ([]string, string) {
 		if !defaultResolved {
 			defaultSkipArgs, defaultSkipScript = getSkipArgs(
-				p.skipClients,
+				skipClients,
 				p.skipSettings,
 				media,
 				p.skipCache,
@@ -192,14 +203,14 @@ func (p *MPVPlayer) Play(sources []provider.MediaSource, media model.ResolvedMed
 		} else {
 			skipArgs, _ = getDefaultSkipArgs()
 		}
-		return playSingleSource(source, media, skipArgs, p.progressObserver)
+		return playSingleSource(source, media, skipArgs, p.progressObserver, skipSink)
 	})
 }
 
 // playSingleSource plays one source through two strategies: direct mpv with
 // native options first, then a curl|mpv pipe for streams whose TLS/header
 // quirks mpv's own HTTP stack rejects.
-func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, aniskipArgs []string, observer ProgressObserver) (PlaybackResult, error) {
+func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, aniskipArgs []string, observer ProgressObserver, skipSink *liveSkipSink) (PlaybackResult, error) {
 	socketPath := DefaultMPVSocketPath()
 
 	// Strategy 1: direct MPV playback (primary).
@@ -215,6 +226,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		sourceURL:  source.URL,
 		isLive:     media.IsLive(),
 		observer:   observer,
+		skipSink:   skipSink,
 	})
 	if direct.shortWarning {
 		return PlaybackResult{}, fmt.Errorf("source rejected: stream is a short placeholder/warning video (%.1fs <= %.0fs)", direct.shortDur, ShortWarningVideoMaxDuration)
@@ -259,9 +271,6 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		"--input-ipc-server=" + socketPath,
 		hwdecOptionArg(),
 	}
-	// segment itself, so it needs the same transport identity as the
-	// direct path (header-gated CDNs answer 403 without Referer/Origin
-	// on segment requests too).
 	if strings.TrimSpace(source.UserAgent) != "" {
 		pipeMpvArgs = append(pipeMpvArgs, "--user-agent="+source.UserAgent)
 	}
@@ -298,6 +307,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		sourceURL:  source.URL,
 		isLive:     media.IsLive(),
 		observer:   observer,
+		skipSink:   skipSink,
 	})
 	if pipeErr != nil {
 		return PlaybackResult{}, fmt.Errorf("mpv playback failed: pipe startup error: %w", pipeErr)
@@ -375,9 +385,6 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 	// option for: Origin and the provider's Cookie.
 	var headers []string
 	if strings.TrimSpace(source.Referer) != "" {
-		// Some CDNs reject an Origin header outright (or only accept a bare
-		// scheme://host), so it's opt-in via SuppressOrigin. When sent it stays
-		// derived from the referer, matching what a browser would send.
 		if !source.SuppressOrigin {
 			if origin := originFromReferer(strings.TrimSpace(source.Referer)); origin != "" {
 				headers = append(headers, "Origin: "+origin)
@@ -574,10 +581,6 @@ func ipcPoller(
 			return false
 		}
 
-		// Media is loaded if time-pos is available (even if 0.0), duration is
-		// > 0, or MPV is actively loading/playing media (not idle). Early in
-		// an HLS load every property may legitimately answer "unavailable";
-		// that's not a connection failure.
 		loaded := (posErr == nil) || (durErr == nil && durF > 0) || (idleErr == nil && !isIdle)
 		failed := posErr != nil && durErr != nil && idleErr != nil
 
@@ -594,8 +597,6 @@ func ipcPoller(
 		if err := client.Connect(3 * time.Second); err != nil {
 			mpvLog.Debug("ipc connect failed", "err", err)
 		} else {
-			// Poll immediately on connection so readiness is detected without
-			// waiting for the first tick.
 			if healthy := poll(); healthy {
 				ticker := time.NewTicker(1 * time.Second)
 			sample:
@@ -657,6 +658,9 @@ func waitForPlaybackReadiness(
 	ipcDone := make(chan struct{})
 	var ipcWG sync.WaitGroup
 	client := NewIPCClient(check.socketPath)
+	if check.skipSink != nil {
+		check.skipSink.attach(client)
+	}
 	stats := newPlaybackStats()
 	ipcWG.Add(1)
 	go func() {
@@ -677,7 +681,7 @@ func waitForPlaybackReadiness(
 	phaseStart := time.Now()
 	readinessTimer := time.NewTimer(mpvReadinessTimeout)
 	defer readinessTimer.Stop()
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(mpvReadinessPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -762,6 +766,9 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 	ipcDone := make(chan struct{})
 	var ipcWG sync.WaitGroup
 	client := NewIPCClient(check.socketPath)
+	if check.skipSink != nil {
+		check.skipSink.attach(client)
+	}
 	stats := newPlaybackStats()
 	ipcWG.Add(1)
 	go func() {
@@ -782,7 +789,7 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 	phaseStart := time.Now()
 	readinessTimer := time.NewTimer(mpvReadinessTimeout)
 	defer readinessTimer.Stop()
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(mpvReadinessPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -910,10 +917,6 @@ func attemptSucceeded(launched bool, exitCode int, quickExit bool, stats Playbac
 	if stats.DurationSecs > 0 || stats.FinalPositionSecs > 0 {
 		return true
 	}
-	// A process that exits before the startup window elapses — even with a 0
-	// exit code — means playback never started (e.g. mpv fails to open the
-	// URL and quits cleanly). Treat that as failure so the caller falls
-	// through to the next strategy instead of reporting bogus success.
 	if !launched {
 		return false
 	}
@@ -921,12 +924,6 @@ func attemptSucceeded(launched bool, exitCode int, quickExit bool, stats Playbac
 	if exitCode == 4 {
 		return true
 	}
-	// Exit 0 with no IPC evidence is ambiguous: user quitting instantly vs
-	// silent failure on a dead URL. quickExit narrows it down — a real user
-	// reacts within a second or two, while a failing open typically takes
-	// longer (bounded by --network-timeout=8). Only trust exit 0 inside that
-	// window, otherwise dead sources get reported as "played successfully"
-	// and fallback sources never get tried.
 	return exitCode == 0 && quickExit
 }
 

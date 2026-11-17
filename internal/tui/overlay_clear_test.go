@@ -43,8 +43,6 @@ func TestOverlayImageChangeRequestsScreenClear(t *testing.T) {
 			seriesResults: []provider.SearchResult{{Title: "Frieren"}},
 		}
 
-		// Leaving the search view hides the poster: the stale placement
-		// must be cleared before the next frame.
 		_, cmd := m.Update(historyLoadedMsg{})
 		if !cmdContainsClearScreen(cmd) {
 			t.Fatalf("%v: hiding an image must request a screen clear", protocol)
@@ -68,8 +66,6 @@ func TestOverlayNoImageSkipsScreenClear(t *testing.T) {
 }
 
 func TestNonOverlayImageDoesNotScreenClear(t *testing.T) {
-	// Kitty placements are deleted by id and blocks are plain text; neither
-	// needs a full clear.
 	for _, protocol := range []termimg.Protocol{termimg.ProtocolKitty, termimg.ProtocolBlocks, termimg.ProtocolNone} {
 		m := &modelImpl{
 			activeView:    viewSearch,
@@ -286,8 +282,6 @@ func TestPosterVisibilityWidthGates(t *testing.T) {
 				seriesResults:    []provider.SearchResult{{Title: "Frieren"}},
 			}
 		}
-		// The results renderer needs TermWidth >= 90 or content width >= 70,
-		// which starts at terminal width 78.
 		if m := build(77); m.searchPosterVisible() || keyIncludes(m, "search") {
 			t.Error("width 77 must hide the results poster")
 		}
@@ -338,8 +332,6 @@ func TestPosterVisibilityWidthGates(t *testing.T) {
 				previewPosterOpID: 3,
 			}
 		}
-		// Mirrors showPreviewPoster: TermWidth >= 80 or content width >= 70,
-		// which starts at terminal width 78.
 		if m := build(77); m.previewPosterVisible() || keyIncludes(m, "preview") {
 			t.Error("width 77 must hide the preview poster")
 		}
@@ -360,8 +352,6 @@ func TestPosterVisibilityWidthGates(t *testing.T) {
 				historyPosterOpID: 3,
 			}
 		}
-		// Mirrors showPosterPane: content width >= 100, i.e. terminal width
-		// 108 with the 4-column gutters.
 		if m := build(107); m.historyPosterVisible() || keyIncludes(m, "history") {
 			t.Error("width 107 must hide the history poster")
 		}
@@ -369,4 +359,44 @@ func TestPosterVisibilityWidthGates(t *testing.T) {
 			t.Error("width 108 must show the history poster")
 		}
 	})
+
+	t.Run("calendar", func(t *testing.T) {
+		build := func(width int) *modelImpl {
+			return &modelImpl{
+				activeView:         viewCalendar,
+				width:              width,
+				height:             40,
+				imgProtocol:        termimg.ProtocolSixel,
+				imagesEnabled:      true,
+				calendarPoster:     "ART",
+				calendarPosterOpID: 3,
+			}
+		}
+		if m := build(107); m.calendarPosterVisible() || keyIncludes(m, "calendar") {
+			t.Error("width 107 must hide the calendar poster")
+		}
+		if m := build(108); !m.calendarPosterVisible() || !keyIncludes(m, "calendar") {
+			t.Error("width 108 must show the calendar poster")
+		}
+	})
+}
+
+func TestOverlayCalendarPosterChangeRequestsScreenClear(t *testing.T) {
+	for _, protocol := range []termimg.Protocol{termimg.ProtocolSixel, termimg.ProtocolIterm} {
+		m := &modelImpl{
+			activeView:         viewCalendar,
+			keys:               defaultKeyMap(),
+			width:              120,
+			height:             40,
+			imgProtocol:        protocol,
+			imagesEnabled:      true,
+			calendarPoster:     "POSTER_ART",
+			calendarPosterOpID: 1,
+		}
+
+		_, cmd := m.Update(posterLoadedMsg{slot: posterSlotCalendar, opID: 1, rendered: "NEW_ART"})
+		if !cmdContainsClearScreen(cmd) {
+			t.Fatalf("%v: changing the calendar cover must request a screen clear", protocol)
+		}
+	}
 }

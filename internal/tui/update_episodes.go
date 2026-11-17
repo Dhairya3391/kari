@@ -35,8 +35,6 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 	seasonEps, origIndices := m.currentSeasonEpisodes()
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		// While a / filter is being typed, rune keys extend the query;
-		// movement still works; enter applies, esc cancels (globally).
 		if m.episodeFiltering {
 			switch keyMsg.String() {
 			case "enter":
@@ -263,35 +261,72 @@ func (m *modelImpl) updateEpisodes(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// FilterRedundantEpisodeNavigation drops key repeats that cannot move the
-// episode cursor, avoiding redraws while queued input drains at a boundary.
-func FilterRedundantEpisodeNavigation(model tea.Model, msg tea.Msg) tea.Msg {
+// FilterRedundantNavigation drops navigation repeats that cannot move the
+// cursor, avoiding redraws while queued input drains at a boundary. Covers the
+// episode list and the search results list, which share the wheel-to-key
+// translation in FilterScrollInput.
+func FilterRedundantNavigation(model tea.Model, msg tea.Msg) tea.Msg {
 	m, ok := model.(*modelImpl)
-	if !ok || m.activeView != viewEpisodes || !m.hasCurrentEpisodeProjection() {
+	if !ok {
 		return msg
 	}
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return msg
 	}
-	index := m.seasonEpisodeIndex
-	count := len(m.episodeCache.filtered)
-	switch keyMsg.String() {
-	case "down", "j", "pgdown":
-		if index >= count-1 {
-			return nil
+	// A help overlay consumes up/down itself to scroll its own content. The
+	// underlying list's cursor does not move, so its boundary is meaningless
+	// here and dropping keys would leave help unscrollable at the top or on an
+	// empty search home screen.
+	if m.showHelp {
+		return msg
+	}
+
+	switch m.activeView {
+	case viewEpisodes:
+		if !m.hasCurrentEpisodeProjection() {
+			return msg
 		}
-	case "ctrl+d":
-		if !m.selectMode && !m.episodeFiltering && index >= count-1 {
-			return nil
+		index := m.seasonEpisodeIndex
+		count := len(m.episodeCache.filtered)
+		switch keyMsg.String() {
+		case "down", "j", "pgdown":
+			if index >= count-1 {
+				return nil
+			}
+		case "ctrl+d":
+			if !m.selectMode && !m.episodeFiltering && index >= count-1 {
+				return nil
+			}
+		case "up", "k", "pgup":
+			if index <= 0 {
+				return nil
+			}
+		case "ctrl+u":
+			if !m.selectMode && !m.episodeFiltering && index <= 0 {
+				return nil
+			}
 		}
-	case "up", "k", "pgup":
-		if index <= 0 {
-			return nil
-		}
-	case "ctrl+u":
-		if !m.selectMode && !m.episodeFiltering && index <= 0 {
-			return nil
+	case viewSearch:
+		index := m.seriesList.Index()
+		count := len(m.seriesList.Items())
+		switch keyMsg.String() {
+		case "down", "j", "pgdown":
+			if index >= count-1 {
+				return nil
+			}
+		case "ctrl+d":
+			if index >= count-1 {
+				return nil
+			}
+		case "up", "k", "pgup":
+			if index <= 0 {
+				return nil
+			}
+		case "ctrl+u":
+			if index <= 0 {
+				return nil
+			}
 		}
 	}
 	return msg

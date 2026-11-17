@@ -42,15 +42,8 @@ func (m *modelImpl) computeLayoutDims() layoutDims {
 }
 
 func (m *modelImpl) bodyHeight() int {
-	// Stable layout height: header (1), rule (1), body spacer (1), bottom spacer (1),
-	// status/loading reserved slot (2), and footer (1) = 7 rows.
-	// Kept constant so loading states and status banners never resize lists or shift
 	height := m.height - 7
 	return max(1, height)
-}
-
-func (m *modelImpl) scrollBody(delta int) {
-	m.bodyScroll = max(0, m.bodyScroll+delta)
 }
 
 func (m *modelImpl) resizeLists() {
@@ -63,7 +56,9 @@ func (m *modelImpl) resizeLists() {
 	seriesW := max(20, searchLeftWidth(dims.bodyW)-4)
 	m.seriesList.SetSize(seriesW, seriesH)
 	m.episodeList.SetSize(w, episodeH)
-	m.chapterList.SetSize(w, episodeH)
+	// The chapter list is sized per frame in collectChaptersData from the
+	// frame body height; a resize-time value here would be overwritten and
+	// disagree by a few rows.
 	m.historyList.SetSize(w, historyH)
 
 	inputW := max(15, dims.contentW-12)
@@ -148,6 +143,7 @@ func (m *modelImpl) pushView(next viewState) {
 	}
 
 	m.clearStatus()
+	m.resetScrollGate()
 
 	// Prevent duplicate entries in backstack (e.g. going from preview to preview)
 	if len(m.backStack) > 0 && m.backStack[len(m.backStack)-1] == next {
@@ -166,6 +162,7 @@ func (m *modelImpl) goBackOne() bool {
 		return false
 	}
 	m.clearStatus()
+	m.resetScrollGate()
 	if m.activeView == viewPreview {
 		m.clearPreviewPoster()
 	}
@@ -221,22 +218,13 @@ func (m *modelImpl) toggleAnimeAudio() (tea.Model, tea.Cmd) {
 		m.setStatus(statusWarn, "Sub/dub toggle applies to anime only")
 		return m, nil
 	}
-	if strings.EqualFold(m.audioMode, provider.AudioDub) {
-		m.audioMode = provider.AudioSub
-	} else {
-		m.audioMode = provider.AudioDub
-	}
+	m.toggleAnimeAudioTrack()
 	m.saveSettings()
-	toastCmd := m.setToast("audio track: "+m.audioMode, ToastInfo)
 
 	if m.selectedSeries == nil {
-		return m, toastCmd
+		return m, nil
 	}
 
-	// If on Preview screen, reload streams for current episode with new audio track.
-	// The previous track's resolved state is fully cleared first: merging
-	// the fresh resolve into stale Playback would leave the old audio's
-	// rows in the list.
 	if m.activeView == viewPreview && m.selectedEpisode != nil {
 		m.selectedEpisode.Audio = normalizeAudioMode(m.audioMode)
 		m.loading = true
@@ -261,7 +249,7 @@ func (m *modelImpl) toggleAnimeAudio() (tea.Model, tea.Cmd) {
 	m.loadingText = "Reloading episodes..."
 	opID := m.newOpID()
 	m.episodesOpID = opID
-	return m, tea.Batch(toastCmd, m.spinner.Tick, m.episodesCmd(opID, *m.selectedSeries))
+	return m, tea.Batch(m.spinner.Tick, m.episodesCmd(opID, *m.selectedSeries))
 }
 
 func (m *modelImpl) nextEpisodeIndex() (int, bool) {
@@ -332,10 +320,6 @@ func posterBlock(rendered string, unavailable bool, protocol termimg.Protocol, i
 		return rendered
 	}
 	if imagesEnabled {
-		// Reserve the column with explicit feedback instead of
-		// collapsing the header: loading artwork vs confirmed absent.
-		// The slot cleanup still runs first so a stale placement from
-		// the previous title never lingers behind the placeholder.
 		if unavailable {
 			return protocol.Cleanup(imageID) + posterPlaceholder("no image found")
 		}
@@ -344,8 +328,6 @@ func posterBlock(rendered string, unavailable bool, protocol termimg.Protocol, i
 	return protocol.Cleanup(imageID)
 }
 
-// posterPlaceholder renders a fixed-width dim stand-in keeping the
-// poster column stable across loading → loaded → absent states.
 // scrubTerminalResponses strips stray Kitty graphics-protocol responses
 // (e.g. `_Gi=1;OK\`) that some terminals emit asynchronously after an
 // image transmit: they arrive on stdin as ordinary runes and a focused
@@ -386,25 +368,18 @@ func scrubTerminalResponseChunk(s string) (string, bool) {
 	return b.String(), discardTerminator
 }
 
+// posterPlaceholder renders the loading/absent stand-in text. It does not pad
+// to a fixed width: the caller's fixed-slot helper owns the slot geometry, and
+// pre-padding here gets truncated into an ellipsis in narrower panes.
 func posterPlaceholder(text string) string {
-	dim := lipgloss.NewStyle().Faint(true)
-	padded := text + strings.Repeat(" ", max(0, posterPlaceholderWidth-lipgloss.Width(text)))
-	return dim.Render(padded)
+	return lipgloss.NewStyle().Faint(true).Render(text)
 }
 
-// languageEnabled reports whether an audio language is enabled: a nil
-// map, an absent key, or an explicit true all mean enabled; only an
-// explicit false disables. (Committed-code scheme: the filter records
-// overrides, never a full set.)
-func (m *modelImpl) languageEnabled(lang string) bool {
-	if m.languageFilter == nil {
-		return true
-	}
-	enabled, ok := m.languageFilter[lang]
-	if !ok {
-		return true
-	}
-	return enabled
+// languageEnabled reports whether an audio language is enabled according to
+// the authoritative typed scope. Unknown and absent codes stay enabled; only
+// an explicit disabled canonical code removes a language.
+func (m *modelImpl) languageEnabled(code string) bool {
+	return m.filterScope.Defaults.Audio.Allows(code)
 }
 
 // hasEnabledLanguage guards the loaded filter against a degenerate

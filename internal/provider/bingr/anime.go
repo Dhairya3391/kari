@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"kari/internal/config"
+	"kari/internal/httpclient"
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/provider/anilist"
 	"kari/internal/provider/kit"
+	"kari/internal/timeouts"
 )
 
 type animeSearchResponse struct {
@@ -46,25 +48,6 @@ type animeMetaResponse struct {
 	Episodes    int    `json:"episodes"`
 	TMDBID      int    `json:"tmdb_id"`
 	TMDBType    string `json:"tmdb_type"`
-}
-
-type megaplayResponse struct {
-	Streams []megaplayStream `json:"streams"`
-}
-
-type megaplayStream struct {
-	Server    string              `json:"server"`
-	URL       string              `json:"url"`
-	Type      string              `json:"type"`
-	Referer   string              `json:"referer"`
-	DubType   string              `json:"dubType"`
-	Subtitles []megaplaySubOption `json:"subtitles"`
-}
-
-type megaplaySubOption struct {
-	Label string `json:"label"`
-	Lang  string `json:"lang"`
-	URL   string `json:"url"`
 }
 
 func (c *Client) searchAnimeBingr(ctx context.Context, query string) ([]provider.SearchResult, error) {
@@ -240,7 +223,6 @@ func (c *Client) resolveAnime(
 		}
 	}
 
-	// Branch 1: MegaPlay resolution (via MAL ID).
 	if meta.IDMal > 0 {
 		wg.Add(1)
 		go func() {
@@ -248,9 +230,6 @@ func (c *Client) resolveAnime(
 			sources, err := c.fetchMegaPlayAnime(ctx, meta.IDMal, epNum, category)
 			if err != nil {
 				logging.Debug("bingr megaplay failed", "malID", meta.IDMal, "ep", epNum, "cat", category, "err", err)
-				mu.Lock()
-				lastErr = err
-				mu.Unlock()
 				return
 			}
 			pushSources(sources)
@@ -275,16 +254,25 @@ func (c *Client) resolveAnime(
 				subWG.Add(1)
 				go func(srv serverSpec) {
 					defer subWG.Done()
-					reqCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+					reqCtx, cancel := context.WithTimeout(ctx, timeouts.BingrShard)
 					defer cancel()
 
 					sources, err := c.fetchServerStreams(reqCtx, srv, mType, meta.TMDBID, 1, epNum, meta.Title, "")
-					if err != nil || len(sources) == 0 {
+					if err != nil {
+						logging.Debug("bingr anime shard failed", "srv", srv.id, "err", err)
+						mu.Lock()
+						lastErr = err
+						mu.Unlock()
+						return
+					}
+					if len(sources) == 0 {
 						return
 					}
 
-					filtered := filterAnimeAudioSources(sources, category)
-					pushSources(filtered)
+					for i := range sources {
+						sources[i].Audio.Track = animeTrack(category)
+					}
+					pushSources(sources)
 				}(srv)
 			}
 			subWG.Wait()
@@ -302,23 +290,13 @@ func (c *Client) resolveAnime(
 	return nil
 }
 
-func filterAnimeAudioSources(sources []provider.MediaSource, category string) []provider.MediaSource {
-	var kept []provider.MediaSource
-	for i := range sources {
-		s := &sources[i]
-		langCode := strings.ToLower(s.Language)
-		switch category {
-		case provider.AudioSub:
-			if langCode == "" || langCode == "ja" {
-				kept = append(kept, *s)
-			}
-		case provider.AudioDub:
-			if langCode != "" && langCode != "ja" {
-				kept = append(kept, *s)
-			}
-		}
+// animeTrack maps the anime episode handle's category onto the typed audio
+// track. It is content metadata, not a user language preference.
+func animeTrack(category string) provider.AudioTrack {
+	if strings.EqualFold(strings.TrimSpace(category), provider.AudioDub) {
+		return provider.TrackDub
 	}
-	return kept
+	return provider.TrackSub
 }
 
 type animeMetaCacheEntry struct {
@@ -366,137 +344,178 @@ func (c *Client) fetchAnimeMeta(ctx context.Context, anilistID string) (*animeMe
 	return &meta, nil
 }
 
+// fetchMegaPlayAnime resolves one anime episode through MegaPlay's direct
+// embeds. The MAL id is the primary index; when that embed fails the cached
+// AniList id is tried as a fallback so titles indexed only there still work.
 func (c *Client) fetchMegaPlayAnime(ctx context.Context, malID, epNum int, category string) ([]provider.MediaSource, error) {
-	token, err := c.getFilmuToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("filmu auth: %w", err)
+	cat := strings.ToLower(strings.TrimSpace(category))
+	if cat != provider.AudioDub {
+		cat = provider.AudioSub
 	}
 
-	reqURL := fmt.Sprintf("%s/hianime/megaplay?malId=%d&ep=%d&type=%s", c.filmuBase, malID, epNum, category)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	malEmbedURL := fmt.Sprintf("%s/stream/mal/%d/%d/%s", c.embedBase, malID, epNum, cat)
+	sources, err := c.resolveMegaplayEmbed(ctx, malEmbedURL, cat)
+	if err == nil {
+		return sources, nil
+	}
+	if ctx.Err() != nil {
+		return nil, err
+	}
+
+	if anilistID := c.anilistIDForMAL(malID); anilistID != "" {
+		aniEmbedURL := fmt.Sprintf("%s/stream/ani/%s/%d/%s", c.embedBase, anilistID, epNum, cat)
+		if aniSources, aniErr := c.resolveMegaplayEmbed(ctx, aniEmbedURL, cat); aniErr == nil {
+			return aniSources, nil
+		}
+	}
+	return nil, fmt.Errorf("megaplay anime mal %d ep %d: %w", malID, epNum, err)
+}
+
+// anilistIDForMAL recovers the AniList id from the metadata cache populated
+// by the preceding fetchAnimeMeta call in resolveAnime.
+func (c *Client) anilistIDForMAL(malID int) string {
+	var found string
+	c.animeMetaCache.Range(func(key, value any) bool {
+		if id, ok := key.(string); ok {
+			if entry, ok := value.(animeMetaCacheEntry); ok && entry.meta != nil && entry.meta.IDMal == malID {
+				found = id
+				return false
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// resolveMegaplayEmbed turns a MegaPlay embed page into a playable source:
+// extract the file id, fetch getSources with the embed as Referer, then
+// decrypt and sign the returned token using the shared kit helpers.
+func (c *Client) resolveMegaplayEmbed(ctx context.Context, embedURL, category string) ([]provider.MediaSource, error) {
+	fileID, err := c.megaplayFileID(ctx, embedURL)
+	if err != nil {
+		return nil, fmt.Errorf("megaplay embed: %w", err)
+	}
+
+	parsed, err := url.Parse(embedURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse megaplay embed: %w", err)
+	}
+	origin := parsed.Scheme + "://" + parsed.Host
+	getSourcesURL := fmt.Sprintf("%s/stream/getSources?id=%s", origin, fileID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, getSourcesURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
-	req.Header.Set("Referer", config.BingrReferer)
-	if token != "" {
-		req.Header.Set("x-api-key", token)
-	}
+	req.Header.Set("Referer", embedURL)
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("megaplay getSources: %w", err)
 	}
-	defer resp.Body.Close()
-
+	body, err := httpclient.ReadCapped(resp)
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("megaplay read sources: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: reqURL}
+		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: getSourcesURL}
 	}
 
-	var mr megaplayResponse
-	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
-		return nil, err
+	var sr kit.MegaplaySourcesResp
+	if err := json.Unmarshal(body, &sr); err != nil {
+		return nil, fmt.Errorf("megaplay decode sources: %w", err)
+	}
+	if sr.Enc == "" {
+		return nil, provider.ErrNoSources
+	}
+	rawM3U8, err := kit.DecryptMegaplayEnc(sr.Enc)
+	if err != nil {
+		return nil, fmt.Errorf("megaplay decrypt: %w", err)
 	}
 
-	var sources []provider.MediaSource
-	for _, stream := range mr.Streams {
-		rawURL := strings.TrimSpace(stream.URL)
-		if rawURL == "" {
+	subs := make([]provider.SubtitleOption, 0, len(sr.Tracks))
+	for _, track := range sr.Tracks {
+		if strings.EqualFold(strings.TrimSpace(track.Kind), "thumbnails") || strings.TrimSpace(track.File) == "" {
 			continue
 		}
-
-		referer := stream.Referer
-		if referer == "" {
-			referer = config.MegaPlayReferer
-		}
-
-		var subs []provider.SubtitleOption
-		for _, s := range stream.Subtitles {
-			subURL := unwrapProxyURL(s.URL)
-			if subURL == "" {
-				continue
-			}
-			subs = append(subs, provider.SubtitleOption{
-				URL:      subURL,
-				Language: lang.Normalize(s.Lang),
-				Referer:  referer,
-			})
-		}
-
-		subType := ""
-		if category == provider.AudioSub {
-			subType = provider.SubTypeSoft
-		}
-
-		sources = append(sources, provider.MediaSource{
-			URL:            rawURL,
-			Quality:        "1080p",
-			Backend:        "MegaPlay",
-			Type:           provider.SourceTypeHLS,
-			Referer:        referer,
-			SuppressOrigin: true,
-			SubType:        subType,
-			Subtitles:      subs,
+		subs = append(subs, provider.SubtitleOption{
+			URL:      track.File,
+			Language: lang.FromLabel(kit.Clean(track.Label)),
+			Default:  track.Default,
+			Referer:  origin + "/",
 		})
 	}
 
-	return sources, nil
+	return []provider.MediaSource{{
+		URL:            kit.SignCDNURL(rawM3U8, 86400),
+		Quality:        "Auto",
+		Backend:        "MegaPlay",
+		Referer:        origin + "/",
+		Type:           provider.SourceTypeHLS,
+		UserAgent:      config.DesktopUserAgent,
+		SuppressOrigin: true,
+		Subtitles:      subs,
+		Audio:          provider.AudioInfo{Track: animeTrack(category)},
+		SubType:        provider.SubTypeSoft,
+	}}, nil
 }
 
-func unwrapProxyURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if strings.Contains(raw, "url=") {
-		if u, err := url.Parse(raw); err == nil {
-			if target := u.Query().Get("url"); target != "" {
-				return target
-			}
-		}
-	}
-	return raw
-}
-
-func (c *Client) getFilmuToken(ctx context.Context) (string, error) {
-	c.tokenMu.Lock()
-	if c.token != "" && time.Now().Before(c.tokenExp) {
-		tok := c.token
-		c.tokenMu.Unlock()
-		return tok, nil
-	}
-	c.tokenMu.Unlock()
-
-	reqURL := fmt.Sprintf("%s/token", c.filmuBase)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader([]byte{}))
+// megaplayFileID fetches an embed page and extracts its stream file id.
+func (c *Client) megaplayFileID(ctx context.Context, embedURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, embedURL, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
-	req.Header.Set("Origin", config.BingrOrigin)
-	req.Header.Set("Referer", config.BingrReferer)
+	req.Header.Set("Referer", c.embedBase+"/")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", &provider.HTTPError{Code: resp.StatusCode, URL: reqURL}
-	}
-
-	var tr struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+	body, err := httpclient.ReadCapped(resp)
+	_ = resp.Body.Close()
+	if err != nil {
 		return "", err
 	}
-	if tr.Token == "" {
-		return "", fmt.Errorf("empty token from %s", reqURL)
+	if resp.StatusCode != http.StatusOK {
+		return "", &provider.HTTPError{Code: resp.StatusCode, URL: embedURL}
 	}
+	return parseMegaplayFileID(body)
+}
 
-	c.tokenMu.Lock()
-	c.token = tr.Token
-	c.tokenExp = time.Now().Add(2 * time.Hour)
-	c.tokenMu.Unlock()
+// parseMegaplayFileID reads the file id from an embed page. A 200 page
+// explicitly titled as an error means the track does not exist (for example
+// an unreleased dub), which maps to the audio-unavailable sentinel.
+func parseMegaplayFileID(body []byte) (string, error) {
+	if id := digitsAfter(body, []byte(`data-id="`)); id != "" {
+		return id, nil
+	}
+	if id := digitsAfter(body, []byte("File ")); id != "" {
+		return id, nil
+	}
+	if bytes.Contains(body, []byte("<title>Error")) {
+		return "", fmt.Errorf("no file id in embed page: %w", provider.ErrAudioUnavailable)
+	}
+	return "", fmt.Errorf("no file id in embed page")
+}
 
-	return tr.Token, nil
+// digitsAfter returns the run of digits that follows marker, or empty.
+func digitsAfter(body, marker []byte) string {
+	i := bytes.Index(body, marker)
+	if i < 0 {
+		return ""
+	}
+	start := i + len(marker)
+	end := start
+	for end < len(body) && body[end] >= '0' && body[end] <= '9' {
+		end++
+	}
+	if end == start {
+		return ""
+	}
+	return string(body[start:end])
 }

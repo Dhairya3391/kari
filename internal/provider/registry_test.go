@@ -51,6 +51,38 @@ func TestRegistryRegisterDeduplicatesByName(t *testing.T) {
 	}
 }
 
+type presentableConfiguredFake struct {
+	configuredFake
+	alias string
+}
+
+func (f *presentableConfiguredFake) Alias() string { return f.alias }
+
+func TestRegistryConfiguredAlias(t *testing.T) {
+	r := &Registry{}
+	r.Register(&presentableConfiguredFake{
+		configuredFake: configuredFake{
+			fakeProvider: fakeProvider{name: "addon-1", modes: []Mode{{Name: ModeStremio}}},
+			value:        "https://addon.example/manifest.json",
+		},
+		alias: "HdHub",
+	})
+	r.Register(&configuredFake{
+		fakeProvider: fakeProvider{name: "addon-2", modes: []Mode{{Name: ModeStremio}}},
+		value:        "https://plain.example/manifest.json",
+	})
+
+	if alias, ok := r.ConfiguredAlias("https://addon.example/manifest.json"); !ok || alias != "HdHub" {
+		t.Fatalf("ConfiguredAlias = %q, %v, want HdHub, true", alias, ok)
+	}
+	if alias, ok := r.ConfiguredAlias("https://plain.example/manifest.json"); !ok || alias != "addon-2" {
+		t.Fatalf("ConfiguredAlias fallback = %q, %v, want addon-2, true", alias, ok)
+	}
+	if _, ok := r.ConfiguredAlias("https://missing.example/manifest.json"); ok {
+		t.Fatal("ConfiguredAlias found an unknown value")
+	}
+}
+
 func TestRegistryUnregisterConfigured(t *testing.T) {
 	r := &Registry{}
 	r.Register(&configuredFake{

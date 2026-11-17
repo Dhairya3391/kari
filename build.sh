@@ -15,7 +15,7 @@ else
   D="${DESCRIBE#v}"
   case "$D" in
     *-*-g*)
-      IFS='.-' read -r MAJOR MINOR PATCH COMMITS HASH <<< "$D"
+      IFS='.-' read -r MAJOR MINOR PATCH COMMITS _ <<< "$D"
       VERSION="v${MAJOR}.${MINOR}.$((PATCH + COMMITS))"
       ;;
     *)
@@ -24,6 +24,14 @@ else
   esac
 fi
 LDFLAGS="-s -w -X kari/internal/app.Version=$VERSION -X kari/internal/app.Commit=$COMMIT"
+
+# Version and commit are already supplied above; avoid Go's extra VCS queries.
+BASE_FLAGS=("-buildvcs=false" "-ldflags=$LDFLAGS")
+# Plain ./build.sh shares package-cache entries with ordinary Go commands.
+# Release/cross-platform builds still omit local paths for reproducibility.
+if [ "$#" -gt 0 ]; then
+  BASE_FLAGS=("-trimpath" "${BASE_FLAGS[@]}")
+fi
 
 get_host_os() {
   if [ -n "${TERMUX_VERSION:-}" ]; then
@@ -47,6 +55,26 @@ get_host_arch() {
   esac
 }
 
+binary_name() {
+  local goos="$1" goarch="$2"
+  local name="$APP_NAME-$goos-$goarch"
+  if [ "$goos" = "windows" ]; then
+    name+=".exe"
+  fi
+  echo "$name"
+}
+
+build_one() {
+  local goos="$1" goarch="$2" out="$3"
+  local args=("${BASE_FLAGS[@]}")
+  # Android requires PIE for modern versions.
+  if [ "$goos" = "android" ]; then
+    args+=("-buildmode=pie")
+  fi
+  CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+    go build "${args[@]}" -o "$out" "$PKG"
+}
+
 if [ "${1:-}" = "all" ]; then
   mkdir -p "$BUILD_DIR"
 
@@ -62,86 +90,84 @@ if [ "${1:-}" = "all" ]; then
 
   echo "Building all platforms..."
 
-  # Use a simple worker pool to avoid overloading the system
-  # Max 4 parallel builds
-  MAX_JOBS=4
-  job_count=0
+  # Keep a bounded number of builds in flight so parallel go builds do not
+  # oversubscribe the CPU. PIDs are reaped FIFO, which keeps the window full
+  # without relying on `wait -n` (missing from the bash 3.2 shipped by macOS).
+  MAX_JOBS="${MAX_JOBS:-4}"
+  case "$MAX_JOBS" in
+    '' | *[!0-9]*)
+      echo "MAX_JOBS must be a positive integer, got '$MAX_JOBS'" >&2
+      exit 2
+      ;;
+  esac
+  if [ "$MAX_JOBS" -lt 1 ]; then
+    echo "MAX_JOBS must be at least 1, got '$MAX_JOBS'" >&2
+    exit 2
+  fi
+
+  pids=()
+  outputs=()
   failed=0
 
   for platform in "${platforms[@]}"; do
     IFS="/" read -r GOOS GOARCH <<< "$platform"
-
-    output_name="$APP_NAME-$GOOS-$GOARCH"
-    if [ "$GOOS" = "windows" ]; then
-      output_name+=".exe"
-    fi
-
-    # Build flags as an array to handle quoting correctly
-    build_args=("-trimpath" "-ldflags=$LDFLAGS")
-
-    # Android requires PIE for modern versions
-    if [ "$GOOS" = "android" ]; then
-      build_args+=("-buildmode=pie")
-    fi
+    output_name=$(binary_name "$GOOS" "$GOARCH")
+    outputs+=("$BUILD_DIR/$output_name")
 
     echo "Building $output_name..."
     (
-      CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-      go build "${build_args[@]}" \
-      -o "$BUILD_DIR/$output_name" "$PKG" 2>&1 || {
+      build_one "$GOOS" "$GOARCH" "$BUILD_DIR/$output_name" || {
         echo "FAILED: $output_name" >&2
         exit 1
       }
     ) &
+    pids+=("$!")
 
-    ((job_count++))
-    if [ "$job_count" -ge "$MAX_JOBS" ]; then
-      wait -n || ((failed++))
-      ((job_count--))
+    if [ "${#pids[@]}" -ge "$MAX_JOBS" ]; then
+      wait "${pids[0]}" || failed=$((failed + 1))
+      pids=("${pids[@]:1}")
     fi
   done
 
-  # Wait for remaining jobs
-  while [ "$job_count" -gt 0 ]; do
-    wait -n || ((failed++))
-    ((job_count--))
-  done
+  # A cap at least as wide as the platform list leaves nothing queued here,
+  # and bash 3.2 (the macOS /bin/bash) errors on "${pids[@]}" under `set -u`
+  # when the array is empty.
+  if [ "${#pids[@]}" -gt 0 ]; then
+    for pid in "${pids[@]}"; do
+      wait "$pid" || failed=$((failed + 1))
+    done
+  fi
 
   if [ "$failed" -gt 0 ]; then
-    echo "$failed build(s) failed."
+    echo "$failed build(s) failed." >&2
     exit 1
   fi
 
-  # Optional: Compress with UPX if available to make updater faster
-  if command -v upx >/dev/null 2>&1; then
+  # Compress with UPX when available to make the updater download smaller.
+  # Run the compressions in parallel: -9 takes several seconds per binary,
+  # so doing them one after another dominates the whole `all` build.
+  # Set UPX=0 to skip compression entirely. Only the binaries built above are
+  # passed to upx so stale files in the build directory are left alone.
+  if [ "${UPX:-1}" != "0" ] && command -v upx >/dev/null 2>&1; then
     echo "Compressing binaries with UPX..."
-    # Only compress if there are files
-    if ls "$BUILD_DIR"/* >/dev/null 2>&1; then
-      upx -9 "$BUILD_DIR"/* >/dev/null 2>&1 || true
-    fi
+    for f in "${outputs[@]}"; do
+      upx -9 "$f" >/dev/null 2>&1 &
+    done
+    wait || true
   fi
 
   echo "All builds complete."
 elif [ "${1:-}" = "target" ]; then
-  GOOS=$2
-  GOARCH=$3
-
-  output_name="$APP_NAME-$GOOS-$GOARCH"
-  if [ "$GOOS" = "windows" ]; then
-    output_name+=".exe"
+  GOOS="${2:-}"
+  GOARCH="${3:-}"
+  if [ -z "$GOOS" ] || [ -z "$GOARCH" ]; then
+    echo "usage: $0 target <os> <arch>" >&2
+    exit 1
   fi
 
-  build_args=("-trimpath" "-ldflags=$LDFLAGS")
-  if [ "$GOOS" = "android" ]; then
-    build_args+=("-buildmode=pie")
-  fi
-
+  output_name=$(binary_name "$GOOS" "$GOARCH")
   echo "Building $output_name for ${GOOS}/${GOARCH}..."
-
-  CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-  go build "${build_args[@]}" \
-  -o "$output_name" "$PKG"
-
+  build_one "$GOOS" "$GOARCH" "$output_name"
   echo "Done."
 else
   GOOS=$(get_host_os)
@@ -152,16 +178,7 @@ else
     output_name+=".exe"
   fi
 
-  build_args=("-trimpath" "-ldflags=$LDFLAGS")
-  if [ "$GOOS" = "android" ]; then
-    build_args+=("-buildmode=pie")
-  fi
-
   echo "Building $output_name for ${GOOS}/${GOARCH}..."
-
-  CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-  go build "${build_args[@]}" \
-  -o "$output_name" "$PKG"
-
+  build_one "$GOOS" "$GOARCH" "$output_name"
   echo "Done."
-  fi
+fi

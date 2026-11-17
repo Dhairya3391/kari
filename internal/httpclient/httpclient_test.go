@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/go-retryablehttp"
 )
 
 // TestPerHostConcurrencyCap proves at most 4 requests run concurrently
@@ -216,5 +218,66 @@ func TestReadCapped(t *testing.T) {
 	}
 	if _, err := ReadCapped(resp2); err == nil {
 		t.Error("oversized body must error")
+	}
+}
+
+// TestRetryAfterIsHonored measures whether an explicit Retry-After header is
+// respected when deciding how long to wait before a retry.
+func TestRetryAfterIsHonored(t *testing.T) {
+	const requestedWait = 900 * time.Millisecond // allow small clock variance under Retry-After: 1
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	client := New()
+	start := time.Now()
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	resp, err := client.Do(req)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	resp.Body.Close()
+	t.Logf("OBSERVED: elapsed=%v requests=%d status=%d requestedWait=%v", elapsed, calls.Load(), resp.StatusCode, requestedWait)
+	if calls.Load() != 2 {
+		t.Fatalf("requests = %d, want 2 (initial 429 + retry)", calls.Load())
+	}
+	if elapsed < requestedWait {
+		t.Errorf("retried after %v, earlier than the server's 1s Retry-After", elapsed)
+	}
+}
+
+// TestClientsShareTransportPool proves clients built by different constructors
+// reuse the same transport, so provider fan-out does not pay duplicate TLS
+// handshakes for every client instance.
+func TestClientsShareTransportPool(t *testing.T) {
+	base := func(c *http.Client) http.RoundTripper {
+		rt := c.Transport
+		for {
+			switch v := rt.(type) {
+			case *retryablehttp.RoundTripper:
+				rt = v.Client.HTTPClient.Transport
+			case *uaRoundTripper:
+				rt = v.next
+			case *kariClientRoundTripper:
+				rt = v.next
+			case *hostSemaphore:
+				return v.next
+			default:
+				return rt
+			}
+		}
+	}
+	first := base(New())
+	second := base(NewWithUserAgent("test-agent"))
+	if first != second {
+		t.Fatalf("clients use different transports: %p vs %p", first, second)
 	}
 }

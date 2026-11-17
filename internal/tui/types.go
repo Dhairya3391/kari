@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"kari/internal/calendar"
+	"kari/internal/filter"
 	"kari/internal/history"
 	"kari/internal/manga"
 	"kari/internal/model"
@@ -19,7 +20,6 @@ import (
 	"kari/internal/poster"
 	"kari/internal/presence"
 	"kari/internal/provider"
-	"kari/internal/ranking"
 	"kari/internal/scrobble"
 	"kari/internal/service"
 	"kari/internal/termimg"
@@ -49,6 +49,16 @@ type episodeHistoryIndexCache struct {
 	title string
 	index history.EpisodeIndex
 	valid bool
+}
+
+// previewHeaderCache memoizes the plain-text preview metadata block. The
+// overlay layout key needs that text on every message (spinner ticks, theme
+// crossfades, keystrokes), but it only changes when the metadata or the
+// available width does.
+type previewHeaderCache struct {
+	fingerprint uint64
+	signature   string
+	valid       bool
 }
 
 const (
@@ -81,6 +91,10 @@ const (
 	qualityHighest   = 1
 	qualityDataSaver = 2
 	qualityLowest    = 3
+	// qualityExplicitSD is the last persisted stream-quality tier. Picking an
+	// explicit tier in settings stores 10-13 (mirroring filter.QualityUHD..SD),
+	// and those values must survive a reload for "same as stream" downloads.
+	qualityExplicitSD = 13
 )
 
 const (
@@ -95,6 +109,9 @@ type searchCacheEntry struct {
 	results   []provider.SearchResult
 	usedQuery string
 	warnings  []string
+	// cachedAt lets a repeat search detect that the service collected slow
+	// provider rows after this snapshot and refresh instead of reusing it.
+	cachedAt time.Time
 }
 
 type searchDoneMsg struct {
@@ -266,9 +283,11 @@ const (
 )
 
 const (
-	posterSlotSearch  posterSlot = "search"
-	posterSlotPreview posterSlot = "preview"
-	posterSlotHistory posterSlot = "history"
+	posterSlotSearch   posterSlot = "search"
+	posterSlotPreview  posterSlot = "preview"
+	posterSlotHistory  posterSlot = "history"
+	posterSlotCalendar posterSlot = "calendar"
+	posterSlotLive     posterSlot = "live"
 )
 
 type posterLoadedMsg struct {
@@ -280,10 +299,19 @@ type posterLoadedMsg struct {
 
 type previewDetailsMsg struct {
 	opID     int
+	key      string
 	overview string
 	genres   []string
 	rating   string
 	err      error
+}
+
+// previewDetails is a cached plot synopsis, genre list, and score for one
+// title. It survives navigation so returning to a screen shows them at once.
+type previewDetails struct {
+	overview string
+	genres   []string
+	rating   string
 }
 
 // chaptersDoneMsg carries a fetched chapter listing for the manga mode.
@@ -320,6 +348,21 @@ type readerPageMsg struct {
 	render  string
 	opID    int
 	err     error
+}
+
+// historyProjection caches the sorted/filtered history rows between frames.
+// Rebuilding them walks, sorts and flattens every group on every message.
+type historyProjection struct {
+	source        []history.Group
+	finishedTab   bool
+	modeFilter    provider.ContentType
+	filter        string
+	valid         bool
+	activeTab     HistoryTab
+	activeList    []history.Group
+	modeFilters   []HistoryModeFilter
+	continueCount int
+	finishedCount int
 }
 
 type modelImpl struct {
@@ -362,7 +405,6 @@ type modelImpl struct {
 	calendarSchedule                calendar.WeeklySchedule
 	calendarDayIndex                int
 	calendarReleaseIndex            int
-	calendarScrollOffset            int
 	calendarFilter                  calendar.FilterMode
 	calendarQuery                   string
 	calendarFiltering               bool
@@ -401,11 +443,8 @@ type modelImpl struct {
 	statusID               int
 	statusExpiresAt        time.Time
 	showHelp               bool
-	bodyScroll             int
 	helpScroll             int
-	lastScrollInputAt      time.Time
-	lastScrollDirection    string
-	selectedPlayback       int
+	scroll                 scrollGate
 	previewSkipInfo        string
 	previewSkipKey         string
 	skipInfoOpID           int
@@ -431,6 +470,7 @@ type modelImpl struct {
 	crossfadeStep       int
 	crossfadeFrom       ModeTheme
 	crossfadeTo         ModeTheme
+	crossfadePalette    [17]ModeTheme
 	crossfadeOpID       int
 	nextOpID            int
 
@@ -468,39 +508,50 @@ type modelImpl struct {
 	downloadSpeed        string
 	downloadDownloaded   string
 	downloadETA          string
-	downloadChan         chan tea.Msg
-	resolveChan          chan tea.Msg
-	cancelDownload       context.CancelFunc
-	downloadTitle        string
-	downloadOutputDir    string
-	confirmQuit          bool
-	confirmStop          bool
-	confirmDelete        bool
-	confirmClearHistory  bool
-	anilistAuthURL       string
-	authInput            textinput.Model
-	traktAuthActive      bool
-	traktUserCode        string
-	traktVerifyURL       string
-	traktDeviceCode      string
-	traktCancel          context.CancelFunc
-	startupSync          bool
-	disableHistory       bool
-	disabledHistoryModes map[string]bool
-	discordPresence      bool
+	// completedDownloadsCache holds one directory scan for a short window so
+	// the downloads screen can use it in both the body and the footer without
+	// walking the download directory twice per frame.
+	completedDownloadsCache []service.CompletedDownload
+	completedDownloadsAt    time.Time
+	historyCache            historyProjection
+	previewHeader           previewHeaderCache
+	downloadChan            chan tea.Msg
+	resolveChan             chan tea.Msg
+	cancelDownload          context.CancelFunc
+	downloadTitle           string
+	downloadOutputDir       string
+	confirmQuit             bool
+	confirmStop             bool
+	confirmDelete           bool
+	confirmClearHistory     bool
+	anilistAuthURL          string
+	authInput               textinput.Model
+	traktAuthActive         bool
+	traktUserCode           string
+	traktVerifyURL          string
+	traktDeviceCode         string
+	traktCancel             context.CancelFunc
+	startupSync             bool
+	disableHistory          bool
+	disabledHistoryModes    map[string]bool
+	discordPresence         bool
 	// presenceSession tags the current now-playing card so a late background
 	// artwork lookup can't revive a card that was already cleared or replaced.
-	presenceSession             atomic.Int64
-	searchCacheGeneration       atomic.Uint64
-	settingsIndex               int
-	stremioAddonManifests       []string
-	addonInputOpen              bool
-	addonManifestTester         func(context.Context, string) (provider.Provider, error)
-	startupAddonLoader          func(context.Context, string) (provider.Provider, error)
-	addonTestCancel             context.CancelFunc
-	addonTesting                bool
-	addonPendingURL             string
-	searchCache                 *util.BoundedCache[searchCacheEntry]
+	presenceSession       atomic.Int64
+	searchCacheGeneration atomic.Uint64
+	settingsIndex         int
+	stremioAddonManifests []string
+	addonInputOpen        bool
+	addonManifestTester   func(context.Context, string) (provider.Provider, error)
+	startupAddonLoader    func(context.Context, string) (provider.Provider, error)
+	addonTestCancel       context.CancelFunc
+	addonTesting          bool
+	addonPendingURL       string
+	searchCache           *util.BoundedCache[searchCacheEntry]
+	// filterScope is the single source of truth for per-mode ranking policy.
+	// The legacy scalar fields below mirror it for downloads and older
+	// settings files; only this scope feeds PlaybackOptions.Preferences.
+	filterScope                 filter.Scope
 	audioMode                   string
 	qualityMode                 int
 	downloadQuality             int
@@ -510,7 +561,6 @@ type modelImpl struct {
 	disableDownloadVerification bool
 	languageFilter              map[string]bool
 	subtitleLanguage            string
-	subtitleLanguageIndex       int
 	disableAnimeSubtitles       bool
 	accentIndex                 int
 	customAccentHex             string
@@ -539,27 +589,42 @@ type modelImpl struct {
 	singleResolved   *model.ResolvedMedia
 	pendingDownload  *service.DownloadJob
 
-	posterClient             *poster.Client
-	presence                 *presence.Client
-	imgProtocol              termimg.Protocol
-	imagesEnabled            bool
-	posterCache              *util.BoundedCache[string]
-	searchPoster             string
-	searchPosterOpID         int
-	searchPosterCancel       context.CancelFunc
-	searchPosterUnavailable  bool
-	previewPoster            string
-	previewPosterOpID        int
-	previewPosterCancel      context.CancelFunc
-	previewPosterUnavailable bool
-	previewOverview          string
-	previewGenres            []string
-	previewRating            string
-	historyPoster            string
-	historyPosterOpID        int
-	historyPosterCancel      context.CancelFunc
-	historyPosterUnavailable bool
-	historyPosterDrawn       bool
+	posterClient              *poster.Client
+	presence                  *presence.Client
+	imgProtocol               termimg.Protocol
+	imagesEnabled             bool
+	posterCache               *util.BoundedCache[string]
+	previewDetailsCache       *util.BoundedCache[previewDetails]
+	searchPoster              string
+	searchPosterOpID          int
+	searchPosterCancel        context.CancelFunc
+	searchPosterUnavailable   bool
+	livePoster                string
+	livePosterOpID            int
+	livePosterCancel          context.CancelFunc
+	livePosterUnavailable     bool
+	liveUpdatedAt             time.Time
+	liveSources               int
+	previewPoster             string
+	previewPosterOpID         int
+	previewPosterCancel       context.CancelFunc
+	previewPosterUnavailable  bool
+	previewOverview           string
+	previewGenres             []string
+	previewRating             string
+	historyPoster             string
+	historyPosterOpID         int
+	historyPosterCancel       context.CancelFunc
+	historyPosterUnavailable  bool
+	historyPosterDrawn        bool
+	calendarPoster            string
+	calendarPosterOpID        int
+	calendarPosterCancel      context.CancelFunc
+	calendarPosterUnavailable bool
+	// calendarPosterKey identifies the release the current artwork belongs to.
+	// It lets Update reload the cover on selection changes without refetching
+	// on every spinner tick or status message.
+	calendarPosterKey string
 	// back to a group without re-aggregating the store.
 	historyGroups []history.Group
 
@@ -610,7 +675,7 @@ type modelImpl struct {
 	resultsFilter    string
 	resultsFiltering bool
 	// Source Ranking & Progressive loading on Preview
-	rankedSources        []ranking.ScoredSource
+	rankedSources        []filter.RankedSource
 	previewSelectedIndex int
 	stickyProviders      map[string]string
 	loadingProviders     int

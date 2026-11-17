@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"kari/internal/filter"
 	"kari/internal/logging"
+	"kari/internal/provider"
 	"kari/internal/util"
 )
 
@@ -93,6 +95,48 @@ type Data struct {
 	StartupSearchActive *bool `json:"startup_search_active"`
 	// AutoUpdate controls whether Kari automatically updates in the background when a new version is available (default false).
 	AutoUpdate bool `json:"auto_update"`
+
+	// Filters is the typed per-mode filtering policy. Once migrated it is the
+	// single source of truth for quality, audio-language, subtitle and track
+	// preferences; the legacy scalar fields above are kept only for older
+	// settings files and for downgrade compatibility.
+	Filters filter.Scope `json:"filters,omitempty"`
+	// FiltersMigrated records that the legacy fields have been folded into
+	// Filters, so an all-default policy is not re-seeded on every load.
+	FiltersMigrated bool `json:"filters_migrated,omitempty"`
+}
+
+// EffectiveFilters returns the typed per-mode filtering policy, seeding it
+// from the legacy scalar fields on first use. The seeded scope is stored back
+// on the document so every later read and save uses the same single source.
+func (d *Data) EffectiveFilters() filter.Scope {
+	if d == nil {
+		return filter.FromLegacy(0, 0, nil, "", "", false, "")
+	}
+	if d.FiltersMigrated {
+		return d.Filters
+	}
+
+	scope := filter.FromLegacy(
+		d.QualityMode,
+		d.DownloadQuality,
+		d.LanguageFilter,
+		d.SubtitleLanguage,
+		d.DefaultAnimeAudio,
+		d.DisableAnimeSubtitles,
+		"",
+	)
+	if scope.ByMode == nil {
+		scope.ByMode = make(map[provider.ContentType]filter.Preferences)
+	}
+	for mode, name := range d.PreferredProviders {
+		modePrefs := scope.For(provider.ContentType(mode))
+		modePrefs.PreferredProvider = name
+		scope.ByMode[provider.ContentType(mode)] = modePrefs
+	}
+	d.Filters = scope
+	d.FiltersMigrated = true
+	return scope
 }
 
 // DisabledHistoryModeSet returns a set of modes excluded from local history.
@@ -196,13 +240,6 @@ func path() string {
 		home = os.Getenv("HOME")
 	}
 	if home == "" {
-		// os.UserHomeDir errors or comes back empty if HOME/USERPROFILE
-		// aren't set, which does happen on Windows (e.g. some service
-		// contexts). Falling through with an empty home would silently
-		// resolve to a relative ".config/kari/settings.json" under
-		// whatever the current working directory happens to be, so
-		// settings would appear to save but never be found again on the
-		// next run from a different directory.
 		settingsLog.Warn("home directory undetermined; using relative path fallback")
 	}
 	return filepath.Join(home, ".config", "kari", "settings.json")

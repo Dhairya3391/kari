@@ -71,8 +71,6 @@ func TestRenderEpisodesScreen_NoOverflowWithPane(t *testing.T) {
 		t.Errorf("pane must show the series title, got:\n%s", out)
 	}
 
-	// Multi-season runs add the tab strip: 15 seasons must fit the
-	// column too, never hiding behind the poster.
 	multi := data
 	multi.SeasonCount = 15
 	multi.ActiveSeason = 14

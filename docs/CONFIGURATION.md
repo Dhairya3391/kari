@@ -116,7 +116,7 @@ User preferences configured via the in-app Settings screen (`s`) are persisted t
 | `modes` | list | Ordered list of content modes displayed in tab bar. | Canonical list |
 | `modes_disabled` | list | List of disabled mode keys excluded from tab switching. | `[]` |
 | `disabled_providers` | list | List of disabled provider IDs (e.g. `["pengu", "cinecat"]`). | `[]` |
-| `stremio_addon_manifests` | list of strings | Validated Stremio-compatible stream addon manifest URLs. Configure these in Settings → Add-ons. | `[]` |
+| `stremio_addon_manifests` | list of strings | HTTP(S) Stremio-compatible addon manifest URLs (any reachable manifest is accepted without a playback probe). Configure these in Settings → Add-ons. | `[]` |
 | `transitions` | bool | Enable color crossfade transitions between views. | `true` |
 | `startup_search_active` | bool | Focus the search input field immediately on application launch. | `true` |
 | `auto_update` | bool | Check and prompt for background updates when a new release is published. | `false` |

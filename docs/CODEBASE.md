@@ -31,7 +31,7 @@ mandatory rules for AI agents, deferring here for detail).
 ```txt
 cmd/kari/            entry point: flags, logging init, calls app.Run
 internal/
-  app/               composition root: loads config, wires everything (Run)
+  app/               composition root: CLI, bootstrap, wiring, Run
   tui/               bubbletea UI. No networking, no business logic.
   service/           orchestration between TUI and provider/player/downloader
   provider/          media source integrations + Registry + capability contracts
@@ -331,15 +331,21 @@ Fan-out/fan-in uses `errgroup.WithContext` + mutex-guarded aggregation
 a comment justifying them. Every goroutine has a termination path: derive
 from a cancellable ctx, drain abandoned channels, never leak on early exit.
 
-No global mutable state. The single sanctioned exception remains
-`internal/tui/styles.go` theme vars (documented there).
+No global mutable state. Two exceptions are sanctioned:
+`internal/tui/styles.go` theme vars (documented there), and
+`internal/httpclient`'s process-wide transport and per-host semaphore
+(`sharedBase`). The latter is Kari's equivalent of Go's process-wide
+`http.DefaultTransport`: all clients must share one connection pool and one
+per-host cap, so it is built once behind `sync.Once` and is immutable after
+construction. Do not introduce other globals without comparable justification.
 
 ---
 
 ## 11. Dependency Injection & Wiring
 
-- Components are constructed in `internal/app/app.go` and passed down via
-  constructors. No `init()` side effects anywhere.
+- Components are constructed in the `internal/app` package (`app.go` is the
+  entry point; `wire.go` holds the builders) and passed down via constructors.
+  No `init()` side effects anywhere.
 - Providers self-describe via `provider.Descriptor` in
   `internal/provider/defaults/defaults.go`:
 

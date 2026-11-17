@@ -164,8 +164,6 @@ func ApplyURL(url string, onProgress ProgressFunc) error {
 		return fmt.Errorf("swap binary: %w", err)
 	}
 
-	// Try removing old binary immediately. On Unix this succeeds; on Windows it is deferred
-	// to next startup cleanup because the running process holds an active lock.
 	if err := os.Remove(oldPath); err != nil {
 		updateLog.Debug("old binary removal deferred to next run", "file", oldPath, "err", err)
 	}

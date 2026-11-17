@@ -3,10 +3,12 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/provider"
+	"kari/internal/service"
 )
 
 // ResultsData holds the state needed to render the Results screen.
@@ -27,9 +29,13 @@ type ResultsData struct {
 	FilterQuery   string // / text filter; empty means unfiltered
 	Filtering     bool   // true while the user is typing the / filter
 	PosterBlock   string
-	Overview      string
 	Genres        []string
 	Rating        string
+	// CardHeight is the unshrunken body height used to size the poster slot.
+	// It is independent of the transient status/loading row so the metadata
+	// below the poster never shifts when that row appears or disappears.
+	// Zero means fall back to Height (callers that build data directly).
+	CardHeight int
 	// Loading is true while an async operation (e.g. episode fetch) is
 	// running on top of the results list. SpinnerFrame and LoadingText
 	// supply the inline feedback per spec §4.10.
@@ -40,6 +46,13 @@ type ResultsData struct {
 	TermWidth    int
 	Height       int
 	Accent       lipgloss.AdaptiveColor
+
+	// LiveGuide is the prepared section layout, set only in live mode.
+	LiveGuide *service.LiveGuide
+	// LiveUpdatedAt is the completion time of the last live search.
+	LiveUpdatedAt time.Time
+	// LiveSources counts integrations that contributed to the live search.
+	LiveSources int
 }
 
 // queryLine renders the search-box line: the live input while focused,
@@ -99,10 +112,6 @@ func RenderResultsScreen(data ResultsData) string {
 		headerLines = append(headerLines, st.Dim.Render("/")+data.FilterQuery+st.Cursor.Render("▌"), "")
 	}
 
-	// While loading with no rows yet, the body stays header-only: the
-	// fixed loading row above the footer carries the spinner, so no
-	// inline line appears/disappears to shift content, and no premature
-	// "no results" flashes.
 	if len(data.Results) == 0 && !data.Loading {
 		modeName := strings.ToLower(string(data.Mode))
 		if strings.TrimSpace(data.FilterQuery) != "" {
@@ -133,8 +142,6 @@ func RenderResultsScreen(data ResultsData) string {
 		return strings.Join(append(headerLines, table), "\n")
 	}
 
-	// 2-column layout: details pane gets a compact column (up to 36 cells),
-	// giving the results list the majority of space for full title visibility.
 	rightW := min(36, max(26, data.Width*28/100))
 	leftW := data.Width - rightW - 4
 	if leftW < 40 {
@@ -142,13 +149,22 @@ func RenderResultsScreen(data ResultsData) string {
 		rightW = max(24, data.Width-leftW-4)
 	}
 
-	leftCol := renderResultsTable(data, leftW, data.Height, st)
-	rightCol := renderResultsDetails(data, rightW, st)
-
+	cardHeight := data.CardHeight
+	if cardHeight <= 0 {
+		cardHeight = data.Height
+	}
+	bodyHeight := max(5, cardHeight-len(headerLines))
+	// renderResultsTable reserves the header rows itself via windowRange's
+	// headerReserve; subtracting them here too made the two-column list
+	// several rows shorter than the single-column one.
+	leftLines := strings.Split(renderResultsTable(data, leftW, data.Height, st), "\n")
+	rightLines := strings.Split(renderResultsDetails(data, rightW, bodyHeight, st), "\n")
+	lines := max(len(leftLines), len(rightLines))
+	leftLines, rightLines = padLines(leftLines, lines), padLines(rightLines, lines)
 	joined := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(leftW).Render(leftCol),
-		"    ",
-		lipgloss.NewStyle().Width(rightW).Render(rightCol),
+		lipgloss.NewStyle().Width(leftW).Render(strings.Join(leftLines, "\n")),
+		strings.Repeat(" ", posterGutter),
+		lipgloss.NewStyle().Width(rightW).Render(strings.Join(rightLines, "\n")),
 	)
 
 	return strings.Join(append(headerLines, joined), "\n")
@@ -157,8 +173,6 @@ func RenderResultsScreen(data ResultsData) string {
 func renderResultsTable(data ResultsData, width, height int, st Styles) string {
 	var rows []string
 
-	// TV and Movies searches have one result type, so only mixed modes need
-	// the extra type column.
 	showType := data.Mode != provider.ModeTV && data.Mode != provider.ModeMovies
 	typeW := 7
 	yearW := 4
@@ -168,8 +182,6 @@ func renderResultsTable(data ResultsData, width, height int, st Styles) string {
 	}
 	titleW := max(8, width-fixedW)
 
-	// 3 lines reserved above the table ("› query", count, ""),
-	// plus 2 more while the / filter prompt is shown.
 	reserve := 3
 	if data.Filtering || strings.TrimSpace(data.FilterQuery) != "" {
 		reserve = 5
@@ -231,24 +243,25 @@ func renderResultsTable(data ResultsData, width, height int, st Styles) string {
 	return strings.Join(rows, "\n")
 }
 
-func renderResultsDetails(data ResultsData, width int, st Styles) string {
+// renderResultsDetails fills a fixed-height details pane. Every field owns a
+// slot from the first frame, so the poster, rating, genres, and synopsis
+// arriving asynchronously never move the result list beside it.
+func renderResultsDetails(data ResultsData, width, height int, st Styles) string {
+	posterRows := detailsPosterRows(height)
+	paneRows := posterRows + 14
 	if data.SelectedIndex < 0 || data.SelectedIndex >= len(data.Results) {
-		return ""
+		return strings.Join(make([]string, paneRows), "\n")
 	}
 	sel := data.Results[data.SelectedIndex]
 
-	var parts []string
+	parts := append(strings.Split(fixedBlock(data.PosterBlock, width, posterRows), "\n"), "", "")
 
-	// 1. Poster block (Kitty/Sixel/iTerm raw sequence)
-	if data.PosterBlock != "" {
-		parts = append(parts, data.PosterBlock, "")
-	}
-
-	// 2. Title
 	title := sel.Title
-	parts = append(parts, st.Bold.Render(title))
+	if title == "" {
+		title = "—"
+	}
+	parts = append(parts, st.Bold.Render(truncate(title, width)))
 
-	// 3. Metadata line: e.g. "2019 · ★ 9.38" or "2019"
 	var meta []string
 	if sel.Year != "" {
 		meta = append(meta, st.Dim.Render(sel.Year))
@@ -256,21 +269,17 @@ func renderResultsDetails(data ResultsData, width int, st Styles) string {
 	if data.Rating != "" && data.Rating != "—" {
 		meta = append(meta, st.Current.Render("★ ")+st.Dim.Render(data.Rating))
 	}
-	if len(meta) > 0 {
-		parts = append(parts, strings.Join(meta, st.Dim.Render(" · ")))
-	}
-
-	// 4. Genres line
-	if len(data.Genres) > 0 {
-		parts = append(parts, st.Dim.Render(strings.Join(data.Genres, " · ")))
-	}
-
-	// 5. Synopsis / Plot Overview
-	if data.Overview != "" {
+	if len(meta) == 0 {
 		parts = append(parts, "")
-		wrapped := wrapText(data.Overview, width, 8)
-		parts = append(parts, st.Dim.Render(wrapped))
+	} else {
+		parts = append(parts, truncate(strings.Join(meta, st.Dim.Render(" · ")), width))
 	}
 
-	return strings.Join(parts, "\n")
+	if len(data.Genres) == 0 {
+		parts = append(parts, "")
+	} else {
+		parts = append(parts, st.Dim.Render(truncate(strings.Join(data.Genres, " · "), width)))
+	}
+
+	return strings.Join(padLines(parts, paneRows), "\n")
 }

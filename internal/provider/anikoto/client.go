@@ -107,14 +107,16 @@ func (c *Client) FetchAvailableEpisodes(ctx context.Context, series provider.Sea
 	mediaID := series.ID
 	logging.Debug("fetch episodes", "provider", c.Name(), "mediaID", mediaID)
 
-	_, slug, err := c.resolveAnilistToAnikoto(ctx, mediaID)
+	animeID, slug, err := c.resolveAnilistToAnikoto(ctx, mediaID)
 	if err != nil {
 		return nil, fmt.Errorf("anikoto episodes: resolve: %w", err)
 	}
 	if slug == "" {
 		return nil, provider.ErrNoEpisodes
 	}
-	animeID := c.fetchAnimeIDFromWatchPage(ctx, slug)
+	if animeID == "" {
+		animeID = c.fetchAnimeIDFromWatchPage(ctx, slug)
+	}
 	if animeID == "" {
 		return nil, fmt.Errorf("anikoto episodes: no anime ID for %q: %w", slug, provider.ErrNoEpisodes)
 	}
@@ -142,8 +144,6 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
 	logging.Debug("resolve source", "provider", c.Name(), "mediaID", mediaID, "episodeID", episode.ID)
 
-	// Strip the pipe-separated dataIDs suffix before parsing the handle,
-	// but keep it: it lets resolution skip the episode re-fetch.
 	cleanID := episode.ID
 	dataIDs := ""
 	if idx := strings.Index(cleanID, "|"); idx >= 0 {

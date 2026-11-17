@@ -98,9 +98,7 @@ func Init(debug bool) error {
 	}
 
 	opts := &slog.HandlerOptions{
-		Level: level,
-		// Source locations only matter while debugging; keeping them off in
-		// normal operation keeps lines short and diff-friendly.
+		Level:     level,
 		AddSource: level == slog.LevelDebug,
 	}
 

@@ -99,18 +99,6 @@ type laneResult struct {
 	err       error
 }
 
-// isDub reports whether a lane response actually carries dubbed audio.
-func (r laneResult) isDub() bool {
-	source := strings.ToLower(strings.TrimSpace(r.source))
-	if source == "" {
-		source = strings.ToLower(strings.TrimSpace(r.provider))
-	}
-	if source == "" {
-		source = r.lane
-	}
-	return strings.Contains(source, "dub")
-}
-
 // isAnime reports whether the title has VidRift anime lanes. The upstream
 // field is either false or the array of anime lane names.
 func (m embedMeta) isAnime() bool {
@@ -179,7 +167,7 @@ func decodeInlineJSON[T any](body []byte, marker string) (T, error) {
 
 // buildSources maps every lane stream onto a playable media source, sharing
 // the page-wide subtitles plus any lane-specific tracks.
-func buildSources(page embedPage, results []laneResult, base string) []provider.MediaSource {
+func buildSources(page embedPage, results []laneResult, base string, track provider.AudioTrack) []provider.MediaSource {
 	generic := subtitleOptions(page.Subtitles, base)
 	var sources []provider.MediaSource
 	for i := range results {
@@ -189,15 +177,17 @@ func buildSources(page embedPage, results []laneResult, base string) []provider.
 		subtitles = append(subtitles, subtitleOptions(result.subtitles, base)...)
 		subtitles = dedupeSubtitles(subtitles)
 		for j := range result.streams {
-			sources = append(sources, mediaSource(result.streams[j], *result, base, subtitles, page.Meta.isAnime()))
+			sources = append(sources, mediaSource(result.streams[j], *result, base, subtitles, track))
 		}
 	}
 	return sources
 }
 
 // mediaSource converts one lane stream. The proxy URL is used only when the
-// lane has no direct address; both are played by mpv as remote HLS.
-func mediaSource(stream apiStream, lane laneResult, base string, subtitles []provider.SubtitleOption, anime bool) provider.MediaSource {
+// lane has no direct address; both are played by mpv as remote HLS. The
+// subtitle delivery kind is left unknown: an external track list does not
+// prove whether the picture is hard- or soft-subbed.
+func mediaSource(stream apiStream, lane laneResult, base string, subtitles []provider.SubtitleOption, track provider.AudioTrack) provider.MediaSource {
 	rawURL := strings.TrimSpace(stream.URL)
 	if rawURL == "" {
 		rawURL = strings.TrimSpace(stream.ProxyURL)
@@ -207,23 +197,22 @@ func mediaSource(stream apiStream, lane laneResult, base string, subtitles []pro
 	if sourceType == provider.SourceTypeMP4 {
 		sourceType = kit.NormalizeSourceKind(resolvedURL)
 	}
-	// Only the anime lane's delivery model is known: it ships soft subtitle
-	// tracks. General fallback lanes may be hard-subbed, so they stay
-	// untagged instead of claiming soft subs they may not have.
-	subType := ""
-	if anime && len(subtitles) > 0 && (lane.lane == providerAnime || lane.lane == providerAnimeDub) {
-		subType = provider.SubTypeSoft
+	language := streamLanguage(stream)
+	audio := provider.AudioInfo{Track: track}
+	if language != "" {
+		audio.Languages = []string{language}
 	}
 	return provider.MediaSource{
 		URL:            resolvedURL,
 		Quality:        streamQuality(stream, lane.maxRes),
+		Height:         streamHeight(stream, lane.maxRes),
 		Backend:        firstNonEmpty(stream.Provider, lane.provider),
 		Referer:        base + "/",
 		Type:           sourceType,
 		Subtitles:      subtitles,
 		UserAgent:      config.DesktopUserAgent,
-		Language:       streamLanguage(stream),
-		SubType:        subType,
+		Language:       language,
+		Audio:          audio,
 		SuppressOrigin: true,
 	}
 }
@@ -277,9 +266,10 @@ func bakedSources(meta embedMeta, base string) []provider.MediaSource {
 	return sources
 }
 
-// streamQuality labels a stream by its highest declared rung, falling back
-// to the lane's max resolution and then to Auto.
-func streamQuality(stream apiStream, laneMaxRes int) string {
+// streamHeight returns the tallest resolution declared by a stream's rungs,
+// falling back to the lane's max resolution. Zero means the lane declared
+// nothing, which must stay unknown rather than becoming a guessed tier.
+func streamHeight(stream apiStream, laneMaxRes int) int {
 	height := 0
 	for _, rung := range stream.Rungs {
 		if rung.Height > height {
@@ -287,8 +277,15 @@ func streamQuality(stream apiStream, laneMaxRes int) string {
 		}
 	}
 	if height == 0 {
-		height = laneMaxRes
+		return laneMaxRes
 	}
+	return height
+}
+
+// streamQuality labels a stream by its highest declared rung, falling back
+// to the lane's max resolution and then to Auto.
+func streamQuality(stream apiStream, laneMaxRes int) string {
+	height := streamHeight(stream, laneMaxRes)
 	switch {
 	case height >= 2160:
 		return "4K"
@@ -302,18 +299,10 @@ func streamQuality(stream apiStream, laneMaxRes int) string {
 // streamLanguage derives an audio-language code from a lane's display name
 // or provider label. Titan and Lyra name tracks without a provider prefix
 // ("English", "Tamil"), so the whole label is normalized when no separator
-// is present. Unknown labels stay empty so no filter can drop them.
+// is present. A label with no real language code stays unknown: the anime
+// sub/dub lane name is a track choice, not a language declaration.
 func streamLanguage(stream apiStream) string {
-	if code := languageFromLabel(stream.Name); code != "" {
-		return code
-	}
-	switch strings.ToLower(strings.TrimSpace(stream.Provider)) {
-	case "anime":
-		return "ja"
-	case "anime dub":
-		return "en"
-	}
-	return ""
+	return languageFromLabel(stream.Name)
 }
 
 // languageFromLabel extracts the audio language from a lane label. Orion

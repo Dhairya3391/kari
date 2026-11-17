@@ -13,12 +13,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"kari/internal/config"
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/kit"
+	"kari/internal/timeouts"
 )
 
 const (
@@ -64,6 +65,15 @@ type apiResponse struct {
 	Subtitles []apiSubtitle   `json:"subtitles"`
 }
 
+// apiMeta is the media metadata VidQueen embeds in each lane response. Only
+// spoken languages carry typed audio identity; the rest is display-only.
+type apiMeta struct {
+	SpokenLanguages []struct {
+		ISO6391 string `json:"iso_639_1"`
+		Name    string `json:"name"`
+	} `json:"spoken_languages"`
+}
+
 type apiSource struct {
 	Source    string       `json:"source"`
 	Label     string       `json:"label"`
@@ -81,17 +91,19 @@ type apiQuality struct {
 // apiSubtitle carries only the fields playback needs; the API's type/source
 // keys and the inline manifests some lanes return are intentionally unmapped.
 type apiSubtitle struct {
-	Label string `json:"label"`
-	File  string `json:"file"`
+	Label  string `json:"label"`
+	File   string `json:"file"`
+	Source string `json:"source"`
 }
 
 // laneResult is one server's answer. A nil source with a nil error means the
 // lane simply has nothing for this title.
 type laneResult struct {
-	server    server
-	source    *apiSource
-	subtitles []apiSubtitle
-	err       error
+	server         server
+	source         *apiSource
+	subtitles      []apiSubtitle
+	audioLanguages []string
+	err            error
 }
 
 type variantStream struct {
@@ -147,8 +159,6 @@ func (c *Client) fetchSources(
 	wg.Wait()
 
 	subtitles := collectSubtitles(results)
-	// Filter here rather than in ResolveSource so the streaming path (which the
-	// TUI prefers) and the synchronous path list exactly the same rows.
 	sources := provider.FilterDirectSources(c.buildSources(ctx, results, subtitles))
 	if len(sources) == 0 {
 		var lastErr error
@@ -174,7 +184,7 @@ func (c *Client) fetchSources(
 // fetchLane asks one VidQueen lane for the requested title. A missing stream is
 // a valid answer, not an error.
 func (c *Client) fetchLane(ctx context.Context, srv server, tmdbID int, mediaType string, season, epNum int) laneResult {
-	reqCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, timeouts.SweetfoxLane)
 	defer cancel()
 
 	target := c.apiURL(mediaType, tmdbID, season, epNum, srv.key)
@@ -191,9 +201,6 @@ func (c *Client) fetchLane(ctx context.Context, srv server, tmdbID int, mediaTyp
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-		// A lane that does not carry this title is a valid empty answer, not a
-		// provider failure; treating it as an error would trip the circuit
-		// breaker for a title that simply is not in that lane's catalog.
 		return laneResult{server: srv}
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -204,7 +211,30 @@ func (c *Client) fetchLane(ctx context.Context, srv server, tmdbID int, mediaTyp
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIBytes)).Decode(&data); err != nil {
 		return laneResult{server: srv, err: fmt.Errorf("sweetfox lane %s decode: %w", srv.key, err)}
 	}
-	return laneResult{server: srv, source: data.Source, subtitles: data.Subtitles}
+	return laneResult{
+		server:         srv,
+		source:         data.Source,
+		subtitles:      data.Subtitles,
+		audioLanguages: spokenLanguages(data.Meta),
+	}
+}
+
+// spokenLanguages canonicalizes the ISO codes the API declares for a title.
+// Unknown or blank codes are dropped so no invented language reaches the
+// central audio filter.
+func spokenLanguages(raw json.RawMessage) []string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var meta apiMeta
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil
+	}
+	codes := make([]string, 0, len(meta.SpokenLanguages))
+	for _, entry := range meta.SpokenLanguages {
+		codes = append(codes, entry.ISO6391)
+	}
+	return lang.Canonicalize(codes)
 }
 
 // apiURL builds the lane endpoint. Query parameters are sorted for stable
@@ -279,6 +309,15 @@ func (c *Client) buildSources(ctx context.Context, results []laneResult, subtitl
 	return sources
 }
 
+// sourceMeta carries the typed fields attached to every row of one lane.
+type sourceMeta struct {
+	backend        string
+	height         int
+	bitrate        int
+	audioLanguages []string
+	subtitles      []provider.SubtitleOption
+}
+
 // laneSources turns one server's answer into rows. Explicit MP4 qualities are
 // emitted directly; HLS entries are probed for master variants so 4K tiers are
 // surfaced alongside the adaptive stream.
@@ -287,14 +326,24 @@ func (c *Client) laneSources(ctx context.Context, result laneResult, subtitles [
 		return nil
 	}
 
+	backend := strings.TrimSpace(result.source.Label)
+	if backend == "" {
+		backend = result.server.label
+	}
+	meta := sourceMeta{
+		backend:        backend,
+		audioLanguages: result.audioLanguages,
+		subtitles:      subtitles,
+	}
+
 	var sources []provider.MediaSource
 	seen := make(map[string]bool)
-	add := func(target, quality, sourceType string) {
+	add := func(target, quality, sourceType string, meta sourceMeta) {
 		if target == "" || seen[target] {
 			return
 		}
 		seen[target] = true
-		sources = append(sources, c.newMediaSource(target, quality, result.server.label, sourceType, subtitles))
+		sources = append(sources, c.newMediaSource(target, quality, sourceType, meta))
 	}
 
 	if len(result.source.Qualities) > 0 {
@@ -308,15 +357,23 @@ func (c *Client) laneSources(ctx context.Context, result laneResult, subtitles [
 				if variants, err := c.fetchVariants(ctx, u); err != nil {
 					logging.Debug("sweetfox variant parsing failed; keeping HLS row", "url", u, "server", result.server.label, "err", err)
 				} else if len(variants) > 0 {
+					bestHeight, bestBitrate := 0, 0
 					for _, variant := range variants {
-						add(variant.URL, variant.Quality, provider.SourceTypeHLS)
+						bestHeight = max(bestHeight, variant.Height)
+						bestBitrate = max(bestBitrate, variant.Bandwidth)
+						add(variant.URL, variant.Quality, provider.SourceTypeHLS, sourceMeta{
+							backend: backend, height: variant.Height, bitrate: variant.Bandwidth,
+							audioLanguages: result.audioLanguages, subtitles: subtitles,
+						})
 					}
-					// The probed URL is itself a master; keep its adaptive form.
-					add(u, "Auto", provider.SourceTypeHLS)
+					meta.height, meta.bitrate = bestHeight, bestBitrate
+					add(u, "Auto", provider.SourceTypeHLS, meta)
 					continue
 				}
 			}
-			add(u, qualityLabel(quality, result.source.Height), sourceType)
+			label := qualityLabel(quality, result.source.Height)
+			meta.height, meta.bitrate = heightOfLabel(label), 0
+			add(u, label, sourceType, meta)
 		}
 		return sources
 	}
@@ -330,11 +387,18 @@ func (c *Client) laneSources(ctx context.Context, result laneResult, subtitles [
 	if err != nil {
 		logging.Debug("sweetfox variant parsing failed; falling back to master", "url", masterURL, "server", result.server.label, "err", err)
 	}
+	bestHeight, bestBitrate := 0, 0
 	for _, variant := range variants {
-		add(variant.URL, variant.Quality, provider.SourceTypeHLS)
+		bestHeight = max(bestHeight, variant.Height)
+		bestBitrate = max(bestBitrate, variant.Bandwidth)
+		add(variant.URL, variant.Quality, provider.SourceTypeHLS, sourceMeta{
+			backend: backend, height: variant.Height, bitrate: variant.Bandwidth,
+			audioLanguages: result.audioLanguages, subtitles: subtitles,
+		})
 	}
 	// Always offer the adaptive master alongside individual tiers.
-	add(masterURL, "Auto", provider.SourceTypeHLS)
+	meta.height, meta.bitrate = bestHeight, bestBitrate
+	add(masterURL, "Auto", provider.SourceTypeHLS, meta)
 	return sources
 }
 
@@ -368,43 +432,42 @@ func qualityType(quality apiQuality, rawURL string) string {
 	return provider.SourceTypeMP4
 }
 
-func (c *Client) newMediaSource(target, quality, backend, sourceType string, subtitles []provider.SubtitleOption) provider.MediaSource {
+func (c *Client) newMediaSource(target, quality, sourceType string, meta sourceMeta) provider.MediaSource {
 	return provider.MediaSource{
 		URL:       target,
 		Quality:   quality,
-		Backend:   backend,
+		Height:    meta.height,
+		Bitrate:   meta.bitrate,
+		Backend:   meta.backend,
 		Type:      sourceType,
 		Referer:   c.playerBase + "/",
 		UserAgent: config.DesktopUserAgent,
-		Subtitles: subtitles,
+		Audio: provider.AudioInfo{
+			Languages: meta.audioLanguages,
+		},
+		Subtitles: meta.subtitles,
 	}
 }
 
-// resolutionLabel buckets a pixel height into the label users expect. Heights
-// such as the API's 800/804 auto lanes fall into their nearest standard tier.
-func resolutionLabel(height int) string {
-	switch {
-	case height >= 2160:
-		return "4K (2160p)"
-	case height >= 1440:
-		return "1440p"
-	case height >= 1080:
-		return "1080p"
-	case height >= 720:
-		return "720p"
-	case height >= 480:
-		return "480p"
-	case height >= 360:
-		return "360p"
-	default:
-		return fmt.Sprintf("%dp", height)
+// heightOfLabel resolves an explicit quality label to a pixel height. Adaptive
+// labels stay unknown: the manifest picks their tier at playback time.
+func heightOfLabel(label string) int {
+	if kit.IsAdaptiveQuality(label) {
+		return 0
 	}
+	return kit.QualityHeight(label)
+}
+
+// resolutionLabel buckets a pixel height into the shared canonical label.
+// Heights such as the API's 800/804 auto lanes fall into their nearest tier.
+func resolutionLabel(height int) string {
+	return kit.QualityLabelFromHeight(height)
 }
 
 // fetchVariants reads an HLS master and returns its individual quality tiers,
 // highest first. Non-master playlists simply yield no variants.
 func (c *Client) fetchVariants(ctx context.Context, masterURL string) ([]variantStream, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, timeouts.SweetfoxMaster)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, masterURL, nil)
@@ -496,8 +559,11 @@ func (c *Client) fetchVariants(ctx context.Context, masterURL string) ([]variant
 	return variants, nil
 }
 
-// collectSubtitles merges the subtitle lists returned by every lane. Lanes that
-// have no stream still publish the title's subtitle set.
+// collectSubtitles merges the subtitle lists returned by every lane. Lanes
+// that have no stream still publish the title's subtitle set. The upstream
+// list carries nearly a hundred entries for the same handful of languages, so
+// tracks are keyed by canonical language plus source; lanes that omit a source
+// id fall back to the URL, preserving distinct tracks without one.
 func collectSubtitles(results []laneResult) []provider.SubtitleOption {
 	var out []provider.SubtitleOption
 	seen := make(map[string]bool)
@@ -505,19 +571,27 @@ func collectSubtitles(results []laneResult) []provider.SubtitleOption {
 	for _, result := range results {
 		for _, item := range result.subtitles {
 			u := strings.TrimSpace(item.File)
-			if u == "" || seen[u] {
+			if u == "" {
 				continue
 			}
-			seen[u] = true
 
 			clean := strings.TrimSpace(reSubtitleLabelTrim.ReplaceAllString(item.Label, ""))
-			norm := lang.Normalize(clean)
+			norm := lang.FromLabel(clean)
 			if norm == "" {
-				norm = lang.Normalize(item.Label)
+				norm = lang.FromLabel(item.Label)
 			}
 			if norm == "" {
 				norm = "und"
 			}
+			source := strings.ToLower(strings.TrimSpace(item.Source))
+			if source == "" {
+				source = u
+			}
+			key := norm + "\x00" + source
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
 
 			out = append(out, provider.SubtitleOption{
 				URL:      u,

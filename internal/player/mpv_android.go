@@ -58,11 +58,6 @@ func playSingleSourceWithMPVAndroid(
 		return err
 	}
 
-	// mpv-android's intent accepts options only via extras for title, start
-	// position and subtitle tracks; it cannot receive HTTP headers/UA/referrer
-	// (see parseIntentExtras in the upstream app). Use -t video/any so the URL
-	// is opened regardless of a missing/odd file extension, and pass title and
-	// resume position as supported extras.
 	args := []string{"start", "-p", mpvAndroidPackageName(), "-a", "android.intent.action.VIEW", "-t", "video/any", "-d", intentDataURI(source.URL)}
 
 	if title := sanitizeMediaTitle(media.DisplayTitle()); title != "" {
@@ -146,10 +141,6 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 		headers = append(headers, "Cookie: "+source.CookieHeader)
 	}
 	if len(headers) > 0 {
-		// mpv list-typed options (http-header-fields) are cumulative: each
-		// repeated line in a config file appends one entry. Do that instead of
-		// a single value joined with "\r\n" (mpv.conf does not decode that
-		// escape, unlike the command line parser).
 		for _, h := range headers {
 			confBuilder.WriteString("http-header-fields=")
 			confBuilder.WriteString(h)
@@ -169,11 +160,6 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 		confBuilder.WriteString(fmt.Sprintf("start=%d\n", int(media.StartTime)))
 	}
 
-	// Subtitles: mpv-android's VIEW intent CANNOT carry subtitles here — its
-	// `subs` extra is a Parcelable (Uri) array which `am`/termux-am has no
-	// `--eua` flag capable of building. Instead copy the downloaded track next
-	// to our include target and attach it with a sub-file line so it loads for
-	// this session. (mpv's sub-file is a list option, so a repeated line works.)
 	subPath := ""
 	if subtitlePath != "" {
 		ext := filepath.Ext(subtitlePath)

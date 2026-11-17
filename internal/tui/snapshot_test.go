@@ -7,10 +7,10 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"kari/internal/filter"
 	"kari/internal/history"
 	"kari/internal/model"
 	"kari/internal/provider"
-	"kari/internal/ranking"
 	"kari/internal/settings"
 )
 
@@ -124,7 +124,6 @@ func TestSnapshot_Results(t *testing.T) {
 				Mode:          m.mode,
 				Results:       m.results,
 				SelectedIndex: 0,
-				Overview:      "Sample description for testing layout rendering across columns.",
 				Genres:        []string{"Action", "Drama"},
 				Rating:        "8.5",
 				Width:         dims.ContentWidth,
@@ -214,7 +213,7 @@ func TestSnapshot_Preview(t *testing.T) {
 		{Quality: "FHD 3.05 GB", Language: "English", Resolver: "4KHDHub"},
 		{Quality: "FHD 6.17 GB", Language: "Hindi", Resolver: "4KHDHub"},
 	}
-	ranked := ranking.RankSources(sources, ranking.Criteria{Mode: provider.ModeTV})
+	ranked := filter.Prepare(sources, filter.FromLegacy(qualityAll, 0, nil, "", "", false, "").For(provider.ModeTV), provider.ModeTV, nil, time.Time{})
 
 	for _, sz := range snapshotSizes {
 		dims := ComputeDims(sz.cols, sz.rows)
@@ -261,7 +260,7 @@ func TestSnapshot_PreviewLongTitle(t *testing.T) {
 	sources := []provider.MediaSource{
 		{Quality: "FHD", Resolver: "miruro"},
 	}
-	ranked := ranking.RankSources(sources, ranking.Criteria{Mode: provider.ModeAnime})
+	ranked := filter.Prepare(sources, filter.FromLegacy(qualityAll, 0, nil, "", "", false, "").For(provider.ModeAnime), provider.ModeAnime, nil, time.Time{})
 	// Exact title from issue #35 reports.
 	longTitle := "The Vice President Doesn't Say Anything About the Possibility of Him Being the Main Character"
 	for _, sz := range snapshotSizes {
@@ -339,7 +338,7 @@ func TestSnapshot_Preview_Playing(t *testing.T) {
 		{Quality: "4K 7.41 GB", Language: "English", Resolver: "4KHDHub"},
 		{Quality: "FHD 3.05 GB", Language: "English", Resolver: "4KHDHub"},
 	}
-	ranked := ranking.RankSources(sources, ranking.Criteria{Mode: provider.ModeTV})
+	ranked := filter.Prepare(sources, filter.FromLegacy(qualityAll, 0, nil, "", "", false, "").For(provider.ModeTV), provider.ModeTV, nil, time.Time{})
 
 	for _, sz := range snapshotSizes {
 		dims := ComputeDims(sz.cols, sz.rows)

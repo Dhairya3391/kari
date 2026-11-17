@@ -110,6 +110,12 @@ func TestResolveSourceSuccess(t *testing.T) {
 	if sources[0].Backend != "Dexter" || sources[0].Quality != "1080p" {
 		t.Errorf("sources[0] quality/backend = %q/%q, want 1080p/Dexter", sources[0].Quality, sources[0].Backend)
 	}
+	if sources[0].Height != 1080 {
+		t.Errorf("sources[0].Height = %d, want 1080", sources[0].Height)
+	}
+	if len(sources[0].Audio.Languages) != 0 || sources[0].Audio.Track != provider.TrackUnknown {
+		t.Errorf("solis must not invent audio metadata: %+v", sources[0].Audio)
+	}
 	if len(sources[0].Subtitles) != 1 {
 		t.Fatalf("len(subtitles) = %d, want 1", len(sources[0].Subtitles))
 	}

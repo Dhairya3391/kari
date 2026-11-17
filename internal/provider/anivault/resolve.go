@@ -10,10 +10,6 @@ import (
 	"kari/internal/provider/kit"
 )
 
-// This file maps AniVault watch payloads onto provider.MediaSource values,
-// unwrapping the API's proxy URLs so mpv always receives direct CDN
-// addresses and the upstream referer those CDNs require.
-
 // watchSources maps a watch payload to direct playable sources. Iframe-only
 // payloads carry no stream and are dropped.
 func watchSources(watch watchResponse) []provider.MediaSource {
@@ -44,6 +40,7 @@ func watchSources(watch watchResponse) []provider.MediaSource {
 			Type:      streamType,
 			Subtitles: subtitles,
 			SubType:   subType,
+			Audio:     provider.AudioInfo{Track: provider.TrackSub},
 			ExtraArgs: extraArgs,
 		})
 	}
@@ -135,12 +132,12 @@ func subtitleOptions(entries []apiSubtitle) []provider.SubtitleOption {
 		if target == "" || isThumbnailTrack(target) || seen[target] {
 			continue
 		}
-		language := lang.Normalize(kit.Clean(entry.Lang))
+		language := lang.FromLabel(kit.Clean(entry.Lang))
 		if language == "unknown" {
 			continue
 		}
 		if language == "" {
-			language = "en"
+			language = "und"
 		}
 		seen[target] = true
 		out = append(out, provider.SubtitleOption{

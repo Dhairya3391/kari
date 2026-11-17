@@ -50,6 +50,50 @@ func specialKey(t tea.KeyType, s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: t, Runes: []rune(s)}
 }
 
+// TestSearchBoundaryScrollDoesNotRefetchPoster proves scrolling past the top
+// or bottom of the results list does no poster work. triggerSearchPoster bumps
+// searchPosterOpID via clearSearchPoster on every call, so an unchanged opID
+// means no cancel/refetch cycle was scheduled for a redundant scroll.
+func TestSearchBoundaryScrollDoesNotRefetchPoster(t *testing.T) {
+	const seedOpID = 7
+	newModel := func() *modelImpl {
+		m := resultsFilterModel()
+		m.searchPosterOpID = seedOpID
+		return m
+	}
+
+	// At the top, up must be a no-op: no command, no poster slot churn.
+	top := newModel()
+	_, cmd := top.updateSearch(tea.KeyMsg{Type: tea.KeyUp})
+	if cmd != nil {
+		t.Errorf("up at top returned a command %v, want none", cmd)
+	}
+	if top.searchPosterOpID != seedOpID {
+		t.Errorf("up at top bumped poster opID to %d, want %d", top.searchPosterOpID, seedOpID)
+	}
+
+	// At the bottom, down must likewise do nothing.
+	bottom := newModel()
+	bottom.seriesList.Select(len(bottom.seriesResults) - 1)
+	_, cmd = bottom.updateSearch(tea.KeyMsg{Type: tea.KeyDown})
+	if cmd != nil {
+		t.Errorf("down at bottom returned a command %v, want none", cmd)
+	}
+	if bottom.searchPosterOpID != seedOpID {
+		t.Errorf("down at bottom bumped poster opID to %d, want %d", bottom.searchPosterOpID, seedOpID)
+	}
+
+	// A real move still refreshes the poster exactly once (one opID bump).
+	moved := newModel()
+	_, _ = moved.updateSearch(tea.KeyMsg{Type: tea.KeyDown})
+	if got := moved.selectedSeriesIndex(); got != 1 {
+		t.Fatalf("after down, index = %d, want 1", got)
+	}
+	if moved.searchPosterOpID != seedOpID+1 {
+		t.Errorf("real move bumped poster opID to %d, want %d", moved.searchPosterOpID, seedOpID+1)
+	}
+}
+
 // / enters filter mode instead of focusing the search input.
 func TestResultsSlashStartsFilter(t *testing.T) {
 	m := resultsFilterModel()

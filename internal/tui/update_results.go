@@ -14,8 +14,6 @@ func cleanErrorForUI(err error) string {
 	}
 	msg := err.Error()
 
-	// Scrub transport detail: URLs embed upstream hostnames (i.e. provider
-	// identities) and add noise without helping the user.
 	for _, m := range reURL.FindAllString(msg, -1) {
 		msg = strings.ReplaceAll(msg, m, "…")
 	}

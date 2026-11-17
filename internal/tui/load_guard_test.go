@@ -6,14 +6,15 @@ package tui
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/filter"
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/provider"
-	"kari/internal/ranking"
 	"kari/internal/service"
 )
 
@@ -317,7 +318,9 @@ func readySourceModel() *modelImpl {
 	m.resolved = &model.ResolvedMedia{SeriesTitle: "T", Playback: []provider.MediaSource{
 		{URL: "https://cdn.example.com/x.m3u8", Quality: "1080p", Resolver: "movysx"},
 	}}
-	m.rankedSources = ranking.RankSources(m.resolved.Playback, ranking.Criteria{Mode: provider.ModeMovies})
+	m.rankedSources = filter.Prepare(m.resolved.Playback,
+		filter.FromLegacy(qualityAll, 0, nil, "", "", false, "").For(provider.ModeMovies),
+		provider.ModeMovies, nil, time.Time{})
 	return m
 }
 
@@ -413,8 +416,6 @@ func (f *langProviderFake) AudioLanguages() []provider.AudioLanguage { return f.
 // Spacebar (which reports " ", not "space") toggles the focused
 // language in the audio picker.
 func TestAudioPickerSpaceToggles(t *testing.T) {
-	// The toggle path calls saveSettings: keep test writes off the
-	// real ~/.config/kari/settings.json.
 	t.Setenv("HOME", t.TempDir())
 	m := newTestSwitchModel()
 	m.registry.Register(&langProviderFake{
@@ -455,13 +456,11 @@ func TestLanguageFilterPersistsAcrossReload(t *testing.T) {
 		fakeProviderForSwitch: fakeProviderForSwitch{name: "p", modes: []provider.Mode{{Name: provider.ModeMovies}}},
 		langs:                 []provider.AudioLanguage{{Code: "en", Display: "English"}, {Code: "hi", Display: "Hindi"}},
 	})
-	m.languageFilter = map[string]bool{"hi": false, "Hindi": false}
+	m.filterScope.Defaults.Audio = filter.NewLanguagePreference([]string{"en"}, []string{"hi"})
 	if !m.hasEnabledLanguage() {
 		t.Fatal("one disabled language must not void the filter")
 	}
-	// Simulate the model.go load guard with an all-disabled map: it
-	// must reject, keeping the previous selection.
-	m.languageFilter = map[string]bool{"en": false, "English": false, "hi": false, "Hindi": false}
+	m.filterScope.Defaults.Audio = filter.NewLanguagePreference(nil, []string{"en", "hi"})
 	if m.hasEnabledLanguage() {
 		t.Error("all-disabled filter must be rejected at load")
 	}

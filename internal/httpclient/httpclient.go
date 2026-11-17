@@ -15,11 +15,23 @@ import (
 
 	"kari/internal/config"
 	"kari/internal/logging"
+	"kari/internal/timeouts"
 )
 
 const (
-	defaultTimeout = 60 * time.Second
-	defaultRetries = 2
+	// defaultTimeout bounds one HTTP attempt. Most callers also carry a
+	// service-level context deadline; keeping this short avoids a single
+	// stalled host holding a fan-out slot for a full minute.
+	defaultTimeout = timeouts.HTTPDefault
+	// One retry is enough to ride out a transient 5xx or connection reset.
+	// More retries multiply the tail latency of every provider call.
+	defaultRetries = 1
+	// Tight cap for our own computed backoff so a transient failure cannot
+	// stall playback resolution.
+	maxRetryWait = 600 * time.Millisecond
+	// A server's explicit Retry-After is a direct instruction; honor it, but
+	// still bound pathological values (some hosts send minutes).
+	maxRetryAfterWait = 5 * time.Second
 	// maxPerHost caps concurrent requests to one host so provider fan-out
 	// stays polite: 16 in flight per host, the rest wait on context.
 	maxPerHost = 16
@@ -27,6 +39,35 @@ const (
 	// never flow through the capped helpers.
 	MaxBodyBytes = 8 << 20
 )
+
+var (
+	transportOnce   sync.Once
+	sharedTransport *http.Transport
+	sharedSemaphore *hostSemaphore
+)
+
+// sharedBase builds the process-wide transport and per-host semaphore once.
+// They are immutable after construction; only their internal pools and
+// semaphore channels mutate, which is what lets unrelated clients reuse the
+// same idle connections instead of opening fresh TCP+TLS handshakes.
+func sharedBase() (*http.Transport, *hostSemaphore) {
+	transportOnce.Do(func() {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.ForceAttemptHTTP2 = true
+		transport.MaxIdleConns = 200
+		transport.MaxIdleConnsPerHost = 32
+		transport.IdleConnTimeout = 90 * time.Second
+		transport.TLSHandshakeTimeout = timeouts.HTTPTLSHandshake
+		transport.ExpectContinueTimeout = time.Second
+		transport.DialContext = newResilientDialer().DialContext
+		sharedTransport = transport
+		sharedSemaphore = &hostSemaphore{
+			sems: make(map[string]chan struct{}),
+			next: transport,
+		}
+	})
+	return sharedTransport, sharedSemaphore
+}
 
 // New returns a shared HTTP client with retry and timeout settings.
 func New() *http.Client {
@@ -61,13 +102,21 @@ func NewWithUserAgentAndTimeout(userAgent string, timeout time.Duration) *http.C
 func newClient(timeout time.Duration) *http.Client {
 	retryClient := retryablehttp.NewClient()
 	retryClient.RetryMax = defaultRetries
-	retryClient.RetryWaitMin = 200 * time.Millisecond
-	retryClient.RetryWaitMax = 1500 * time.Millisecond
-	// Retry idempotent reads only: connect errors, 5xx and 429 (honoring
-	// Retry-After via the base policy). POSTs never retry so a flaky
-	// transport cannot double-submit a write; the whole call stays
-	// bounded by the client timeout so retries never multiply past the
-	// caller's context deadline.
+	retryClient.RetryWaitMin = 100 * time.Millisecond
+	retryClient.RetryWaitMax = maxRetryWait
+	retryClient.Backoff = func(min, max time.Duration, attemptNum int, resp *http.Response) time.Duration {
+		wait := retryablehttp.DefaultBackoff(min, max, attemptNum, resp)
+		if resp != nil && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable) {
+			if wait > maxRetryAfterWait {
+				return maxRetryAfterWait
+			}
+			return wait
+		}
+		if wait > maxRetryWait {
+			return maxRetryWait
+		}
+		return wait
+	}
 	retryClient.CheckRetry = func(ctx context.Context, resp *http.Response, err error) (bool, error) {
 		if resp != nil && resp.Request != nil {
 			switch resp.Request.Method {
@@ -80,30 +129,8 @@ func newClient(timeout time.Duration) *http.Client {
 	}
 	retryClient.HTTPClient.Timeout = timeout
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-
-	// Go's default MaxIdleConnsPerHost is 2, which is too low for providers
-	// that fan out several concurrent requests to their own host (e.g. the
-	// streaming providers' parallel multi-quality resolves) — with only 2
-	// idle connections kept warm, a burst beyond that forces extra TCP+TLS
-	// handshakes instead of reusing connections.
-	transport.ForceAttemptHTTP2 = true
-	transport.MaxIdleConns = 200
-	transport.MaxIdleConnsPerHost = 32
-	transport.IdleConnTimeout = 90 * time.Second
-	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ExpectContinueTimeout = time.Second
-
-	// Universal resilient DNS dialer: uses system DNS first, falling back to
-	// public DNS (Cloudflare 1.1.1.1/1.0.0.1, Google 8.8.8.8/8.8.4.4) over
-	// UDP/TCP if system DNS is blocked, hijacked, or fails.
-	dialer := newResilientDialer()
-	transport.DialContext = dialer.DialContext
-
-	// Compression stays on (HTTP/2 + gzip via the default transport; no
-	// code sets Accept-Encoding manually) and connections are reused.
-	var rt http.RoundTripper = transport
-	rt = &hostSemaphore{next: rt}
+	_, semaphore := sharedBase()
+	var rt http.RoundTripper = semaphore
 	rt = &kariClientRoundTripper{next: rt}
 	rt = &uaRoundTripper{next: rt, ua: config.DesktopUserAgent}
 	retryClient.HTTPClient.Transport = rt
@@ -114,23 +141,31 @@ func newClient(timeout time.Duration) *http.Client {
 // hostSemaphore caps concurrent requests per host. It is safe for
 // concurrent use; waiting acquires respect the request context.
 type hostSemaphore struct {
-	mu   sync.Mutex
+	mu   sync.RWMutex
 	sems map[string]chan struct{}
 	next http.RoundTripper
 }
 
-// slot returns the semaphore for host, creating it on first use.
+// slot returns the semaphore for host, creating it on first use. The read
+// path dominates under fan-out, so lookups take a read lock and only the
+// first request for a host takes the write lock.
 func (h *hostSemaphore) slot(host string) chan struct{} {
+	h.mu.RLock()
+	s, ok := h.sems[host]
+	h.mu.RUnlock()
+	if ok {
+		return s
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.sems == nil {
 		h.sems = make(map[string]chan struct{})
 	}
-	s, ok := h.sems[host]
-	if !ok {
-		s = make(chan struct{}, maxPerHost)
-		h.sems[host] = s
+	if s, ok := h.sems[host]; ok {
+		return s
 	}
+	s = make(chan struct{}, maxPerHost)
+	h.sems[host] = s
 	return s
 }
 
@@ -230,7 +265,7 @@ func newResilientDialer() *net.Dialer {
 			ch := make(chan dialResult, total)
 			for _, server := range publicDNSServers {
 				go func() {
-					d := net.Dialer{Timeout: 4 * time.Second}
+					d := net.Dialer{Timeout: timeouts.HTTPDial}
 					conn, err := d.DialContext(raceCtx, network, server)
 					if err == nil {
 						select {
@@ -270,7 +305,7 @@ func newResilientDialer() *net.Dialer {
 			if runtime.GOOS == "android" {
 				return fallbackResolver.Dial(ctx, network, address)
 			}
-			d := net.Dialer{Timeout: 3 * time.Second}
+			d := net.Dialer{Timeout: timeouts.HTTPDialTLS}
 			conn, err := d.DialContext(ctx, network, address)
 			if err == nil {
 				return conn, nil
@@ -280,7 +315,7 @@ func newResilientDialer() *net.Dialer {
 	}
 
 	return &net.Dialer{
-		Timeout:   30 * time.Second,
+		Timeout:   timeouts.HTTPDefault,
 		KeepAlive: 30 * time.Second,
 		Resolver:  dualResolver,
 	}

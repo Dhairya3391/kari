@@ -130,9 +130,6 @@ func (s *DownloadService) CompletedDownloads() []CompletedDownload {
 		if err != nil {
 			return nil //nolint:nilerr // an unrelatable file cannot be a Kari download
 		}
-		// Only files recorded by a successful Kari download belong in this
-		// view. The folder layout also identifies files downloaded before
-		// markers were introduced.
 		_, markerErr := os.Stat(completedDownloadMarker(path))
 		if markerErr != nil && !os.IsNotExist(markerErr) {
 			return fmt.Errorf("check completed download marker: %w", markerErr)
@@ -141,8 +138,6 @@ func (s *DownloadService) CompletedDownloads() []CompletedDownload {
 			return nil
 		}
 
-		// Incomplete download check: .aria2, .part, or .ytdl control/partial files
-		// beside the target or staged in its temp directory.
 		if _, err := os.Stat(path + ".aria2"); err == nil {
 			return nil
 		}
@@ -164,8 +159,6 @@ func (s *DownloadService) CompletedDownloads() []CompletedDownload {
 		}
 		info, err := entry.Info()
 		if err != nil || info.Size() <= 0 {
-			// A vanished or unreadable entry must not hide the rest of
-			// the completed downloads.
 			return nil //nolint:nilerr // intentional per-entry skip
 		}
 
@@ -511,7 +504,3 @@ type BatchDownloadResult struct {
 	Episode provider.Episode
 	Err     error
 }
-
-// BatchDownload downloads episodes sequentially (respecting ctx), applying
-// quality/language filters before each download and reporting progress via
-// onProgress. One failed episode never aborts the rest.

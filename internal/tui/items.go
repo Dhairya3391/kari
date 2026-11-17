@@ -114,8 +114,6 @@ func episodesToItems(items []provider.Episode, historyStore *history.Store, seri
 			tag = fmt.Sprintf("S%02d", it.Season)
 		}
 
-		// The custom episode screen styles only visible rows. These items
-		// retain selection/filter metadata without pre-rendering the roster.
 		title := marker + tag + it.Title
 		desc := ""
 		if mediaType == provider.MediaTypeMovie {
@@ -255,8 +253,6 @@ func compareChapterNumbers(a, b string) (cmp int, ok bool) {
 // untouched 0% rows) and finished, backing the Continue/Finished tabs.
 func splitHistoryGroups(groups []history.Group) (continued, finished []history.Group) {
 	for _, group := range groups {
-		// Finished means everything watched and nothing in progress;
-		// anything else continues.
 		if group.HasComplete && !group.HasIncomplete {
 			finished = append(finished, group)
 		} else {
@@ -322,8 +318,6 @@ func historyRowStatus(group history.Group, finished bool) string {
 }
 
 func historyEntryTag(entry history.Entry) string {
-	// Manga progress keys chapters by catalog number in EpisodeTitle
-	// (fractional numbers don't fit the int Episode field).
 	if entry.Mode == string(provider.ModeManga) && strings.TrimSpace(entry.EpisodeTitle) != "" {
 		return "Ch " + strings.TrimSpace(entry.EpisodeTitle)
 	}

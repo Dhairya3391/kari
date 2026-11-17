@@ -30,8 +30,6 @@ func (m *modelImpl) onDownloadDone(msg downloadDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.downloadOpID {
 		return m, m.downloadSubscription()
 	}
-	// A user-initiated pause cancels the context. Keep the progress readout
-	// and partial files so resume continues from the checkpoint.
 	if errors.Is(msg.err, context.Canceled) {
 		logging.Info("download paused", "opID", msg.opID)
 		m.cancelDownload = nil

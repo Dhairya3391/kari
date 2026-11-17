@@ -96,9 +96,6 @@ func RenderSeasonTabs(seasonCount int, activeSeasonIndex int, accent lipgloss.Ad
 		return string(rune('0'+n/10)) + string(rune('0'+n%10))
 	}
 
-	// Window [lo, hi] around the active season that fits maxWidth.
-	// Widths are raw cells: 9 for "season   ", 5 per gap, digits per
-	// tab, 1 per overflow marker.
 	lo, hi := activeSeasonIndex, activeSeasonIndex
 	width := func(lo, hi int) int {
 		w := 9
@@ -120,8 +117,6 @@ func RenderSeasonTabs(seasonCount int, activeSeasonIndex int, accent lipgloss.Ad
 		return maxWidth <= 0 || width(lo, hi) <= maxWidth
 	}
 	for lo > 0 || hi < seasonCount-1 {
-		// Expand the side hiding more seasons first (ties: right),
-		// stopping when neither side fits.
 		leftHidden, rightHidden := lo, seasonCount-1-hi
 		if rightHidden >= leftHidden && hi < seasonCount-1 && fits(lo, hi+1) {
 			hi++

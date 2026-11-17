@@ -68,8 +68,6 @@ func TestStore_CloseWaitsForPendingSave(t *testing.T) {
 
 	s.Close()
 
-	// Reopen from disk — if Close() didn't wait for the background write,
-	// this would come back empty.
 	reopened, err := NewStore(path)
 	if err != nil {
 		t.Fatalf("NewStore (reopen): %v", err)

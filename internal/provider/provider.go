@@ -67,6 +67,31 @@ const (
 	SubTypeSoft = "soft"
 )
 
+// AudioTrack declares how audio reaches the picture for episodic content.
+// TrackDual marks sources whose manifest genuinely carries multiple selectable
+// audio renditions, which cannot be described as a single sub or dub track.
+type AudioTrack string
+
+// Audio-track vocabulary for MediaSource.Audio.Track. The empty value means
+// the provider could not determine the track kind; it is never a claim of
+// "sub" or "dub".
+const (
+	TrackUnknown AudioTrack = ""
+	TrackSub     AudioTrack = "sub"
+	TrackDub     AudioTrack = "dub"
+	TrackDual    AudioTrack = "dual"
+)
+
+// AudioInfo is the typed audio metadata a provider can declare for a source.
+// Languages holds canonical language codes (via lang.Normalize); multiple
+// codes are expected for live channels and dual-audio streams. It is kept
+// separate from the display-only Language and AudioLabel fields so filtering
+// never has to parse a label to recover audio identity.
+type AudioInfo struct {
+	Languages []string
+	Track     AudioTrack
+}
+
 // Stream container/protocol vocabulary for MediaSource.Type. Players and
 // downloaders branch on these; providers emit them.
 const (
@@ -206,6 +231,14 @@ type MediaSource struct {
 	UserAgent    string
 	CookieHeader string
 	Language     string
+	// Height is the declared peak vertical resolution in pixels, zero when
+	// the provider has none. Quality is the human-readable label derived from
+	// it; filtering must prefer Height and fall back to parsing Quality only
+	// as a last resort.
+	Height int
+	// Audio is the typed audio identity of the source. It replaces string
+	// matching against Language, Quality, Resolver, and AudioLabel.
+	Audio AudioInfo
 	// AudioLabel is the display-only audio language description for sources
 	// whose audio is not a single selectable track: live channels that
 	// broadcast in several languages, or sources whose language is inferred
@@ -227,6 +260,10 @@ type MediaSource struct {
 	SkipTimes *SkipTimes
 	// FallbackOnly keeps a weak lane visible while ranking it below ordinary sources.
 	FallbackOnly bool
+	// Bitrate is the stream's declared peak bitrate in bits per second, zero
+	// when unknown. Ranking uses it to break ties between sources of equal
+	// resolution so the higher-bitrate encode is preferred.
+	Bitrate int
 }
 
 // TransportIdentity returns the canonical identity used to deduplicate a
@@ -497,10 +534,6 @@ type Descriptor struct {
 type Deps struct {
 	Config  *config.Config
 	KeyPool *tmdb.KeyPool
-	// LanguageFilter mirrors the user's audio-language settings (see
-	// internal/settings LanguageFilter): nil or missing keys mean enabled.
-	// Providers use it to drop foreign dubbed audio at resolve time.
-	LanguageFilter map[string]bool
 }
 
 // StreamingProvider is implemented by providers that deliver sources

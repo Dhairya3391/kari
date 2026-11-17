@@ -19,13 +19,8 @@ import (
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/provider/kit"
+	"kari/internal/timeouts"
 )
-
-// Direct resolution talks to the Movy.sx source infrastructure itself
-// (api.wecollege.net), ported from temp/movy/server.mjs: a seed is fetched
-// per title, eleven city endpoints return XOR-encrypted payloads, and the
-// merged sources are direct CDN URLs playable by mpv. No intermediary API
-// or proxy is involved.
 
 // defaultStreamBase is the source service backing direct resolution.
 const defaultStreamBase = "https://api.wecollege.net"
@@ -40,9 +35,9 @@ func sourceEndpoints() []string {
 }
 
 const (
-	requestTimeoutMS = 12000
-	softTimeoutMS    = 2500
-	sourceGraceMS    = 800
+	requestTimeoutMS = timeouts.MovysxRequestMS
+	softTimeoutMS    = timeouts.MovysxSoftMS
+	sourceGraceMS    = timeouts.MovysxGraceMS
 	sourceQuorum     = 3
 	seedTTLMS        = 30000
 
@@ -50,8 +45,8 @@ const (
 	// HLS manifest. Probes run concurrently and only for rows that can change
 	// the list, so the caps stay low: a slow manifest is simply left visible as
 	// an unverified row instead of delaying the source list.
-	mirrorProbeTimeout = 2 * time.Second
-	mirrorProbeTotal   = 3 * time.Second
+	mirrorProbeTimeout = timeouts.MovysxMirrorProbe
+	mirrorProbeTotal   = timeouts.MovysxMirrorTotal
 )
 
 // --- Stream cipher (ported from temp/movy/server.mjs) ---
@@ -384,8 +379,6 @@ func (c *Client) fetchEndpointSources(ctx context.Context, endpoint string, para
 	if err == nil {
 		return out, nil
 	}
-	// A 401 means the seed rotated: drop the cache and retry once with a
-	// fresh seed, mirroring the web player. Anything else stands.
 	if !isHTTPErrorCode(err, http.StatusUnauthorized) {
 		return nil, err
 	}
@@ -638,9 +631,6 @@ func mergeProviderResults(payloads []*upstreamPayload) *mergedResults {
 	// Best-first: quality rank, then mp4 preferred over HLS at parity.
 	sortMergedSources(candidates)
 
-	// Collapse the same asset served under several city lanes. Sorting
-	// first keeps the highest-ranked label (e.g. 1080p over auto) for the
-	// shared URL.
 	sourceSet := map[string]struct{}{}
 	for _, src := range candidates {
 		key := canonicalSourceKey(src.url)
@@ -664,7 +654,11 @@ func mergeProviderResults(payloads []*upstreamPayload) *mergedResults {
 			if u == "" {
 				continue
 			}
-			isVTTorSRT := strings.EqualFold(strings.TrimSpace(sub.Type), "vtt") || strings.EqualFold(strings.TrimSpace(sub.Type), "srt")
+			subType := strings.ToLower(strings.TrimSpace(sub.Type))
+			if subType == "thumbnails" {
+				continue
+			}
+			isVTTorSRT := subType == "vtt" || subType == "srt"
 			if !kit.IsSubtitleURL(u) && !isVTTorSRT {
 				continue
 			}

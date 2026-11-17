@@ -52,8 +52,6 @@ func (m *modelImpl) publishPresence(np presence.NowPlaying) {
 		if err != nil || url == "" {
 			return
 		}
-		// Drop the refresh when playback moved on or stopped meanwhile, so a
-		// late poster lookup can't revive a cleared card.
 		if m.presenceSession.Load() != session {
 			return
 		}

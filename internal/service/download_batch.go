@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"kari/internal/downloader"
+	"kari/internal/filter"
 	"kari/internal/provider"
-	"kari/internal/ranking"
 )
 
 func (s *DownloadService) BatchDownload(
@@ -49,9 +51,6 @@ func (s *DownloadService) BatchDownloadWithActiveAndPreferred(
 	onActive func(outputDir, title string),
 	onProgress func(current, total int, epTitle string, dp downloader.DownloadProgress),
 ) []BatchDownloadResult {
-	// Each episode still resolves and downloads in order, so per-file
-	// parallel connections (aria2c splits / yt-dlp fragments) remain the
-	// speed lever.
 	results := make([]BatchDownloadResult, len(episodes))
 	reportProgress := func(cur, tot int, title string, dp downloader.DownloadProgress) {
 		if onProgress != nil {
@@ -82,22 +81,23 @@ func (s *DownloadService) BatchDownloadWithActiveAndPreferred(
 			results[i].Err = fmt.Errorf("resolve %s: %w", epTitle, err)
 			continue
 		}
-		filtered := FilterPlaybackSources(resolved.Playback, qualityMode, languages)
-		if len(filtered) > 0 {
-			resolved.Playback = filtered
-		} else {
-			// If no source matches requested quality tier, fall back to language-filtered or any available sources
-			langOnly := FilterPlaybackSources(resolved.Playback, 0, languages)
-			if len(langOnly) > 0 {
-				resolved.Playback = langOnly
-			}
+		prefs := filter.FromLegacy(qualityMode, qualityMode, languages, "", "", false, preferredProvider).For(mode)
+		langFiltered := filter.FilterLanguages(resolved.Playback, mode, prefs.Audio)
+		tiered := filter.SelectTier(langFiltered, prefs.Quality)
+		if len(tiered) > 0 {
+			langFiltered = tiered
 		}
-		if len(resolved.Playback) == 0 {
+		if len(langFiltered) == 0 {
 			reportProgress(current, len(episodes), epTitle, downloader.DownloadProgress{Percent: 1.0})
 			results[i].Err = fmt.Errorf("filter %s: no playback source available", epTitle)
 			continue
 		}
-		resolved.Playback = ranking.PreferProvider(resolved.Playback, preferredProvider)
+		ranked := filter.Prepare(langFiltered, prefs, mode, nil, time.Time{})
+		grouped := filter.GroupByProvider(ranked, preferredProvider)
+		resolved.Playback = make([]provider.MediaSource, 0, len(grouped))
+		for _, row := range grouped {
+			resolved.Playback = append(resolved.Playback, row.Source)
+		}
 
 		if onActive != nil {
 			outputDir, title := s.OrganizedPath(resolved)

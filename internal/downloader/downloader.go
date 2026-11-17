@@ -298,9 +298,6 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 	seenSources := make(map[string]struct{}, len(req.Sources))
 	for i, source := range req.Sources {
 		if err := ctx.Err(); err != nil {
-			// Pause/cancel keeps partial data on disk: the .aria2 control
-			// file and .part fragments are the resume checkpoints. Only
-			// CleanupPartial (explicit delete from the UI) removes them.
 			return err
 		}
 
@@ -333,10 +330,6 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 						return fmt.Errorf("source %d (%s): %w", i+1, source.Quality, err)
 					}
 					if errors.Is(err, errVerificationUnavailable) {
-						// The bytes downloaded fine but the local checker cannot
-						// judge them. Keeping the file breaks the download loop;
-						// deleting it would fetch the same bytes again and hit
-						// the same inconclusive check.
 						ytdlpLog.Warn("download integrity check unavailable; keeping file", "index", i+1, "total", len(req.Sources), "err", err)
 					} else {
 						d.removeDownloadedFile(req.OutputDir, baseTitle)
@@ -366,8 +359,6 @@ func (d *YTDLPDownloader) Download(ctx context.Context, req DownloadRequest) err
 	if len(errs) == 0 {
 		return fmt.Errorf("ytdlp: no usable sources provided")
 	}
-	// .aria2 control files survive a full failure so a later retry of the
-	// same source resumes instead of restarting from zero.
 	return fmt.Errorf("ytdlp: all %d usable sources failed: %w", len(errs), errors.Join(errs...))
 }
 
@@ -437,8 +428,6 @@ func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle s
 	verifyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	// 1. Head sample verification: validate container headers, streams, and initial frames.
-	// Decoding a 3-second sample verifies codec initialization and container atoms in <150ms.
 	headCmd := exec.CommandContext(verifyCtx, "ffmpeg", "-v", "error", "-xerror", "-nostdin", "-i", path, "-t", "3", "-f", "null", "-")
 	var headStderr bytes.Buffer
 	headCmd.Stderr = &headStderr
@@ -453,8 +442,6 @@ func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle s
 		case verifyUnavailable:
 			return fmt.Errorf("%w: %s", errVerificationUnavailable, errMsg)
 		default:
-			// An unexplained ffmpeg failure is not proof that the bytes are
-			// corrupt. Keep the file instead of re-downloading it forever.
 			return fmt.Errorf("%w: %s", errVerificationUnavailable, errMsg)
 		}
 	}
@@ -462,8 +449,6 @@ func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle s
 		return fmt.Errorf("video integrity check failed: %s", strings.TrimSpace(headStderr.String()))
 	}
 
-	// 2. Tail sample verification: seek to the end of the timeline and decode final frames.
-	// Detects truncated downloads (e.g. missing moov atoms, incomplete fragment stitching, premature EOF).
 	tailCmd := exec.CommandContext(verifyCtx, "ffmpeg", "-v", "error", "-xerror", "-nostdin", "-sseof", "-3", "-i", path, "-t", "3", "-f", "null", "-")
 	var tailStderr bytes.Buffer
 	tailCmd.Stderr = &tailStderr
@@ -472,8 +457,6 @@ func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle s
 			return fmt.Errorf("%w: video integrity check timed out: %w", errVerificationUnavailable, verifyCtx.Err())
 		}
 		errMsg := ffmpegErrorText(tailStderr.String(), err)
-		// Some container formats (e.g. raw unindexed streams) cannot seek backwards with -sseof.
-		// If head passed and the failure is purely a seeking limitation, log and treat as valid.
 		if strings.Contains(errMsg, "does not support seeking") || strings.Contains(errMsg, "cannot seek") || strings.Contains(errMsg, "seek to position") {
 			ytdlpLog.Debug("container does not support tail seek; head verified successfully", "path", path, "err", errMsg)
 			return nil
@@ -481,15 +464,10 @@ func (d *YTDLPDownloader) verifyFile(ctx context.Context, outputDir, baseTitle s
 		if classifyTailOutput(errMsg) == verifyCorrupt {
 			return fmt.Errorf("video integrity check failed: %s", errMsg)
 		}
-		// Seeking into the last GOP often makes decoders log errors on files
-		// that are perfectly playable. Only container-level evidence proves a
-		// truncated tail, so keep the file when the failure is decoder noise.
 		ytdlpLog.Debug("tail verification inconclusive; head verified successfully", "path", path, "err", errMsg)
 		return nil
 	}
 
-	// Certain container demuxers (e.g. Matroska/WebM) log premature EOF to stderr
-	// without returning a non-zero exit code when seek lands beyond available clusters.
 	if classifyTailOutput(tailStderr.String()) == verifyCorrupt {
 		return fmt.Errorf("video integrity check failed: file ended prematurely (truncated download)")
 	}
@@ -517,9 +495,6 @@ func (d *YTDLPDownloader) downloadSource(ctx context.Context, req DownloadReques
 		return err
 	}
 
-	// Some providers label redirecting or signed URLs as MP4 even though they
-	// need yt-dlp's native request handling. Retry that same source natively
-	// before moving to the next provider URL.
 	ytdlpLog.Debug("aria2c strategy failed; retrying natively", "resolver", source.Resolver)
 	d.CleanupPartial(req.OutputDir, req.Title, req.TempDir)
 	return d.downloadWithStrategy(ctx, req, source, "native")
@@ -531,9 +506,6 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	source provider.MediaSource,
 	strategy string,
 ) error {
-	// Direct-media downloads use aria2c through its JSON-RPC interface,
-	// providing structured progress (speed, ETA, downloaded size) instead
-	// of yt-dlp's opaque external-downloader passthrough.
 	if strategy == "aria2c" {
 		if _, err := exec.LookPath("aria2c"); err != nil {
 			return fmt.Errorf("aria2c: binary not found: %w", err)
@@ -699,9 +671,6 @@ func (d *YTDLPDownloader) downloadWithStrategy(
 	go scanPipe(stdout, false, &stdoutScanErr)
 	go scanPipe(stderr, true, &stderrScanErr)
 
-	// Drain both pipes before Wait: Wait closes them, and closing a pipe
-	// while the scanners are still reading truncates progress and surfaces
-	// spurious read errors.
 	wg.Wait()
 	err = cmd.Wait()
 

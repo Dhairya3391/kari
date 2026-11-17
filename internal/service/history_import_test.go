@@ -271,8 +271,6 @@ func TestImportSkipsLive(t *testing.T) {
 
 func TestImportMatchesAniListIDAcrossTitles(t *testing.T) {
 	store := importTestStore(t)
-	// Local watch recorded under the provider title, with the catalog
-	// id new watches now persist.
 	if err := store.Upsert(history.Entry{
 		Key:   history.EntryKey{Title: "Frieren", Mode: "anime", MediaType: "anime", Season: 1, Episode: 1},
 		Title: "Frieren", Season: 1, Episode: 1, Complete: true,
@@ -281,8 +279,6 @@ func TestImportMatchesAniListIDAcrossTitles(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	// Remote uses the romaji title for the same catalog id: must merge,
-	// not duplicate.
 	imported, upgraded, skipped := ImportWatched(store, []scrobble.WatchedItem{
 		{Title: "Sousou no Frieren", Mode: "anime", MediaType: "anime", Season: 1, Episode: 1, AniListID: 154587, Complete: true, WatchedAt: time.Now()},
 	})
@@ -317,8 +313,6 @@ func TestImportMatchesTMDBAcrossTitles(t *testing.T) {
 
 func TestImportTMDBNamespacesMedia(t *testing.T) {
 	store := importTestStore(t)
-	// TMDB movie 123 and TV show 123 are different entities sharing a
-	// number: the media type keeps them apart.
 	imported, _, _ := ImportWatched(store, []scrobble.WatchedItem{
 		{Title: "Dune", Mode: "movies", MediaType: "movie", TMDBID: 123, Complete: true, WatchedAt: time.Now()},
 		{Title: "Some Show", Mode: "tv", MediaType: "tv", Season: 2, Episode: 3, TMDBID: 123, Complete: true, WatchedAt: time.Now()},
@@ -401,8 +395,6 @@ func TestImportSkipDoesNotChurn(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	// Skipped entries are left byte-identical: no id backfill, no
-	// timestamp touch, so repeated syncs stay write-quiet.
 	_, _, skipped := ImportWatched(store, []scrobble.WatchedItem{
 		{Title: "Dune", Mode: "movies", MediaType: "movie", TMDBID: 456, Complete: true, WatchedAt: time.Now()},
 	})
@@ -433,8 +425,6 @@ func TestSplitYear(t *testing.T) {
 
 func TestImportMatchesYearSuffixedTitle(t *testing.T) {
 	store := importTestStore(t)
-	// The real-data case: local "Hunter x Hunter" ep1 in progress,
-	// AniList english "Hunter x Hunter (2011)" finished.
 	if err := store.Upsert(history.Entry{
 		Key:   history.EntryKey{Title: "Hunter x Hunter", Mode: "anime", MediaType: "anime", Season: 1, Episode: 1},
 		Title: "Hunter x Hunter", Season: 1, Episode: 1,
@@ -502,9 +492,6 @@ func TestImportYearlessRemoteMatchesYearLocal(t *testing.T) {
 
 func TestImportMangaAdoptsBlindMarker(t *testing.T) {
 	store := importTestStore(t)
-	// Local manga entry that never recorded its chapter (the real
-	// One Piece case): the remote position is information, not a
-	// clobber, so it is adopted.
 	if err := store.Upsert(history.Entry{
 		Key: mangaKey("One Piece"), Title: "One Piece",
 		Mode: "manga", MediaType: "manga",

@@ -25,6 +25,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/skipdb"
+	"kari/internal/timeouts"
 	"kari/internal/tmdb"
 	"kari/internal/util"
 )
@@ -40,6 +41,9 @@ type SkipClients struct {
 	IntroDB   *introdb.Client
 	TMDB      *tmdb.KeyPool
 	HTTP      *http.Client
+	// SkipSink, when set, receives skip timings that arrive after playback
+	// has already started so the running player can apply them live.
+	SkipSink *liveSkipSink
 }
 
 // SkipSettings holds the configured skip provider and per-zone auto-skip flags.
@@ -51,11 +55,13 @@ type SkipSettings struct {
 	SkipPreview    bool // Automatically skips preview segments.
 }
 
-// skipLookupTimeout bounds the whole skip fan-out. The AniSkip path needs
-// two sequential API calls (AniList ID resolution, then timings), so a
-// deadline tuned for a single request drops valid data on slow connections
-// and then caches the empty result for the rest of the session.
-const skipLookupTimeout = 6 * time.Second
+// skipForegroundWait bounds how long playback waits for skip timings. The
+// lookup itself keeps running for skipLookupBackgroundTimeout so a slow
+// provider still populates the cache for the next play or preview.
+const (
+	skipForegroundWait          = timeouts.SkipForegroundWait
+	skipLookupBackgroundTimeout = timeouts.SkipBackground
+)
 
 const skipLuaScript = `
 local opts = {
@@ -74,6 +80,9 @@ local opts = {
     min_duration  = 60,
     is_live       = 0,
 }
+
+local utils = nil
+pcall(function() utils = require('mp.utils') end)
 
 pcall(function()
     local mp_opt = require('mp.options')
@@ -169,6 +178,31 @@ local function inject_chapters()
         end
         mp.set_property_native("chapter-list", chapters)
         chapters_injected = true
+    end)
+end
+
+-- A late skip lookup pushes its result here after playback has already
+-- started. Updating the options and re-injecting chapters applies it without
+-- restarting mpv.
+if mp.register_script_message then
+    mp.register_script_message("kari-skip-update", function(payload)
+        if not utils then return end
+        local ok, data = pcall(utils.parse_json, payload)
+        if not ok or type(data) ~= "table" then return end
+        for _, key in ipairs({"recap_start", "recap_end", "op_start", "op_end",
+                              "ed_start", "ed_end", "preview_start", "preview_end",
+                              "auto_recap", "auto_intro", "auto_ending",
+                              "auto_preview"}) do
+            if data[key] ~= nil then opts[key] = data[key] end
+        end
+        chapters_injected = false
+        local chapters = build_chapters()
+        if #chapters > 0 then
+            pcall(function()
+                mp.set_property_native("chapter-list", chapters)
+            end)
+            chapters_injected = true
+        end
     end)
 end
 
@@ -408,7 +442,7 @@ func resolveIMDbID(ctx context.Context, media model.ResolvedMedia, keyPool *tmdb
 	}
 
 	if httpClient == nil {
-		httpClient = httpclient.NewWithTimeout(5 * time.Second)
+		httpClient = httpclient.NewWithTimeout(timeouts.SkipIMDbFallback)
 	}
 
 	// 2. Resolve from TMDBID if available
@@ -541,9 +575,79 @@ func getSkipArgs(
 		return buildSkipArgsFromTimes(cached, settings)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), skipLookupTimeout)
-	defer cancel()
+	results := make(chan combinedSkipTimes, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), skipLookupBackgroundTimeout)
+	go func() {
+		defer cancel()
+		results <- lookupSkipTimes(ctx, clients, media, providerMode, cacheKey, cache)
+	}()
 
+	select {
+	case times := <-results:
+		if !hasSkipSegments(times) {
+			return nil, ""
+		}
+		return buildSkipArgsFromTimes(times, settings)
+	case <-time.After(skipForegroundWait):
+		if clients.SkipSink == nil {
+			return nil, ""
+		}
+		go clients.SkipSink.applyWhenReady(results)
+		absent := combinedSkipTimes{
+			OpStart: -1, OpEnd: -1,
+			EdStart: -1, EdEnd: -1,
+			RecapStart: -1, RecapEnd: -1,
+			PreviewStart: -1, PreviewEnd: -1,
+			IsLive: media.IsLive(),
+		}
+		return buildSkipArgsFromTimes(absent, settings)
+	}
+}
+
+// applyWhenReady forwards a late skip result to the live player. The producer
+// sends exactly one value after the lookup returns, and that lookup is bounded
+// by its own background deadline, so the blocking receive always terminates
+// without a second (racing) cancellation signal. The lookup can finish before
+// the player process is launched, so delivery waits for the IPC client to be
+// attached and retries briefly while it connects instead of dropping the
+// result on a nil or disconnected client.
+func (s *liveSkipSink) applyWhenReady(results <-chan combinedSkipTimes) {
+	times := <-results
+	if !hasSkipSegments(times) {
+		return
+	}
+	s.stageLateResult(times)
+	select {
+	case <-s.attached:
+	case <-time.After(liveSkipAttachWait):
+		skipLog.Debug("live skip injection skipped: player never attached")
+		return
+	}
+	deadline := time.Now().Add(liveSkipConnectWait)
+	for !s.pendingDone() && time.Now().Before(deadline) {
+		s.deliverPending()
+		if s.pendingDone() {
+			return
+		}
+		time.Sleep(liveSkipRetryInterval)
+	}
+}
+
+// hasSkipSegments reports whether times carries any usable skip interval.
+func hasSkipSegments(times combinedSkipTimes) bool {
+	return times.OpStart >= 0 || times.EdStart >= 0 || times.RecapStart >= 0 || times.PreviewStart >= 0
+}
+
+// lookupSkipTimes fans out to the configured skip providers and returns the
+// merged timings. It caches the result (including a confirmed absence) so
+// later callers reuse it; an inconclusive lookup is never cached.
+func lookupSkipTimes(
+	ctx context.Context,
+	clients SkipClients,
+	media model.ResolvedMedia,
+	providerMode, cacheKey string,
+	cache *util.BoundedCache[combinedSkipTimes],
+) combinedSkipTimes {
 	// 1. Resolve AniList ID from media metadata if available
 	var anilistID int
 	if trimmed := strings.Trim(strings.TrimSpace(media.SeriesURL), "/"); trimmed != "" {
@@ -803,18 +907,12 @@ func getSkipArgs(
 		applyConsensus()
 	}
 
-	if times.OpStart < 0 && times.EdStart < 0 && times.RecapStart < 0 && times.PreviewStart < 0 {
-		if lookupFailed.Load() || ctx.Err() != nil {
-			skipLog.Debug("skip lookup incomplete; not caching empty result", "title", media.SeriesTitle, "episode", media.EpisodeNumber, "imdb", imdbID, "err", ctx.Err())
-			return nil, ""
-		}
-		cache.Set(cacheKey, times)
-		skipLog.Debug("no skip intervals found", "title", media.SeriesTitle, "episode", media.EpisodeNumber, "imdb", imdbID)
-		return nil, ""
+	if lookupFailed.Load() || ctx.Err() != nil {
+		skipLog.Debug("skip lookup incomplete; not caching result", "title", media.SeriesTitle, "episode", media.EpisodeNumber, "imdb", imdbID, "err", ctx.Err())
+		return times
 	}
-
 	cache.Set(cacheKey, times)
-	return buildSkipArgsFromTimes(times, settings)
+	return times
 }
 
 func skipCacheKey(media model.ResolvedMedia, providerMode string) string {

@@ -193,17 +193,13 @@ func TestCatalogFetchEpisodesCompleteRoster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(episodes) != 1181*2 {
-		t.Fatalf("got %d entries, want 2362", len(episodes))
+	if len(episodes) != 1181 {
+		t.Fatalf("got %d entries, want 1181", len(episodes))
 	}
 	for index, episode := range episodes {
-		number := index/2 + 1
-		audio := provider.AudioSub
-		if index%2 != 0 {
-			audio = provider.AudioDub
-		}
-		wantID := fmt.Sprintf("watch/anivault/hoshika/58090/%s/%d", audio, number)
-		if episode.ID != wantID || episode.Episode != number || episode.Audio != audio || episode.Season != 1 {
+		number := index + 1
+		wantID := fmt.Sprintf("watch/anivault/hoshika/58090/%s/%d", provider.AudioSub, number)
+		if episode.ID != wantID || episode.Episode != number || episode.Audio != provider.AudioSub || episode.Season != 1 {
 			t.Fatalf("entry %d = %+v, want %s", index, episode, wantID)
 		}
 		wantTitle := "Episode " + strconv.Itoa(number)
@@ -231,7 +227,7 @@ func TestCatalogFetchEpisodesWithoutMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(episodes) != 2362 || episodes[2361].Title != "Episode 1181" {
+	if len(episodes) != 1181 || episodes[1180].Title != "Episode 1181" {
 		t.Fatalf("metadata absence truncated roster: %d entries", len(episodes))
 	}
 }

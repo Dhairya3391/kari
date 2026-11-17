@@ -13,7 +13,7 @@
 ## 0. Registration (single source today)
 
 - `internal/provider/defaults/defaults.go` is the only registration
-  list: `anicine, movysx, anikoto, anipm, anivault, anidream, miruro, moovie, solis, cinecat, sweetfox, weebcentral, pengu, jellyfin`.
+  list: `anicine, movysx, anikoto, anipm, anivault, anidream, miruro, solis, cinecat, cinejoy, cno, sweetfox, weebcentral, pengu, jellyfin`.
 - `jellyfin.When` gates on `JellyfinURL && JellyfinAPIKey`
   (`defaults.go:60-62`); factory failure skips with log, never fatal
   (`defaults.go:80-84`).
@@ -25,8 +25,8 @@ Declared modes/priorities:
 | mode | providers (priority) | evidence |
 | --- | --- | --- |
 | anime | anicine P1, anikoto P2, anipm P1, anivault P2, anidream P2, miruro P2, pengu P3 | `anicine`, `anikoto`, `anipm`, `anivault`, `anidream`, `miruro`, `pengu` `client.go` `Modes()` |
-| movies/tv/cartoon | movysx P2, pengu P2, moovie P2, solis P2, cinecat P2, sweetfox P2 | `movysx`, `pengu`, `moovie`, `solis`, `cinecat`, `sweetfox` `client.go` `Modes()` |
-| live | pengu P1 only | `pengu/client.go:162` |
+| movies/tv/cartoon | movysx P2, pengu P2, solis P2, cinecat P2, cinejoy P2, cno P2, sweetfox P2 | `movysx`, `pengu`, `solis`, `cinecat`, `cinejoy`, `cno`, `sweetfox` `client.go` `Modes()` |
+| live | thedaddy P1 (sports + live TV), famelack P2 (live TV only) | `thedaddy/client.go`, `famelack/client.go` `Modes()` |
 | reading (internal mode `manga`) | weebcentral P1, anidream P2, atsu P2 | `weebcentral`, `anidream`, `atsu` `Modes()` |
 | jellyfin | jellyfin P1 only | `jellyfin/client.go:55-59` |
 
@@ -165,9 +165,21 @@ Unified shapes: `provider.SearchResult` (`provider.go:64-97`),
 | weebcentral | HTMX scrape `weebcentral.com`; search ≤25; chapters from series page + `chapter-select` merge; pages `pageImgSrcRe`; `MangaPage{URL,Referer: site, UserAgent: DesktopUA}` | `FetchEpisodes/ResolveSource` return sentinels (correct for Reader); chapter numbers strings (`"10.5"`); year/genres scraped (`yearRe`, `seriesTitleRe`); throttle 300ms mutex (`client.go:89-103`) |
 | jellyfin | `X-Emby-Token` `authGET`; library cached 5m (`library.go:20`), `maxSearchResults 50`; `rankLibrary/matchScore/hasWordPrefix/containsAllWords/isSubsequence`; resolve synthetic `/Videos/{id}/stream?static=true&api_key=` `Type mp4 Quality "Jellyfin"` (`client.go:237-239`) | quality fixed string; no audio/subtitle langs from server yet; search falls back to `searchHints` when cache misses |
 | solis | TMDB base for search/items + hosted Solis API resolve (`https://solis-api.vercel.app`); multi-tier HLS/DASH streaming + multi-language subtitles | API 1.2.0: stable per-lane `backend` (`"Dexter"`, `"Gumball"`, …) alongside the legacy composite `quality` (`"1080p (Dexter)"`); shard playlists are probed server-side so `quality` reports the real top tier and 404/410 lanes are dropped; DASH lanes ship DASH demuxer args; subtitles normalized to short language codes (deduped by URL+language, per-source and stream-level); 20s fan-out budget; 45s batch result cache (`fresh=1` bypass, `validate=false` opt-out); `meta` reports version/cache/timing; progressive SSE stream resolution; mpv plays directly |
-| cinecat | TMDB base for search/items + ZCDN edge (zcdn1.2wwlgkfo-31a.workers.dev) multi-tier HLS (4K, 1080p, 720p, 480p, Auto) + every lane advertised by the sources API (edge.cinecat.eu) + Granite (sub.vdrk.site) subtitles | parallel ZCDN + per-lane fan-out; lane tiers tagged with the lane `backend` and an `Auto (<Lane>)` master; one failing lane never fails resolution; mpv plays directly; Referer hotlink protection |
+| cinecat | TMDB base for search/items + ZCDN edge (zcdn1.c3204a347-edge.workers.dev, mirrors zcdn1-3) multi-tier HLS (4K, 1080p, 720p, 480p, Auto) + Aphrodite self-hosted content edge (cdn.hls.lol `/content/movie/{tmdb}` and `/content/tv/{tmdb}/{season}/{episode}` → totallyacdn.cc master) + every lane advertised by the sources API (edge.cinecat.eu) + Granite (sub.vdrk.site) subtitles | parallel ZCDN + Aphrodite + per-lane fan-out; Aphrodite and lane tiers are tagged with their `backend` and an `Auto (<Backend>)` master; a single-rendition lane keeps its own declared `label` (canonicalized through the shared height→label mapping) instead of an adaptive row; one failing lane, ZCDN, or Aphrodite never fails resolution; mpv plays directly; Referer hotlink protection |
+| cinejoy | TMDB base for search/items + sealed gateway (api2.wing.st) over every lane the `/servers` listing advertises (Light, Lisbon, Sirius, Nebula), each expanded into HLS quality tiers plus a master row; captions from the lane CDN | resolution is an ECDH P-256 + AES-GCM envelope (`HKDF` directions `c2s`/`s2c`, per-request ephemeral key, AAD binds version/key id/direction), POSTed to `/g` with a path of `/<lane>/<movie\|series>`; `/servers` is a plain JSON listing whose 4K-flagged lanes are queried first; a listing failure falls back to the known lane set; lanes ship results as they answer and one failing lane never fails the resolution; stream `type` selects hls/mp4 rows and unknown containers are dropped; self-contained tier URLs are published directly, while tiers with a separate `AUDIO` rendition are video-only so the master is published instead, labelled with its highest tier's resolution (mpv launches with `--hls-bitrate=max`, so the master really plays that tier with audio); a 4K claim backed by an H.264 level below 5.1 is clamped so fake 4K rows cannot outrank the real HEVC 4K lanes; declared peak bitrate is carried on each source so ranking prefers the higher-bitrate 4K; captions need the site `Origin` (a bare request 404s) so every subtitle option carries the referer; mpv plays directly |
+| cno | TMDB base for search/items + site source listing (`/api/movie/{tmdb}` or `/api/tv/{tmdb}/episode/{season}/{episode}`), which advertises the current direct HLS path; HLS master expanded into quality tiers; OpenSubtitles WebVTT via `/api/subs/list/...` + `/api/subs/file/...` | the retired `/api/s/20/...` tier is no longer requested; the HLS URL and its version query are read from the listing instead of hardcoded, so site-side path changes need no provider edit; embed sources in the listing are ignored (not direct streams); tier `Height`/`Bitrate` come from the parsed manifest and `Backend` from the listing label; subtitles deduped by normalized language and carry the site referer; mpv plays directly |
 | sweetfox | TMDB base for search/items + VidQueen API (api.vidqueen.st) fan-out over the seven lanes SweetFox's player shows: Bloodstone `s1`, Obsidian `s4`, Garnet `s2`, Ruby `s3`, Jet `s5`, Amethyst `s7`, Nightshade `s6`; HLS masters and HLS `qualities` entries are expanded per tier (including 4K/2160p) plus an `Auto` row; MP4 quality entries pass through; merged subtitles normalized via `lang.Normalize` | the site's `#4k` page is a curated title list (`/data/uhd.json`) that only adds `&q=2160` to the same embed, so no separate 4K server exists; each lane is probed in parallel with browser headers (`Origin`/`Referer` player embed, `Sec-Ch-Ua`) and its own 12s cap, playlist probes are capped at 64 KiB and 6s; missing lanes are skipped, s1/s3 duplicates deduped by URL; mpv plays directly |
 | streambase | TMDB multi-search + details + `errgroup` seasons sem 5 (`base.go:35-472`); key rotation `NextKey/MarkFailed` on 401/429 | movie → synthetic single episode; cartoon filter genre 16; `reEpisodeNum/reSeasonNum` package regexps (`base.go:28-29`) |
+
+All HLS sources are enriched centrally in
+`internal/service/audio_manifest.go` (called from `media_service_resolve.go`):
+one bounded parallel playlist probe per batch carries each source's declared
+peak `Bitrate`, relabels adaptive `Auto`/`Master` rows with the highest credible
+tier from the master (`kit.QualityLabelFromHeight`, `kit.CredibleHeight`), and
+drops explicit tier rows shadowed by a relabeled master. Live-mode sources keep
+their adaptive label; unreadable masters keep `Auto`. Providers no longer need
+to parse masters themselves for this, and cinejoy/sweetfox/cinecat share the
+same height-to-label helper.
 
 Normalization gaps (repo-wide): quality strings mix heights (`1080p`),
 labels (`FHD`, `Auto`, `4K [TAG] (Hindi)`), dims; languages mix ISO

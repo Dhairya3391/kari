@@ -298,9 +298,6 @@ func TestFetchWatchedListFollowsChunks(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		// First chunk announces another; the second closes the list.
-		// Chunk variables must travel with the query or big lists
-		// silently truncate after the first chunk.
 		if strings.Contains(payload, `"chunk":2`) {
 			_, _ = w.Write([]byte(`{"data":{"MediaListCollection":{"hasNextChunk":false,"lists":[
 				{"entries":[
@@ -471,8 +468,6 @@ func TestFetchMangaListRequiresAuth(t *testing.T) {
 }
 
 func TestFetchWatchedHistoryProceedsOnRefreshFailure(t *testing.T) {
-	// A dead refresh endpoint must not block the fetch: the current
-	// access token may still be honored.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasSuffix(r.URL.Path, "/oauth/token") {

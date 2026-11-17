@@ -8,10 +8,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
+	"kari/internal/timeouts"
 )
 
 // SkipTimes holds interval boundaries (in seconds) for each skippable zone.
@@ -39,7 +39,7 @@ type Client struct {
 // Passing empty strings falls back to the bundled defaults.
 func NewClient(httpClient *http.Client, apiKey string) *Client {
 	if httpClient == nil {
-		httpClient = httpclient.NewWithTimeout(10 * time.Second)
+		httpClient = httpclient.NewWithTimeout(timeouts.SkipHTTP)
 	}
 	if strings.TrimSpace(apiKey) == "" {
 		apiKey = config.DefaultIntroDBAPIKey

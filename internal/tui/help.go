@@ -12,7 +12,10 @@ type HelpData struct {
 	ContextKeys []KeyBinding
 	GlobalKeys  []KeyBinding
 	Width       int
-	Accent      lipgloss.AdaptiveColor
+	// Scroll is the number of content lines hidden above the viewport. It is
+	// clamped by the caller; positive values reveal lower key bindings.
+	Scroll int
+	Accent lipgloss.AdaptiveColor
 }
 
 func RenderHelpOverlay(data HelpData) string {
@@ -45,7 +48,7 @@ func RenderHelpOverlay(data HelpData) string {
 		}
 		singleCol := strings.Join(lines, "\n")
 		boxW := min(availWidth+4, max(36, maxKey+24))
-		return RenderOverlay(singleCol, boxW, data.Accent)
+		return RenderOverlay(scrollHelpContent(singleCol, data.Scroll), boxW, data.Accent)
 	}
 
 	// 1. Measure max key lengths
@@ -142,5 +145,18 @@ func RenderHelpOverlay(data HelpData) string {
 	if data.Width > 0 && boxW > data.Width {
 		boxW = data.Width
 	}
-	return RenderOverlay(content, boxW, data.Accent)
+	return RenderOverlay(scrollHelpContent(content, data.Scroll), boxW, data.Accent)
+}
+
+// scrollHelpContent drops the first scroll lines of the help body so the
+// overlay can reveal lower bindings without changing its box geometry.
+func scrollHelpContent(content string, scroll int) string {
+	if scroll <= 0 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	if scroll >= len(lines) {
+		return strings.Join(lines[len(lines)-1:], "\n")
+	}
+	return strings.Join(lines[scroll:], "\n")
 }

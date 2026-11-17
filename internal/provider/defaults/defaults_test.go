@@ -13,11 +13,11 @@ func TestDefaultRegistryIncludesNewProviders(t *testing.T) {
 		PenguAuthToken: "dummy",
 	}
 
-	reg, err := NewDefaultRegistry(keyPool, cfg, nil)
+	reg, err := NewDefaultRegistry(keyPool, cfg)
 	if err != nil {
 		t.Fatalf("NewDefaultRegistry: %v", err)
 	}
-	for _, name := range []string{"cno", "mapple", "cinecat", "movysx", "a11", "vyla", "atsu", "stability", "timstreams", "famelack", "iptvorg", "anidream"} {
+	for _, name := range []string{"cno", "mapple", "cinecat", "movysx", "a11", "vyla", "atsu", "famelack", "anidream"} {
 		p, ok := reg.ProviderByName(name)
 		if !ok || p == nil {
 			t.Errorf("expected provider %q in registry", name)

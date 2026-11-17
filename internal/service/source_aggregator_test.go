@@ -40,6 +40,38 @@ func TestSourceAggregatorOwnsBatches(t *testing.T) {
 	}
 }
 
+// TestSourceAggregatorReplacesProviderBatch proves late enrichment can drop a
+// shadowed row that an earlier progressive snapshot already added, and that an
+// empty batch is a no-op rather than a removal of previously published rows.
+func TestSourceAggregatorReplacesProviderBatch(t *testing.T) {
+	agg := newSourceAggregator(nil, func(name string) string { return name })
+	full := []provider.MediaSource{
+		{URL: "https://cdn.example/master.m3u8", Quality: "1080p"},
+		{URL: "https://cdn.example/tier-1080.m3u8", Quality: "1080p"},
+	}
+	if !agg.add("stream", full) {
+		t.Fatal("initial batch did not change aggregate")
+	}
+	if len(agg.sources) != 2 {
+		t.Fatalf("sources = %d, want 2", len(agg.sources))
+	}
+
+	kept := full[:1]
+	if !agg.replaceProviderSources("stream", kept) {
+		t.Fatal("replacement did not change aggregate")
+	}
+	if len(agg.sources) != 1 || agg.sources[0].URL != kept[0].URL {
+		t.Fatalf("sources after replacement = %+v, want only master", agg.sources)
+	}
+
+	if agg.replaceProviderSources("stream", []provider.MediaSource{{URL: ""}}) {
+		t.Fatal("empty batch should be a no-op")
+	}
+	if len(agg.sources) != 1 {
+		t.Fatalf("sources after no-op = %d, want 1", len(agg.sources))
+	}
+}
+
 // TestSourceAggregatorReportsChanges distinguishes no-op batches from metadata
 // improvements, preferred-provider replacement, and newly discovered subtitles.
 func TestSourceAggregatorReportsChanges(t *testing.T) {

@@ -8,6 +8,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -74,6 +77,59 @@ func testChannels() []testChannel {
 		},
 	}
 }
+
+// testStreamHost is a non-local host so playableStreams keeps the fixture
+// streams; a rewrite transport points them at the local test server.
+const testStreamHost = "https://streams.example.test"
+
+// testChannelsAt rebuilds the fixture with CDN-style stream URLs. A stable
+// path per original URL keeps the duplicate-stream case intact so
+// playableStreams still deduplicates it. Languages are made multi-valued to
+// exercise the typed audio metadata the resolver emits.
+func testChannelsAt() []testChannel {
+	channels := testChannels()
+	channels[0].Languages = []string{"ara", "fra"}
+	channels[1].Languages = []string{"spa", "fra", "spa"}
+	paths := make(map[string]string)
+	for i := range channels {
+		for j, raw := range channels[i].Sources["streams"] {
+			path, ok := paths[raw]
+			if !ok {
+				path = testStreamHost + "/stream/" + strconv.Itoa(len(paths)) + ".m3u8"
+				paths[raw] = path
+			}
+			channels[i].Sources["streams"][j] = path
+		}
+	}
+	return channels
+}
+
+// rewriteTransport routes every request to base, letting the resolver probe
+// a local HLS master while the catalog advertises non-local CDN URLs.
+type rewriteTransport struct {
+	base string
+	next http.RoundTripper
+}
+
+// RoundTrip implements http.RoundTripper.
+func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	target, err := url.Parse(t.base + req.URL.RequestURI())
+	if err != nil {
+		return nil, err
+	}
+	clone.URL = target
+	clone.Host = target.Host
+	return t.next.RoundTrip(clone)
+}
+
+// testMasterPlaylist is an HLS master with two real renditions. streamMeta
+// must pick the 1080p tier's height and the highest declared bandwidth.
+const testMasterPlaylist = "#EXTM3U\n" +
+	"#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2500000,RESOLUTION=1280x720\n" +
+	"720p.m3u8\n" +
+	"#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=6000000,RESOLUTION=1920x1080\n" +
+	"1080p.m3u8\n"
 
 // testCountries returns fixture country codes mapped to display names.
 func testCountries() map[string]countryMetadata {
@@ -267,8 +323,6 @@ func TestFamelackSearchCachesCatalog(t *testing.T) {
 		t.Errorf("catalog requests = %d, want 2 (channels + countries)", got)
 	}
 
-	// Expire the cache while the upstream fails; the previous catalog
-	// must keep the live tab usable.
 	client.mu.Lock()
 	client.fetchedAt = time.Now().Add(-directoryTTL)
 	client.mu.Unlock()
@@ -310,8 +364,27 @@ func TestFamelackCountryMetadataFallback(t *testing.T) {
 }
 
 func TestFamelackEpisodesAndResolve(t *testing.T) {
-	var requests atomic.Int32
-	client := newTestClient(t, catalogHandler(t, &requests))
+	countries := gzipJSON(t, testCountries())
+	var channels []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		switch {
+		case r.URL.Path == "/countries.json":
+			_, _ = w.Write(countries)
+		case strings.HasSuffix(r.URL.Path, ".m3u8"):
+			_, _ = w.Write([]byte(testMasterPlaylist))
+		default:
+			_, _ = w.Write(channels)
+		}
+	}))
+	defer server.Close()
+	channels = gzipJSON(t, testChannelsAt())
+
+	hc := &http.Client{Transport: rewriteTransport{base: server.URL, next: http.DefaultTransport}}
+	client, err := NewClientWithURLs(server.URL+"/all.json", server.URL+"/countries.json", hc)
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
 
 	results, err := client.Search(context.Background(), "cartoon", provider.ModeLive)
 	if err != nil {
@@ -336,8 +409,19 @@ func TestFamelackEpisodesAndResolve(t *testing.T) {
 		if source.Type != provider.SourceTypeHLS {
 			t.Errorf("source type = %q, want HLS", source.Type)
 		}
-		if source.Quality != "Auto" {
-			t.Errorf("quality = %q, want Auto", source.Quality)
+		if source.Quality != "1080p" {
+			t.Errorf("quality = %q, want 1080p", source.Quality)
+		}
+		if source.Height != 1080 {
+			t.Errorf("height = %d, want 1080", source.Height)
+		}
+		if source.Bitrate != 6000000 {
+			t.Errorf("bitrate = %d, want 6000000", source.Bitrate)
+		}
+		// Directory languages belong to the channel, not to each mirror's
+		// tracks; the manifest probe supplies the real label.
+		if source.AudioLabel != "" || len(source.Audio.Languages) != 0 || source.Language != "" {
+			t.Errorf("directory languages leaked into stream audio: %+v", source)
 		}
 	}
 
@@ -355,6 +439,41 @@ func TestFamelackEpisodesAndResolve(t *testing.T) {
 	if _, err := client.FetchEpisodes(context.Background(), provider.SearchResult{}); !errors.Is(err, provider.ErrNoEpisodes) {
 		t.Errorf("empty series err = %v, want ErrNoEpisodes", err)
 	}
+}
+
+func TestStreamMeta(t *testing.T) {
+	t.Run("hls master", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(testMasterPlaylist))
+		}))
+		defer server.Close()
+		height, bitrate := streamMeta(context.Background(), server.Client(), server.URL+"/master.m3u8")
+		if height != 1080 || bitrate != 6000000 {
+			t.Fatalf("streamMeta() = (%d,%d), want (1080,6000000)", height, bitrate)
+		}
+	})
+
+	t.Run("url resolution fallback", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+		height, bitrate := streamMeta(context.Background(), server.Client(), server.URL+"/live/720p/index.m3u8")
+		if height != 720 || bitrate != 0 {
+			t.Fatalf("streamMeta() = (%d,%d), want (720,0)", height, bitrate)
+		}
+	})
+
+	t.Run("unknown stays zero", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+		height, bitrate := streamMeta(context.Background(), server.Client(), server.URL+"/live/index.m3u8")
+		if height != 0 || bitrate != 0 {
+			t.Fatalf("streamMeta() = (%d,%d), want (0,0)", height, bitrate)
+		}
+	})
 }
 
 func TestFamelackCatalogErrors(t *testing.T) {

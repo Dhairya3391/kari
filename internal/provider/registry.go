@@ -43,6 +43,26 @@ func (r *Registry) UnregisterConfigured(value string) (string, bool) {
 	return "", false
 }
 
+// ConfiguredAlias returns the display alias of the configured provider whose
+// configuration value is value, with ok reporting whether one is registered.
+func (r *Registry) ConfiguredAlias(value string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.providers {
+		configured, ok := p.(ConfiguredProvider)
+		if !ok || !configured.MatchesConfiguration(value) {
+			continue
+		}
+		if presenter, ok := p.(Presenter); ok {
+			if alias := strings.TrimSpace(presenter.Alias()); alias != "" {
+				return alias, true
+			}
+		}
+		return p.Name(), true
+	}
+	return "", false
+}
+
 // ProvidersForMode returns providers supporting the given mode, ordered by priority.
 func (r *Registry) ProvidersForMode(mode ContentType) []Provider {
 	type rankedProvider struct {

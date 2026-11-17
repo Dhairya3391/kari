@@ -42,9 +42,6 @@ func TestProviderPipeline(t *testing.T) {
 					}
 
 					pick := results[0]
-					// Results here come straight from p.Search, so
-					// pick.Provider is unset (MediaService stamps it); only
-					// the missing TMDB id matters for cross-provider reuse.
 					if pick.TMDBID == 0 {
 						t.Logf("%s: result %q carries no TMDB id; cross-provider reuse will skip it", p.Name(), pick.Title)
 					}
@@ -56,8 +53,6 @@ func TestProviderPipeline(t *testing.T) {
 					var sources []provider.MediaSource
 					if pick.MediaType == provider.MediaTypeMovie && !reg.RequiresEpisodeListForMovies(p.Name()) {
 						ep := provider.Episode{TMDBID: pick.TMDBID}
-						// Direct anime movie resolves still need the picked
-						// audio lane; search-result IDs alone are ambiguous.
 						if mode == provider.ModeAnime {
 							ep.Audio = provider.AudioSub
 						}
@@ -98,9 +93,6 @@ func TestRegistryCapabilitiesLive(t *testing.T) {
 			t.Errorf("audio language missing code/display: %+v", l)
 		}
 	}
-	// Anime providers may declare audio languages too (VidRift and Pengu
-	// tag per-lane audio), so only require that the anime slice is valid
-	// and part of the registry-wide union rather than empty.
 	all := make(map[string]bool, len(reg.AudioLanguages()))
 	for _, l := range reg.AudioLanguages() {
 		all[l.Code] = true

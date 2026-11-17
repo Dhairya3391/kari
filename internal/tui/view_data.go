@@ -2,16 +2,47 @@ package tui
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"kari/internal/filter"
 	"kari/internal/history"
 	"kari/internal/lang"
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/service"
 	"kari/internal/termimg"
-	"strings"
-
-	"github.com/charmbracelet/lipgloss"
 )
+
+// sameHistoryGroups detects a replacement of the history slice without
+// scanning its rows, mirroring sameSearchResults for search results.
+func sameHistoryGroups(left, right []history.Group) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	if len(left) == 0 {
+		return true
+	}
+	return &left[0] == &right[0]
+}
+
+// completedDownloads returns the on-disk downloads, reusing one directory
+// scan for a short window. Both the body and the keybinding builder call this
+// on every frame; without the window the directory is walked twice per frame.
+func (m *modelImpl) completedDownloads() []service.CompletedDownload {
+	if m.downloadService == nil {
+		return nil
+	}
+	if time.Since(m.completedDownloadsAt) < 500*time.Millisecond {
+		return m.completedDownloadsCache
+	}
+	m.completedDownloadsCache = m.downloadService.CompletedDownloads()
+	m.completedDownloadsAt = time.Now()
+	return m.completedDownloadsCache
+}
 
 func (m *modelImpl) collectSearchData(width int, accent lipgloss.AdaptiveColor) SearchData {
 	inputView := "› search " + strings.ToLower(string(m.appMode)) + "…"
@@ -33,10 +64,6 @@ func (m *modelImpl) collectSearchData(width int, accent lipgloss.AdaptiveColor) 
 }
 
 func (m *modelImpl) collectResultsData(width, height int, accent lipgloss.AdaptiveColor) ResultsData {
-	posterBlock := posterBlock(m.searchPoster, m.searchPosterUnavailable, m.imgProtocol, kittySearchImageID, m.imagesEnabled)
-
-	// The / filter narrows the widget, so the highlight is the widget
-	// position — not the original index, which only selection uses.
 	visible, _ := m.visibleSeriesResults()
 	pos := m.seriesList.Index()
 	if pos < 0 || pos >= len(visible) {
@@ -60,7 +87,13 @@ func (m *modelImpl) collectResultsData(width, height int, accent lipgloss.Adapti
 		}
 	}
 
-	return ResultsData{
+	// The card's poster slot is sized from the unshrunken body height so the
+	// metadata beneath it stays put when a transient status/loading row adds a
+	// line above the footer. m.width/m.height are the terminal dimensions;
+	// the height argument is already reduced by that status row.
+	cardHeight := ComputeDims(m.width, m.height).BodyHeight
+
+	data := ResultsData{
 		Query:         m.searchQuery,
 		InputView:     inputView,
 		InputFocused:  inputFocused,
@@ -70,10 +103,9 @@ func (m *modelImpl) collectResultsData(width, height int, accent lipgloss.Adapti
 		ProviderNames: providerNames,
 		FilterQuery:   m.resultsFilter,
 		Filtering:     m.resultsFiltering,
-		PosterBlock:   posterBlock,
-		Overview:      m.previewOverview,
 		Genres:        m.previewGenres,
 		Rating:        m.previewRating,
+		CardHeight:    cardHeight,
 		Loading:       m.loading,
 		LoadingText:   m.loadingText,
 		SpinnerFrame:  m.spinner.View(),
@@ -82,6 +114,23 @@ func (m *modelImpl) collectResultsData(width, height int, accent lipgloss.Adapti
 		Height:        height,
 		Accent:        accent,
 	}
+
+	if m.appMode == provider.ModeLive {
+		guide := service.BuildLiveGuide(visible, pos, time.Now())
+		data.LiveGuide = &guide
+		data.LiveUpdatedAt = m.liveUpdatedAt
+		data.LiveSources = m.liveSources
+		data.PosterBlock = fixedBlock(
+			posterBlock(m.livePoster, m.livePosterUnavailable, m.imgProtocol, kittyLiveImageID, m.imagesEnabled),
+			livePosterMaxCols,
+			livePosterRows,
+		)
+		return data
+	}
+
+	poster := posterBlock(m.searchPoster, m.searchPosterUnavailable, m.imgProtocol, kittySearchImageID, m.imagesEnabled)
+	data.PosterBlock = insetFixedBlock(poster, searchPosterMaxCols, detailsPosterRows(cardHeight), posterInset)
+	return data
 }
 
 func (m *modelImpl) collectEpisodesData(width, height int, accent lipgloss.AdaptiveColor) EpisodesData {
@@ -97,11 +146,9 @@ func (m *modelImpl) collectEpisodesData(width, height int, accent lipgloss.Adapt
 		seasonCount = 1
 	}
 
-	seriesYear := ""
-	seriesKind := ""
+	seriesYear, seriesKind := "", ""
 	if m.selectedSeries != nil {
-		seriesYear = m.selectedSeries.Year
-		seriesKind = m.selectedSeries.MediaType
+		seriesYear, seriesKind = m.selectedSeries.Year, m.selectedSeries.MediaType
 	}
 
 	selectedEpTitle := ""
@@ -116,6 +163,20 @@ func (m *modelImpl) collectEpisodesData(width, height int, accent lipgloss.Adapt
 			title = fmt.Sprintf("Episode %d", num)
 		}
 		selectedEpTitle = fmt.Sprintf("%02d · %s", num, title)
+	}
+
+	seriesGenres, seriesRating := m.previewGenres, m.previewRating
+	if len(seriesGenres) == 0 || seriesRating == "" {
+		_, cachedGenres, cachedRating := m.cachedPreviewDetails()
+		if len(seriesGenres) == 0 {
+			seriesGenres = cachedGenres
+		}
+		if seriesRating == "" {
+			seriesRating = cachedRating
+		}
+	}
+	if len(seriesGenres) == 0 && m.selectedSeries != nil {
+		seriesGenres = m.selectedSeries.Genres
 	}
 
 	return EpisodesData{
@@ -138,12 +199,12 @@ func (m *modelImpl) collectEpisodesData(width, height int, accent lipgloss.Adapt
 		Width:                width,
 		Height:               height,
 		Accent:               accent,
-		PosterBlock:          posterBlock(m.searchPoster, m.searchPosterUnavailable, m.imgProtocol, kittySearchImageID, m.imagesEnabled),
+		CardHeight:           ComputeDims(m.width, m.height).BodyHeight,
+		PosterBlock:          insetFixedBlock(posterBlock(m.searchPoster, m.searchPosterUnavailable, m.imgProtocol, kittySearchImageID, m.imagesEnabled), searchPosterMaxCols, detailsPosterRows(ComputeDims(m.width, m.height).BodyHeight), posterInset),
 		SeriesYear:           seriesYear,
 		SeriesKind:           seriesKind,
-		SeriesRating:         m.previewRating,
-		SeriesGenres:         m.previewGenres,
-		SeriesOverview:       m.previewOverview,
+		SeriesRating:         seriesRating,
+		SeriesGenres:         seriesGenres,
 		TermWidth:            m.width,
 		SelectedEpisodeTitle: selectedEpTitle,
 	}
@@ -215,12 +276,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		if len(m.episodeResults) > 0 {
 			totalStr = fmt.Sprintf("  (%d of %d)", m.selectedEpisodeIndex()+1, len(m.episodeResults))
 		}
-		// Compute available metadata width so the episode title can be
-		// truncated before the (X of Y) count is appended. This prevents
-		// the combined line from exceeding the screen width, which would
-		// cause Bubble Tea to skip the end-of-line erase and leave old
-		// image cells visible — the root cause of issue #35.
-		metaW := max(20, width-previewPosterMaxCols-4)
+		metaW := max(20, width-previewPosterMaxCols-posterGutter)
 		if m.width < 80 && width < 70 {
 			metaW = max(20, width)
 		}
@@ -240,19 +296,10 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 	audioText := ""
 	audioTrack := ""
 	if m.appMode == provider.ModeAnime {
-		mode := strings.ToLower(strings.TrimSpace(m.audioMode))
-		if mode == "" {
-			mode = "sub"
-		}
-		audioTrack = mode
-		if mode == "dub" {
-			audioText = "dub · English"
-		} else {
-			audioText = "sub · Japanese"
-		}
+		track := m.filterScope.For(provider.ModeAnime).Track
+		audioTrack = trackToAudioMode(track)
+		audioText = strings.ToLower(trackLabel(track))
 	}
-	// Non-anime modes show per-source audio in the sources table below,
-	// so no header audio row is needed here.
 
 	subtitlesText := ""
 	subtitleType := ""
@@ -264,8 +311,9 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 	if subLang == "" {
 		subLang = m.subtitleLangUsed
 	}
-	if subLang == "" && m.resolved != nil && len(m.rankedSources) > 0 && m.subtitleLanguage != "off" {
-		subLang = m.subtitleLanguage
+	activeSubPref := m.filterScope.For(m.appMode).Subtitles
+	if subLang == "" && m.resolved != nil && len(m.rankedSources) > 0 && activeSubPref.Mode != filter.SubtitleOff {
+		subLang = activeSubPref.Language
 		if subLang == "" {
 			subLang = "en"
 		}
@@ -284,18 +332,31 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 	}
 	resumePos := m.currentResumePosition()
 
-	poster := posterBlock(m.previewPoster, m.previewPosterUnavailable, m.imgProtocol, kittyPreviewImageID, m.imagesEnabled)
+	poster := insetFixedBlock(
+		posterBlock(m.previewPoster, m.previewPosterUnavailable, m.imgProtocol, kittyPreviewImageID, m.imagesEnabled),
+		previewPosterMaxCols, posterSlotRows(height, previewPosterMaxRows), previewPosterInset,
+	)
 
 	var sources []provider.MediaSource
 	if m.resolved != nil {
 		sources = m.resolved.Playback
 	}
 
-	// Fall back to search-stamped metadata while the async details
-	// fetch is in flight (or when it failed): providers like WeebCentral
-	// ship overview/genres at search time.
 	overview := m.previewOverview
 	genres := m.previewGenres
+	rating := m.previewRating
+	if overview == "" || len(genres) == 0 || rating == "" {
+		cachedOverview, cachedGenres, cachedRating := m.cachedPreviewDetails()
+		if overview == "" {
+			overview = cachedOverview
+		}
+		if len(genres) == 0 {
+			genres = cachedGenres
+		}
+		if rating == "" {
+			rating = cachedRating
+		}
+	}
 	if overview == "" && m.selectedSeries != nil {
 		overview = m.selectedSeries.Overview
 	}
@@ -325,7 +386,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		SeriesTitle:      seriesTitle,
 		EpisodeInfo:      epInfo,
 		Genres:           genres,
-		Rating:           m.previewRating,
+		Rating:           rating,
 		Overview:         overview,
 		AudioText:        audioText,
 		AudioTrack:       audioTrack,
@@ -360,9 +421,6 @@ func detectSubtitleType(src provider.MediaSource, resolved *model.ResolvedMedia,
 	if mode != provider.ModeAnime {
 		return ""
 	}
-	// A declared subtitle kind wins over heuristics: a hard-subtitled
-	// stream stays "hard subs" even when the pool also lists
-	// downloadable sidecar tracks.
 	switch strings.ToLower(strings.TrimSpace(src.SubType)) {
 	case provider.SubTypeHard:
 		return "hard subs"
@@ -405,18 +463,31 @@ func (m *modelImpl) subtitleProviderName(track model.SubtitleTrack) string {
 }
 
 func (m *modelImpl) collectHistoryData(width, height int, accent lipgloss.AdaptiveColor) HistoryData {
-	continued, finished := splitHistoryGroups(m.historyGroups)
-
-	activeTab := HistoryTabContinue
 	finishedTab := m.historyTab == historyTabFinished
-	activeList := sortGroupsByDateBucket(continued, false)
-	if finishedTab {
-		activeTab = HistoryTabFinished
-		activeList = sortGroupsByDateBucket(finished, true)
+	cache := &m.historyCache
+	if !cache.valid || !sameHistoryGroups(cache.source, m.historyGroups) ||
+		cache.finishedTab != finishedTab || cache.modeFilter != m.historyModeFilter ||
+		cache.filter != m.historyFilter {
+		continued, finished := splitHistoryGroups(m.historyGroups)
+		activeTab := HistoryTabContinue
+		activeList := sortGroupsByDateBucket(continued, false)
+		if finishedTab {
+			activeTab = HistoryTabFinished
+			activeList = sortGroupsByDateBucket(finished, true)
+		}
+		cache.source = m.historyGroups
+		cache.finishedTab = finishedTab
+		cache.modeFilter = m.historyModeFilter
+		cache.filter = m.historyFilter
+		cache.valid = true
+		cache.activeTab = activeTab
+		cache.modeFilters = historyModeFilters(m.historyGroups, activeList)
+		cache.activeList = filterHistoryGroups(activeList, m.historyModeFilter)
+		cache.activeList = searchHistoryGroups(cache.activeList, m.historyFilter)
+		cache.continueCount = len(filterHistoryGroups(continued, m.historyModeFilter))
+		cache.finishedCount = len(filterHistoryGroups(finished, m.historyModeFilter))
 	}
-	modeFilters := historyModeFilters(m.historyGroups, activeList)
-	activeList = filterHistoryGroups(activeList, m.historyModeFilter)
-	activeList = searchHistoryGroups(activeList, m.historyFilter)
+	activeList := cache.activeList
 	poster := ""
 	if m.imagesEnabled {
 		if m.imgProtocol == termimg.ProtocolKitty && m.historyPosterDrawn && m.historyPoster != "" {
@@ -425,13 +496,14 @@ func (m *modelImpl) collectHistoryData(width, height int, accent lipgloss.Adapti
 			poster = posterBlock(m.historyPoster, m.historyPosterUnavailable, m.imgProtocol, kittyHistoryImageID, m.imagesEnabled)
 		}
 	}
+	poster = insetFixedBlock(poster, historyPosterMaxCols, posterSlotRows(height, historyPosterMaxRows), posterInset)
 
 	return HistoryData{
-		ActiveTab:        activeTab,
-		ContinueCount:    len(filterHistoryGroups(continued, m.historyModeFilter)),
-		FinishedCount:    len(filterHistoryGroups(finished, m.historyModeFilter)),
+		ActiveTab:        cache.activeTab,
+		ContinueCount:    cache.continueCount,
+		FinishedCount:    cache.finishedCount,
 		ModeFilter:       m.historyModeFilter,
-		ModeFilters:      modeFilters,
+		ModeFilters:      cache.modeFilters,
 		FilterQuery:      m.historyFilter,
 		Filtering:        m.historyFiltering,
 		Groups:           activeList,
@@ -445,24 +517,39 @@ func (m *modelImpl) collectHistoryData(width, height int, accent lipgloss.Adapti
 	}
 }
 
+// addonRows builds readable rows for configured addons using the loaded
+// provider's alias when available and the manifest URL host otherwise.
+func (m *modelImpl) addonRows() []AddonRow {
+	rows := make([]AddonRow, 0, len(m.stremioAddonManifests))
+	for _, manifestURL := range m.stremioAddonManifests {
+		host := manifestURL
+		if parsed, err := url.Parse(strings.TrimSpace(manifestURL)); err == nil && parsed.Host != "" {
+			host = parsed.Host
+		}
+		alias, loaded := "", false
+		if m.registry != nil {
+			alias, loaded = m.registry.ConfiguredAlias(manifestURL)
+		}
+		name := alias
+		if name == "" {
+			name = host
+		}
+		rows = append(rows, AddonRow{Name: name, Host: host, Loaded: loaded})
+	}
+	return rows
+}
+
 func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 	accent := m.currentAccent()
 
-	// Build audio languages summary
+	audioPref := m.filterScope.Defaults.Audio
 	var enabledSummary []string
 	var allLangNames []string
 	enabledMap := make(map[string]bool)
 	allLangs := m.availableLanguages()
 	for _, l := range allLangs {
 		allLangNames = append(allLangNames, l.Display)
-		// Absent from map or true = enabled; false = explicitly disabled
-		isDisabled := false
-		if val, ok := m.languageFilter[l.Code]; ok && !val {
-			isDisabled = true
-		} else if val, ok := m.languageFilter[l.Display]; ok && !val {
-			isDisabled = true
-		}
-		if !isDisabled {
+		if audioPref.Allows(l.Code) && audioPref.Allows(l.Display) {
 			enabledSummary = append(enabledSummary, l.Display)
 			enabledMap[l.Display] = true
 		}
@@ -479,20 +566,8 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		}
 	}
 
-	animeAudio := "Sub · Japanese"
-	if strings.EqualFold(m.audioMode, "dub") {
-		animeAudio = "Dub · English"
-	}
-
-	qualityName := "All"
-	switch m.qualityMode {
-	case qualityHighest:
-		qualityName = "Highest"
-	case qualityDataSaver:
-		qualityName = "Data Saver"
-	case qualityLowest:
-		qualityName = "Lowest"
-	}
+	animeAudio := trackLabel(m.filterScope.For(provider.ModeAnime).Track)
+	qualityName := qualitySettingLabel(m.filterScope.For(m.appMode).Quality)
 
 	var downloadQualityName string
 	switch m.downloadQuality {
@@ -507,6 +582,14 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 	default:
 		downloadQualityName = "Auto (same as stream)"
 	}
+	activeSubs := m.filterScope.For(m.appMode).Subtitles
+	subtitleName := "Any"
+	if activeSubs.Mode == filter.SubtitleOff {
+		subtitleName = "Off"
+	} else if code := lang.Normalize(activeSubs.Language); code != "" {
+		subtitleName = lang.Name(code)
+	}
+
 	priorityRows := m.providerPriorityRows()
 	accentName := "Auto (per mode)"
 	if m.accentIndex > 0 && m.accentIndex < len(accentPresets) {
@@ -571,13 +654,13 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		Autoplay:              m.autoplay,
 		VerifyDownloads:       !m.disableDownloadVerification,
 		AudioSummary:          audioSummary,
-		SubtitleLanguage:      lang.Name(m.subtitleLanguage),
+		SubtitleLanguage:      subtitleName,
 		AudioPickerOpen:       m.audioPickerOpen,
 		AllLanguages:          allLangNames,
 		EnabledLanguages:      enabledMap,
 		PickerIndex:           m.audioPickerIndex,
 		AnimeAudioTrack:       animeAudio,
-		AnimeSubtitles:        !m.disableAnimeSubtitles,
+		AnimeSubtitles:        m.filterScope.For(provider.ModeAnime).Subtitles.Mode != filter.SubtitleOff,
 		SkipSource:            m.skipProvider,
 		AutoSkipIntro:         m.autoSkipIntro,
 		AutoSkipEnding:        m.autoSkipEnding,
@@ -606,6 +689,7 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		HistoryModes:          historyModes,
 		ProviderRows:          m.providerRows(),
 		StremioAddonManifests: append([]string(nil), m.stremioAddonManifests...),
+		AddonRows:             m.addonRows(),
 		AddonInputOpen:        m.addonInputOpen,
 		AddonInputView:        m.addonInput.View(),
 		AddonTesting:          m.addonTesting,
@@ -694,10 +778,7 @@ func (m *modelImpl) collectDownloadsData(width, height int, accent lipgloss.Adap
 	var done []DoneDownload
 	seenDone := make(map[string]bool)
 
-	var diskDone []service.CompletedDownload
-	if m.downloadService != nil {
-		diskDone = m.downloadService.CompletedDownloads()
-	}
+	diskDone := m.completedDownloads()
 
 	diskPathMap := make(map[string]string, len(diskDone))
 	for _, cd := range diskDone {

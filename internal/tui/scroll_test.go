@@ -15,6 +15,7 @@ import (
 	"kari/internal/history"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/service"
 )
 
 func TestWindowRows(t *testing.T) {
@@ -94,12 +95,9 @@ func liveFixtureTitles(n int) []provider.SearchResult {
 
 // Live grouping must come only from Live/StartsAt/Group: schedule text in
 // Year is ignored, and 24/7 channels sort under Channels even without a
-// schedule.
+// schedule. The renderer now consumes the service-prepared guide.
 func TestLiveClassificationIgnoresYear(t *testing.T) {
 	now := time.Now()
-	// A same-day future fixture: +3h, pulled back when that would
-	// cross midnight (the old fixed +3h failed every evening east of
-	// UTC). Truncated to the minute like real schedule payloads.
 	deltaMin := 180
 	if minsIn := now.Hour()*60 + now.Minute(); minsIn+deltaMin >= 24*60 {
 		deltaMin = (24*60 - minsIn) / 2
@@ -112,59 +110,26 @@ func TestLiveClassificationIgnoresYear(t *testing.T) {
 	tmrw := event.AddDate(0, 0, 1)
 
 	tests := []struct {
-		name       string
-		r          provider.SearchResult
-		wantGroup  liveGroup
-		wantHeader string
+		name string
+		r    provider.SearchResult
+		want service.LiveSectionKind
 	}{
-		{
-			// Regression: pengu used to stuff "Live" into Year; grouping
-			// must not depend on it.
-			name:      "year text never marks live",
-			r:         provider.SearchResult{Title: "Match", Year: "Live"},
-			wantGroup: liveGroupLater,
-		},
-		{
-			name:      "explicit live wins",
-			r:         provider.SearchResult{Title: "Match", Live: true},
-			wantGroup: liveGroupNow,
-		},
-		{
-			name:      "channel group overrides schedule",
-			r:         provider.SearchResult{Title: "ESPN", Group: "Channel", Live: true},
-			wantGroup: liveGroupChannels,
-		},
-		{
-			name:      "future start today",
-			r:         provider.SearchResult{Title: "Match", StartsAt: event},
-			wantGroup: liveGroupToday,
-		},
-		{
-			name:      "future start tomorrow",
-			r:         provider.SearchResult{Title: "Match", StartsAt: tmrw},
-			wantGroup: liveGroupTomorrow,
-		},
-		{
-			name:       "recent start is live",
-			r:          provider.SearchResult{Title: "Match", StartsAt: now.Add(-1 * time.Hour)},
-			wantGroup:  liveGroupNow,
-			wantHeader: "Live now",
-		},
-		{
-			name:       "ended event beyond max live duration is later",
-			r:          provider.SearchResult{Title: "Match", StartsAt: now.Add(-24 * time.Hour)},
-			wantGroup:  liveGroupLater,
-			wantHeader: "Later",
-		},
+		{name: "year text never marks live", r: provider.SearchResult{Title: "Match", Year: "Live"}, want: service.LiveSectionUpcoming},
+		{name: "explicit live wins", r: provider.SearchResult{Title: "Match", Live: true}, want: service.LiveSectionNow},
+		{name: "channel group overrides schedule", r: provider.SearchResult{Title: "ESPN", Group: "Channel", Live: true}, want: service.LiveSectionChannels},
+		{name: "future start today", r: provider.SearchResult{Title: "Match", StartsAt: event}, want: service.LiveSectionUpcoming},
+		{name: "future start tomorrow", r: provider.SearchResult{Title: "Match", StartsAt: tmrw}, want: service.LiveSectionUpcoming},
+		{name: "recent start is live", r: provider.SearchResult{Title: "Match", StartsAt: now.Add(-1 * time.Hour)}, want: service.LiveSectionNow},
+		{name: "ended event beyond max live duration is later", r: provider.SearchResult{Title: "Match", StartsAt: now.Add(-24 * time.Hour)}, want: service.LiveSectionUpcoming},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			g, _ := classifyLiveResult(tt.r)
-			if g != tt.wantGroup {
-				t.Errorf("group = %v, want %v", g, tt.wantGroup)
+			guide := service.BuildLiveGuide([]provider.SearchResult{tt.r}, 0, now)
+			if len(guide.Sections) != 1 {
+				t.Fatalf("sections = %d, want 1", len(guide.Sections))
 			}
-			if name := liveGroupName[g]; name != tt.wantHeader && tt.wantHeader != "" {
-				t.Errorf("header = %q, want %q", name, tt.wantHeader)
+			if got := guide.Sections[0].Kind; got != tt.want {
+				t.Errorf("section = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -189,6 +154,24 @@ func TestLiveResultsScrollWithCursor(t *testing.T) {
 	}
 	if !strings.Contains(out, "↑") {
 		t.Errorf("expected scroll-up hint:\n%s", out)
+	}
+}
+
+// TestLiveResultsKeepsBottomHint guards the fixed-row budget: the bottom
+// scroll hint is appended after the window rows and must not be truncated.
+func TestLiveResultsKeepsBottomHint(t *testing.T) {
+	data := ResultsData{
+		Query:         "search live…",
+		Mode:          provider.ModeLive,
+		Results:       liveFixtureTitles(40),
+		SelectedIndex: 2,
+		Width:         100,
+		Height:        24,
+		Accent:        ResolveAccent(model.KindLive, "Auto"),
+	}
+	out := RenderLiveResultsScreen(data)
+	if !strings.Contains(out, "↓") {
+		t.Errorf("bottom scroll hint was truncated away:\n%s", out)
 	}
 }
 

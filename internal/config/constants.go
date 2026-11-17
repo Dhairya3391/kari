@@ -7,6 +7,7 @@ const (
 	AnikotoBase      = "https://anikototv.se"
 	MovyReferer      = "https://www.movy.sx/"
 	PenguAPIBase     = "https://pengu.uk"
+	TheDaddyBase     = "https://thedaddy.li"
 	TMDBAPIBase      = "https://api.themoviedb.org/3"
 	TMDBBaseURL      = "https://www.themoviedb.org"
 	TMDBImageBase    = "https://image.tmdb.org/t/p/"
@@ -23,6 +24,9 @@ const (
 	TraktAuthBase    = "https://trakt.tv"
 	AniListAPIBase   = "https://graphql.anilist.co"
 	AniListAuthBase  = "https://anilist.co"
+	// AniListReferer is sent when downloading AniList-hosted artwork so the
+	// image CDN serves the real cover instead of a hotlink placeholder.
+	AniListReferer = "https://anilist.co/"
 
 	DefaultTraktClientID       = "3638fff997ff24c5deb51646a7520bc531f5d482a30def91c238a8d2a0bd648d"
 	DefaultTraktClientSecret   = "3aeb56d02d938833b0395ddd484b9c13849b0523bb32d0b0635cb9b048eed91d"
@@ -76,18 +80,36 @@ const (
 
 	// SolisAPIBase is the hosted streaming resolution API deployed on Vercel.
 	SolisAPIBase = "https://solis-api.vercel.app"
+
+	// CnoBase is the main web and API base for Cno (https://cno.to).
+	CnoBase = "https://cno.to"
+	// CnoReferer satisfies hotlink and header protection on Cno API and stream requests.
+	CnoReferer = "https://cno.to/"
+
+	// CinejoyBase is the Cinejoy web application (https://cinejoy.pk). Its
+	// sealed resolution gateway and stream CDNs both key on this origin, so
+	// sources carry it as their Referer and derived Origin header.
+	CinejoyBase = "https://cinejoy.pk"
+	// CinejoyAPIBase is Cinejoy's sealed resolution gateway. Every request is
+	// an HPKE-style ECDH + AES-GCM envelope (see internal/provider/cinejoy).
+	CinejoyAPIBase = "https://api2.wing.st"
 	// CinecatBase is the public web application for Cinecat (https://beta.cinecat.eu).
 	CinecatBase = "https://beta.cinecat.eu"
 	// CinecatReferer satisfies the hotlink protection on Cinecat stream requests.
 	CinecatReferer = "https://beta.cinecat.eu/"
 	// CinecatCDNBase is the current ZCDN edge for Cinecat's adaptive HLS lane.
-	// Older zcdn*.iamwatchingyou.site and *.bluevelvet.space hosts were retired
-	// and now redirect to the workers.dev deployment.
-	CinecatCDNBase = "https://zcdn1.2wwlgkfo-31a.workers.dev"
+	// The site's /config.js picks any of zcdn1-3 on this workers.dev deployment;
+	// older zcdn*.iamwatchingyou.site, *.bluevelvet.space, and 2wwlgkfo-31a
+	// workers.dev hosts were retired and now answer 429.
+	CinecatCDNBase = "https://zcdn1.c3204a347-edge.workers.dev"
 	// CinecatSourcesAPIBase is Cinecat's multi-lane sources API. It lists the
 	// available streaming backends and resolves each one by TMDB coordinates.
 	CinecatSourcesAPIBase = "https://edge.cinecat.eu"
-	CinecatSubsBase       = "https://sub.vdrk.site"
+	// CinecatAphroditeBase is Cinecat's self-hosted Aphrodite content lookup.
+	// It resolves a TMDB title straight to its HLS master on the totallyacdn.cc
+	// edge, independently of the ZCDN token API.
+	CinecatAphroditeBase = "https://cdn.hls.lol"
+	CinecatSubsBase      = "https://sub.vdrk.site"
 
 	// SweetFoxPlayerBase is the VidQueen player origin SweetFox embeds. The
 	// player exposes seven internal stream lanes (Bloodstone, Obsidian,
@@ -96,11 +118,6 @@ const (
 	// SweetFoxAPIBase is the VidQueen stream resolution API. Every lane is
 	// addressed through it with the TMDB id plus a sources key (s1–s7).
 	SweetFoxAPIBase = "https://api.vidqueen.st"
-
-	// CnoBase is the main web and API base for Cno (https://cno.to).
-	CnoBase = "https://cno.to"
-	// CnoReferer satisfies hotlink and header protection on Cno API and stream requests.
-	CnoReferer = "https://cno.to/"
 
 	// MappleBase is the main web and API base for Mapple (https://mapple.fun).
 	MappleBase = "https://mapple.fun"
@@ -126,10 +143,6 @@ const (
 	BingrOrigin = "https://bingr.st"
 	// BingrReferer satisfies hotlink and referer requirements on Bingr API requests.
 	BingrReferer = "https://bingr.st/"
-	// FilmuAPIBase is the HiAnime/MegaPlay token and stream gateway used by Bingr for anime.
-	FilmuAPIBase = "https://hianime.filmu.in"
-	// MegaPlayReferer satisfies hotlink protection on MegaPlay stream and subtitle requests.
-	MegaPlayReferer = "https://megaplay.buzz/"
 	// DefaultDiscordAppID is the Kari Discord application used for Rich
 	// Presence. Its registered name is what users see as the activity verb
 	// ("Watching Kari"); the KARI_DISCORD_APP_ID env var overrides it for
@@ -151,45 +164,6 @@ const (
 	FamelackTVChannelsURL = FamelackDataBase + "/tv/categories/all.json"
 	// FamelackTVCountriesURL maps ISO country codes to display names.
 	FamelackTVCountriesURL = FamelackDataBase + "/tv/countries_metadata.json"
-)
-
-// IPTV-org publishes a community-maintained live TV catalog as public JSON
-// endpoints on GitHub Pages. Channels and stream URLs are separate documents
-// joined by channel ID.
-const (
-	// IPTVOrgAPIBase is the root of the public IPTV-org API.
-	IPTVOrgAPIBase = "https://iptv-org.github.io/api"
-	// IPTVOrgChannelsURL lists every known channel with country, category,
-	// and lifecycle metadata.
-	IPTVOrgChannelsURL = IPTVOrgAPIBase + "/channels.json"
-	// IPTVOrgStreamsURL lists direct stream URLs keyed by channel ID.
-	IPTVOrgStreamsURL = IPTVOrgAPIBase + "/streams.json"
-	// IPTVOrgCategoriesURL maps category IDs to display names.
-	IPTVOrgCategoriesURL = IPTVOrgAPIBase + "/categories.json"
-	// IPTVOrgCountriesURL maps country codes to display names and languages.
-	IPTVOrgCountriesURL = IPTVOrgAPIBase + "/countries.json"
-)
-
-// TimStreams exposes sports events and 24/7 channels through its public API.
-const (
-	// TimStreamsBase is the TimStreams web application origin.
-	TimStreamsBase = "https://tim-streams.com"
-	// TimStreamsAPIBase is the API used for live events, channels, and playback lanes.
-	TimStreamsAPIBase = TimStreamsBase + "/api"
-	// TimStreamsShortBase serves the short stream links that issue playback tickets.
-	TimStreamsShortBase = "https://ehgembxe.cfd"
-)
-
-// Stability live sports and channels platform (https://stability.taxidev.me).
-const (
-	// StabilityBase is the Stability web application origin.
-	StabilityBase = "https://stability.taxidev.me"
-	// StabilityAPIBase is the API endpoint prefix for schedule, channels, and stream resolution.
-	StabilityAPIBase = StabilityBase + "/api"
-	// StabilityTaxiCDNBase is the primary CDN origin for Stability HLS stream playlists.
-	StabilityTaxiCDNBase = "https://taxi-dev.b-cdn.net"
-	// StabilityCloudCDNBase is the secondary CDN origin for Stability live master manifests.
-	StabilityCloudCDNBase = "https://cdn.taxicloud.dev"
 )
 
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var

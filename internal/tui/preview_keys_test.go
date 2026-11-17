@@ -8,13 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/filter"
 	"kari/internal/history"
 	"kari/internal/model"
 	"kari/internal/provider"
-	"kari/internal/ranking"
 	"kari/internal/service"
 )
 
@@ -156,7 +157,9 @@ func TestPreviewRestartFromBeginning(t *testing.T) {
 	m.resolved = &model.ResolvedMedia{SeriesTitle: "Frieren", Playback: []provider.MediaSource{
 		{URL: "https://cdn.example.com/master.m3u8", Quality: "1080p", Resolver: "anikoto"},
 	}}
-	m.rankedSources = ranking.RankSources(m.resolved.Playback, ranking.Criteria{Mode: provider.ModeAnime})
+	m.rankedSources = filter.Prepare(m.resolved.Playback,
+		filter.FromLegacy(qualityAll, 0, nil, "", "", false, "").For(provider.ModeAnime),
+		provider.ModeAnime, nil, time.Time{})
 	m.playOpID = 0
 
 	mdl, _ := m.updatePreview(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
@@ -175,7 +178,9 @@ func TestPreviewRestartIgnoredWhilePlaying(t *testing.T) {
 	m.resolved = &model.ResolvedMedia{SeriesTitle: "Frieren", Playback: []provider.MediaSource{
 		{URL: "https://cdn.example.com/master.m3u8", Quality: "1080p", Resolver: "anikoto"},
 	}}
-	m.rankedSources = ranking.RankSources(m.resolved.Playback, ranking.Criteria{Mode: provider.ModeAnime})
+	m.rankedSources = filter.Prepare(m.resolved.Playback,
+		filter.FromLegacy(qualityAll, 0, nil, "", "", false, "").For(provider.ModeAnime),
+		provider.ModeAnime, nil, time.Time{})
 	m.playOpID = 7
 
 	mdl, _ := m.updatePreview(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
@@ -193,7 +198,9 @@ func TestPreviewDForDownloadAndDForDownloadsTab(t *testing.T) {
 	m.resolved = &model.ResolvedMedia{SeriesTitle: "Frieren", Playback: []provider.MediaSource{
 		{URL: "https://cdn.example.com/master.m3u8", Quality: "1080p", Resolver: "anikoto"},
 	}}
-	m.rankedSources = ranking.RankSources(m.resolved.Playback, ranking.Criteria{Mode: provider.ModeAnime})
+	m.rankedSources = filter.Prepare(m.resolved.Playback,
+		filter.FromLegacy(qualityAll, 0, nil, "", "", false, "").For(provider.ModeAnime),
+		provider.ModeAnime, nil, time.Time{})
 
 	// Lowercase 'd' navigates to the downloads screen
 	mdl, _ := m.updatePreview(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})

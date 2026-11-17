@@ -146,8 +146,6 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
 	logging.Debug("resolve source", "provider", c.Name(), "mediaID", mediaID, "episodeID", episode.ID)
 
-	// Anime episodes carry watch/anicine route IDs; everything else cannot
-	// resolve through this provider.
 	if h := kit.ParseHandle(mediaID, episode.ID, episode.Audio, episode.Episode, "anicine"); h.Valid() && isAnimeRoute(episode) {
 		return c.resolveAnime(ctx, h.AniListID, h.Category, h.Number)
 	}

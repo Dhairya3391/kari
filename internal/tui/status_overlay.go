@@ -15,8 +15,6 @@ type AnimeStatusAction int
 const (
 	// ActionAnimeWatching sets the anime's tracking status to CURRENT on AniList.
 	ActionAnimeWatching AnimeStatusAction = iota
-	// ActionAnimeRewatching sets the tracking status to REPEATING on AniList, resets progress to 0,
-	// increments repeat count, and clears stale local playback history for clean rewatch resumption.
 	ActionAnimeRewatching
 	// ActionAnimeCompleted sets tracking status to COMPLETED and advances progress to total episodes.
 	ActionAnimeCompleted

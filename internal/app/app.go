@@ -4,33 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
-	"time"
 
-	"kari/internal/animeskip"
-	"kari/internal/aniskip"
-	"kari/internal/calendar"
 	"kari/internal/config"
-	"kari/internal/downloader"
-	"kari/internal/history"
-	"kari/internal/httpclient"
-	"kari/internal/introdb"
 	"kari/internal/logging"
-	"kari/internal/man"
-	"kari/internal/manga"
-	"kari/internal/player"
-	"kari/internal/poster"
-	"kari/internal/presence"
-	"kari/internal/provider"
-	"kari/internal/provider/defaults"
-	"kari/internal/scrobble"
-	"kari/internal/selfupdate"
-	"kari/internal/service"
 	"kari/internal/settings"
-	"kari/internal/skipdb"
-	"kari/internal/subtitles"
-	"kari/internal/tmdb"
 	"kari/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -45,225 +22,48 @@ var (
 	Commit  = "dev"
 )
 
-// helpText is printed by -h/--help. It intentionally stays brief; the full
-// reference is in the man page (man kari).
-const helpText = `Usage: kari [OPTIONS] [QUERY]
-
-Stream anime, movies, and TV shows from your terminal.
-
-OPTIONS
-  -v, --version   Print version and exit.
-  -u, --update    Self-update to the latest release and exit.
-  -h, --help      Show this message and exit.
-
-QUERY
-  Optional search term. When provided, kari pre-fills the search
-  input and executes the search immediately on launch.
-
-KEYS (inside TUI)
-  Space           Search        Tab/Shift+Tab   Switch category
-  Enter           Select/Play   Esc             Go back
-  j/k or ↑/↓      Navigate      h/H             History
-  n               Next episode  A               Toggle auto-play
-  a               Sub/Dub       s/S             Settings
-  d               Download      r               Restart episode
-  Ctrl+P          Switch player q/Ctrl+C        Quit
-
-For the full reference including all environment variables and
-configuration options, run:
-
-  man kari
-
-Source and issue tracker: https://github.com/Dhairya3391/kari
-`
-
-func getArgs() (args []string, version bool, update bool, help bool) {
-	for _, arg := range os.Args[1:] {
-		if arg == "-v" || arg == "--version" {
-			version = true
-			continue
-		}
-		if arg == "-u" || arg == "-U" || arg == "--update" {
-			update = true
-			continue
-		}
-		if arg == "-h" || arg == "--help" {
-			help = true
-			continue
-		}
-		args = append(args, arg)
+// Run boots the application: it serves the CLI early exits, then loads
+// configuration, wires the component graph, and hands control to bubbletea.
+func Run() error {
+	a := parseArgs(os.Args[1:])
+	if handled, err := handleCLI(a, os.Stdout, Update); handled {
+		return err
 	}
-	return args, version, update, help
+	return run(a.query)
 }
 
-// Run boots the whole application: parse args, load config, wire every
-// component in internal/provider/defaults and app, then hand control to the
-// bubbletea program. It is the only place concrete components meet.
-func Run() error {
-	args, showVersion, showUpdate, showHelp := getArgs()
-	if showHelp {
-		fmt.Print(helpText)
-		return nil
-	}
-	if showVersion {
-		fmt.Printf("Kari version %s (%s)\n", Version, Commit)
-		return nil
-	}
-	if showUpdate {
-		return Update()
-	}
-	query := strings.TrimSpace(strings.Join(args, " "))
+// run starts a normal interactive session with an optional pre-filled query.
+func run(query string) error {
 	logging.Info("starting app", "query", query)
-	go selfupdate.CleanupOldExecutables()
-	go func() {
-		if _, err := man.EnsureInstalled(); err != nil {
-			logging.Debug("man page ensure install", "err", err)
-		}
-	}()
 	if p := logging.Path(); p != "" {
 		logging.Info("log file ready", "path", p)
 	}
+	startHousekeeping()
 
 	cfg, err := config.Load()
 	if err != nil {
-		return err
+		return fmt.Errorf("load config: %w", err)
 	}
+	saved := settings.Load()
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = os.Getenv("HOME")
-	}
-	configDir := filepath.Join(home, ".config", "kari")
+	configDir := resolveConfigDir()
 	migrateConfigDir(configDir)
 
-	histPath := filepath.Join(configDir, "history.json")
-	historyStore, historyErr := history.NewStore(histPath)
-	if historyErr != nil {
-		logging.Error("history store init failed; continuing without history", "err", historyErr)
-	}
-
-	keyPool := tmdb.NewKeyPool(cfg.TMDBAPIKeys)
-	skipHTTP := httpclient.NewWithTimeout(10 * time.Second)
-	aniskipClient := aniskip.NewClient(skipHTTP)
-	animeskipClient, err := animeskip.NewClient(skipHTTP, cfg.AnimeSkipClientID)
-	if err != nil {
-		logging.Warn("anime-skip client init failed; continuing without anime-skip", "err", err)
-		animeskipClient = nil
-	}
-	skipdbClient := skipdb.NewClient(skipHTTP, config.DefaultSkipDBAPIKey)
-	introdbClient := introdb.NewClient(skipHTTP, config.DefaultIntroDBAPIKey)
-	skipClients := player.SkipClients{
-		AniSkip:   aniskipClient,
-		AnimeSkip: animeskipClient,
-		SkipDB:    skipdbClient,
-		IntroDB:   introdbClient,
-		TMDB:      keyPool,
-		HTTP:      skipHTTP,
-	}
-
-	skipSettings := player.SkipSettings{
-		Provider: "hybrid",
-	}
-	savedSettings := settings.Load()
-	if savedSettings != nil {
-		if savedSettings.SkipProvider != "" {
-			skipSettings.Provider = savedSettings.SkipProvider
-		}
-		skipSettings.AutoSkipIntro = savedSettings.AutoSkipIntro
-		skipSettings.AutoSkipEnding = savedSettings.AutoSkipEnding
-		skipSettings.SkipRecap = savedSettings.SkipRecap
-		skipSettings.SkipPreview = savedSettings.SkipPreview
-	}
-
-	// Audio-language filter for providers (nil = everything enabled).
-	var langFilter map[string]bool
-	if savedSettings != nil {
-		langFilter = savedSettings.LanguageFilter
-	}
-
-	registry, err := defaults.NewDefaultRegistry(keyPool, cfg, langFilter)
+	deps, err := newDependencies(cfg, saved, configDir)
 	if err != nil {
 		return err
 	}
-	mediaService := service.NewMediaService(registry)
-	if savedSettings != nil && len(savedSettings.DisabledProviders) > 0 {
-		mediaService.SetDisabledProviders(savedSettings.DisabledProviders)
-	}
-	mangaClient := manga.NewClient()
-	mangaService := service.NewMangaService(registry, mangaClient)
-	players := player.NewRegistry(cfg.PreferredPlayer, skipClients, skipSettings)
-	subtitleService := service.NewSubtitleService(cfg)
-	downloadService := service.NewDownloadService(cfg.DownloadDir, downloader.NewYTDLPDownloader(), mediaService, subtitleService)
-	if savedSettings != nil && savedSettings.DisableDownloadVerification {
-		downloadService.SetVerifyDownloads(false)
-	}
+	defer deps.close()
 
-	traktClient := scrobble.NewTraktClient(cfg.TraktClientID, cfg.TraktClientSecret)
-	anilistClient := scrobble.NewAniListClient(cfg.AniListClientID, cfg.AniListClientSecret)
-	posterClient := poster.NewClient(keyPool)
-	calendarClient := calendar.NewClient(keyPool)
-
-	// Discord Rich Presence is opt-in and entirely best-effort: the client
-	// is idle until the TUI publishes a now-playing card, and reports live
-	// position/pause telemetry from players that expose IPC (mpv/IINA).
-	presenceClient := newPresenceClient()
-	if presenceClient != nil {
-		defer presenceClient.Close()
-		players.SetProgressObserver(func(p player.PlaybackProgress) {
-			presenceClient.UpdateProgress(presence.Progress{
-				PositionSecs: p.PositionSecs,
-				DurationSecs: p.DurationSecs,
-				Paused:       p.Paused,
-			})
-		})
-	}
-
-	// Bound on-disk caches so repeat sessions don't grow them without limit;
-	// eviction is oldest-first and failures only log.
-	go func() {
-		if err := manga.PruneDiskCache(); err != nil {
-			logging.Debug("manga page cache prune failed", "err", err)
-		}
-		if err := poster.PruneDiskCache(); err != nil {
-			logging.Debug("poster cache prune failed", "err", err)
-		}
-		if err := subtitles.PruneCacheDir(7 * 24 * time.Hour); err != nil {
-			logging.Debug("subtitle cache prune failed", "err", err)
-		}
-	}()
-
-	m := tui.NewModel(context.Background(), query, registry, players, cfg.DownloadDir, mediaService, mangaService, mangaClient, downloadService, subtitleService, historyStore, historyErr, traktClient, anilistClient, posterClient, presenceClient, calendarClient, Version, Commit, tui.ModelOptions{
-		Settings: savedSettings,
-		AddonManifestTester: func(ctx context.Context, manifestURL string) (provider.Provider, error) {
-			return defaults.LoadStremioAddon(ctx, manifestURL, keyPool)
-		},
-		StartupAddonLoader: func(ctx context.Context, manifestURL string) (provider.Provider, error) {
-			return defaults.LoadConfiguredStremioAddon(ctx, manifestURL, keyPool)
-		},
-	})
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithFilter(tui.FilterScrollInput))
+	m := newTUIModel(context.Background(), deps, query, saved)
+	p := tea.NewProgram(m,
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+		tea.WithFilter(tui.FilterScrollInput),
+	)
 	_, err = p.Run()
 	if err != nil {
 		logging.Error("program exited with error", "err", err)
 	}
-	if historyStore != nil {
-		historyStore.Close()
-	}
 	return err
-}
-
-// newPresenceClient builds the Discord Rich Presence client, honoring the
-// KARI_DISCORD_APP_ID override. A misconfigured id disables presence rather
-// than failing startup; presence is a nicety, never a requirement.
-func newPresenceClient() *presence.Client {
-	appID := strings.TrimSpace(os.Getenv("KARI_DISCORD_APP_ID"))
-	if appID == "" {
-		appID = config.DefaultDiscordAppID
-	}
-	client, err := presence.New(appID)
-	if err != nil {
-		logging.Warn("discord presence disabled", "err", err)
-		return nil
-	}
-	return client
 }

@@ -36,6 +36,107 @@ func TestNormalizeQualityCanonical(t *testing.T) {
 	}
 }
 
+// TestQualityHeightProvesCanonicalHeight proves QualityHeight is the height
+// half of NormalizeQuality across the raw shapes providers emit.
+func TestQualityHeightProvesCanonicalHeight(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want int
+	}{
+		{"1080p", Quality1080},
+		{"1920x1080", Quality1080},
+		{"4K [4KHDHub]", Quality2160},
+		{"576p PAL", Quality576},
+		{"Auto", Quality1080},
+		{"Auto 2160p", Quality2160},
+		{"Master 4K", Quality2160},
+		{"Auto 540p", 540},
+		{"", QualityUnknown},
+		{"gibberish", QualityUnknown},
+	}
+	for _, tc := range cases {
+		if got := QualityHeight(tc.raw); got != tc.want {
+			t.Errorf("QualityHeight(%q) = %d, want %d", tc.raw, got, tc.want)
+		}
+		if h, _ := NormalizeQuality(tc.raw); h != tc.want {
+			t.Errorf("NormalizeQuality(%q) height = %d, want %d", tc.raw, h, tc.want)
+		}
+	}
+}
+
+// TestIsAdaptiveQualityProvesBareAdaptiveLabels proves adaptive words with no
+// named resolution count as adaptive while resolution-carrying labels do not.
+func TestIsAdaptiveQualityProvesBareAdaptiveLabels(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{"Auto", true},
+		{"auto", true},
+		{"Master", true},
+		{"Auto (Hindi)", true},
+		{"Auto [Provider]", true},
+		{"1080p", false},
+		{"FHD", false},
+		{"Auto 1080p", false},
+		{"Master 4K", false},
+		{"Direct", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := IsAdaptiveQuality(tc.raw); got != tc.want {
+			t.Errorf("IsAdaptiveQuality(%q) = %v, want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// TestNormalizeQualityAbsorbedCases pins the ranking-derived cases the
+// canonical parser now owns: bracket tags, 576p, and explicit auto/master
+// resolutions.
+func TestNormalizeQualityAbsorbedCases(t *testing.T) {
+	cases := []struct {
+		raw    string
+		height int
+		label  string
+	}{
+		{"2160p", 2160, "2160p"},
+		{"UHD 2160p", 2160, "2160p"},
+		{"QHD 1440p", 1440, "1440p"},
+		{"FHD [VegaMovies]", 1080, "1080p"},
+		{"576p PAL", 576, "576p"},
+		{"480p SD", 480, "480p"},
+		{"360p", 360, "360p"},
+		{"Auto 2160p", 2160, "2160p"},
+		{"Master 4K", 2160, "2160p"},
+		{"Auto 540p", 540, "480p"},
+		{"—", 0, "unknown"},
+	}
+	for _, tc := range cases {
+		h, l := NormalizeQuality(tc.raw)
+		if h != tc.height || l != tc.label {
+			t.Errorf("NormalizeQuality(%q) = (%d,%q), want (%d,%q)", tc.raw, h, l, tc.height, tc.label)
+		}
+	}
+}
+
+// TestNormalizeQualityLabelConsistency proves the label always comes from the
+// canonical height mapping. QualityLabelFromHeight agrees for every positive
+// sub-4K height; its 4K spelling is the one display-only exception.
+func TestNormalizeQualityLabelConsistency(t *testing.T) {
+	raws := []string{"2160p", "1440p", "1080p", "720p", "576p", "480p", "360p", "240p", "Auto", "gibberish", ""}
+	for _, raw := range raws {
+		h, label := NormalizeQuality(raw)
+		if want := qualityLabel(h); label != want {
+			t.Errorf("NormalizeQuality(%q) label = %q, want %q", raw, label, want)
+		}
+		if h > 0 && h < Quality2160 {
+			if want := QualityLabelFromHeight(h); label != want {
+				t.Errorf("NormalizeQuality(%q) label = %q, want QualityLabelFromHeight = %q", raw, label, want)
+			}
+		}
+	}
+}
+
 // TestNormalizeLanguagesISO proves audio/subtitle tags fold to ISO 639-1.
 func TestNormalizeLanguagesISO(t *testing.T) {
 	cases := []struct{ raw, want string }{

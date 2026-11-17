@@ -16,6 +16,21 @@ import (
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/kit"
+	"kari/internal/timeouts"
+)
+
+const (
+	// metaTimeout bounds the metadata lookup that must finish before any
+	// shard can start: a stalled details endpoint used to hold the whole
+	// fan-out behind the service's much longer deadline.
+	metaTimeout = timeouts.BingrMeta
+	// fanoutTimeout bounds the whole shard fan-out. Healthy shards answer
+	// within three seconds; a longer window only holds the provider spinner.
+	fanoutTimeout = timeouts.BingrFanout
+	// shardTimeout bounds one shard request inside the fan-out so a single
+	// stalled shard cannot consume the entire budget.
+	shardTimeout = timeouts.BingrShard
 )
 
 type serverSpec struct {
@@ -24,12 +39,13 @@ type serverSpec struct {
 	country string
 }
 
+// activeServers lists only shards that currently serve stream responses.
+// Moscow (s80) and Novo (s81) were retired upstream and answer every request
+// with HTTP 500, so probing them only added failures and spinner wait time.
 var activeServers = []serverSpec{
 	{id: "s40", name: "Aphelion", country: "GL"},
 	{id: "s70", name: "Polaris", country: "US"},
 	{id: "s62", name: "Bastion", country: "IN"},
-	{id: "s80", name: "Moscow", country: "US"},
-	{id: "s81", name: "Novo", country: "US"},
 }
 
 type streamRequestBody struct {
@@ -93,14 +109,14 @@ func (c *Client) resolveDirect(
 	totalSources := 0
 	var lastErr error
 
-	fanoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	fanoutCtx, cancel := context.WithTimeout(ctx, fanoutTimeout)
 	defer cancel()
 
 	for _, srv := range activeServers {
 		wg.Add(1)
 		go func(srv serverSpec) {
 			defer wg.Done()
-			reqCtx, reqCancel := context.WithTimeout(fanoutCtx, 8*time.Second)
+			reqCtx, reqCancel := context.WithTimeout(fanoutCtx, shardTimeout)
 			defer reqCancel()
 
 			sources, err := c.fetchServerStreams(reqCtx, srv, mediaType, tmdbID, season, epNum, title, year)
@@ -241,7 +257,7 @@ func (c *Client) mapStreamResponse(sr streamResponse, serverName string) ([]prov
 		if subURL == "" {
 			continue
 		}
-		normLang := lang.Normalize(sub.Lang)
+		normLang := lang.FromCodeOrLabel(sub.Lang, sub.Label)
 		key := normLang + ":" + subURL
 		if seenSub[key] {
 			continue
@@ -265,11 +281,6 @@ func (c *Client) mapStreamResponse(sr streamResponse, serverName string) ([]prov
 			continue
 		}
 
-		audLang := detectAudioLanguage(s.Name, s.Label)
-		if !c.languageEnabled(audLang) {
-			continue
-		}
-
 		quality := strings.TrimSpace(s.Quality)
 		if quality == "" {
 			quality = "HD"
@@ -277,6 +288,7 @@ func (c *Client) mapStreamResponse(sr streamResponse, serverName string) ([]prov
 		if bracket := strings.Index(quality, "["); bracket >= 0 {
 			quality = strings.TrimSpace(quality[:bracket])
 		}
+		height := kit.QualityHeight(quality)
 		ref := config.BingrReferer
 		if r, ok := s.Headers["Referer"]; ok && r != "" {
 			ref = r
@@ -291,6 +303,8 @@ func (c *Client) mapStreamResponse(sr streamResponse, serverName string) ([]prov
 			srcType = provider.SourceTypeMP4
 		}
 
+		// Stream names and labels are not a reliable audio language source;
+		// leave the typed audio identity unknown rather than guessing one.
 		out = append(out, provider.MediaSource{
 			URL:       rawURL,
 			Quality:   quality,
@@ -298,7 +312,7 @@ func (c *Client) mapStreamResponse(sr streamResponse, serverName string) ([]prov
 			Type:      srcType,
 			Referer:   ref,
 			UserAgent: ua,
-			Language:  audLang,
+			Height:    height,
 			Subtitles: subs,
 		})
 	}
@@ -322,8 +336,10 @@ func (c *Client) findMeta(ctx context.Context, mediaType string, tmdbID int, def
 			return entry.title, entry.year
 		}
 	}
+	metaCtx, cancel := context.WithTimeout(ctx, metaTimeout)
+	defer cancel()
 	reqURL := fmt.Sprintf("%s/details/%s/%d?v=1", c.apiBase, mediaType, tmdbID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	req, err := http.NewRequestWithContext(metaCtx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return defaultTitle, ""
 	}
@@ -395,44 +411,4 @@ func parseEpisodeCoords(mediaID string, episode provider.Episode) (int, string, 
 		epNum = 1
 	}
 	return tmdbID, mediaType, season, epNum, nil
-}
-
-func detectAudioLanguage(name, label string) string {
-	combined := strings.ToLower(name + " " + label)
-	if strings.Contains(combined, " sub") || strings.Contains(combined, "original") {
-		return ""
-	}
-
-	switch {
-	case strings.Contains(combined, "hindi"):
-		return "hi"
-	case strings.Contains(combined, "french") || strings.Contains(combined, "français"):
-		return "fr"
-	case strings.Contains(combined, "spanish") || strings.Contains(combined, "español"):
-		return "es"
-	case strings.Contains(combined, "german") || strings.Contains(combined, "deutsch"):
-		return "de"
-	case strings.Contains(combined, "italian") || strings.Contains(combined, "italiano"):
-		return "it"
-	case strings.Contains(combined, "portuguese") || strings.Contains(combined, "português"):
-		return "pt"
-	case strings.Contains(combined, "russian"):
-		return "ru"
-	case strings.Contains(combined, "arabic"):
-		return "ar"
-	case strings.Contains(combined, "indonesian"):
-		return "id"
-	case strings.Contains(combined, "tagalog") || strings.Contains(combined, "filipino"):
-		return "tl"
-	case strings.Contains(combined, "japanese"):
-		return "ja"
-	case strings.Contains(combined, "korean"):
-		return "ko"
-	case strings.Contains(combined, "chinese"):
-		return "zh"
-	case strings.Contains(combined, "english"):
-		return "en"
-	default:
-		return ""
-	}
 }

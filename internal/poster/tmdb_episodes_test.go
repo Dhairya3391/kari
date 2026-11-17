@@ -73,8 +73,6 @@ func TestFetchEpisodeTitlesTMDBSeasonSpecific(t *testing.T) {
 		tmdbBase: srv.URL,
 	}
 
-	// Season 2 requested: must return Season 2 episodes starting at 1 ("Fourth", "Fifth"),
-	// NOT Season 1 episodes concatenated.
 	titles, err := client.FetchEpisodeTitlesTMDB(context.Background(), "Naruto Season 2", 2004)
 	if err != nil {
 		t.Fatalf("FetchEpisodeTitlesTMDB failed: %v", err)

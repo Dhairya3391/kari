@@ -24,6 +24,15 @@ import (
 
 const directCacheTTL = 3600 // seconds
 
+// maxSlugProbes bounds concurrent watch-page guesses: enough to hide the
+// round-trips, few enough to stay polite to a scraped site.
+const maxSlugProbes = 4
+
+// serverBatchSize bounds how many stream servers are resolved at once. Every
+// server needs the same three chained requests, so a small parallel batch
+// removes the serial round-trip cost without bursting the site.
+const serverBatchSize = 4
+
 // anikotoIDEntry is a cached mapping from AniList ID to anikoto's internal
 // animeID + slug. Cached to avoid redundant HTML scrapes on every ResolveSource call.
 type anikotoIDEntry struct {
@@ -113,20 +122,42 @@ func (c *Client) resolveAnilistToAnikoto(ctx context.Context, anilistID string) 
 		queryTitles = queryTitles[:3]
 	}
 
-	// 1. Probe direct watch page for slugs derived from titles.
-	for _, s := range slugCandidates(titles) {
-		if seenSlugs[s] {
+	slugs := slugCandidates(titles)
+	for _, s := range slugs {
+		seenSlugs[s] = true
+	}
+	type slugProbe struct {
+		cand anikotoCandidate
+		ok   bool
+	}
+	probeCtx, stopProbes := context.WithCancel(ctx)
+	defer stopProbes()
+	probes := make(chan slugProbe, len(slugs))
+	probeSlots := make(chan struct{}, maxSlugProbes)
+	for _, s := range slugs {
+		go func(slug string) {
+			select {
+			case probeSlots <- struct{}{}:
+				defer func() { <-probeSlots }()
+			case <-probeCtx.Done():
+				probes <- slugProbe{ok: false}
+				return
+			}
+			cand, ok := c.fetchCandidateFromWatchPage(probeCtx, slug)
+			// Buffer is sized to len(slugs), so an abandoned probe never blocks.
+			probes <- slugProbe{cand: cand, ok: ok}
+		}(s)
+	}
+	for range slugs {
+		probe := <-probes
+		if !probe.ok {
 			continue
 		}
-		seenSlugs[s] = true
-		if cand, ok := c.fetchCandidateFromWatchPage(ctx, s); ok {
-			candidates = append(candidates, cand)
-			if scoreCandidate(cand.name, titles) == 1000 {
-				foundID := cand.animeID
-				entry := anikotoIDEntry{animeID: foundID, slug: cand.slug, cachedAt: time.Now()}
-				idCache.Store(anilistID, entry)
-				return foundID, cand.slug, nil
-			}
+		candidates = append(candidates, probe.cand)
+		if scoreCandidate(probe.cand.name, titles) == 1000 {
+			entry := anikotoIDEntry{animeID: probe.cand.animeID, slug: probe.cand.slug, cachedAt: time.Now()}
+			idCache.Store(anilistID, entry)
+			return probe.cand.animeID, probe.cand.slug, nil
 		}
 	}
 
@@ -383,8 +414,6 @@ func (c *Client) fetchAnimeIDFromWatchPage(ctx context.Context, slug string) str
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return ""
 	}
-	// The canonical player node carries the anime ID; fall back to the
-	// first data-id on the page.
 	if m := reWatchMainID.FindSubmatch(body); len(m) >= 2 {
 		return string(m[1])
 	}
@@ -620,8 +649,6 @@ func (c *Client) fetchEpisodesDirect(ctx context.Context, animeID, anilistID str
 		}
 		dataIDs := dataIDsMatch[1]
 
-		// Display title from the anchor body ("1 I'm used to it"),
-		// dropping the leading episode number.
 		epTitle := reLeadNum.ReplaceAllString(cleanTitle(block[2]), "")
 		if epTitle == "" {
 			epTitle = fmt.Sprintf("Episode %d", numInt)
@@ -636,8 +663,6 @@ func (c *Client) fetchEpisodesDirect(ctx context.Context, animeID, anilistID str
 			hasDub = m[1] == "1"
 		}
 
-		// Embed dataIDs into episode ID via pipe separator so ResolveSource
-		// can use them without re-fetching the episode list.
 		if hasSub {
 			eps = append(eps, provider.Episode{
 				Title:   epTitle,
@@ -808,8 +833,6 @@ func (c *Client) resolveServerStream(ctx context.Context, linkID, watchReferer, 
 		return nil, nil, fmt.Errorf("embed fetch: status %d", embedResp.StatusCode)
 	}
 
-	// Extract file ID from embed HTML: look for data-id="<digits>" first,
-	// then fall back to "File <digits> -" pattern.
 	fileID := ""
 	if m := reDataID.FindSubmatch(embedBody); len(m) >= 2 {
 		fileID = string(m[1])
@@ -860,38 +883,96 @@ func (c *Client) resolveServerStream(ctx context.Context, linkID, watchReferer, 
 	}
 	signedM3U8 := kit.SignCDNURL(rawM3U8, 86400)
 
-	// Step 5: Build subtitle options from tracks (English and "und" only).
-	var subs []provider.SubtitleOption
-	for _, track := range sourcesResp.Tracks {
-		if strings.EqualFold(strings.TrimSpace(track.Kind), "thumbnails") {
-			continue
-		}
-		lang := track.Label
-		labelLower := strings.ToLower(track.Label)
-		if strings.Contains(labelLower, "eng") || strings.Contains(labelLower, "english") {
-			lang = "en"
-		}
-		subs = append(subs, provider.SubtitleOption{
-			URL:      track.File,
-			Language: lang,
-			Default:  track.Default,
-		})
-	}
-
 	embedScheme := parsedEmbed.Scheme
 	embedHost := parsedEmbed.Host
 	streamReferer := fmt.Sprintf("%s://%s/", embedScheme, embedHost)
 
+	height, bitrate := c.megaplaySourceMeta(ctx, signedM3U8, streamReferer)
+	quality := "Auto"
+	if height > 0 {
+		quality = kit.QualityLabelFromHeight(height)
+	}
+
+	// Step 5: Build subtitle options from the declared caption tracks.
+	var subs []provider.SubtitleOption
+	for _, track := range sourcesResp.Tracks {
+		if strings.EqualFold(strings.TrimSpace(track.Kind), "thumbnails") ||
+			strings.TrimSpace(track.File) == "" {
+			continue
+		}
+		subs = append(subs, provider.SubtitleOption{
+			URL:      track.File,
+			Language: kit.SubtitleLanguage(track.Label),
+			Default:  track.Default,
+		})
+	}
+
 	source := provider.MediaSource{
 		URL:       signedM3U8,
-		Quality:   "1080p",
+		Quality:   quality,
 		Backend:   serverName,
 		Referer:   streamReferer,
 		UserAgent: config.DesktopUserAgent,
 		Type:      provider.SourceTypeHLS,
+		Height:    height,
+		Bitrate:   bitrate,
 		Subtitles: subs,
+		SubType:   subtitleKind(sourcesResp.Tracks),
+		SkipTimes: megaplaySkipTimes(sourcesResp, c.Name()),
 	}
 	return []provider.MediaSource{source}, subs, nil
+}
+
+// megaplaySourceMeta reads the signed Megaplay master for its best credible
+// resolution and peak bitrate. Unreadable masters report 0/0.
+func (c *Client) megaplaySourceMeta(ctx context.Context, signed, referer string) (height, bitrate int) {
+	variants, err := kit.ParseHLSVariants(ctx, c.http, signed, map[string]string{"Referer": referer})
+	if err != nil {
+		logging.Debug("anikoto megaplay master probe failed", "err", err)
+		return 0, 0
+	}
+	return kit.SourceMetaFromVariants(variants)
+}
+
+// subtitleKind maps Megaplay caption track kinds onto the subtitle delivery
+// hint. External caption tracks are toggleable, so the picture itself is not
+// hard-subtitled; thumbnail tracks are ignored.
+func subtitleKind(tracks []kit.MegaplayTrack) string {
+	for _, track := range tracks {
+		switch strings.ToLower(strings.TrimSpace(track.Kind)) {
+		case "captions", "subtitles":
+			return provider.SubTypeSoft
+		}
+	}
+	return ""
+}
+
+// megaplaySkipTimes converts the getSources intro/outro cues into provider
+// skip bounds. Absent segments use -1 so no false segment is declared.
+func megaplaySkipTimes(sr kit.MegaplaySourcesResp, source string) *provider.SkipTimes {
+	if sr.Intro == nil && sr.Outro == nil {
+		return nil
+	}
+	skip := &provider.SkipTimes{
+		Source:       source,
+		OpStart:      -1,
+		OpEnd:        -1,
+		EdStart:      -1,
+		EdEnd:        -1,
+		RecapStart:   -1,
+		RecapEnd:     -1,
+		PreviewStart: -1,
+		PreviewEnd:   -1,
+	}
+	if sr.Intro != nil {
+		skip.OpStart = sr.Intro.Start
+		skip.OpEnd = sr.Intro.End
+	}
+	if sr.Outro != nil {
+		skip.EdStart = sr.Outro.Start
+		skip.EdEnd = sr.Outro.End
+	}
+	return skip
 }
 
 // resolveDirectStreams resolves a full stream for the given anilist ID, audio
@@ -986,14 +1067,8 @@ func (c *Client) resolveFromDataIDs(ctx context.Context, dataIDs, slug, category
 	}
 	serverListHTML := slJSON.Result
 
-	// Parse server rows for the requested audio only. Never fall back to
-	// the opposite track: silently playing sub audio for a dub request
-	// (or vice versa) is worse than a clear miss the service can retry
-	// against the next provider.
 	servers := parseServerList(serverListHTML, category)
 	if len(servers) == 0 {
-		// Verified absence (list parsed, track missing), not a transport
-		// failure: retrying cannot help, and callers may hide the entry.
 		return nil, fmt.Errorf("anikoto direct: no %s servers: %w", strings.ToLower(category), provider.ErrAudioUnavailable)
 	}
 
@@ -1009,14 +1084,30 @@ func (c *Client) resolveFromDataIDs(ctx context.Context, dataIDs, slug, category
 	}
 	sortedServers = append(sortedServers, rest...)
 
-	for _, sv := range sortedServers {
-		sources, _, svErr := c.resolveServerStream(ctx, sv.linkID, watchRef, sv.name)
-		if svErr != nil {
-			logging.Debug("anikoto direct: server failed", "server", sv.name, "err", svErr)
-			continue
+	for start := 0; start < len(sortedServers); start += serverBatchSize {
+		batch := sortedServers[start:min(start+serverBatchSize, len(sortedServers))]
+		results := make([]struct {
+			sources []provider.MediaSource
+			err     error
+		}, len(batch))
+		var wg sync.WaitGroup
+		for i, sv := range batch {
+			wg.Add(1)
+			go func(i int, sv serverEntry) {
+				defer wg.Done()
+				sources, _, svErr := c.resolveServerStream(ctx, sv.linkID, watchRef, sv.name)
+				results[i].sources, results[i].err = sources, svErr
+			}(i, sv)
 		}
-		if len(sources) > 0 {
-			return sources, nil
+		wg.Wait()
+		for i, res := range results {
+			if res.err != nil {
+				logging.Debug("anikoto direct: server failed", "server", batch[i].name, "err", res.err)
+				continue
+			}
+			if len(res.sources) > 0 {
+				return res.sources, nil
+			}
 		}
 	}
 

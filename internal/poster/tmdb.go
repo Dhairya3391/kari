@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"kari/internal/config"
 	"kari/internal/provider/kit"
 )
@@ -177,8 +179,6 @@ func (c *Client) FetchEpisodeTitlesTMDB(ctx context.Context, title string, year 
 		return nil, err
 	}
 
-	// If the title requests a specific season (e.g. "Season 2"), and TMDB's show
-	// has that season, return only that season's episodes starting at 1.
 	if reqSeason := kit.ParseSeason(title); reqSeason > 1 {
 		for _, season := range show.Seasons {
 			if season.SeasonNumber == reqSeason {
@@ -199,25 +199,37 @@ func (c *Client) FetchEpisodeTitlesTMDB(ctx context.Context, title string, year 
 		}
 	}
 	// Fetch episodes first: the numbering scheme isn't known until we can
-	// compare a season's first episode number against 1.
+	// compare a season's first episode number against 1. Seasons are fetched
+	// concurrently (a long-running show has dozens) but written into an
+	// indexed slice so the order used by the restarted-numbering offset stays
+	// deterministic.
 	type seasonData struct {
+		number   int
 		count    int
 		episodes []tmdbEpisode
 	}
-	var seasons []seasonData
+	seasons := make([]seasonData, 0, len(show.Seasons))
 	for _, season := range show.Seasons {
 		if season.SeasonNumber <= 0 {
 			continue // specials aren't part of the absolute episode order
 		}
-		var sr tmdbSeasonResponse
-		if err := c.tmdbGet(ctx, fmt.Sprintf("/tv/%d/season/%d", tvID, season.SeasonNumber), nil, &sr); err != nil {
-			return nil, err
-		}
-		seasons = append(seasons, seasonData{count: season.EpisodeCount, episodes: sr.Episodes})
+		seasons = append(seasons, seasonData{count: season.EpisodeCount, number: season.SeasonNumber})
+	}
+	g, gCtx := errgroup.WithContext(ctx)
+	for i := range seasons {
+		g.Go(func() error {
+			var sr tmdbSeasonResponse
+			if err := c.tmdbGet(gCtx, fmt.Sprintf("/tv/%d/season/%d", tvID, seasons[i].number), nil, &sr); err != nil {
+				return err
+			}
+			seasons[i].episodes = sr.Episodes
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
-	// A later season starting above episode 1 means the show already numbers
-	// absolutely; otherwise each season restarts and needs the running offset.
 	absolute := false
 	if len(seasons) > 1 {
 		for _, ep := range seasons[1].episodes {

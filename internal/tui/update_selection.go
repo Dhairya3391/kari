@@ -7,6 +7,7 @@ import (
 
 	"kari/internal/history"
 	"kari/internal/provider"
+	"kari/internal/provider/kit"
 	"kari/internal/service"
 )
 
@@ -16,8 +17,6 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.setStatus(statusError, "Series selection out of range")
 		return m, nil
 	}
-	// One pipeline at a time: a series pick while anything loads waits with
-	// visible feedback instead of orphaning the active operation.
 	if !m.guardLoad() {
 		return m, nil
 	}
@@ -27,9 +26,6 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 	m.selectedEpisodes = make(map[int]struct{})
 	m.episodeIndex = 0
 
-	// Titles from manga/comic providers flow into the chapter listing
-	// and the fullscreen reader instead of episode resolution. The
-	// branch is on the MangaSource capability, never on names or modes.
 	if m.isMangaProvider(m.selectedSeries.Provider) {
 		if len(m.selectedSeries.SourceOptions) > 1 {
 			m.mangaSourceIndex = 0
@@ -40,18 +36,12 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		return m.selectMangaSeries(idx)
 	}
 
-	// Movie-titled and live results skip the episode listing and resolve directly,
-	// unless the selected provider declares (via provider.MovieEpisodeFlow)
-	// that it needs a fetched episode ID even for movies.
 	if (m.selectedSeries.MediaType == provider.MediaTypeMovie || m.selectedSeries.MediaType == provider.MediaTypeLive || m.selectedSeries.Type == provider.ModeLive || m.appMode == provider.ModeLive) && !m.registry.RequiresEpisodeListForMovies(m.selectedSeries.Provider) {
 		tuiLog.Debug("direct result; resolving directly", "title", m.selectedSeries.Title)
 		m.selectedEpisode = &provider.Episode{
 			Title: m.selectedSeries.Title,
 			ID:    m.selectedSeries.ID,
 		}
-		// Direct-resolve skips the episode list, but audio-selecting
-		// providers still need the picked sub/dub track: search-result IDs
-		// alone do not say which audio lane to open.
 		if m.audioMode != "" && m.modeFeatures().AudioSelection {
 			m.selectedEpisode.Audio = normalizeAudioMode(m.audioMode)
 		}
@@ -65,9 +55,6 @@ func (m *modelImpl) selectSeries(idx int) (tea.Model, tea.Cmd) {
 		m.manualPlaybackSelected = false
 		m.resolveAttempts = 0
 		m.preferredRepairAttempts = 0
-		// Drop the previous content's ranking so Preview never flashes
-		// stale sources before the first snapshot arrives (mirrors
-		// startEpisodeResolution lines 252-253).
 		m.rankedSources = nil
 		m.previewSelectedIndex = 0
 		m.clearPreviewPoster()
@@ -98,8 +85,6 @@ func (m *modelImpl) selectMangaSource(index int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	selected := m.selectedSeries.SourceOptions[index]
-	// Keep the aggregate choices on the selected result so backing out of
-	// chapters can reopen the source picker with its original rows.
 	selected.SourceOptions = m.selectedSeries.SourceOptions
 	m.selectedSeries = &selected
 	for i := range m.seriesResults {
@@ -158,6 +143,17 @@ func (m *modelImpl) refilterSeriesList() {
 	if len(visible) > 0 {
 		m.seriesList.Select(0)
 	}
+}
+
+// pageSeriesList moves the results cursor by delta, clamped to the visible
+// list. All paging keys share this path so paging feels identical everywhere.
+func (m *modelImpl) pageSeriesList(delta int) {
+	items := m.seriesList.Items()
+	if len(items) == 0 {
+		return
+	}
+	next := clampIndex(m.seriesList.Index()+delta, len(items))
+	m.seriesList.Select(next)
 }
 
 // selectedEpisodeIndex resolves the 0-based index of the currently active
@@ -220,10 +216,6 @@ func (m *modelImpl) playNextEpisode() (tea.Model, tea.Cmd) {
 }
 
 func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, tea.Cmd) {
-	// Completion-chained callers (history resume steps, movie
-	// auto-select, autoplay) arrive with settled state; user picks
-	// while anything loads wait with visible feedback instead of
-	// abandoning the running pipeline.
 	if !m.guardLoad() {
 		return m, nil
 	}
@@ -234,11 +226,6 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	}
 	m.selectedEpisode = &m.episodeResults[idx]
 	m.episodeIndex = idx
-	// The listing keeps the audio lane it was fetched with, and an `a`
-	// toggle on Preview only re-resolves the current episode's streams.
-	// Stamp the live preference on every handle we resolve so "next
-	// episode" keeps playing the track the user picked, not the one the
-	// listing was loaded under.
 	if m.audioMode != "" && m.modeFeatures().AudioSelection {
 		m.selectedEpisode.Audio = normalizeAudioMode(m.audioMode)
 	}
@@ -271,7 +258,10 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	if src, ok := m.selectedPlaybackSource(); ok {
 		m.prevSourceResolver = src.Resolver
 		m.prevSourceLanguage = src.Language
-		m.prevSourceQuality = service.SourceQuality(src.Quality)
+		m.prevSourceQuality = src.Height
+		if m.prevSourceQuality == 0 {
+			m.prevSourceQuality = kit.QualityHeight(src.Quality)
+		}
 	}
 	m.resolved = nil
 	m.resetPreviewSkipInfo()
@@ -279,8 +269,6 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	m.manualPlaybackSelected = false
 	m.resolveAttempts = 0
 	m.preferredRepairAttempts = 0
-	// Drop the previous episode's ranking immediately so Preview never
-	// flashes stale sources before the first snapshot re-ranks.
 	m.rankedSources = nil
 	m.previewSelectedIndex = 0
 	m.subtitleResolverUsed = ""
@@ -411,7 +399,6 @@ func (m *modelImpl) startSearchFromInput() (tea.Model, tea.Cmd) {
 	m.setStatus(statusInfo, "")
 	m.resolved = nil
 	m.clearPreviewPoster()
-	m.selectedPlayback = 0
 	opID := m.newOpID()
 	m.searchOpID = opID
 	return m, tea.Batch(m.spinner.Tick, m.searchCmd(opID, q))
@@ -497,11 +484,6 @@ func (m *modelImpl) exitInputMode() bool {
 		m.clearStatus()
 		return true
 	}
-	// Settings-screen text inputs (custom accent hex, AniList auth code)
-	// need the same treatment: handleGlobalKeys' Back case runs before
-	// updateSettings ever sees the key, so without this, Esc while typing
-	// here falls through to goBackOne() and exits the whole Settings
-	// screen instead of just closing the input.
 	if m.activeView == viewSettings {
 		if m.addonInputOpen {
 			if m.addonTestCancel != nil {

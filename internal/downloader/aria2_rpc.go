@@ -71,8 +71,6 @@ func (d *Aria2Downloader) Download(
 	outputDir, tempDir, baseTitle string,
 	progress func(DownloadProgress),
 ) error {
-	// Aria2 JSON-RPC uses POST for non-idempotent commands. Keep a bounded
-	// client local to this download so retries cannot duplicate submissions.
 	rpcClient := &http.Client{Timeout: 15 * time.Second}
 	port, err := findFreePort()
 	if err != nil {
@@ -92,8 +90,6 @@ func (d *Aria2Downloader) Download(
 		"-x16", "-s16", "-k1M",
 		"--file-allocation=none",
 		"--console-log-level=warn",
-		// Frequent control-file checkpoints so a pause/cancel loses at
-		// most ~15s of progress; the .aria2 file is the resume anchor.
 		"--auto-save-interval=15",
 		"--max-tries=8",
 		"--retry-wait=2",
@@ -124,9 +120,6 @@ func (d *Aria2Downloader) Download(
 
 	headers := sourceHeaders(source)
 
-	// Build aria2c options. A present .aria2 control file makes the re-added
-	// URI resume from its checkpoint; --continue covers partial files whose
-	// control file was lost (server must support range requests).
 	aria2Opts := map[string]any{
 		"max-connection-per-server": "16",
 		"split":                     "16",
@@ -183,8 +176,6 @@ func (d *Aria2Downloader) Download(
 			case "complete":
 				_ = aria2RemoveDownloadResult(ctx, rpcClient, port, secret, gid)
 
-				// aria2c may produce a file whose name we don't control.
-				// Rename it to the canonical baseTitle + extension.
 				if err := renameOutputFile(status, outputDir, baseTitle); err != nil {
 					return fmt.Errorf("aria2: finalize output file: %w", err)
 				}

@@ -4,6 +4,7 @@
 package kit
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
@@ -19,51 +20,162 @@ const (
 	QualityUnknown = 0
 	Quality360     = 360
 	Quality480     = 480
+	Quality576     = 576
 	Quality720     = 720
 	Quality1080    = 1080
 	Quality1440    = 1440
 	Quality2160    = 2160
 )
 
-// NormalizeQuality maps a raw upstream quality string to a canonical
-// height and label. Heights: 2160/1080/720/480/unknown. Labels use the
-// 2160p/1080p/720p/480p/unknown vocabulary so ranking and display agree.
+// Quality tokens recognized in a raw label. Word boundaries keep backend
+// names such as "HD1" or "4KHDHub" from being read as resolutions; an
+// explicit WxH dimension is preferred so "1920x1080" folds by its height.
+var (
+	reQualityBracket   = regexp.MustCompile(`\[[^\]]+\]`)
+	reQualityDimension = regexp.MustCompile(`(?i)\b\d{2,4}\s*x\s*(\d{3,4})\b`)
+	reQuality4K        = regexp.MustCompile(`(?i)\b(4k|uhd|2160p?)\b`)
+	reQualityQHD       = regexp.MustCompile(`(?i)\b(qhd|1440p?|2k)\b`)
+	reQualityFHD       = regexp.MustCompile(`(?i)\b(fhd|1080p?)\b`)
+	reQualityHD        = regexp.MustCompile(`(?i)\b(hd|720p?)\b`)
+	reQuality576       = regexp.MustCompile(`(?i)\b(576p?)\b`)
+	reQualitySD        = regexp.MustCompile(`(?i)\b(sd|480p?)\b`)
+	reQuality360       = regexp.MustCompile(`(?i)\b(360p?)\b`)
+	reQualityP         = regexp.MustCompile(`(?i)(\d{3,4})p`)
+	reQualityNumber    = regexp.MustCompile(`\b(\d{3,4})\b`)
+)
+
+// NormalizeQuality is the canonical parser for a raw upstream quality label:
+// it returns the canonical pixel height and the matching display label. Every
+// provider, the filter pipeline, and HLS helpers route through here so the
+// same text always sorts and renders identically.
 func NormalizeQuality(raw string) (height int, label string) {
-	lower := strings.ToLower(strings.TrimSpace(raw))
-	if lower == "" || lower == "unknown" {
-		return QualityUnknown, "unknown"
+	height = qualityHeight(raw)
+	return height, qualityLabel(height)
+}
+
+// QualityHeight returns just the canonical pixel height parsed by
+// NormalizeQuality, for callers that only need ordering or a threshold.
+func QualityHeight(raw string) int {
+	height, _ := NormalizeQuality(raw)
+	return height
+}
+
+// IsAdaptiveQuality reports whether a label only advertises an adaptive
+// ("Auto"/"Master") stream without naming a real resolution. The manifest
+// picks the tier at playback time, so ranking the row as a known resolution
+// would be a guess.
+func IsAdaptiveQuality(raw string) bool {
+	stripped := raw
+	if strings.IndexByte(raw, '[') >= 0 {
+		stripped = reQualityBracket.ReplaceAllString(raw, "")
 	}
-	// Explicit adaptive labels win over backend tags: "Auto (HD1)" is an
-	// adaptive master, not 720p. Numeric heights beat word labels so a
-	// backend tag like "[4KHDHub]" never overrides an explicit "1080p".
+	lower := strings.ToLower(strings.TrimSpace(stripped))
+	if !strings.Contains(lower, "auto") && !strings.Contains(lower, "master") {
+		return false
+	}
+	for _, re := range []*regexp.Regexp{
+		reQuality4K, reQualityQHD, reQualityFHD, reQualityHD,
+		reQuality576, reQualitySD, reQuality360, reQualityP,
+	} {
+		if re.MatchString(lower) {
+			return false
+		}
+	}
+	return true
+}
+
+// qualityHeight folds a raw quality label to a canonical pixel height. This
+// is the single parsing path: explicit dimensions and resolutions win over
+// adaptive words so "Auto 2160p" names a tier while bare "Auto" keeps the
+// optimistic FHD guess used for ranking.
+func qualityHeight(raw string) int {
+	stripped := raw
+	if strings.IndexByte(raw, '[') >= 0 {
+		stripped = reQualityBracket.ReplaceAllString(raw, "")
+	}
+	lower := strings.ToLower(strings.TrimSpace(stripped))
+	if lower == "" || lower == "unknown" || lower == "—" {
+		return QualityUnknown
+	}
+
+	switch lower {
+	case "1080p", "1080", "fhd":
+		return Quality1080
+	case "720p", "720", "hd":
+		return Quality720
+	case "2160p", "2160", "4k", "uhd":
+		return Quality2160
+	case "1440p", "1440", "qhd", "2k":
+		return Quality1440
+	case "576p", "576":
+		return Quality576
+	case "480p", "480", "sd":
+		return Quality480
+	case "360p", "360":
+		return Quality360
+	}
+
+	if m := reQualityDimension.FindStringSubmatch(lower); len(m) >= 2 {
+		if h, err := strconv.Atoi(m[1]); err == nil && h > 0 {
+			return h
+		}
+	}
+	for _, candidate := range []struct {
+		re     *regexp.Regexp
+		height int
+	}{
+		{reQuality4K, Quality2160},
+		{reQualityQHD, Quality1440},
+		{reQualityFHD, Quality1080},
+		{reQualityHD, Quality720},
+		{reQuality576, Quality576},
+		{reQualitySD, Quality480},
+		{reQuality360, Quality360},
+	} {
+		if candidate.re.MatchString(lower) {
+			return candidate.height
+		}
+	}
+	if m := reQualityP.FindStringSubmatch(lower); len(m) >= 2 {
+		if h, err := strconv.Atoi(m[1]); err == nil && h > 0 {
+			return h
+		}
+	}
 	if strings.Contains(lower, "auto") || strings.Contains(lower, "master") || strings.Contains(lower, "live") {
-		return Quality1080, "1080p"
+		return Quality1080
 	}
+	if m := reQualityNumber.FindStringSubmatch(lower); len(m) >= 2 {
+		if h, err := strconv.Atoi(m[1]); err == nil && h > 0 {
+			return h
+		}
+	}
+	return QualityUnknown
+}
+
+// qualityLabel maps a canonical height to its single display vocabulary.
+// Keeping the mapping here means NormalizeQuality and the HLS helpers cannot
+// drift apart on how a given height is spelled.
+func qualityLabel(height int) string {
 	switch {
-	case strings.Contains(lower, "2160"):
-		return Quality2160, "2160p"
-	case strings.Contains(lower, "1080"):
-		return Quality1080, "1080p"
-	case strings.Contains(lower, "1440"):
-		return Quality1440, "1440p"
-	case strings.Contains(lower, "720"):
-		return Quality720, "720p"
-	case strings.Contains(lower, "480"):
-		return Quality480, "480p"
-	case strings.Contains(lower, "360"):
-		return Quality360, "360p"
-	case strings.Contains(lower, "4k") || strings.Contains(lower, "uhd"):
-		return Quality2160, "2160p"
-	case strings.Contains(lower, "qhd") || strings.Contains(lower, "2k"):
-		return Quality1440, "1440p"
-	case strings.Contains(lower, "fhd"):
-		return Quality1080, "1080p"
-	case strings.Contains(lower, "hd"):
-		return Quality720, "720p"
-	case strings.Contains(lower, "sd"):
-		return Quality480, "480p"
+	case height >= Quality2160:
+		return "2160p"
+	case height >= Quality1440:
+		return "1440p"
+	case height >= Quality1080:
+		return "1080p"
+	case height >= Quality720:
+		return "720p"
+	case height >= Quality576:
+		return "576p"
+	case height >= Quality480:
+		return "480p"
+	case height >= Quality360:
+		return "360p"
+	case height > 0:
+		return fmt.Sprintf("%dp", height)
+	default:
+		return "unknown"
 	}
-	return QualityUnknown, "unknown"
 }
 
 // NormalizeAudio folds a raw audio language tag to ISO 639-1 via

@@ -38,7 +38,7 @@ Every contribution must follow these rules:
 
 1. **Simple beats clever**: Prefer straight-line code over complex abstractions. Delete dead code; do not comment it out.
 2. **Layer isolation**: Provider knowledge lives strictly under `internal/provider/**`. The TUI and services must never inspect provider names or import concrete provider packages.
-3. **No global mutables**: Do not add global variables or `init()` side effects. Construct components in `internal/app/app.go` and pass them down.
+3. **No global mutables**: Do not add global variables or `init()` side effects. Construct components in `internal/app/app.go` and pass them down. The two sanctioned exceptions are the theme vars in `internal/tui/styles.go` and the shared transport/per-host semaphore in `internal/httpclient` (built once in `sharedBase`; see AGENTS.md §1).
 4. **Shared HTTP client**: Always use `internal/httpclient`. Never instantiate raw `http.Client` instances.
 5. **Strict typing**: Use `provider.ContentType` constants (`ModeAnime`, `ModeMovies`, etc.) rather than raw strings.
 6. **Error handling**: Wrap errors with context (`fmt.Errorf("search titles: %w", err)`). Use sentinel errors from `internal/provider/errors.go` for control flow.

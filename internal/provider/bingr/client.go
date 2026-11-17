@@ -3,9 +3,9 @@
 // animation/cartoons, and anime.
 //
 // and cartoons, and the AniList index for anime. Stream resolution routes
-// through Bingr's backend shard cluster (Aphelion, Polaris, Bastion, Moscow,
-// Novo) for movies, television, and TMDB-mapped anime, augmented by HiAnime /
-// MegaPlay for AniList-keyed subbed and dubbed anime streams.
+// through Bingr's backend shard cluster (Aphelion, Polaris, Bastion) for
+// movies, television, and TMDB-mapped anime, augmented by direct MegaPlay
+// embeds for AniList-keyed subbed and dubbed anime streams.
 package bingr
 
 import (
@@ -14,11 +14,9 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
-	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/provider/anilist"
@@ -37,6 +35,10 @@ var (
 const (
 	// providerID is the canonical registry handle for Bingr.
 	providerID = "bingr"
+	// megaplayBase serves the direct anime embeds keyed by MAL or AniList ID.
+	// It mirrors the base used by the anicine provider; the former Filmu
+	// gateway is permanently gone, so embeds are fetched from MegaPlay itself.
+	megaplayBase = "https://megaplay.buzz"
 )
 
 var bingrAudioLanguages = []provider.AudioLanguage{
@@ -61,13 +63,9 @@ type Client struct {
 	base        *streambase.Base
 	httpClient  *http.Client
 	apiBase     string
-	filmuBase   string
+	embedBase   string
 	anilistBase string
-	langFilter  map[string]bool
 
-	tokenMu        sync.Mutex
-	token          string
-	tokenExp       time.Time
 	metaCache      sync.Map
 	animeMetaCache sync.Map
 }
@@ -75,17 +73,13 @@ type Client struct {
 // NewClient constructs the Bingr provider over the shared TMDB search base
 // pointing to production endpoints.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
-	return NewClientWithLanguageFilter(keyPool, nil)
-}
-
-// NewClientWithLanguageFilter constructs the Bingr provider with an explicit audio language filter.
-func NewClientWithLanguageFilter(keyPool *tmdb.KeyPool, langFilter map[string]bool) (*Client, error) {
-	return NewClientWithURLs(keyPool, config.BingrAPIBase, config.FilmuAPIBase, config.AniListAPIBase, langFilter)
+	return NewClientWithURLs(keyPool, config.BingrAPIBase, megaplayBase, config.AniListAPIBase)
 }
 
 // NewClientWithURLs constructs the provider against custom endpoints so tests
-// can mock external backends without live network requests.
-func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, filmuBase, anilistBase string, langFilter map[string]bool) (*Client, error) {
+// can mock external backends without live network requests. The embedBase
+// argument is the MegaPlay origin that serves anime embeds and getSources.
+func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, embedBase, anilistBase string) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
 		return nil, fmt.Errorf("bingr streambase: %w", err)
@@ -94,9 +88,9 @@ func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, filmuBase, anilistBase st
 	if apiBase == "" {
 		apiBase = config.BingrAPIBase
 	}
-	filmuBase = strings.TrimRight(strings.TrimSpace(filmuBase), "/")
-	if filmuBase == "" {
-		filmuBase = config.FilmuAPIBase
+	embedBase = strings.TrimRight(strings.TrimSpace(embedBase), "/")
+	if embedBase == "" {
+		embedBase = megaplayBase
 	}
 	anilistBase = strings.TrimRight(strings.TrimSpace(anilistBase), "/")
 	if anilistBase == "" {
@@ -106,9 +100,8 @@ func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, filmuBase, anilistBase st
 		base:        base,
 		httpClient:  httpclient.New(),
 		apiBase:     apiBase,
-		filmuBase:   filmuBase,
+		embedBase:   embedBase,
 		anilistBase: anilistBase,
-		langFilter:  langFilter,
 	}, nil
 }
 
@@ -142,28 +135,6 @@ func (c *Client) Features(mode provider.ContentType) provider.Features {
 // common audio tracks.
 func (c *Client) AudioLanguages() []provider.AudioLanguage {
 	return bingrAudioLanguages
-}
-
-// languageEnabled tests whether an audio language tag is permitted by the user's
-// language filter.
-func (c *Client) languageEnabled(tag string) bool {
-	if c.langFilter == nil || tag == "" {
-		return true
-	}
-	code := lang.Normalize(tag)
-	display := lang.Name(code)
-	for _, k := range []string{tag, code, display} {
-		if k == "" {
-			continue
-		}
-		if v, ok := c.langFilter[k]; ok {
-			return v
-		}
-		if v, ok := c.langFilter[strings.ToLower(k)]; ok {
-			return v
-		}
-	}
-	return true
 }
 
 // Search resolves anime via AniList index and movies/TV/cartoon through TMDB.

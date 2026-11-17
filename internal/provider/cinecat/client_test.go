@@ -96,7 +96,7 @@ https://cdn.example.com/play/550/v3/index.m3u8
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL)
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -113,8 +113,6 @@ https://cdn.example.com/play/550/v3/index.m3u8
 		t.Error("expected subtitle endpoint to be called")
 	}
 
-	// 4 variants (4K, 1080p, 720p, 480p); the Auto master is the httptest
-	// 127.0.0.1 URL and is dropped by FilterDirectSources as non-direct.
 	if len(sources) != 4 {
 		t.Fatalf("expected 4 sources, got %d", len(sources))
 	}
@@ -179,7 +177,7 @@ https://cdn.example.com/play/1396-s2e5/v1/index.m3u8
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL)
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -195,6 +193,83 @@ https://cdn.example.com/play/1396-s2e5/v1/index.m3u8
 
 	if len(sources) != 1 {
 		t.Fatalf("expected 1 source (1080p; Auto master is local mock and filtered), got %d", len(sources))
+	}
+}
+
+// TestCinecatResolveAphrodite proves the self-hosted Aphrodite content edge
+// resolves independently of ZCDN for both movies and TV episodes.
+func TestCinecatResolveAphrodite(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/cdn", func(w http.ResponseWriter, r *http.Request) {
+		// ZCDN unavailable; Aphrodite alone must resolve playback.
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	mux.HandleFunc("/content/movie/603", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(aphroditeResponse{
+			Found: true,
+			Type:  "hls",
+			URL:   fmt.Sprintf("http://%s/aphrodite/movie.m3u8", r.Host),
+		})
+	})
+
+	mux.HandleFunc("/content/tv/1396/2/5", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(aphroditeResponse{
+			Found: true,
+			Type:  "hls",
+			URL:   fmt.Sprintf("http://%s/aphrodite/tv.m3u8", r.Host),
+		})
+	})
+
+	ladder := `#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080
+https://cdn.example.com/aphrodite/v1/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720
+https://cdn.example.com/aphrodite/v2/index.m3u8
+`
+	for _, path := range []string{"/aphrodite/movie.m3u8", "/aphrodite/tv.m3u8"} {
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = w.Write([]byte(ladder))
+		})
+	}
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
+
+	movie, err := client.ResolveSource(context.Background(), "603", provider.Episode{TMDBID: 603})
+	if err != nil {
+		t.Fatalf("ResolveSource movie failed: %v", err)
+	}
+	episode, err := client.ResolveSource(context.Background(), "1396", provider.Episode{
+		TMDBID:  1396,
+		Season:  2,
+		Episode: 5,
+	})
+	if err != nil {
+		t.Fatalf("ResolveSource TV failed: %v", err)
+	}
+
+	for name, sources := range map[string][]provider.MediaSource{"movie": movie, "episode": episode} {
+		if len(sources) != 2 {
+			t.Fatalf("%s: expected 2 Aphrodite tiers, got %d: %+v", name, len(sources), sources)
+		}
+		for i, want := range []string{"1080p", "720p"} {
+			if sources[i].Quality != want {
+				t.Errorf("%s: sources[%d].Quality = %q, want %q", name, i, sources[i].Quality, want)
+			}
+			if sources[i].Backend != aphroditeBackend {
+				t.Errorf("%s: sources[%d].Backend = %q, want %q", name, i, sources[i].Backend, aphroditeBackend)
+			}
+		}
 	}
 }
 
@@ -225,10 +300,7 @@ func TestCinecatResolveLanes(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(laneStreamsResponse{
-			Streams: []struct {
-				Kind string `json:"kind"`
-				URL  string `json:"url"`
-			}{
+			Streams: []laneStreamResponse{
 				{Kind: "hls", URL: fmt.Sprintf("http://%s/lane-a/master.m3u8", r.Host)},
 			},
 		})
@@ -256,7 +328,7 @@ https://cdn.example.com/lane-a/v2/index.m3u8
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL)
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -266,8 +338,6 @@ https://cdn.example.com/lane-a/v2/index.m3u8
 		t.Fatalf("ResolveSource failed: %v", err)
 	}
 
-	// Two tiers from the only working lane; the Auto master and the broken lane
-	// are dropped by FilterDirectSources or the lane 404 respectively.
 	if len(sources) != 2 {
 		t.Fatalf("expected 2 sources, got %d: %+v", len(sources), sources)
 	}
@@ -278,6 +348,57 @@ https://cdn.example.com/lane-a/v2/index.m3u8
 		if sources[i].Backend != "Abyssinia" {
 			t.Errorf("sources[%d].Backend = %q, want Abyssinia", i, sources[i].Backend)
 		}
+	}
+}
+
+// TestCinecatLaneDeclaredQuality proves a single-rendition lane keeps its own
+// quality label instead of collapsing into an identical "Auto (Lane)" row,
+// while a master ladder still exposes its tiers plus an adaptive row.
+func TestCinecatLaneDeclaredQuality(t *testing.T) {
+	c := &Client{siteBase: "https://beta.cinecat.eu"}
+
+	single := c.candidateSources(sourceCandidate{
+		URL:     "https://edge.cinecat.eu/hls/abc/master.m3u8",
+		Backend: "Siamese",
+		Label:   "720p",
+	}, nil, nil)
+	if len(single) != 1 {
+		t.Fatalf("single-rendition lane produced %d sources, want 1", len(single))
+	}
+	if single[0].Quality != "720p" {
+		t.Errorf("single-rendition quality = %q, want 720p", single[0].Quality)
+	}
+	if single[0].Backend != "Siamese" {
+		t.Errorf("backend = %q, want Siamese", single[0].Backend)
+	}
+
+	uhd := c.candidateSources(sourceCandidate{
+		URL:     "https://edge.cinecat.eu/hls/uhd/master.m3u8",
+		Backend: "Siamese",
+		Label:   "2160p",
+	}, nil, nil)
+	if len(uhd) != 1 || uhd[0].Quality != "4K (2160p)" {
+		t.Fatalf("4K lane quality = %+v, want 4K (2160p)", uhd)
+	}
+
+	undeclared := c.candidateSources(sourceCandidate{
+		URL:     "https://edge.cinecat.eu/hls/def/master.m3u8",
+		Backend: "Siamese",
+	}, nil, nil)
+	if len(undeclared) != 1 || undeclared[0].Quality != "Auto (Siamese)" {
+		t.Fatalf("undeclared rendering = %+v, want one Auto (Siamese) row", undeclared)
+	}
+
+	master := c.candidateSources(sourceCandidate{
+		URL:     "https://edge.cinecat.eu/hls/ghi/master.m3u8",
+		Backend: "Siamese",
+		Label:   "720p",
+	}, []variantStream{{URL: "https://edge.cinecat.eu/hls/ghi/p0.m3u8", Quality: "1080p", Height: 1080}}, nil)
+	if len(master) != 2 {
+		t.Fatalf("master ladder produced %d sources, want tier + adaptive", len(master))
+	}
+	if master[0].Quality != "1080p" || master[1].Quality != "Auto (Siamese)" {
+		t.Errorf("master qualities = %q, %q; want 1080p, Auto (Siamese)", master[0].Quality, master[1].Quality)
 	}
 }
 
@@ -294,7 +415,7 @@ func TestCinecatBuildingOrNotReady(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL)
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}

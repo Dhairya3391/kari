@@ -84,6 +84,96 @@ func TestProviderSearchTimeoutBudgets(t *testing.T) {
 	}
 }
 
+// TestSearchBackfillKeepsLateProviderResults proves a provider that answers
+// after the grace window is not lost: its rows are collected in the background
+// and merged into the next identical query.
+func TestSearchBackfillKeepsLateProviderResults(t *testing.T) {
+	fast := &slowStub{name: "fast", mode: provider.ModeMovies,
+		results: []provider.SearchResult{{Title: "Fast", ID: "1", MediaType: provider.MediaTypeMovie}}}
+	slow := &slowStub{name: "slow", mode: provider.ModeMovies, delay: searchGrace + 400*time.Millisecond,
+		results: []provider.SearchResult{{Title: "Slow", ID: "2", MediaType: provider.MediaTypeMovie}}}
+
+	svc := NewMediaService(newTestRegistry(fast, slow))
+	first, _, _, err := svc.Search(context.Background(), provider.ModeMovies, "backfill")
+	if err != nil {
+		t.Fatalf("first search: %v", err)
+	}
+	if len(first) != 1 || first[0].Title != "Fast" {
+		t.Fatalf("first search = %+v, want only the fast provider's row", first)
+	}
+
+	// Wait for the detached collector to cache the late provider's row.
+	cacheKey := "movies:backfill"
+	deadline := time.Now().Add(searchGrace + 5*time.Second)
+	for {
+		if entry, ok := svc.searchBackfill.Get(cacheKey); ok && len(entry.results) >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("backfill never collected the slow provider's results")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	second, _, _, err := svc.Search(context.Background(), provider.ModeMovies, "backfill")
+	if err != nil {
+		t.Fatalf("second search: %v", err)
+	}
+	if len(second) != 2 {
+		t.Fatalf("second search = %+v, want both providers' rows", second)
+	}
+}
+
+// TestSearchCacheHitMergesBackfill proves a cached partial response is refreshed
+// with rows a detached collector stored after the response was cached.
+func TestSearchCacheHitMergesBackfill(t *testing.T) {
+	svc := NewMediaService(newTestRegistry())
+	const key = "movies:backfill-cache"
+	svc.searchCache.Set(key, searchCacheEntry{
+		results: []provider.SearchResult{
+			{Title: "Fast", ID: "1", Type: provider.ModeMovies, MediaType: provider.MediaTypeMovie},
+		},
+		query:    "backfill-cache",
+		cachedAt: time.Now(),
+	})
+	svc.searchBackfill.Set(key, searchBackfillEntry{
+		results: []provider.SearchResult{
+			{Title: "Slow", ID: "2", Type: provider.ModeMovies, MediaType: provider.MediaTypeMovie},
+		},
+		cachedAt: time.Now(),
+	})
+
+	got, _, _, err := svc.Search(context.Background(), provider.ModeMovies, "backfill-cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("cached search = %+v, want the backfilled row merged in", got)
+	}
+}
+
+// A collector that started before a provider was disabled must not write its
+// rows back into the cache after the toggle cleared it; otherwise the
+// just-disabled provider's results reappear on the next search.
+func TestCollectSearchBackfillSkipsStaleGeneration(t *testing.T) {
+	svc := NewMediaService(newTestRegistry())
+	const key = "movies:stale-generation"
+	gen := svc.providerGeneration
+
+	ch := make(chan providerSearchResult, 1)
+	ch <- providerSearchResult{provider: "disabled", results: []provider.SearchResult{
+		{Title: "Old", ID: "1", Type: provider.ModeMovies, MediaType: provider.MediaTypeMovie},
+	}}
+	close(ch)
+
+	svc.SetDisabledProviders([]string{"disabled"})
+	svc.collectSearchBackfill(key, nil, ch, 1, func() {}, gen)
+
+	if _, ok := svc.searchBackfill.Get(key); ok {
+		t.Fatal("stale backfill was written after the provider was disabled")
+	}
+}
+
 // TestSearchPartialResultsWithFailureList proves a dead provider does not
 // sink a good one: partial results plus the failed-provider list.
 func TestSearchPartialResultsWithFailureList(t *testing.T) {

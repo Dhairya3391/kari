@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"kari/internal/filter"
 	"kari/internal/provider"
 	"kari/internal/service"
 )
@@ -14,12 +15,15 @@ func (m *modelImpl) rankAndSelectSources() {
 		return
 	}
 
+	prefs := m.filterScope.For(m.appMode)
 	m.rankedSources = service.PreparePlaybackSources(m.resolved.Playback, service.PlaybackOptions{
-		Mode:                  m.appMode,
-		QualityMode:           m.qualityMode,
-		PreferredProvider:     m.preferredProviderForMode(m.appMode),
-		EnabledAudioLanguages: m.languageFilter,
+		Mode:              m.appMode,
+		Preferences:       &prefs,
+		PreferredProvider: m.preferredProviderForMode(m.appMode),
 	})
+	if m.rankedSources == nil {
+		m.rankedSources = []filter.RankedSource{}
+	}
 	m.previewSelectedIndex = 0
 }
 
@@ -42,8 +46,6 @@ func (m *modelImpl) refreshRanking() {
 			}
 		}
 	}
-	// On autoplay, if the user hasn't manually moved the cursor, prefer the same
-	// provider/resolver that the previous episode played from if available.
 	if m.autoPlayAfterResolve && m.prevSourceResolver != "" && !m.manualPlaybackSelected {
 		bestIdx := -1
 		for i, s := range m.rankedSources {

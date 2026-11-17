@@ -237,8 +237,6 @@ func (c *AniListClient) UpdateMangaProgress(ctx context.Context, p MangaProgress
 		return fmt.Errorf("media id or title required")
 	}
 
-	// Serialize read-then-write so concurrent completions cannot both see
-	// stale progress and apply out of order.
 	c.mangaMu.Lock()
 	defer c.mangaMu.Unlock()
 

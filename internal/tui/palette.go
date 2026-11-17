@@ -25,6 +25,10 @@ var (
 		Dark:  "#F7768E",
 		Light: "#CF222E",
 	}
+	ColorWarn = lipgloss.AdaptiveColor{
+		Dark:  "#F59E0B",
+		Light: "#B45309",
+	}
 )
 
 // ModeTheme defines the visual identity tokens for a single content mode.

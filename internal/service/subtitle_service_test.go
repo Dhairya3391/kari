@@ -522,9 +522,6 @@ func TestSubtitleServiceProviderSubsNotPoisonedByOpenSubtitles(t *testing.T) {
 		},
 	}
 
-	// Simulate: user first selected a miruro source (no provider subs).
-	// Manually inject an OpenSub-style track under miruro's cacheKey to
-	// represent a prior fetch that reached OpenSubtitles and cached its result.
 	openSubPath := t.TempDir() + "/opensub.srt"
 	if err := os.WriteFile(openSubPath, []byte("1\n00:00,000 --> 00:01,000\nopemsub track\n"), 0o644); err != nil {
 		t.Fatal(err)

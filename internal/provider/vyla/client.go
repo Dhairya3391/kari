@@ -15,6 +15,7 @@ import (
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/kit"
 	"kari/internal/provider/streambase"
 	"kari/internal/tmdb"
 	"net/http"
@@ -324,7 +325,7 @@ func (c *Client) availableSources(ctx context.Context) ([]string, error) {
 // dedicated provider routes.
 func isNativeVylaSource(source string) bool {
 	switch strings.ToLower(strings.TrimSpace(source)) {
-	case "111477", "cno", "movy", "pengu":
+	case "111477", "movy", "pengu":
 		return true
 	default:
 		return false
@@ -362,13 +363,17 @@ func toMediaSource(s *vylaSource, subs []provider.SubtitleOption) provider.Media
 
 	backend := cleanBackendName(s.Source)
 	res := cleanResolution(s.Quality, s.Label)
+	height := kit.QualityHeight(s.Quality)
+	if height == 0 {
+		height = kit.QualityHeight(s.Label)
+	}
 	src := provider.MediaSource{
 		URL:       strings.TrimSpace(s.URL),
 		Quality:   res,
+		Height:    height,
 		Backend:   backend,
 		Type:      srcType,
 		Subtitles: subs,
-		Language:  detectLanguage(s.Language, s.Label),
 	}
 	if srcType == provider.SourceTypeHLS {
 		src.ExtraArgs = append([]string(nil), defaultDemuxerArgs...)
@@ -398,7 +403,7 @@ func toSubtitleOptions(subs []vylaSubtitle) []provider.SubtitleOption {
 		if u == "" {
 			continue
 		}
-		normLang := lang.Normalize(sub.Label)
+		normLang := lang.FromLabel(sub.Label)
 		if normLang == "" {
 			normLang = "und"
 		}
@@ -429,8 +434,6 @@ func cleanBackendName(raw string) string {
 		return "LookMovie"
 	case "cinezo":
 		return "Cinezo"
-	case "cno":
-		return "Cno"
 	case "movy":
 		return "Movy"
 	case "vidapi":
@@ -471,33 +474,4 @@ func cleanResolution(rawQuality, label string) string {
 		}
 	}
 	return "1080P"
-}
-func detectLanguage(rawLang, label string) string {
-	if norm := lang.Normalize(rawLang); norm != "" && norm != "und" {
-		return norm
-	}
-	lbl := strings.ToLower(label)
-	for _, l := range []struct {
-		token string
-		code  string
-	}{
-		{"hindi", "hi"},
-		{"japanese", "ja"},
-		{"spanish", "es"},
-		{"french", "fr"},
-		{"german", "de"},
-		{"italian", "it"},
-		{"portuguese", "pt"},
-		{"russian", "ru"},
-		{"arabic", "ar"},
-		{"korean", "ko"},
-		{"chinese", "zh"},
-		{"tamil", "ta"},
-		{"telugu", "te"},
-	} {
-		if strings.Contains(lbl, l.token) {
-			return l.code
-		}
-	}
-	return ""
 }

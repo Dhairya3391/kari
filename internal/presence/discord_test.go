@@ -158,8 +158,6 @@ func TestClientAnswersPingWithPong(t *testing.T) {
 	ping := []byte(`{"nonce":"keepalive"}`)
 	got := make(chan struct{}, 1)
 	go func() {
-		// The first frame the client sends is the activity; consume it so the
-		// reply we read next is unambiguously the keepalive answer.
 		if _, _, err := readFrame(server); err != nil {
 			return
 		}

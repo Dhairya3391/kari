@@ -114,6 +114,9 @@ func RenderDownloadsScreen(data DownloadsData) string {
 	if hint := windowHint(below, false, st); hint != "" {
 		rows = append(rows, hint)
 	}
+	if data.Height > 0 {
+		return strings.Join(padLines(rows, end-start+2), "\n")
+	}
 	return strings.Join(rows, "\n")
 }
 

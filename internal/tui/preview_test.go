@@ -7,9 +7,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"kari/internal/filter"
 	"kari/internal/model"
 	"kari/internal/provider"
-	"kari/internal/ranking"
 )
 
 // A failed provider names capital-R retry: lowercase r restarts
@@ -109,8 +109,8 @@ func TestPreviewOmitsPlayingBanner(t *testing.T) {
 // row names its language (or shows a dash when unknown) so the column never
 // shifts. Anime keeps the sub/dub header row instead.
 func TestPreviewSourcesAudioColumn(t *testing.T) {
-	ranked := func() []ranking.ScoredSource {
-		return []ranking.ScoredSource{
+	ranked := func() []filter.RankedSource {
+		return []filter.RankedSource{
 			{Source: provider.MediaSource{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p [MovieBox]", Resolver: "pengu"}},
 			{Source: provider.MediaSource{URL: "https://cdn.example.com/b.m3u8", Quality: "1080p [MovieBox] (Hindi)", Resolver: "pengu", Language: "hi"}},
 		}
@@ -137,7 +137,7 @@ func TestPreviewSourcesAudioColumn(t *testing.T) {
 	})
 	t.Run("multiple audio languages are explicit", func(t *testing.T) {
 		data := PreviewData{
-			RankedSources: []ranking.ScoredSource{{Source: provider.MediaSource{
+			RankedSources: []filter.RankedSource{{Source: provider.MediaSource{
 				URL: "https://cdn.example.com/live.m3u8", AudioLabel: "English · Hindi · Tamil",
 			}}},
 			Mode: provider.ModeTV, Width: 100,
@@ -173,7 +173,7 @@ func TestPreviewFailureLineHiddenForPartialResults(t *testing.T) {
 		Mode:           provider.ModeAnime,
 		AudioText:      "sub · Japanese",
 		FailedProvider: "anicine",
-		RankedSources: []ranking.ScoredSource{
+		RankedSources: []filter.RankedSource{
 			{Source: provider.MediaSource{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p", Resolver: "x"}},
 		},
 		Width:  100,
@@ -406,7 +406,7 @@ func TestRenderPreviewHeader_LongEpisodeTitleBounded(t *testing.T) {
 	// Exact title from issue #35 reports.
 	longTitle := "The Vice President Doesn't Say Anything About the Possibility of Him Being the Main Character"
 	// Use a placeholder poster of the same visual width as a real rendered one.
-	posterBlock := strings.Repeat(" ", 26)
+	posterBlock := strings.Repeat(" ", previewPosterMaxCols)
 	for _, width := range []int{72, 80, 100, 120, 140} {
 		data := PreviewData{
 			SeriesTitle: "Baccano!",
@@ -447,7 +447,7 @@ func TestRenderPreviewHeader_Standard80ColTerminalShowsPoster(t *testing.T) {
 // title is long enough to be truncated to fit the available metadata width, the
 // trailing (X of Y) episode count is still present in EpisodeInfo.
 func TestCollectPreviewData_LongTitlePreservesCount(t *testing.T) {
-	longTitle := "The Vice President Doesn't Say Anything About the Possibility of Him Being the Main Character"
+	longTitle := "The Vice President Doesn't Say Anything About the Possibility of Him Being the Main Character And Several Other Extremely Long Details That Must Be Truncated"
 	episodes := make([]provider.Episode, 13)
 	for i := range episodes {
 		episodes[i] = provider.Episode{Season: 1, Episode: i + 1, Title: longTitle}
@@ -470,7 +470,7 @@ func TestCollectPreviewData_LongTitlePreservesCount(t *testing.T) {
 		t.Errorf("EpisodeInfo expected truncation ellipsis for long title: %q", data.EpisodeInfo)
 	}
 	// The info line itself must fit within the metadata column width.
-	metaW := max(20, 140-previewPosterMaxCols-4)
+	metaW := max(20, 140-previewPosterMaxCols-posterGutter)
 	if w := lipgloss.Width(data.EpisodeInfo); w > metaW {
 		t.Errorf("EpisodeInfo width %d exceeds metaW %d: %q", w, metaW, data.EpisodeInfo)
 	}
@@ -509,7 +509,7 @@ func TestCollectPreviewDataProviderSkipInfo(t *testing.T) {
 		SeriesTitle: "Frieren",
 		Playback:    []provider.MediaSource{miruroSrcWithSkips, anikotoSrc, miruroSrcWithoutSkips},
 	}
-	m.rankedSources = []ranking.ScoredSource{
+	m.rankedSources = []filter.RankedSource{
 		{Source: miruroSrcWithSkips},
 		{Source: anikotoSrc},
 		{Source: miruroSrcWithoutSkips},

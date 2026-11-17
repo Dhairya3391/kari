@@ -100,8 +100,8 @@ func TestStreamLanguage(t *testing.T) {
 		{name: "original label", stream: apiStream{Name: "Orion · Original"}, wantCode: ""},
 		{name: "bare label", stream: apiStream{Name: "Tamil", Provider: "Titan"}, wantCode: "ta"},
 		{name: "multi audio", stream: apiStream{Name: "Multi-audio", Provider: "Titan"}, wantCode: ""},
-		{name: "anime lane", stream: apiStream{Provider: "Anime"}, wantCode: "ja"},
-		{name: "anime dub lane", stream: apiStream{Provider: "Anime Dub"}, wantCode: "en"},
+		{name: "anime lane without a language label", stream: apiStream{Provider: "Anime"}, wantCode: ""},
+		{name: "anime dub lane without a language label", stream: apiStream{Provider: "Anime Dub"}, wantCode: ""},
 		{name: "unknown", stream: apiStream{Provider: "Vela"}, wantCode: ""},
 		{name: "unknown label", stream: apiStream{Name: "Klingon", Provider: "Lyra"}, wantCode: ""},
 	}
@@ -234,13 +234,19 @@ func TestMediaSourcePrefersDirectURL(t *testing.T) {
 		Name:     "Orion · Hindi",
 		Rungs:    []streamRung{{Height: 1080}},
 	}
-	source := mediaSource(stream, laneResult{lane: "orion", maxRes: 1080}, "https://embed.vidrift.net", nil, false)
+	source := mediaSource(stream, laneResult{lane: "orion", maxRes: 1080}, "https://embed.vidrift.net", nil, provider.TrackUnknown)
 
 	if source.URL != "https://embed.vidrift.net/api/orion/x/master.m3u8" {
 		t.Errorf("url = %q, want the resolved direct URL", source.URL)
 	}
 	if source.Language != "hi" || source.Quality != "1080p" || source.Type != provider.SourceTypeHLS {
 		t.Errorf("source = %+v", source)
+	}
+	if source.Height != 1080 {
+		t.Errorf("Height = %d, want 1080", source.Height)
+	}
+	if got := source.Audio.Languages; len(got) != 1 || got[0] != "hi" {
+		t.Errorf("Audio.Languages = %v, want [hi]", got)
 	}
 	if source.Referer != "https://embed.vidrift.net/" || source.UserAgent != config.DesktopUserAgent || !source.SuppressOrigin {
 		t.Errorf("headers = %+v", source)

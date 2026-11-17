@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"kari/internal/calendar"
 	"kari/internal/history"
@@ -105,14 +107,14 @@ func TestRenderCalendarScreen(t *testing.T) {
 	if !strings.Contains(rendered, "Sousou no Frieren") {
 		t.Errorf("expected calendar screen to render 'Sousou no Frieren', got:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "Left: Ep 6-8 (3 left)") {
-		t.Errorf("expected left-to-watch badge 'Left: Ep 6-8 (3 left)', got:\n%s", rendered)
+	if !strings.Contains(rendered, "▸3") {
+		t.Errorf("expected behind chip '▸3', got:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "Severance") {
 		t.Errorf("expected calendar screen to render 'Severance', got:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "WATCH PROGRESS") {
-		t.Errorf("expected right detail panel to render 'WATCH PROGRESS', got:\n%s", rendered)
+	if !strings.Contains(rendered, "PROGRESS") {
+		t.Errorf("expected right detail panel to render 'PROGRESS', got:\n%s", rendered)
 	}
 }
 
@@ -274,9 +276,64 @@ func TestCalendar_NoDuplicateEpisodeLabel(t *testing.T) {
 	}
 
 	row := renderCalendarRow(unstarted, false, 100, st)
-	count := strings.Count(row, "S02E204")
+	count := strings.Count(row, "S02 E204")
 	if count != 1 {
-		t.Errorf("expected 'S02E204' to appear exactly once, got %d occurrences in:\n%s", count, row)
+		t.Errorf("expected 'S02 E204' to appear exactly once, got %d occurrences in:\n%s", count, row)
+	}
+}
+
+func TestCalendar_EpisodeLabelFormat(t *testing.T) {
+	cases := []struct {
+		name    string
+		mode    provider.ContentType
+		season  int
+		episode int
+		want    string
+	}{
+		{"anime single digit", provider.ModeAnime, 1, 8, "E008"},
+		{"anime three digits", provider.ModeAnime, 1, 158, "E158"},
+		{"tv with season", provider.ModeTV, 2, 5, "S02 E005"},
+		{"tv large episode", provider.ModeTV, 2, 204, "S02 E204"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := calendarEpisodeLabel(tc.mode, tc.season, tc.episode); got != tc.want {
+				t.Errorf("calendarEpisodeLabel() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCalendar_EpisodeCodesAlign(t *testing.T) {
+	accent := lipgloss.AdaptiveColor{Light: "#7AA2F7", Dark: "#7AA2F7"}
+	st := NewStyles(accent)
+	items := []calendar.ReleaseItem{
+		{Release: calendar.Release{Title: "A", Mode: provider.ModeAnime, Episode: 8}},
+		{Release: calendar.Release{Title: "B", Mode: provider.ModeAnime, Episode: 158}},
+		{Release: calendar.Release{Title: "C", Mode: provider.ModeTV, Season: 2, Episode: 5}},
+	}
+
+	firstE := -1
+	firstDigit := -1
+	for _, item := range items {
+		row := ansi.Strip(renderCalendarRow(item, false, 100, st))
+		eIdx := strings.Index(row, "E")
+		digitIdx := strings.Index(row, "008")
+		switch item.Release.Episode {
+		case 158:
+			digitIdx = strings.Index(row, "158")
+		case 5:
+			digitIdx = strings.Index(row, "005")
+		}
+		if eIdx < 0 || digitIdx < 0 {
+			t.Fatalf("could not locate episode code in row: %q", row)
+		}
+		if firstE == -1 {
+			firstE, firstDigit = eIdx, digitIdx
+		} else if eIdx != firstE || digitIdx != firstDigit {
+			t.Errorf("row for %q misaligned: E at %d, digits at %d; want %d and %d\n%s",
+				item.Release.Title, eIdx, digitIdx, firstE, firstDigit, row)
+		}
 	}
 }
 
@@ -315,5 +372,113 @@ func TestCalendar_CenteredScroll(t *testing.T) {
 
 	if foundSelectedAt != 5 {
 		t.Errorf("expected selected cursor at vertical center (line 5), got line %d", foundSelectedAt)
+	}
+}
+
+func TestCalendar_NavShowsOnlyActiveDayAndScope(t *testing.T) {
+	m := newTestCalendarModel(t)
+	accent := lipgloss.AdaptiveColor{Light: "#7AA2F7", Dark: "#7AA2F7"}
+	data := m.collectCalendarData(120, 30, accent)
+
+	rendered := RenderCalendarScreen(data)
+	day := data.Schedule.Days[data.DayIndex]
+	dateLabel := day.ShortDayName + " " + day.Date.Format("Jan 02")
+	if !strings.Contains(rendered, "[ "+dateLabel+" ● ]") {
+		t.Errorf("expected the selected day pill, got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "[ All · 3 ]") {
+		t.Errorf("expected the active scope pill with its count, got:\n%s", rendered)
+	}
+
+	for _, other := range data.Schedule.Days {
+		if other.IsToday {
+			continue
+		}
+		if strings.Contains(rendered, other.ShortDayName+" ") {
+			t.Errorf("unselected day %q should not be listed, got:\n%s", other.ShortDayName, rendered)
+		}
+	}
+	for _, scope := range []string{"Anime (", "Series (", "Watching ("} {
+		if strings.Contains(rendered, scope) {
+			t.Errorf("inactive scope %q should not be listed, got:\n%s", scope, rendered)
+		}
+	}
+
+	m.calendarFilter = calendar.FilterAnime
+	rendered = RenderCalendarScreen(m.collectCalendarData(120, 30, accent))
+	if !strings.Contains(rendered, "[ Anime · 2 ]") {
+		t.Errorf("expected the scope pill to follow the active filter, got:\n%s", rendered)
+	}
+}
+
+func TestCalendar_NarrowLayoutHidesDetailPane(t *testing.T) {
+	m := newTestCalendarModel(t)
+	accent := lipgloss.AdaptiveColor{Light: "#7AA2F7", Dark: "#7AA2F7"}
+
+	narrow := RenderCalendarScreen(m.collectCalendarData(80, 30, accent))
+	if strings.Contains(narrow, "PROGRESS") {
+		t.Errorf("detail pane should be hidden at width 80, got:\n%s", narrow)
+	}
+
+	wide := RenderCalendarScreen(m.collectCalendarData(120, 30, accent))
+	if !strings.Contains(wide, "PROGRESS") {
+		t.Errorf("detail pane should be visible at width 120, got:\n%s", wide)
+	}
+}
+
+func TestCalendar_RenderUsesInjectedClock(t *testing.T) {
+	accent := lipgloss.AdaptiveColor{Light: "#7AA2F7", Dark: "#7AA2F7"}
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	air := now.Add(2*time.Hour + 30*time.Minute)
+	releases := []calendar.Release{{
+		ID:       "future",
+		Title:    "Future Show",
+		Mode:     provider.ModeAnime,
+		Episode:  1,
+		AiringAt: air,
+	}}
+	schedule := calendar.BuildWeeklySchedule(releases, nil, calendar.StartOfWeek(now), now)
+
+	dayIndex := 0
+	for i, day := range schedule.Days {
+		if len(day.Releases) > 0 {
+			dayIndex = i
+			break
+		}
+	}
+	data := CalendarData{
+		Schedule: schedule,
+		DayIndex: dayIndex,
+		Filter:   calendar.FilterAll,
+		Width:    120,
+		Height:   30,
+		Accent:   accent,
+		Now:      now,
+	}
+
+	first := RenderCalendarScreen(data)
+	second := RenderCalendarScreen(data)
+	if first != second {
+		t.Error("expected identical render for the same injected clock")
+	}
+	if !strings.Contains(first, "in 2h 30m") {
+		t.Errorf("expected relative countdown, got:\n%s", first)
+	}
+}
+
+func TestCalendar_KeyHintsHaveSingleSource(t *testing.T) {
+	m := newTestCalendarModel(t)
+	m.activeView = viewCalendar
+
+	if !reflect.DeepEqual(m.activeKeyBindings(), calendarFooterHints()) {
+		t.Errorf("footer bindings = %v, want %v", m.activeKeyBindings(), calendarFooterHints())
+	}
+	if len(calendarKeyHints()) <= len(calendarFooterHints()) {
+		t.Error("expected help to list more bindings than the footer")
+	}
+
+	help := m.renderHelpOverlayContent(120, m.currentAccent())
+	if !strings.Contains(help, "jump scope") {
+		t.Errorf("expected help overlay to use the shared binding list, got:\n%s", help)
 	}
 }

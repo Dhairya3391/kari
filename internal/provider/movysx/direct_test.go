@@ -108,6 +108,7 @@ func TestMergeProviderResults(t *testing.T) {
 			Subtitles: []upstreamSubtitle{
 				{URL: "https://cdn.example.com/en.vtt", Lang: "en"},
 				{URL: "https://cdn.example.com/video.m3u8", Lang: "en"},
+				{URL: "https://cdn.example.com/thumbs.vtt", Lang: "en", Type: "thumbnails"},
 			},
 		},
 	}
@@ -122,7 +123,7 @@ func TestMergeProviderResults(t *testing.T) {
 		t.Errorf("dub row must become hi audio: %+v", m.audio)
 	}
 	if len(m.subtitles) != 1 {
-		t.Errorf("video m3u8 must be filtered from subtitles: %+v", m.subtitles)
+		t.Errorf("video m3u8 and thumbnail tracks must be filtered from subtitles: %+v", m.subtitles)
 	}
 }
 

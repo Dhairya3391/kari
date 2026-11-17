@@ -6,11 +6,6 @@ import (
 	"kari/internal/provider"
 )
 
-// Load serialization and play readiness live here: one media pipeline at
-// a time (idempotent loads), and playback starts once the first source
-// is in. Subtitles are fetched in the background and attach to the
-// resolved media when ready; they never gate playback.
-
 // loadInFlight reports whether any user-visible load is still running: a
 // flagged spinner phase or an operation whose completion clears its opID.
 // Search/episode/history-continue operations are covered by loading (set
@@ -81,32 +76,13 @@ func (m *modelImpl) subtitlesWanted() bool {
 	if !ok {
 		return false
 	}
-	if src.SubType == provider.SubTypeHard && len(src.Subtitles) == 0 {
-		// A hard-subtitled stream carries its captions burned into the
-		// video, so a sidecar would duplicate them — unless the source's
-		// own provider also shipped subtitle tracks for this episode
-		// (exact match or same-provider mirror, which the subtitle
-		// service resolves). Suppress only when the provider offered
-		// nothing; provider-provided subs must always load.
-		return m.providerSubtitlesAvailable(src.Resolver)
-	}
-	return true
-}
-
-// providerSubtitlesAvailable reports whether the resolver behind the
-// selected source declared any subtitle tracks for the episode, exact
-// source match or same-provider mirror alike.
-func (m *modelImpl) providerSubtitlesAvailable(resolver string) bool {
-	resolver = strings.ToLower(strings.TrimSpace(resolver))
-	if resolver == "" {
+	if src.SubType == provider.SubTypeHard {
+		// Captions are burned into a hard-sub stream, so a sidecar would
+		// duplicate them. Skip the fetch regardless of attached or provider
+		// tracks; soft-sub sources (the normal case) still get subs below.
 		return false
 	}
-	for _, track := range m.rawSubtitles {
-		if strings.EqualFold(strings.TrimSpace(track.Resolver), resolver) {
-			return true
-		}
-	}
-	return false
+	return true
 }
 
 // mediaReady reports whether at least one playable source is in.

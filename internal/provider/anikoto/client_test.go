@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"kari/internal/provider"
 )
@@ -60,6 +61,14 @@ func newDirectFixture(t *testing.T, anilistID, title, slug, animeID string) *dir
 			{"id":%s,"title":{"romaji":%q,"english":%q,"userPreferred":%q,"native":"X"},"seasonYear":2024,"format":"TV"},
 			{"id":184694,"title":{"romaji":"Movie Romaji","english":"","userPreferred":"","native":""},"seasonYear":2024,"format":"MOVIE"}
 		]}}}`, anilistID, title, title, title)
+	})
+
+	// Signed Megaplay master with a real rendition ladder.
+	mux.HandleFunc("/anime/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		fmt.Fprint(w, "#EXTM3U\n"+
+			"#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,CODECS=\"avc1.640028,mp4a.40.2\"\n1080.m3u8\n"+
+			"#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=1280x720\n720.m3u8\n")
 	})
 
 	// Anikoto site search page (poster blocks with data-tip IDs).
@@ -114,7 +123,7 @@ func newDirectFixture(t *testing.T, anilistID, title, slug, animeID string) *dir
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"enc":%q,"tracks":[{"file":"https://cdn.example.com/sub.vtt","label":"English","kind":"captions"}]}`,
+		fmt.Fprintf(w, `{"enc":%q,"tracks":[{"file":"https://cdn.example.com/sub.vtt","label":"English","kind":"captions"}],"intro":{"start":25,"end":95},"outro":{"start":1300,"end":1350}}`,
 			fx.encToken)
 	})
 
@@ -130,7 +139,80 @@ func (fx *directFixture) client(t *testing.T) *Client {
 	if err != nil {
 		t.Fatalf("NewClientWithBaseURL: %v", err)
 	}
+	c.http = fixtureClient(fx.server)
 	return c
+}
+
+// fixtureClient sends CDN-looking master requests to the local test server,
+// rewriting HTTPS to HTTP because the fixture server speaks plain HTTP.
+func fixtureClient(srv *httptest.Server) *http.Client {
+	return &http.Client{Transport: fixtureTransport{
+		target: srv.Listener.Addr().String(),
+		base:   http.DefaultTransport,
+	}}
+}
+
+type fixtureTransport struct {
+	target string
+	base   http.RoundTripper
+}
+
+func (rt fixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.URL.Scheme = "http"
+	clone.URL.Host = rt.target
+	clone.Host = ""
+	return rt.base.RoundTrip(clone)
+}
+
+// TestResolveAnilistToAnikotoCancelDoesNotHang guards the parallel slug probe:
+// cancelling mid-probe must not leave the consumer waiting for results that
+// goroutines skipped on the semaphore's Done branch.
+func TestResolveAnilistToAnikotoCancelDoesNotHang(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(string(body), "Media(") {
+			fmt.Fprint(w, `{"data":{"Media":{"id":151807,"title":{"romaji":"Alpha","english":"Bravo","userPreferred":"Charlie","native":"X"},"synonyms":["Delta","Echo","Foxtrot","Golf","Hotel","India","Juliet"]}}}`)
+			return
+		}
+		fmt.Fprint(w, `{"data":{"Page":{"media":[]}}}`)
+	})
+	watchHit := make(chan struct{}, 32)
+	mux.HandleFunc("/watch/", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case watchHit <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c, err := NewClientWithBaseURL(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _ = c.resolveAnilistToAnikoto(ctx, "151807")
+	}()
+	// Wait until the watch-page probes are in flight, then cancel.
+	select {
+	case <-watchHit:
+	case <-time.After(2 * time.Second):
+		t.Fatal("slug probes never started")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("resolveAnilistToAnikoto hung after cancellation")
+	}
 }
 
 func TestAnikotoSearch(t *testing.T) {
@@ -250,8 +332,18 @@ func TestAnikotoResolveSource(t *testing.T) {
 	if s1.Referer == "" || s1.UserAgent == "" {
 		t.Errorf("mpv needs referer + user-agent: %+v", s1)
 	}
-	if len(s1.Subtitles) != 1 || s1.Subtitles[0].URL != "https://cdn.example.com/sub.vtt" {
+	if len(s1.Subtitles) != 1 || s1.Subtitles[0].URL != "https://cdn.example.com/sub.vtt" ||
+		s1.Subtitles[0].Language != "en" {
 		t.Errorf("unexpected subtitles: %+v", s1.Subtitles)
+	}
+	if s1.Height != 1080 || s1.Bitrate != 6000000 {
+		t.Errorf("height/bitrate = %d/%d, want 1080/6000000", s1.Height, s1.Bitrate)
+	}
+	if s1.SubType != provider.SubTypeSoft {
+		t.Errorf("subtitle kind = %q, want soft", s1.SubType)
+	}
+	if s1.SkipTimes == nil || s1.SkipTimes.OpStart != 25 || s1.SkipTimes.EdEnd != 1350 {
+		t.Errorf("skip times = %+v, want intro 25 and outro end 1350", s1.SkipTimes)
 	}
 
 	// The fixture server list is sub-only: a dub request must fail loudly

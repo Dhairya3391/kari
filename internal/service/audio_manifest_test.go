@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"kari/internal/httpclient"
 	"kari/internal/provider"
 )
 
@@ -15,7 +16,7 @@ func TestDiscoverManifestAudioAcrossSources(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Header.Get("Referer") != "https://watch.example/" || r.Header.Get("User-Agent") != "test-agent" || r.Header.Get("Cookie") != "session=abc" {
+		if r.Header.Get("Referer") != "https://watch.example/" || r.Header.Get("Origin") != "https://watch.example" || r.Header.Get("User-Agent") != "test-agent" || r.Header.Get("Cookie") != "session=abc" {
 			http.Error(w, "missing playback headers", http.StatusForbidden)
 			return
 		}
@@ -30,7 +31,7 @@ func TestDiscoverManifestAudioAcrossSources(t *testing.T) {
 		{URL: server.URL + "/clip.mp4"},
 		{URL: "not a URL"},
 	}
-	got := discoverManifestAudio(context.Background(), sources)
+	got := discoverManifestAudio(context.Background(), httpclient.NewWithTimeout(manifestProbeTimeout), sources)
 
 	want := "English · Japanese · हिन्दी, Hindi"
 	if got[0].AudioLabel != want || got[1].AudioLabel != want {

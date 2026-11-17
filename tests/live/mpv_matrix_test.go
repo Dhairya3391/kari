@@ -14,7 +14,7 @@ import (
 
 	"kari/internal/player"
 	"kari/internal/provider"
-	"kari/internal/service"
+	"kari/internal/provider/kit"
 )
 
 // errNoPlayback reports an mpv probe with no IPC duration evidence.
@@ -34,15 +34,18 @@ var mpvMatrixCases = []mpvMatrixCase{
 	{provider: "movysx", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "movysx", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "movysx", mode: provider.ModeCartoon, query: "SpongeBob"},
-	{provider: "moovie", mode: provider.ModeMovies, query: "Inception"},
-	{provider: "moovie", mode: provider.ModeTV, query: "Breaking Bad"},
-	{provider: "moovie", mode: provider.ModeCartoon, query: "SpongeBob"},
 	{provider: "solis", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "solis", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "solis", mode: provider.ModeCartoon, query: "SpongeBob"},
 	{provider: "cinecat", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "cinecat", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "cinecat", mode: provider.ModeCartoon, query: "SpongeBob"},
+	{provider: "cinejoy", mode: provider.ModeMovies, query: "Inception"},
+	{provider: "cinejoy", mode: provider.ModeTV, query: "Breaking Bad"},
+	{provider: "cinejoy", mode: provider.ModeCartoon, query: "SpongeBob"},
+	{provider: "cno", mode: provider.ModeMovies, query: "Inception"},
+	{provider: "cno", mode: provider.ModeTV, query: "Breaking Bad"},
+	{provider: "cno", mode: provider.ModeCartoon, query: "SpongeBob"},
 	{provider: "sweetfox", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "sweetfox", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "sweetfox", mode: provider.ModeCartoon, query: "SpongeBob"},
@@ -50,9 +53,6 @@ var mpvMatrixCases = []mpvMatrixCase{
 	{provider: "pengu", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "pengu", mode: provider.ModeCartoon, query: "SpongeBob"},
 	// Remaining TMDB-backed movie/TV/cartoon providers.
-	{provider: "cno", mode: provider.ModeMovies, query: "Inception"},
-	{provider: "cno", mode: provider.ModeTV, query: "Breaking Bad"},
-	{provider: "cno", mode: provider.ModeCartoon, query: "SpongeBob"},
 	{provider: "mapple", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "mapple", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "mapple", mode: provider.ModeCartoon, query: "SpongeBob"},
@@ -132,8 +132,6 @@ func TestMPVMatrixAllProviders(t *testing.T) {
 			if len(playable) == 0 {
 				t.Skipf("%s: no direct mpv-playable URLs (%d proxied)", p.Name(), len(sources))
 			}
-			// Highest quality first, challenged hosts last — the order the
-			// app attempts via the aggregate sort.
 			sort.SliceStable(playable, func(i, j int) bool {
 				ci, cj := 0, 0
 				if provider.ChallengedHost(playable[i].URL) {
@@ -145,7 +143,7 @@ func TestMPVMatrixAllProviders(t *testing.T) {
 				if ci != cj {
 					return ci < cj
 				}
-				return service.SourceQuality(playable[i].Quality) > service.SourceQuality(playable[j].Quality)
+				return kit.QualityHeight(playable[i].Quality) > kit.QualityHeight(playable[j].Quality)
 			})
 
 			t.Logf("resolved %d sources (%d direct); probing %q", len(sources), len(playable), playable[0].Quality)

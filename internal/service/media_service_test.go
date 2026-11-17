@@ -11,6 +11,7 @@ import (
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/provider/defaults"
+	"kari/internal/provider/kit"
 	"kari/internal/tmdb"
 )
 
@@ -40,12 +41,76 @@ func (s *stubProvider) ResolveSource(ctx context.Context, mediaID string, episod
 	return nil, errors.New("not implemented")
 }
 
+// TestUnionSearchRowsKeepsBothCollectorsRows guards the shared backfill cache
+// key: a later collector must not erase rows gathered by an earlier one, and
+// dedup must trim IDs like the main merge does.
+func TestUnionSearchRowsKeepsBothCollectorsRows(t *testing.T) {
+	primary := []provider.SearchResult{{ID: "1", Type: "movie", Title: "A"}}
+	fallback := []provider.SearchResult{{ID: "2", Type: "movie", Title: "B"}}
+	got := unionSearchRows(primary, fallback)
+	if len(got) != 2 {
+		t.Fatalf("union = %+v, want both collectors' rows", got)
+	}
+	dup := []provider.SearchResult{{ID: "  1  ", Type: "movie", Title: "A again"}}
+	got = unionSearchRows(primary, dup)
+	if len(got) != 1 {
+		t.Fatalf("union with whitespace-variant ID = %+v, want one row", got)
+	}
+	empty := unionSearchRows(nil, []provider.SearchResult{{Title: "no id"}})
+	if len(empty) != 1 {
+		t.Fatalf("union must keep empty-ID rows, got %+v", empty)
+	}
+}
+
+// searchWaitStub blocks until released so tests can observe which grace
+// window the fan-out chooses.
+type searchWaitStub struct {
+	stubProvider
+	wait <-chan struct{}
+}
+
+func (s *searchWaitStub) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
+	select {
+	case <-s.wait:
+		return s.results, s.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func newTestRegistry(providers ...provider.Provider) *provider.Registry {
 	r := &provider.Registry{}
 	for _, p := range providers {
 		r.Register(p)
 	}
 	return r
+}
+
+// TestSearchUsesFastGraceForPrimaryProvider keeps a strong first result from
+// waiting out the full settle window for slower siblings.
+func TestSearchUsesFastGraceForPrimaryProvider(t *testing.T) {
+	fastResults := make([]provider.SearchResult, 10)
+	for i := range fastResults {
+		fastResults[i] = provider.SearchResult{ID: fmt.Sprintf("%d", i+1), Title: fmt.Sprintf("Title %d", i+1)}
+	}
+	release := make(chan struct{})
+	defer close(release)
+	fast := &stubProvider{name: "fast", mode: provider.ModeAnime, results: fastResults}
+	slow := &searchWaitStub{
+		stubProvider: stubProvider{name: "slow", mode: provider.ModeAnime, results: []provider.SearchResult{{ID: "slow", Title: "Slow"}}},
+		wait:         release,
+	}
+	svc := NewMediaService(newTestRegistry(fast, slow))
+
+	start := time.Now()
+	results, _, _, err := svc.Search(context.Background(), provider.ModeAnime, "query")
+	elapsed := time.Since(start)
+	if err != nil || len(results) != len(fastResults) {
+		t.Fatalf("search = %d results, %v", len(results), err)
+	}
+	if elapsed >= searchGrace {
+		t.Fatalf("search took %s, want the fast %s grace", elapsed, searchGraceFast)
+	}
 }
 
 func TestMediaServiceSearchStampsProviderAndAggregates(t *testing.T) {
@@ -255,8 +320,8 @@ func TestSourceAggregatorMergesResignedSourceVariants(t *testing.T) {
 			if kept.Quality != tc.wantQualityLabel {
 				t.Errorf("merged quality label = %q, want %q", kept.Quality, tc.wantQualityLabel)
 			}
-			if SourceQuality(kept.Quality) != tc.wantQuality {
-				t.Errorf("merged quality = %q (%d), want %d", kept.Quality, SourceQuality(kept.Quality), tc.wantQuality)
+			if kit.QualityHeight(kept.Quality) != tc.wantQuality {
+				t.Errorf("merged quality = %q (%d), want %d", kept.Quality, kit.QualityHeight(kept.Quality), tc.wantQuality)
 			}
 			if kept.SubType != tc.wantSubType {
 				t.Errorf("merged subtype = %q, want %q", kept.SubType, tc.wantSubType)
@@ -660,7 +725,7 @@ func TestLiveAnimeResolution(t *testing.T) {
 		TMDBAPIKeys: []string{"test"},
 	}
 	keyPool := tmdb.NewKeyPool(cfg.TMDBAPIKeys)
-	reg, err := defaults.NewDefaultRegistry(keyPool, cfg, nil)
+	reg, err := defaults.NewDefaultRegistry(keyPool, cfg)
 	if err != nil {
 		t.Fatalf("defaults.NewDefaultRegistry failed: %v", err)
 	}
@@ -745,9 +810,6 @@ func (s *streamFake) ResolveStream(ctx context.Context, mediaID string, episode 
 }
 
 func TestResolvedMediaSnapshotIsCopied(t *testing.T) {
-	// Regression guard: snapshots handed to onResult must not alias the
-	// aggregator's backing arrays — later batches mutating aggregation must
-	// leave earlier snapshots untouched.
 	svc := NewMediaService(newTestRegistry(&streamFake{name: "stream", mode: provider.ModeMovies}))
 
 	var firstSnap model.ResolvedMedia
@@ -770,8 +832,6 @@ func TestResolvedMediaSnapshotIsCopied(t *testing.T) {
 		t.Fatalf("first snapshot wrong: %+v", firstSnap.Playback)
 	}
 
-	// Mutate the final aggregate's backing data via the returned slice; the
-	// earlier snapshot must be unaffected.
 	for i := range final.Playback {
 		final.Playback[i].URL = "http://mutated"
 	}

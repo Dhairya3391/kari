@@ -81,30 +81,16 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		switch msg.String() {
 		case "up", "k":
-			m.helpScroll--
+			m.helpScroll = max(0, m.helpScroll-1)
 		case "down", "j":
 			m.helpScroll++
 		case "pgup":
-			m.helpScroll -= max(1, m.height-8)
+			m.helpScroll = max(0, m.helpScroll-max(1, m.height-8))
 		case "pgdown":
 			m.helpScroll += max(1, m.height-8)
 		}
 		return nil, true
 	}
-	if (m.activeView == viewSettings && !m.audioPickerOpen) || m.activeView == viewPreview {
-		switch msg.String() {
-		case "ctrl+u":
-			m.scrollBody(-max(1, m.bodyHeight()-1))
-			return nil, true
-		case "ctrl+d":
-			m.scrollBody(max(1, m.bodyHeight()-1))
-			return nil, true
-		}
-	}
-
-	// While a / filter is being typed, single-rune keys belong to the
-	// filter query, not to global bindings — typing "q" must not quit,
-	// "h" must not open history, "s" must not open settings.
 	if m.resultsFiltering || m.episodeFiltering || m.historyFiltering || m.calendarFiltering {
 		if len(msg.String()) == 1 {
 			return nil, false
@@ -130,8 +116,6 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return tea.Quit, true
 		}
 
-		// Downloads are running: first q announces them; second q pauses
-		// (partials stay on disk for the next session's resume) and quits.
 		if m.confirmQuit {
 			if m.batchCancel != nil {
 				m.batchCancel()
@@ -150,8 +134,6 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return resetConfirmQuitMsg{}
 		}), true
 	case key.Matches(msg, m.keys.History):
-		// Reachable from any list screen, not just the search home —
-		// hiding navigation behind an empty state was unintuitive.
 		switch m.activeView {
 		case viewSearch:
 			if m.queryInput.Focused() {
@@ -198,9 +180,6 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return nil, false
 		}
 		if m.activeView == viewDownloads {
-			// The downloads screen owns x: with the cursor on a specific
-			// row, x targets that item (double-press confirmed), not the
-			// global pause. The screen handler also offers X for all.
 			return nil, false
 		}
 		if m.activeView == viewSearch && m.seriesList.SettingFilter() {
@@ -215,8 +194,6 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 
 		if m.batchCancel != nil || m.cancelDownload != nil {
 			if m.confirmStop {
-				// Double-x pauses (not cancels): partial files stay on disk
-				// and the downloads screen's p resumes from the checkpoint.
 				if m.batchCancel != nil {
 					m.batchCancel()
 					m.batchCancel = nil
@@ -285,6 +262,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		m.showHelp = !m.showHelp
 		m.helpScroll = 0
+		m.resetScrollGate()
 		return nil, true
 	case key.Matches(msg, m.keys.Status):
 		if cmd, ok := m.triggerAnimeStatusModal(); ok {
@@ -346,6 +324,7 @@ func (m *modelImpl) triggerAnimeStatusModal() (tea.Cmd, bool) {
 	m.animeStatusTargetAniListID = aniID
 	m.animeStatusTargetKey = grpKey
 	m.animeStatusPickerOpen = true
+	m.resetScrollGate()
 	m.animeStatusLoading = true
 	m.animeStatusPickerIndex = 0
 	m.animeStatusEntry = nil
@@ -538,6 +517,8 @@ func (m *modelImpl) setAccent(idx int) {
 // existing one by building a settings.Data literal that omits it.
 // AccentColor is read from colorPrimary itself (not accentPresets[idx],
 func (m *modelImpl) saveSettings() {
+	m.syncLegacyFilterFields()
+
 	disabledList := make([]string, 0)
 	for k, v := range m.disabledModes {
 		if v {
@@ -592,9 +573,6 @@ func (m *modelImpl) saveSettings() {
 	}
 
 	subLang := m.subtitleLanguage
-	if subLang == "" {
-		subLang = "en"
-	}
 
 	transitionsVal := m.transitions
 	startupSearchActiveVal := m.startupSearchActive
@@ -630,6 +608,8 @@ func (m *modelImpl) saveSettings() {
 		Transitions:                 &transitionsVal,
 		StartupSearchActive:         &startupSearchActiveVal,
 		AutoUpdate:                  m.autoUpdate,
+		Filters:                     m.filterScope,
+		FiltersMigrated:             true,
 	})
 	if m.players != nil {
 		m.players.SetSkipSettings(player.SkipSettings{
@@ -665,6 +645,7 @@ func (m *modelImpl) switchToMode(target provider.ContentType) tea.Cmd {
 	}
 
 	m.clearStatus()
+	m.resetScrollGate()
 	oldMode := m.appMode
 	m.appMode = target
 	m.updateQueryPlaceholder()

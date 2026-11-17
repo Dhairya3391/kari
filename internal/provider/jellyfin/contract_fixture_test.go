@@ -81,9 +81,6 @@ func TestAuthRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	// Library fetch fails (401) so search falls back to hints for non-empty queries,
-	// which also 401s; for empty queries it returns the library fetch error directly.
-	// Both must surface the typed HTTP error, never masking as "empty query".
 	for _, query := range []string{"boys", ""} {
 		_, err = client.Search(context.Background(), query, provider.ModeJellyfin)
 		if err == nil {

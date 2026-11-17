@@ -155,8 +155,6 @@ func TestCollapseMirrorsSkipsRowsThatCannotBeDuplicates(t *testing.T) {
 
 	c.collapseMirrors(context.Background(), merged)
 
-	// The two unique real tiers cannot collapse, so only the adaptive row is
-	// worth a probe.
 	if got := hits.Load(); got != 1 {
 		t.Errorf("probed %d manifests, want only the adaptive row", got)
 	}
@@ -166,8 +164,6 @@ func TestCollapseMirrorsSkipsRowsThatCannotBeDuplicates(t *testing.T) {
 }
 
 func TestQualityFromDimension(t *testing.T) {
-	// dimension is the master's largest side (max of width/height), so the
-	// inputs are the widths of the standard ladders, not their heights.
 	cases := map[int]string{
 		3840: "2160p", // 3840x2160
 		2560: "1440p", // 2560x1440

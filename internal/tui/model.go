@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/calendar"
+	"kari/internal/filter"
 	"kari/internal/history"
 	"kari/internal/lang"
 	"kari/internal/logging"
@@ -118,9 +119,6 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 	episodeList.SetShowHelp(false)
 	episodeList.SetShowTitle(false)
 
-	// Chapters read like episodes (one selectable row per unit) but carry
-	// manga numbering, so they get their own list rather than sharing the
-	// episode list's items.
 	chapterDelegate := list.NewDefaultDelegate()
 	chapterDelegate.ShowDescription = false
 	chapterDelegate.SetHeight(1)
@@ -238,6 +236,7 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		disabledProviders:   make(map[string]bool),
 		transitions:         true,
 		startupSearchActive: startupSearchActive,
+		filterScope:         filter.FromLegacy(0, 0, nil, "", "", false, ""),
 		qualityMode:         qualityAll,
 		languageFilter:      make(map[string]bool),
 		audioMode:           provider.AudioSub,
@@ -249,11 +248,8 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		presence:            presenceClient,
 		imgProtocol:         termimg.Detect(),
 		imagesEnabled:       true,
-		// Rendered poster strings, not the images themselves — for the Kitty
-		// protocol these are base64-encoded PNGs and can be well over 1MB
-		// each, so this stays smaller than the image caches upstream in
-		// internal/poster to keep a long browsing session's memory bounded.
-		posterCache: util.NewBoundedCache[string](30),
+		posterCache:         util.NewBoundedCache[string](30),
+		previewDetailsCache: util.NewBoundedCache[previewDetails](60),
 	}
 	if len(options) > 0 {
 		model.addonManifestTester = options[0].AddonManifestTester
@@ -272,7 +268,8 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 	}
 	if s := savedSettings; s != nil {
 		model.stremioAddonManifests = append([]string(nil), s.StremioAddonManifests...)
-		if s.QualityMode >= qualityAll && s.QualityMode <= qualityLowest {
+		model.filterScope = s.EffectiveFilters()
+		if s.QualityMode >= qualityAll && s.QualityMode <= qualityExplicitSD {
 			model.qualityMode = s.QualityMode
 		}
 		if s.DownloadQuality >= downloadQualityAuto && s.DownloadQuality <= downloadQualitySD {
@@ -281,14 +278,6 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 		model.preferredProviders = s.PreferredProviders
 		model.disableDownloadVerification = s.DisableDownloadVerification
 		if len(s.LanguageFilter) > 0 {
-			// Saved filters only ever record overrides (a language the user
-			// explicitly disabled) — anything absent from the map is still
-			// implicitly enabled, per languageEnabled. So checking the map's
-			// values directly for a literal `true` rejects the common case
-			// of a user disabling just one or two languages, since every
-			// entry in that map is `false`. Apply it and ask
-			// hasEnabledLanguage, which understands that "absent" means
-			// "enabled", instead.
 			prev := model.languageFilter
 			model.languageFilter = s.LanguageFilter
 			if !model.hasEnabledLanguage() {
@@ -373,21 +362,12 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 	}
 	model.syncDisabledProvidersToService()
 	model.updateQueryPlaceholder()
-	for i, code := range lang.SubtitleOptions {
-		if code == model.subtitleLanguage {
-			model.subtitleLanguageIndex = i
-			break
-		}
-	}
 	if model.downloadService != nil {
 		model.downloadService.SetSubtitleLanguage(model.subtitleLanguage)
 		model.downloadService.SetVerifyDownloads(!model.disableDownloadVerification)
 	}
 	tuiLog.Info("image protocol detected", "protocol", model.imgProtocol.String())
 	if historyLoadErr != nil {
-		// historyStore is nil in this case, silently disabling watch
-		// history/resume for the whole session — surface it instead of
-		// leaving the user to wonder why "Continue Watching" is empty.
 		model.setStatus(statusWarn, "Watch history unavailable: "+historyLoadErr.Error())
 	} else if logging.StderrSuppressed() {
 		model.setStatus(statusWarn, "Stderr logging disabled in terminal (redirect via tty e.g. kari 2> /dev/pts/X)")
@@ -433,14 +413,9 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	mdl, cmd := m.updateMessage(msg)
 
 	if updated, ok := mdl.(*modelImpl); ok {
-		// Sixel/iTerm2 pixels outlive the text cells they were drawn over,
-		// and Bubble Tea skips redrawing unchanged lines, so a moved or
-		// hidden image would otherwise stay on screen. Clear-and-repaint
-		// only when the placement actually changed; status/spinner updates
-		// leave the key untouched. The clear is full-screen because that is
-		// the only portable way to drop an iTerm2 placement (see
-		// termimg.Protocol.NeedsScreenClear); the cost is one repaint, so
-		// gating on the layout key keeps it off the steady-state path.
+		if updated.activeView == viewCalendar {
+			cmd = tea.Batch(cmd, updated.syncCalendarPoster())
+		}
 		if prevOverlayKey != "" && updated.overlayLayoutKey() != prevOverlayKey {
 			cmd = tea.Batch(cmd, tea.ClearScreen)
 		}
@@ -459,9 +434,6 @@ func (m *modelImpl) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var spinnerCmd tea.Cmd
-	// Keep the spinner animating while providers stream sources in
-	// progressively: loading flips false on the first partial results, but
-	// resolution isn't done until resolveOpID resets to zero.
 	if m.loading || m.resolveOpID != 0 {
 		m.spinner, spinnerCmd = m.spinner.Update(msg)
 	}
@@ -469,7 +441,7 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case themeCrossfadeTickMsg:
 		if msg.opID == m.crossfadeOpID && m.crossfadeActive {
 			m.crossfadeStep++
-			if m.crossfadeStep >= 16 {
+			if m.crossfadeStep >= crossfadeSteps {
 				m.crossfadeActive = false
 				return m, nil
 			}
@@ -493,8 +465,6 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resizeLists()
-		// Page renders are dimension-specific; a resize invalidates them
-		// and re-renders the current page at the new size.
 		if m.activeView == viewReader {
 			m.readerRender = make(map[int]string)
 			m.readerCols, m.readerRows = 0, 0
@@ -638,6 +608,16 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.previewPosterUnavailable = msg.err != nil
 				}
 			}
+		case posterSlotCalendar:
+			if msg.opID == m.calendarPosterOpID {
+				m.calendarPoster = msg.rendered
+				m.calendarPosterUnavailable = msg.err != nil && !errors.Is(msg.err, context.Canceled)
+			}
+		case posterSlotLive:
+			if msg.opID == m.livePosterOpID {
+				m.livePoster = msg.rendered
+				m.livePosterUnavailable = msg.err != nil && !errors.Is(msg.err, context.Canceled)
+			}
 		}
 		return m, spinnerCmd
 	case previewDetailsMsg:
@@ -645,6 +625,11 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.previewOverview = msg.overview
 			m.previewGenres = msg.genres
 			m.previewRating = msg.rating
+			if m.previewDetailsCache != nil && msg.key != "" {
+				m.previewDetailsCache.Set(msg.key, previewDetails{
+					overview: msg.overview, genres: msg.genres, rating: msg.rating,
+				})
+			}
 		}
 		return m, spinnerCmd
 	case chaptersDoneMsg:
@@ -710,6 +695,7 @@ func (m *modelImpl) startThemeCrossfade(fromKind, toKind model.Kind) tea.Cmd {
 	m.crossfadeStep = 0
 	m.crossfadeFrom = from
 	m.crossfadeTo = to
+	m.crossfadePalette = buildCrossfadePalette(from, to)
 	m.crossfadeOpID++
 	opID := m.crossfadeOpID
 	return tea.Tick(14*time.Millisecond, func(t time.Time) tea.Msg {

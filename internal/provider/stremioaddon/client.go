@@ -15,7 +15,10 @@ import (
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
+	"kari/internal/lang"
+	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/kit"
 	"kari/internal/provider/streambase"
 	"kari/internal/tmdb"
 
@@ -30,13 +33,38 @@ var (
 )
 
 type manifest struct {
-	Name      string            `json:"name"`
-	Types     []string          `json:"types"`
-	Resources []json.RawMessage `json:"resources"`
-	Catalogs  []addonCatalog    `json:"catalogs"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Types     []string        `json:"types"`
+	Resources []resourceEntry `json:"resources"`
+	Catalogs  []addonCatalog  `json:"catalogs"`
 	Behavior  struct {
 		ConfigurationRequired bool `json:"configurationRequired"`
 	} `json:"behaviorHints"`
+}
+
+// resourceEntry is one declared addon resource. Manifests encode resources
+// either as a bare name or as an object naming the types it applies to.
+type resourceEntry struct {
+	Name       string   `json:"name"`
+	Types      []string `json:"types"`
+	IDPrefixes []string `json:"idPrefixes"`
+}
+
+// UnmarshalJSON accepts both the string and object forms of a Stremio resource.
+func (r *resourceEntry) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err == nil {
+		r.Name = name
+		return nil
+	}
+	type plainResource resourceEntry
+	var entry plainResource
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return err
+	}
+	*r = resourceEntry(entry)
+	return nil
 }
 
 type addonCatalog struct {
@@ -63,6 +91,12 @@ type addonMeta struct {
 	Poster      string       `json:"poster"`
 	Description string       `json:"description"`
 	Genres      []string     `json:"genres"`
+	Runtime     string       `json:"runtime"`
+	Background  string       `json:"background"`
+	IMDBRating  string       `json:"imdbRating"`
+	FirstAired  string       `json:"firstAired"`
+	Trailer     string       `json:"trailer"`
+	Released    string       `json:"released"`
 	Videos      []addonVideo `json:"videos"`
 }
 
@@ -71,10 +105,13 @@ type addonMetaResponse struct {
 }
 
 type addonVideo struct {
-	ID      string `json:"id"`
-	Title   string `json:"title"`
-	Season  int    `json:"season"`
-	Episode int    `json:"episode"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Season    int    `json:"season"`
+	Episode   int    `json:"episode"`
+	Released  string `json:"released"`
+	Overview  string `json:"overview"`
+	Thumbnail string `json:"thumbnail"`
 }
 
 type streamResponse struct {
@@ -82,15 +119,32 @@ type streamResponse struct {
 }
 
 type streamItem struct {
-	Name     string         `json:"name"`
-	Title    string         `json:"title"`
-	URL      string         `json:"url"`
-	Behavior streamBehavior `json:"behaviorHints"`
+	Name        string           `json:"name"`
+	Title       string           `json:"title"`
+	URL         string           `json:"url"`
+	ExternalURL string           `json:"externalUrl"`
+	YTID        string           `json:"ytId"`
+	InfoHash    string           `json:"infoHash"`
+	Subtitles   []streamSubtitle `json:"subtitles"`
+	Description string           `json:"description"`
+	Thumbnail   string           `json:"thumbnail"`
+	Behavior    streamBehavior   `json:"behaviorHints"`
+}
+
+type streamSubtitle struct {
+	URL   string `json:"url"`
+	Lang  string `json:"lang"`
+	Label string `json:"label"`
 }
 
 type streamBehavior struct {
 	Headers      map[string]string `json:"headers"`
 	ProxyHeaders proxyHeaders      `json:"proxyHeaders"`
+	NotWebReady  bool              `json:"notWebReady"`
+	Filename     string            `json:"filename"`
+	VideoHash    string            `json:"videoHash"`
+	VideoSize    int64             `json:"videoSize"`
+	BingeGroup   string            `json:"bingeGroup"`
 }
 
 type proxyHeaders struct {
@@ -99,15 +153,17 @@ type proxyHeaders struct {
 
 // Client accesses a configured Stremio stream addon using its manifest URL.
 type Client struct {
-	base       *streambase.Base
-	httpClient *http.Client
-	manifest   manifest
-	keyPool    *tmdb.KeyPool
-	endpoint   string
-	query      string
-	name       string
-	digest     [32]byte
-	modes      []provider.Mode
+	base         *streambase.Base
+	httpClient   *http.Client
+	manifest     manifest
+	keyPool      *tmdb.KeyPool
+	endpoint     string
+	query        string
+	name         string
+	displayName  string
+	digest       [32]byte
+	modes        []provider.Mode
+	hasSubtitles bool
 }
 
 // NewClient fetches and validates an addon manifest before exposing its stream capabilities.
@@ -148,29 +204,36 @@ func NewClientWithHTTP(ctx context.Context, manifestURL string, keyPool *tmdb.Ke
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 		return nil, fmt.Errorf("decode addon manifest: %w", err)
 	}
-	if info.Name == "" {
-		return nil, fmt.Errorf("addon manifest has no name")
-	}
+	sum := sha256.Sum256([]byte(strings.TrimSpace(manifestURL)))
+	identity := "addon-" + hex.EncodeToString(sum[:6])
 	if info.Behavior.ConfigurationRequired {
-		return nil, fmt.Errorf("addon requires configuration; paste its configured manifest URL")
+		logging.Debug("stremio addon declares configurationRequired", "host", u.Host)
 	}
-	if !supportsStreams(info) {
-		return nil, fmt.Errorf("addon manifest does not declare stream support")
+	displayName := strings.TrimSpace(info.Name)
+	if displayName == "" {
+		displayName = strings.TrimSpace(info.ID)
+	}
+	if displayName == "" {
+		displayName = u.Host
+	}
+	if displayName == "" {
+		displayName = identity
 	}
 	modes := manifestModes(info)
-	if len(modes) == 0 {
-		return nil, fmt.Errorf("addon manifest declares no supported catalog or stream types")
-	}
 	endpoint := strings.TrimSuffix(u.Path, "/")
 	if strings.HasSuffix(strings.ToLower(u.Path), "/manifest.json") {
 		endpoint = strings.TrimSuffix(endpoint, "/manifest.json")
 	}
-	sum := sha256.Sum256([]byte(strings.TrimSpace(manifestURL)))
-	return &Client{base: base, httpClient: hc, manifest: info, keyPool: keyPool, endpoint: strings.TrimSuffix(u.Scheme+"://"+u.Host+endpoint, "/"), query: u.RawQuery, name: "addon-" + hex.EncodeToString(sum[:6]), digest: sum, modes: modes}, nil
+	return &Client{
+		base: base, httpClient: hc, manifest: info, keyPool: keyPool,
+		endpoint: strings.TrimSuffix(u.Scheme+"://"+u.Host+endpoint, "/"),
+		query:    u.RawQuery, name: identity, displayName: displayName,
+		digest: sum, modes: modes, hasSubtitles: supportsResource(info, "subtitles"),
+	}, nil
 }
 
-// Probe verifies that an addon can resolve a catalog item to a playable stream
-// before Kari stores its manifest URL.
+// Probe checks whether an addon can resolve a catalog item to a playable
+// stream. Adding an addon no longer requires a successful probe.
 func (c *Client) Probe(ctx context.Context) error {
 	if len(c.manifest.Catalogs) > 0 {
 		var firstErr error
@@ -191,7 +254,7 @@ func (c *Client) Probe(ctx context.Context) error {
 				}
 				itemIDs := []string{meta.ID}
 				if catalog.Type == "series" {
-					episodes, err := c.fetchCatalogEpisodes(ctx, meta.ID)
+					episodes, err := c.fetchCatalogEpisodesForType(ctx, catalog.Type, meta.ID)
 					if err != nil {
 						if firstErr == nil {
 							firstErr = err
@@ -220,8 +283,6 @@ func (c *Client) Probe(ctx context.Context) error {
 		}
 		return fmt.Errorf("addon catalogs returned no playable streams for their first items")
 	}
-	// Stream-only addons have no catalog item to test, so use stable movie or
-	// series identifiers and require at least one direct URL Kari can play.
 	checks := []struct {
 		id      string
 		season  int
@@ -270,8 +331,8 @@ func (c *Client) MatchesConfiguration(value string) bool {
 // Modes returns catalog-browsing and movie or series modes declared by the addon.
 func (c *Client) Modes() []provider.Mode { return append([]provider.Mode(nil), c.modes...) }
 
-// Alias returns the display name declared by the addon manifest.
-func (c *Client) Alias() string { return c.manifest.Name }
+// Alias returns the addon's display name, falling back to its manifest ID or host.
+func (c *Client) Alias() string { return c.displayName }
 
 // Features declares empty-query catalog browsing for addons with a Stremio mode.
 func (c *Client) Features(mode provider.ContentType) provider.Features {
@@ -305,18 +366,30 @@ func (c *Client) searchCatalogs(ctx context.Context, query string) ([]provider.S
 				errorsByCatalog[index] = fetchErr
 			} else {
 				for _, meta := range metas {
-					if meta.ID == "" || meta.Name == "" || (query != "" && !catalogSupportsSearch(catalog) && !metaMatchesQuery(meta, query)) {
+					// Some addons advertise search but ignore the query and
+					// return their whole catalog. Always filter locally so a
+					// non-filtering upstream cannot bury the real matches.
+					if meta.ID == "" || meta.Name == "" || (query != "" && !metaMatchesQuery(meta, query)) {
 						continue
+					}
+					// Addons often group items under a custom catalog type
+					// ("HdHub") while each meta declares the real Stremio
+					// type. Streams are keyed by the meta type, not the
+					// catalog type, so carry that in the resolution handle.
+					kind := strings.TrimSpace(meta.Type)
+					if kind == "" {
+						kind = catalog.Type
 					}
 					resultsByCatalog[index] = append(resultsByCatalog[index], provider.SearchResult{
 						Title:     meta.Name,
-						ID:        c.Name() + "/" + catalog.Type + "/" + meta.ID,
+						ID:        c.Name() + "/" + kind + "/" + meta.ID,
 						Type:      provider.ModeStremio,
 						Year:      meta.ReleaseInfo,
-						MediaType: catalogMediaType(catalog.Type),
+						MediaType: catalogMediaType(kind),
 						CoverURL:  meta.Poster,
 						Overview:  meta.Description,
 						Genres:    append([]string(nil), meta.Genres...),
+						TMDBID:    metaTMDBID(meta.ID),
 					})
 				}
 			}
@@ -341,6 +414,20 @@ func (c *Client) searchCatalogs(ctx context.Context, query string) ([]provider.S
 	return nil, provider.ErrNoResults
 }
 
+// metaTMDBID parses a TMDB id from the "tmdb:<n>" form Stremio metas use.
+func metaTMDBID(id string) int {
+	const prefix = "tmdb:"
+	raw := strings.TrimSpace(id)
+	if len(raw) < len(prefix) || !strings.EqualFold(raw[:len(prefix)], prefix) {
+		return 0
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(raw[len(prefix):]))
+	if err != nil || value <= 0 {
+		return 0
+	}
+	return value
+}
+
 func (c *Client) fetchCatalog(ctx context.Context, catalog addonCatalog, query string) ([]addonMeta, error) {
 	endpoint, err := c.catalogURL("catalog", catalog.Type, catalog.ID)
 	if err != nil {
@@ -351,8 +438,6 @@ func (c *Client) fetchCatalog(ctx context.Context, catalog addonCatalog, query s
 		return nil, fmt.Errorf("parse addon catalog URL: %w", err)
 	}
 	if catalogSupportsSearch(catalog) && query != "" {
-		// Stremio encodes catalog extras in the path; the query string is
-		// reserved for addon configuration such as API tokens.
 		parsed.Path = strings.TrimSuffix(parsed.Path, ".json") + "/" + url.PathEscape("search="+query) + ".json"
 	}
 	var response catalogResponse
@@ -362,8 +447,8 @@ func (c *Client) fetchCatalog(ctx context.Context, catalog addonCatalog, query s
 	return response.Metas, nil
 }
 
-func (c *Client) fetchCatalogEpisodes(ctx context.Context, itemID string) ([]provider.Episode, error) {
-	endpoint, err := c.catalogURL("meta", "series", itemID)
+func (c *Client) fetchCatalogEpisodesForType(ctx context.Context, kind, itemID string) ([]provider.Episode, error) {
+	endpoint, err := c.catalogURL("meta", kind, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("build addon metadata URL: %w", err)
 	}
@@ -390,7 +475,7 @@ func (c *Client) fetchCatalogEpisodes(ctx context.Context, itemID string) ([]pro
 }
 
 func (c *Client) catalogURL(resource, mediaType, id string) (string, error) {
-	endpoint, err := url.Parse(c.endpoint + "/" + resource + "/" + mediaType + "/" + url.PathEscape(id) + ".json")
+	endpoint, err := url.Parse(c.endpoint + "/" + resource + "/" + url.PathEscape(mediaType) + "/" + url.PathEscape(id) + ".json")
 	if err != nil {
 		return "", err
 	}
@@ -430,10 +515,9 @@ func (c *Client) parseStremioHandle(raw string) (kind, itemID string, ok bool) {
 }
 
 // supportedCatalogType reports whether Kari can browse and resolve a Stremio
-// catalog type. "tv" is Stremio's live-channel and live-event type, used by
-// sports and IPTV addons that have no movie or series catalogs at all.
+// catalog type. Stremio types are free-form, so any non-empty type is allowed.
 func supportedCatalogType(mediaType string) bool {
-	return mediaType == "movie" || mediaType == "series" || mediaType == "tv"
+	return strings.TrimSpace(mediaType) != ""
 }
 
 // catalogMediaType maps a Stremio catalog type onto Kari's media-type
@@ -445,6 +529,8 @@ func catalogMediaType(catalogType string) string {
 		return provider.MediaTypeTV
 	case "tv":
 		return provider.MediaTypeLive
+	case "anime":
+		return provider.MediaTypeAnime
 	default:
 		return provider.MediaTypeMovie
 	}
@@ -466,18 +552,43 @@ func catalogSupportsSearch(catalog addonCatalog) bool {
 
 func metaMatchesQuery(meta addonMeta, query string) bool {
 	query = strings.ToLower(strings.TrimSpace(query))
-	return strings.Contains(strings.ToLower(meta.Name), query) || strings.Contains(strings.ToLower(meta.Description), query)
+	if query == "" {
+		return true
+	}
+	haystack := strings.ToLower(meta.Name + " " + meta.Description + " " + meta.ID)
+	if strings.Contains(haystack, query) {
+		return true
+	}
+	// Token matching keeps results whose title words appear in a different
+	// order than the query while still dropping unrelated catalog rows.
+	for _, word := range strings.Fields(query) {
+		if !strings.Contains(haystack, word) {
+			return false
+		}
+	}
+	return true
 }
 
 // FetchEpisodes returns addon metadata episodes or delegates to Kari's TMDB catalog.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	if kind, itemID, ok := c.parseStremioHandle(series.ID); ok {
-		// Movie and live ("tv") catalog items are single playable rows; only
-		// series catalogs carry a video listing to fetch.
-		if kind != "series" {
+		// Movies and live channels resolve straight from the search result;
+		// every other Stremio type may carry an episodic meta resource.
+		if kind == "movie" || kind == "tv" {
 			return []provider.Episode{{ID: itemID, Title: series.Title}}, nil
 		}
-		return c.fetchCatalogEpisodes(ctx, itemID)
+		if supportsResource(c.manifest, "meta") {
+			if episodes, err := c.fetchCatalogEpisodesForType(ctx, kind, itemID); err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, ctxErr
+				}
+				logging.Debug("stremio meta episodes unavailable; using single item",
+					"kind", kind, "id", itemID, "err", err)
+			} else if len(episodes) > 0 {
+				return episodes, nil
+			}
+		}
+		return []provider.Episode{{ID: itemID, Title: series.Title}}, nil
 	}
 	return c.base.FetchEpisodes(ctx, series)
 }
@@ -513,6 +624,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		ids = append(ids, "tmdb:"+strconv.Itoa(tmdbID))
 	}
 	var items []streamItem
+	resolvedID := id
 	for _, targetID := range ids {
 		if kind == "series" {
 			targetID += ":" + strconv.Itoa(season) + ":" + strconv.Itoa(episodeNumber)
@@ -541,10 +653,12 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		resp.Body.Close()
 		if err == nil && len(payload.Streams) > 0 {
 			items = payload.Streams
+			resolvedID = targetID
 			break
 		}
 	}
 	sources := mediaSources(items)
+	c.mergeSubtitles(ctx, kind, resolvedID, items, sources)
 	if len(sources) == 0 {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("resolve addon streams: %w", err)
@@ -564,10 +678,126 @@ func (c *Client) resolveAddonStreams(ctx context.Context, kind, itemID string) (
 		return nil, fmt.Errorf("fetch addon streams: %w", err)
 	}
 	sources := mediaSources(response.Streams)
+	c.mergeSubtitles(ctx, kind, itemID, response.Streams, sources)
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources
 	}
 	return sources, nil
+}
+
+// subtitleKey identifies the addon subtitle lookup tied to one playback URL.
+type subtitleKey struct {
+	filename string
+	hash     string
+}
+
+// mergeSubtitles augments each source with tracks for its own filename and
+// video hash. A failed subtitle lookup is diagnostic only and must never fail
+// resolution.
+func (c *Client) mergeSubtitles(ctx context.Context, kind, itemID string, items []streamItem, sources []provider.MediaSource) {
+	if !c.hasSubtitles || len(sources) == 0 {
+		return
+	}
+	type lookup struct {
+		indices  []int
+		filename string
+		hash     string
+		tracks   []provider.SubtitleOption
+	}
+	lookups := make(map[subtitleKey]*lookup)
+	for index := range sources {
+		hash := ""
+		for _, item := range items {
+			if strings.TrimSpace(item.URL) == sources[index].URL {
+				hash = item.Behavior.VideoHash
+				break
+			}
+		}
+		key := subtitleKey{filename: subtitleFilename(sources[index].URL), hash: hash}
+		entry := lookups[key]
+		if entry == nil {
+			entry = &lookup{filename: key.filename, hash: key.hash}
+			lookups[key] = entry
+		}
+		entry.indices = append(entry.indices, index)
+	}
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(4)
+	for _, entry := range lookups {
+		group.Go(func() error {
+			entry.tracks = c.fetchStreamSubtitles(groupCtx, kind, itemID, entry.filename, entry.hash)
+			return nil
+		})
+	}
+	_ = group.Wait()
+	for _, entry := range lookups {
+		for _, index := range entry.indices {
+			sources[index].Subtitles = appendUniqueSubtitles(sources[index].Subtitles, entry.tracks)
+		}
+	}
+}
+
+// subtitleFilename extracts the filename Stremio addons match subtitles against.
+func subtitleFilename(videoURL string) string {
+	raw := strings.TrimSpace(videoURL)
+	if raw == "" {
+		return ""
+	}
+	return path.Base(strings.SplitN(raw, "?", 2)[0])
+}
+
+// fetchStreamSubtitles asks the addon for tracks matching one playback filename.
+// It returns an empty slice on any failure because subtitles are optional.
+func (c *Client) fetchStreamSubtitles(ctx context.Context, kind, itemID, filename, videoHash string) []provider.SubtitleOption {
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		return nil
+	}
+	extra := "filename=" + filename
+	if hash := strings.TrimSpace(videoHash); hash != "" {
+		extra += "&videoHash=" + hash
+	}
+	endpoint := c.endpoint + "/subtitles/" + url.PathEscape(kind) + "/" + url.PathEscape(itemID) + "/" + url.PathEscape(extra) + ".json"
+	if c.query != "" {
+		endpoint += "?" + c.query
+	}
+	var payload struct {
+		Subtitles []streamSubtitle `json:"subtitles"`
+	}
+	if err := c.getJSON(ctx, endpoint, &payload); err != nil {
+		return nil
+	}
+	var options []provider.SubtitleOption
+	seen := make(map[string]bool, len(payload.Subtitles))
+	for _, sub := range payload.Subtitles {
+		raw := strings.TrimSpace(sub.URL)
+		if raw == "" || seen[raw] {
+			continue
+		}
+		seen[raw] = true
+		options = append(options, provider.SubtitleOption{
+			URL: raw, Language: lang.Normalize(sub.Lang), Referer: c.endpoint,
+		})
+	}
+	return options
+}
+
+func appendUniqueSubtitles(existing, extra []provider.SubtitleOption) []provider.SubtitleOption {
+	if len(extra) == 0 {
+		return existing
+	}
+	seen := make(map[string]bool, len(existing)+len(extra))
+	for _, sub := range existing {
+		seen[sub.URL] = true
+	}
+	for _, sub := range extra {
+		if sub.URL == "" || seen[sub.URL] {
+			continue
+		}
+		seen[sub.URL] = true
+		existing = append(existing, sub)
+	}
+	return existing
 }
 
 func mediaSources(items []streamItem) []provider.MediaSource {
@@ -575,6 +805,15 @@ func mediaSources(items []streamItem) []provider.MediaSource {
 	for _, item := range items {
 		streamURL := strings.TrimSpace(item.URL)
 		if streamURL == "" || (!provider.IsDirectURL(streamURL) && !isRemoteAddonProxyURL(streamURL)) {
+			// Kari plays streams itself without yt-dlp or a torrent client;
+			// externalUrl/ytId/infoHash-only rows would be dead entries.
+			if item.ExternalURL != "" || item.YTID != "" || item.InfoHash != "" {
+				// Values can carry addon credentials; record presence only.
+				logging.Debug("skipping stremio stream without a direct playable URL",
+					"hasExternalURL", item.ExternalURL != "",
+					"hasYTID", item.YTID != "",
+					"hasInfoHash", item.InfoHash != "")
+			}
 			continue
 		}
 		title := strings.TrimSpace(item.Title)
@@ -584,7 +823,8 @@ func mediaSources(items []streamItem) []provider.MediaSource {
 		if title == "" {
 			title = "Auto"
 		}
-		source := provider.MediaSource{URL: streamURL, Quality: title, Type: sourceType(streamURL)}
+		height, _ := kit.NormalizeQuality(title)
+		source := provider.MediaSource{URL: streamURL, Quality: title, Type: sourceType(streamURL), Height: height}
 		headers := make(map[string]string, len(item.Behavior.Headers)+len(item.Behavior.ProxyHeaders.Request))
 		for key, value := range item.Behavior.Headers {
 			headers[key] = value
@@ -602,9 +842,29 @@ func mediaSources(items []streamItem) []provider.MediaSource {
 				source.CookieHeader = value
 			}
 		}
+		source.Subtitles = subtitleOptions(item.Subtitles, source.Referer)
 		sources = append(sources, source)
 	}
 	return sources
+}
+
+// subtitleOptions keeps only subtitles Kari can fetch itself and carries the
+// stream's referer so hotlink-protected subtitle hosts keep working.
+func subtitleOptions(subs []streamSubtitle, referer string) []provider.SubtitleOption {
+	var options []provider.SubtitleOption
+	for _, sub := range subs {
+		raw := strings.TrimSpace(sub.URL)
+		if raw == "" || (!provider.IsDirectURL(raw) && !isRemoteAddonProxyURL(raw)) {
+			continue
+		}
+		options = append(options, provider.SubtitleOption{
+			URL:      raw,
+			Language: lang.Normalize(sub.Lang),
+			Referer:  referer,
+			Default:  strings.Contains(strings.ToLower(sub.Label), "default"),
+		})
+	}
+	return options
 }
 
 func isRemoteAddonProxyURL(raw string) bool {
@@ -612,8 +872,6 @@ func isRemoteAddonProxyURL(raw string) bool {
 	if err != nil || !strings.Contains(strings.ToLower(parsed.Path), "/proxy/") {
 		return false
 	}
-	// Hosted addons may proxy a source at their own public endpoint. Kari can
-	// fetch that URL directly; only local/helper proxies are unsafe to expose.
 	parsed.Path = "/"
 	parsed.RawPath = ""
 	return provider.IsDirectURL(parsed.String())
@@ -660,15 +918,12 @@ func (c *Client) lookupIMDBID(ctx context.Context, tmdbID int, isSeries bool) st
 }
 
 func supportsStreams(info manifest) bool {
-	for _, raw := range info.Resources {
-		var name string
-		if json.Unmarshal(raw, &name) == nil && name == "stream" {
-			return true
-		}
-		var resource struct {
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(raw, &resource) == nil && resource.Name == "stream" {
+	return supportsResource(info, "stream")
+}
+
+func supportsResource(info manifest, name string) bool {
+	for _, resource := range info.Resources {
+		if resource.Name == name {
 			return true
 		}
 	}
@@ -680,6 +935,12 @@ func manifestModes(info manifest) []provider.Mode {
 	for _, raw := range info.Types {
 		hasMovie = hasMovie || raw == "movie"
 		hasSeries = hasSeries || raw == "series"
+	}
+	for _, resource := range info.Resources {
+		for _, mediaType := range resource.Types {
+			hasMovie = hasMovie || mediaType == "movie"
+			hasSeries = hasSeries || mediaType == "series"
+		}
 	}
 	for _, catalog := range info.Catalogs {
 		hasMovie = hasMovie || catalog.Type == "movie"
@@ -695,23 +956,14 @@ func manifestModes(info manifest) []provider.Mode {
 	if len(info.Catalogs) > 0 && supportsCatalogs(info) {
 		modes = append(modes, provider.Mode{Name: provider.ModeStremio, Priority: 10})
 	}
+	if len(modes) == 0 {
+		modes = append(modes, provider.Mode{Name: provider.ModeStremio, Priority: 10})
+	}
 	return modes
 }
 
 func supportsCatalogs(info manifest) bool {
-	for _, raw := range info.Resources {
-		var name string
-		if json.Unmarshal(raw, &name) == nil && name == "catalog" {
-			return true
-		}
-		var resource struct {
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(raw, &resource) == nil && resource.Name == "catalog" {
-			return true
-		}
-	}
-	return false
+	return supportsResource(info, "catalog")
 }
 
 func sourceType(raw string) string {

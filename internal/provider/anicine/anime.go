@@ -75,7 +75,7 @@ func (c *Client) resolveAnime(ctx context.Context, anilistID, category string, e
 		cat = "sub"
 	}
 	aniEmbedURL := fmt.Sprintf("%s/stream/ani/%s/%d/%s", c.embedBase, anilistID, epNum, cat)
-	sources, aniErr := c.resolveMegaplayEmbed(ctx, aniEmbedURL, anilistID)
+	sources, aniErr := c.resolveMegaplayEmbed(ctx, aniEmbedURL, anilistID, cat)
 	if aniErr == nil {
 		return sources, nil
 	}
@@ -88,14 +88,14 @@ func (c *Client) resolveAnime(ctx context.Context, anilistID, category string, e
 		return nil, fmt.Errorf("anicine anime: AniList embed failed and MAL mapping unavailable: %w", errors.Join(aniErr, err))
 	}
 	malEmbedURL := fmt.Sprintf("%s/stream/mal/%d/%d/%s", c.embedBase, malID, epNum, cat)
-	sources, malErr := c.resolveMegaplayEmbed(ctx, malEmbedURL, strconv.Itoa(malID))
+	sources, malErr := c.resolveMegaplayEmbed(ctx, malEmbedURL, strconv.Itoa(malID), cat)
 	if malErr == nil {
 		return sources, nil
 	}
 	return nil, fmt.Errorf("anicine anime: AniList and MAL embeds failed: %w", errors.Join(aniErr, malErr))
 }
 
-func (c *Client) resolveMegaplayEmbed(ctx context.Context, embedURL, mediaID string) ([]provider.MediaSource, error) {
+func (c *Client) resolveMegaplayEmbed(ctx context.Context, embedURL, mediaID, category string) ([]provider.MediaSource, error) {
 	fileID, err := c.megaplayFileID(ctx, embedURL)
 	if err != nil {
 		return nil, fmt.Errorf("anicine anime: embed %s: %w", mediaID, err)
@@ -140,35 +140,98 @@ func (c *Client) resolveMegaplayEmbed(ctx context.Context, embedURL, mediaID str
 		return nil, fmt.Errorf("anicine anime: decrypt: %w", err)
 	}
 
+	embedReferer := parsed.Scheme + "://" + parsed.Host + "/"
+	signed := kit.SignCDNURL(rawM3U8, 86400)
+	height, bitrate := c.megaplaySourceMeta(ctx, signed, embedReferer)
+	quality := "Auto"
+	if height > 0 {
+		quality = kit.QualityLabelFromHeight(height)
+	}
+
 	var subs []provider.SubtitleOption
 	for _, track := range sr.Tracks {
 		if strings.EqualFold(strings.TrimSpace(track.Kind), "thumbnails") ||
 			strings.TrimSpace(track.File) == "" {
 			continue
 		}
-		language := lang.Normalize(kit.Clean(track.Label))
-		if language == "unknown" || language == "" {
-			language = "en"
-		}
 		subs = append(subs, provider.SubtitleOption{
 			URL:      track.File,
-			Language: language,
+			Language: lang.FromLabel(kit.Clean(track.Label)),
 			Default:  track.Default,
-			Referer:  parsed.Scheme + "://" + parsed.Host + "/",
+			Referer:  embedReferer,
 		})
 	}
 
-	logging.Debug("resolve source done via megaplay", "provider", c.Name(), "mediaID", mediaID)
-	return []provider.MediaSource{{
-		URL:            kit.SignCDNURL(rawM3U8, 86400),
-		Quality:        "1080p",
+	source := provider.MediaSource{
+		URL:            signed,
+		Quality:        quality,
 		Backend:        "Megaplay",
-		Referer:        parsed.Scheme + "://" + parsed.Host + "/",
+		Referer:        embedReferer,
 		Type:           provider.SourceTypeHLS,
 		UserAgent:      config.DesktopUserAgent,
 		SuppressOrigin: true,
 		Subtitles:      subs,
-	}}, nil
+		Height:         height,
+		Bitrate:        bitrate,
+		Audio:          provider.AudioInfo{Track: megaplayTrack(category)},
+		// External VTT tracks are toggleable, never burned into the picture.
+		SubType:   provider.SubTypeSoft,
+		SkipTimes: megaplaySkipTimes(sr, c.Name()),
+	}
+
+	logging.Debug("resolve source done via megaplay", "provider", c.Name(), "mediaID", mediaID,
+		"height", height, "bitrate", bitrate)
+	return []provider.MediaSource{source}, nil
+}
+
+// megaplayTrack maps the embed route's category onto the typed audio track.
+// The route is the provider's own metadata, not a guess from a label.
+func megaplayTrack(category string) provider.AudioTrack {
+	if strings.EqualFold(strings.TrimSpace(category), provider.AudioDub) {
+		return provider.TrackDub
+	}
+	return provider.TrackSub
+}
+
+// megaplaySourceMeta probes the signed Megaplay master for its best credible
+// resolution and peak bitrate. An unreadable master leaves both unknown rather
+// than publishing a guessed resolution.
+func (c *Client) megaplaySourceMeta(ctx context.Context, signed, referer string) (height, bitrate int) {
+	variants, err := kit.ParseHLSVariants(ctx, c.http, signed, map[string]string{"Referer": referer})
+	if err != nil {
+		logging.Debug("megaplay master probe failed", "provider", c.Name(), "err", err)
+		return 0, 0
+	}
+	return kit.SourceMetaFromVariants(variants)
+}
+
+// megaplaySkipTimes converts the getSources intro/outro cues into provider
+// skip bounds. Absent segments use -1 so the player's HasSegments check can
+// distinguish them from a real segment starting at zero.
+func megaplaySkipTimes(sr kit.MegaplaySourcesResp, source string) *provider.SkipTimes {
+	if sr.Intro == nil && sr.Outro == nil {
+		return nil
+	}
+	skip := &provider.SkipTimes{
+		Source:       source,
+		OpStart:      -1,
+		OpEnd:        -1,
+		EdStart:      -1,
+		EdEnd:        -1,
+		RecapStart:   -1,
+		RecapEnd:     -1,
+		PreviewStart: -1,
+		PreviewEnd:   -1,
+	}
+	if sr.Intro != nil {
+		skip.OpStart = sr.Intro.Start
+		skip.OpEnd = sr.Intro.End
+	}
+	if sr.Outro != nil {
+		skip.EdStart = sr.Outro.Start
+		skip.EdEnd = sr.Outro.End
+	}
+	return skip
 }
 
 // megaplayFileID fetches an embed page and extracts the stream file id.
@@ -198,8 +261,6 @@ func (c *Client) megaplayFileID(ctx context.Context, embedURL string) (string, e
 	if m := reEmbedFileIDAlt.FindSubmatch(body); len(m) >= 2 {
 		return string(m[1]), nil
 	}
-	// A 200 embed page explicitly titled as an error means the track does
-	// not exist (e.g. unreleased dub) — verified absence, not drift.
 	if bytes.Contains(body, []byte("<title>Error")) {
 		return "", fmt.Errorf("no file id in embed page: %w", provider.ErrAudioUnavailable)
 	}

@@ -232,8 +232,6 @@ func autocontrastPage(img image.Image) image.Image {
 		for y := range sh {
 			for x := range sw {
 				r, g, bl, a := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
-				// Per-channel linear stretch: manga pages are near-gray,
-				// so this equals a luminance gain without hue shifts.
 				out.Pix[(y*sw+x)*4+0] = clamp8((float64(r>>8) - loF) * gain)
 				out.Pix[(y*sw+x)*4+1] = clamp8((float64(g>>8) - loF) * gain)
 				out.Pix[(y*sw+x)*4+2] = clamp8((float64(bl>>8) - loF) * gain)

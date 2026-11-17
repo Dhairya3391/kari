@@ -18,7 +18,6 @@ import (
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
-	"kari/internal/provider/kit"
 )
 
 var (
@@ -41,6 +40,19 @@ type hlsVariant struct {
 	Quality   string
 	Bandwidth int
 	Height    int
+}
+
+// detailResponse is the site's movie/episode source listing. The HLS entry
+// carries the current server path; embeds in the same list are not direct
+// streams and are ignored here.
+type detailResponse struct {
+	Sources []detailSource `json:"sources"`
+}
+
+type detailSource struct {
+	Kind  string `json:"kind"`
+	URL   string `json:"url"`
+	Label string `json:"label"`
 }
 
 func parseCoordinates(mediaID string, episode provider.Episode) (int, string, int, int, error) {
@@ -103,41 +115,24 @@ func (c *Client) fetchSources(
 		}
 	}()
 
-	var targetPath string
-	if mediaType == provider.MediaTypeTV {
-		targetPath = fmt.Sprintf("tv/%d/%d/%d", tmdbID, season, epNum)
+	detail, detailErr := c.fetchDetail(ctx, tmdbID, mediaType, season, epNum)
+	var (
+		allSources []provider.MediaSource
+		resolveErr error
+	)
+	if detailErr != nil {
+		resolveErr = detailErr
+	} else if hls := c.hlsSource(detail); hls != nil {
+		allSources, resolveErr = c.fetchHLSSources(ctx, hls.url, hls.label)
 	} else {
-		targetPath = fmt.Sprintf("movie/%d", tmdbID)
-	}
-
-	var allSources []provider.MediaSource
-
-	// 1. Fetch Server 20 (Direct HLS on v.cno.to / cno.to)
-	s20URL := fmt.Sprintf("%s/api/s/20/%s", c.siteBase, targetPath)
-	s20Sources, err20 := c.fetchServer20(ctx, s20URL)
-	if err20 == nil && len(s20Sources) > 0 {
-		allSources = append(allSources, s20Sources...)
-	} else {
-		logging.Debug("cno server 20 fetch failed", "url", s20URL, "err", err20)
-	}
-
-	// 2. Fetch Server 21 (Vault CDN network)
-	s21URL := fmt.Sprintf("%s/api/s/21/%s?v=3", c.siteBase, targetPath)
-	s21Sources, err21 := c.fetchServer21(ctx, s21URL)
-	if err21 == nil && len(s21Sources) > 0 {
-		allSources = append(allSources, s21Sources...)
-	} else {
-		logging.Debug("cno server 21 fetch failed", "url", s21URL, "err", err21)
+		resolveErr = provider.ErrNoSources
 	}
 
 	subWg.Wait()
 
 	if len(allSources) == 0 {
-		if err20 != nil {
-			return err20
-		}
-		if err21 != nil {
-			return err21
+		if resolveErr != nil {
+			return resolveErr
 		}
 		return provider.ErrNoSources
 	}
@@ -150,6 +145,65 @@ func (c *Client) fetchSources(
 		updates <- allSources
 	}
 
+	return nil
+}
+
+// fetchDetail reads the site's own source listing so the current HLS path
+// (including its version query) comes from the site instead of being guessed.
+func (c *Client) fetchDetail(
+	ctx context.Context,
+	tmdbID int,
+	mediaType string,
+	season, epNum int,
+) (detailResponse, error) {
+	var endpoint string
+	if mediaType == provider.MediaTypeTV {
+		endpoint = fmt.Sprintf("%s/api/tv/%d/episode/%d/%d", c.siteBase, tmdbID, season, epNum)
+	} else {
+		endpoint = fmt.Sprintf("%s/api/movie/%d", c.siteBase, tmdbID)
+	}
+
+	req, err := c.newRequest(ctx, endpoint)
+	if err != nil {
+		return detailResponse{}, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return detailResponse{}, fmt.Errorf("cno detail request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return detailResponse{}, fmt.Errorf("cno detail status %d", resp.StatusCode)
+	}
+	var detail detailResponse
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		return detailResponse{}, fmt.Errorf("cno decode detail: %w", err)
+	}
+	return detail, nil
+}
+
+type discoveredSource struct {
+	url   string
+	label string
+}
+
+// hlsSource picks the direct HLS entry and resolves its site-relative path.
+func (c *Client) hlsSource(detail detailResponse) *discoveredSource {
+	base, err := url.Parse(c.siteBase + "/")
+	if err != nil {
+		return nil
+	}
+	for _, src := range detail.Sources {
+		if src.Kind != "hls" || src.URL == "" {
+			continue
+		}
+		ref, err := url.Parse(src.URL)
+		if err != nil {
+			continue
+		}
+		return &discoveredSource{url: base.ResolveReference(ref).String(), label: src.Label}
+	}
 	return nil
 }
 
@@ -217,9 +271,9 @@ func (c *Client) fetchSubtitles(
 	return options, nil
 }
 
-func (c *Client) fetchServer20(
+func (c *Client) fetchHLSSources(
 	ctx context.Context,
-	masterURL string,
+	masterURL, label string,
 ) ([]provider.MediaSource, error) {
 	req, err := c.newRequest(ctx, masterURL)
 	if err != nil {
@@ -228,75 +282,23 @@ func (c *Client) fetchServer20(
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cno HLS request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server 20 status %d", resp.StatusCode)
+		return nil, fmt.Errorf("cno HLS status %d", resp.StatusCode)
 	}
 
 	variants, err := parseHLSVariants(resp.Body, masterURL)
 	if err != nil {
-		return nil, fmt.Errorf("server 20 parse variants: %w", err)
-	}
-	if len(variants) > 0 {
-		var sources []provider.MediaSource
-		for _, v := range variants {
-			sources = append(sources, provider.MediaSource{
-				URL:       v.URL,
-				Quality:   v.Quality,
-				Type:      provider.SourceTypeHLS,
-				Referer:   c.siteBase + "/",
-				UserAgent: config.DesktopUserAgent,
-			})
-		}
-		return sources, nil
-	}
-
-	quality := kit.DetectHLSQuality(ctx, c.httpClient, masterURL, map[string]string{
-		"Referer": c.siteBase + "/",
-	})
-	if quality == "auto" {
-		quality = "1080p"
-	}
-
-	return []provider.MediaSource{
-		{
-			URL:       masterURL,
-			Quality:   quality,
-			Type:      provider.SourceTypeHLS,
-			Referer:   c.siteBase + "/",
-			UserAgent: config.DesktopUserAgent,
-		},
-	}, nil
-}
-
-func (c *Client) fetchServer21(
-	ctx context.Context,
-	masterURL string,
-) ([]provider.MediaSource, error) {
-	req, err := c.newRequest(ctx, masterURL)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server 21 status %d", resp.StatusCode)
-	}
-
-	variants, err := parseHLSVariants(resp.Body, masterURL)
-	if err != nil {
-		return nil, fmt.Errorf("server 21 parse variants: %w", err)
+		return nil, fmt.Errorf("cno parse HLS variants: %w", err)
 	}
 	if len(variants) == 0 {
 		return nil, provider.ErrNoSources
+	}
+	if label == "" {
+		label = "Cno HLS"
 	}
 
 	var sources []provider.MediaSource
@@ -304,6 +306,9 @@ func (c *Client) fetchServer21(
 		sources = append(sources, provider.MediaSource{
 			URL:       v.URL,
 			Quality:   v.Quality,
+			Height:    v.Height,
+			Bitrate:   v.Bandwidth,
+			Backend:   label,
 			Type:      provider.SourceTypeHLS,
 			Referer:   c.siteBase + "/",
 			UserAgent: config.DesktopUserAgent,

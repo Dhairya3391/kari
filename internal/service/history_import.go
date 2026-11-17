@@ -79,9 +79,6 @@ func ImportWatched(store *history.Store, items []scrobble.WatchedItem) (imported
 			imported++
 		case !local.Complete && item.Complete:
 			upgrade := local
-			// Upsert derives Complete from position/duration, so a
-			// bare Complete=true on a half-watched position would
-			// flip back to false — pin the position at the end.
 			if upgrade.DurationSecs > 0 {
 				upgrade.PositionSecs = upgrade.DurationSecs
 			}
@@ -152,8 +149,6 @@ func (x *importIndex) add(e history.Entry) {
 		Season:    e.Season,
 		Episode:   e.Episode,
 	}
-	// History entries and their keys can disagree on the title slot
-	// (legacy rows); the key is the identity, the entry the payload.
 	if e.Key.Title != "" || e.Key.Mode != "" {
 		key = e.Key
 	}
@@ -175,9 +170,6 @@ func (x *importIndex) add(e history.Entry) {
 			x.byTitle[k] = key
 		}
 	}
-	// Year-stripped fallback for catalog disambiguation ("Show" ==
-	// "Show (2011)"); the year check happens at lookup, so different
-	// years still map to distinct slots here.
 	if base, year := splitYear(e.Title); year != "" {
 		bk := titleKey{title: normTitle(base), mode: e.Mode, media: e.MediaType, season: e.Season, episode: e.Episode}
 		if bk.title != "" {
@@ -219,10 +211,6 @@ func (x *importIndex) find(store *history.Store, item scrobble.WatchedItem) (his
 			return local, true
 		}
 	}
-	// Year-stripped fallback for catalog disambiguation years: remote
-	// "Show (2011)" still finds local "Show", and vice versa. Both
-	// sides carrying different years never match, so remakes stay
-	// apart; a yearless side always matches (nothing to conflict).
 	if base, year := splitYear(item.Title); base != "" {
 		stripped := titleKey{title: normTitle(base), mode: item.Mode, media: item.MediaType, season: item.Season, episode: item.Episode}
 		if key, ok := x.byTitle[stripped]; ok {
@@ -304,8 +292,6 @@ func importMangaItem(store *history.Store, idx *importIndex, item scrobble.Watch
 	localChapter := mangaProgressChapter(local)
 	remoteChapter := strings.TrimSpace(item.Chapter)
 	if localChapter == "" && remoteChapter != "" {
-		// Blind local marker (chapter never recorded): adopt the
-		// remote position — information, not a clobber.
 		upgrade := local
 		upgrade.EpisodeTitle = remoteChapter
 		upgrade.MangaChapter = remoteChapter
@@ -345,10 +331,6 @@ func importMangaItem(store *history.Store, idx *importIndex, item scrobble.Watch
 		idx.add(upgrade)
 		return 0, 1, 0
 	case cmp == 0 && !local.Complete && item.Complete:
-		// Same chapter, remote finished it: close the chapter. The
-		// page advances to the end with it — completion means read,
-		// and Upsert would otherwise flip Complete back to false
-		// from the half-read position.
 		upgrade := local
 		if upgrade.MangaPages > 0 {
 			upgrade.MangaPage = upgrade.MangaPages

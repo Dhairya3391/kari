@@ -105,11 +105,6 @@ func buildActivity(np NowPlaying, p Progress, now time.Time) *Activity {
 		act.Assets.SmallText = "Paused"
 	}
 
-	// Anchor the elapsed counter to the current position. Discord always
-	// renders the "start" clock, so it is set in both states: while playing it
-	// tracks the player, and while paused it shows where playback stopped
-	// (omitting it makes Discord fall back to 0:00). The remaining-time end is
-	// sent only while playing so a paused card does not count down.
 	start := now.Add(-secondsToDuration(p.PositionSecs))
 	ts := &Timestamps{Start: start.Unix()}
 	if !p.Paused && !isLive && p.DurationSecs > 0 {

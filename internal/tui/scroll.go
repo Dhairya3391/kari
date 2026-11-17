@@ -12,6 +12,15 @@ import (
 	"kari/internal/provider"
 )
 
+// clampIndex constrains i to [0, count-1]. It is the single clamping rule for
+// paged cursor movement across every screen.
+func clampIndex(i, count int) int {
+	if count <= 0 {
+		return 0
+	}
+	return max(0, min(i, count-1))
+}
+
 // windowStart returns the first visible row index for a centered cursor
 // window over total rows: the single scroll rule shared by windowRows,
 // the episodes list, and the preview source table.
@@ -76,16 +85,14 @@ func windowRange(total, cursorPos, height, headerReserve int) (start, end, above
 	if total <= avail {
 		return 0, total, 0, 0
 	}
+	// Always reserve two hint rows, whether or not a hint is shown. The
+	// content row count then stays fixed as the cursor crosses a list edge,
+	// so one keypress never shifts every row by one. applyWindow leaves an
+	// unused hint slot blank.
 	visible := max(1, avail-2)
 	start = windowStart(total, cursorPos, visible)
 	end = start + visible
 	above, below = start, total-end
-	if (above == 0 && below > 0) || (below == 0 && above > 0) {
-		visible = max(1, avail-1)
-		start = windowStart(total, cursorPos, visible)
-		end = start + visible
-		above, below = start, total-end
-	}
 	return start, end, above, below
 }
 
@@ -122,8 +129,6 @@ func centerBlock(content string, width, maxW int) string {
 		return content
 	}
 	lines := strings.Split(content, "\n")
-	// The widest visible line sets the block width; lines already at or
-	// past the terminal width are left alone so nothing wraps.
 	blockW := 0
 	for _, line := range lines {
 		if w := lipgloss.Width(line); w > blockW {
@@ -170,8 +175,6 @@ func formatContinuePosition(entry history.Entry) string {
 		return fmt.Sprintf("%s/%s", formatDurationShort(entry.PositionSecs), formatDurationShort(entry.DurationSecs))
 	}
 
-	// A finished entry with no position data (tracker imports, legacy
-	// rows) must not read "0%": the bar beside it is full.
 	if entry.Complete {
 		return "done"
 	}

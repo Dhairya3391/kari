@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
@@ -42,6 +43,10 @@ const (
 	// placeholderSlug stands in for the canonical slug on the first
 	// watch request; the server answers with a redirect naming it.
 	placeholderSlug = "x"
+	// episodeRosterTTL bounds how long a fetched roster is reused. FetchEpisodes
+	// and FetchEpisodeTitles read the same watch payload; a short-lived cache
+	// keeps the service's title race from downloading it twice.
+	episodeRosterTTL = 5 * time.Minute
 )
 
 // Client implements provider.Provider for Miruro anime.
@@ -51,16 +56,35 @@ type Client struct {
 	gqlBase string
 
 	mu sync.Mutex
-	// byAniList maps AniList ID to its Miruro show coordinates.
+	// byAniList maps AniList ID to its Miruro show coordinates. The canonical
+	// slug lives on showRef, so one lookup serves both search-keyed and
+	// handle-keyed resolutions without a second, parallel cache to invalidate.
 	byAniList map[string]showRef
-	// slugs maps Miruro show ID to its canonical watch slug.
-	slugs map[string]string
+	// rosters caches the watch payload's episode list by Miruro show ID.
+	rosters map[string]cachedRoster
+}
+
+// cachedRoster is one show's episode list and when it was fetched.
+type cachedRoster struct {
+	entries []episodeEntry
+	at      time.Time
 }
 
 // showRef carries everything needed to build a watch URL.
 type showRef struct {
 	showID string
 	slug   string
+}
+
+// slugFor returns the canonical slug already cached for a Miruro show ID.
+// The caller must hold c.mu; the scan is bounded by the shows seen this session.
+func (c *Client) slugFor(showID string) string {
+	for _, ref := range c.byAniList {
+		if ref.showID == showID {
+			return ref.slug
+		}
+	}
+	return ""
 }
 
 // Alias implements provider.Presenter, providing the human-readable display name.
@@ -111,7 +135,7 @@ func NewClientWithBases(siteBase, gqlBase string) (*Client, error) {
 		base:      siteBase,
 		gqlBase:   strings.TrimRight(strings.TrimSpace(gqlBase), "/"),
 		byAniList: make(map[string]showRef),
-		slugs:     make(map[string]string),
+		rosters:   make(map[string]cachedRoster),
 	}, nil
 }
 
@@ -140,7 +164,7 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 		if it.showID != "" {
 			c.mu.Lock()
 			if c.byAniList[anilistID].showID == "" {
-				c.byAniList[anilistID] = showRef{showID: it.showID, slug: c.slugs[it.showID]}
+				c.byAniList[anilistID] = showRef{showID: it.showID, slug: c.slugFor(it.showID)}
 			}
 			c.mu.Unlock()
 		}
@@ -186,7 +210,7 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 	if err != nil {
 		return nil, err
 	}
-	eps, err := c.watchEpisodes(ctx, ref, 1)
+	eps, err := c.cachedEpisodes(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +265,7 @@ func (c *Client) FetchEpisodeTitles(ctx context.Context, series provider.SearchR
 	if err != nil {
 		return nil, err
 	}
-	eps, err := c.watchEpisodes(ctx, ref, 1)
+	eps, err := c.cachedEpisodes(ctx, ref)
 	if err != nil {
 		return nil, err
 	}

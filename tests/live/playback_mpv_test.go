@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"kari/internal/filter"
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/provider"
@@ -47,9 +48,7 @@ func TestMPVPlaybackResolvesAndPlays(t *testing.T) {
 		t.Fatal("resolve produced no playback sources")
 	}
 
-	// Lowest quality starts fastest — we're proving playability, not
-	// benchmarking 4K startup.
-	lowest := service.FilterPlaybackSources(resolved.Playback, 3 /* lowest */, nil)
+	lowest := filter.SelectTier(resolved.Playback, filter.QualityLowest)
 	if len(lowest) == 0 {
 		lowest = resolved.Playback
 	}
@@ -59,8 +58,6 @@ func TestMPVPlaybackResolvesAndPlays(t *testing.T) {
 	// Clear any stale socket from a previous crashed run.
 	_ = os.Remove(player.DefaultMPVSocketPath())
 
-	// Whatever happens below — assertion failure, timeout, panic — never
-	// leave an orphaned mpv playing on this machine.
 	t.Cleanup(func() {
 		quitMPV(t)
 		time.Sleep(500 * time.Millisecond)
@@ -77,9 +74,6 @@ func TestMPVPlaybackResolvesAndPlays(t *testing.T) {
 		done <- playOutcome{result: result, err: err}
 	}()
 
-	// Proof of playback comes from two independent witnesses: our own IPC
-	// polling here, and the production telemetry the player gathered. Either
-	// is sufficient.
 	extDuration := pollMVPDuration(t, 60*time.Second)
 	if extDuration > 0 {
 		t.Logf("playback confirmed via external IPC poll duration=%.1fs", extDuration)

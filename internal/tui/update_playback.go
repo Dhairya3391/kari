@@ -25,18 +25,12 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 	m.endProviderWait()
 	if msg.err != nil {
 		if m.playOpID == 0 {
-			// Verified-missing track (e.g. unreleased dub): retrying
-			// cannot help, so drop the episode instead of looping.
 			if m.resolved == nil && errors.Is(msg.err, provider.ErrAudioUnavailable) {
 				m.loading = false
 				m.loadingText = ""
 				m.autoPlayAfterResolve = false
 				return m.handleUnavailableAudio(), nil
 			}
-			// No sources at all: retry the whole resolve automatically,
-			// bounded by maxResolveAttempts, so a flaky provider doesn't
-			// force a manual retry. Partial results stay playable and are
-			// never retried over.
 			if m.resolved == nil && m.selectedSeries != nil && m.selectedEpisode != nil && m.resolveAttempts+1 < maxResolveAttempts {
 				m.resolveAttempts++
 				m.loading = true
@@ -73,10 +67,6 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 		return m, skipInfoCmd
 	}
 
-	// Partial success with a preferred provider down (movy-first): one
-	// quiet background repair so the favorite doesn't need a manual R.
-	// Bounded to one attempt per pick; the merge dedupes anything the
-	// retry re-delivers.
 	if m.preferredRepairAttempts < 1 && m.preferredRepairNeeded() {
 		m.preferredRepairAttempts++
 		m.loading = true
@@ -89,10 +79,6 @@ func (m *modelImpl) onResolveDone(msg resolveDoneMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.spinner.Tick, m.resolveCmd(opID, *m.selectedSeries, *m.selectedEpisode, exclude, retry), skipInfoCmd)
 	}
 
-	// The subtitle fetch started on the first progress snapshot, so by
-	// now it is usually done: only wait when a fresh fetch just started
-	// or one is still in flight, keeping the soft-subtitle guarantee
-	// for players without hot-add.
 	subCmd := m.triggerSubtitleSync()
 	if m.autoPlayAfterResolve && (subCmd != nil || m.subtitleOpID != 0) {
 		m.loading = true
@@ -209,20 +195,12 @@ func (m *modelImpl) onResolveProgress(msg resolveProgressMsg) (tea.Model, tea.Cm
 		m.loadingText = ""
 	}
 
-	// Start the subtitle fetch on progress snapshots instead of waiting
-	// for every provider: the first batch already carries usable tracks,
-	// and the trigger re-fires only when the target changes or the pool
-	// grows with nothing secured yet.
 	subCmd := m.triggerSubtitleSync()
 	skipInfoCmd := m.triggerPreviewSkipInfo()
 	if wasNil {
 		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewPoster(), m.triggerPreviewDetails(), subCmd, skipInfoCmd)
 	}
 
-	// Progressive snapshots can carry the TMDBID after the first one;
-	// retry the details fetch once it is known so movies don't stay
-	// blank. Guarded to the TMDB path so anime/movies without an ID
-	// don't spam the AniList fallback on every snapshot.
 	if m.previewOverview == "" && msg.resolved.TMDBID != 0 {
 		return m, tea.Batch(m.resolveSubscription(), m.triggerPreviewDetails(), subCmd, skipInfoCmd)
 	}
@@ -291,19 +269,12 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 			TotalResolvers:     resolved.TotalResolvers,
 		}
 		m.rawSubtitles = append([]model.SubtitleTrack{}, resolved.Subtitles...)
-		m.selectedPlayback = 0
 		m.refreshRanking()
 		m.applyResumeFromHistory(m.resolved)
 		return
 	}
 	// Retry snapshots contain only the retried providers, so keep previously
 	// successful rows while updating metadata on sources already present.
-	var selectedURL string
-	if src, ok := m.selectedPlaybackSource(); ok {
-		selectedURL = src.URL
-	}
-	// Merge playback sources, deduplicating so retried or progressively
-	// reporting providers add to existing sources instead of clobbering them.
 	playbackChanged := false
 	seenSources := make(map[string]int, len(m.resolved.Playback)+len(resolved.Playback))
 	for i, p := range m.resolved.Playback {
@@ -328,9 +299,6 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 		m.resolved.Playback = append(m.resolved.Playback, p)
 		playbackChanged = true
 	}
-	// Progressive snapshots may carry the TMDBID after the first one;
-	// pick it up so the details/poster retry below queries TMDB and not
-	// the AniList fallback.
 	if m.resolved.TMDBID == 0 && resolved.TMDBID != 0 {
 		m.resolved.TMDBID = resolved.TMDBID
 	}
@@ -342,22 +310,6 @@ func (m *modelImpl) mergeResolved(resolved model.ResolvedMedia) {
 		}
 	}
 
-	// If user manually switched sources with Tab, restore that specific source URL.
-	// Otherwise default to the top-ranked source (index 0, e.g. Movy.sx).
-	if m.manualPlaybackSelected {
-		newSelected := 0
-		if selectedURL != "" {
-			for i, p := range m.resolved.Playback {
-				if p.URL == selectedURL {
-					newSelected = i
-					break
-				}
-			}
-		}
-		m.selectedPlayback = newSelected
-	} else {
-		m.selectedPlayback = 0
-	}
 	// Accumulate raw subtitles from all provider updates
 	seenSub := make(map[string]struct{})
 	for _, subtitle := range m.rawSubtitles {

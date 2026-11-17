@@ -22,12 +22,12 @@ import (
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
-	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/provider/anilist"
 	"kari/internal/provider/kit"
 	"kari/internal/provider/streambase"
+	"kari/internal/timeouts"
 	"kari/internal/tmdb"
 	"kari/internal/util"
 )
@@ -43,7 +43,7 @@ const (
 	// laneBudget caps how long a resolve waits for the slowest lane. Lanes
 	// still running when it expires are discarded so one stuck scraper
 	// cannot hold the whole provider to the service timeout.
-	defaultLaneBudget = 10 * time.Second
+	defaultLaneBudget = timeouts.LaneBudget
 	// embedCacheTTL and laneCacheTTL keep re-resolves (audio toggle, retry,
 	// returning to an episode) from repeating upstream work. Both stay far
 	// below the signed-URL lifetimes VidRift issues.
@@ -77,7 +77,8 @@ type laneCacheEntry struct {
 // lanes can emit. It backs AudioLanguagesSource so settings can offer
 // per-language filters, and doubles as the whitelist for source tagging:
 // labels that do not normalize onto this list stay untagged instead of
-// sending a bogus --alang value to mpv.
+// sending a bogus --alang value to mpv. This is a declaration surface, not a
+// provider-side filter — lanes are emitted with whatever language they declare.
 var vidriftAudioLanguages = []provider.AudioLanguage{
 	{Code: "en", Display: "English"},
 	{Code: "hi", Display: "Hindi"},
@@ -132,11 +133,8 @@ type Client struct {
 	httpClient  *http.Client
 	embedBase   string
 	anilistBase string
-	// langFilter mirrors the user's audio-language settings (see
-	// internal/settings LanguageFilter): nil or missing keys mean enabled.
-	langFilter map[string]bool
-	embedCache *util.BoundedCache[embedCacheEntry]
-	laneCache  *util.BoundedCache[laneCacheEntry]
+	embedCache  *util.BoundedCache[embedCacheEntry]
+	laneCache   *util.BoundedCache[laneCacheEntry]
 	// laneBudget bounds one lane fan-out; a field so tests can shorten it.
 	laneBudget time.Duration
 }
@@ -144,24 +142,12 @@ type Client struct {
 // NewClient constructs the VidRift provider over the shared TMDB search
 // base and the production embed origin.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
-	return NewClientWithLanguageFilter(keyPool, nil)
-}
-
-// NewClientWithLanguageFilter is NewClient with the user's audio-language
-// filter applied at resolve time (nil = everything enabled).
-func NewClientWithLanguageFilter(keyPool *tmdb.KeyPool, langFilter map[string]bool) (*Client, error) {
-	return NewClientWithURLsAndLanguageFilter(keyPool, config.VidRiftEmbedBase, config.AniListAPIBase, langFilter)
+	return NewClientWithURLs(keyPool, config.VidRiftEmbedBase, config.AniListAPIBase)
 }
 
 // NewClientWithURLs constructs the VidRift provider against explicit embed
 // and AniList endpoints so offline tests can serve canned payloads.
 func NewClientWithURLs(keyPool *tmdb.KeyPool, embedBase, anilistBase string) (*Client, error) {
-	return NewClientWithURLsAndLanguageFilter(keyPool, embedBase, anilistBase, nil)
-}
-
-// NewClientWithURLsAndLanguageFilter is NewClientWithURLs with an explicit
-// audio-language filter.
-func NewClientWithURLsAndLanguageFilter(keyPool *tmdb.KeyPool, embedBase, anilistBase string, langFilter map[string]bool) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
 		return nil, fmt.Errorf("vidrift streambase: %w", err)
@@ -176,7 +162,6 @@ func NewClientWithURLsAndLanguageFilter(keyPool *tmdb.KeyPool, embedBase, anilis
 		httpClient:  httpclient.New(),
 		embedBase:   embedBase,
 		anilistBase: anilistBase,
-		langFilter:  langFilter,
 		embedCache:  util.NewBoundedCache[embedCacheEntry](embedCacheSize),
 		laneCache:   util.NewBoundedCache[laneCacheEntry](laneCacheSize),
 		laneBudget:  defaultLaneBudget,
@@ -297,15 +282,10 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	dubbed := strings.EqualFold(strings.TrimSpace(episode.Audio), provider.AudioDub)
 	lanes := standardSourceProviders
 	if anime {
-		// Anime stays on VidRift's own lane. General scrapers do not
-		// declare Japanese/English audio, so mixing them would turn the
-		// sub/dub choice into a guess and add their cascade latency.
 		lane := providerAnime
 		if dubbed {
 			lane = providerAnimeDub
 		}
-		// The embed always lists both anime lanes even when a title has no
-		// dub, so the lane lookup itself has to prove availability.
 		if !page.Meta.hasAnimeLane(lane) {
 			if dubbed {
 				return nil, fmt.Errorf("vidrift: English dub unavailable: %w", provider.ErrAudioUnavailable)
@@ -319,10 +299,18 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	defer cancel()
 	results := c.fetchLanes(laneCtx, page.Meta.sourcePath(), page.Meta.PlaybackToken, lanes)
 	if anime {
-		results = filterAnimeLanes(results, dubbed)
+		results = filterAnimeLanes(results)
 	}
 
-	sources := buildSources(page, results, c.embedBase)
+	track := provider.TrackUnknown
+	if anime {
+		if dubbed {
+			track = provider.TrackDub
+		} else {
+			track = provider.TrackSub
+		}
+	}
+	sources := buildSources(page, results, c.embedBase, track)
 	if !anime {
 		// Baked BigBang/Evion/Vexon/selfhost lanes carry no reliable audio
 		// language, so they are only safe for movies and TV.
@@ -330,10 +318,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	}
 	sources = dedupeSources(sources)
 	sources = provider.FilterDirectSources(sources)
-	sources = c.filterSourcesByLanguage(sources, anime, dubbed)
 	if len(sources) == 0 {
-		// Surface transport failures instead of disguising them as an
-		// unavailable audio track.
 		if laneErr := firstLaneError(results); laneErr != nil {
 			return nil, fmt.Errorf("vidrift: %w", laneErr)
 		}
@@ -435,6 +420,9 @@ func (c *Client) fetchLane(ctx context.Context, route, token, lane string) (lane
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 	req.Header.Set("Referer", c.embedBase+"/embed/"+route)
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -469,30 +457,16 @@ func (c *Client) fetchLane(ctx context.Context, route, token, lane string) (lane
 	return result, nil
 }
 
-// filterAnimeLanes keeps only responses that came from the requested audio
-// lane. VidRift's cascade happily falls back to another provider (including
-// subbed streams for a dub request), so the response's own source/provider
-// fields are the only reliable signal once a lookup succeeds.
-func filterAnimeLanes(results []laneResult, dubbed bool) []laneResult {
+// filterAnimeLanes drops responses that fell back to another lane. Only the
+// requested lane was queried, so its own declaration — not a substring guess
+// on a provider label — proves which audio track was delivered. Error rows are
+// kept (they carry no streams) so firstLaneError can surface a transport failure
+// instead of it being reported as a missing audio track.
+func filterAnimeLanes(results []laneResult) []laneResult {
 	filtered := make([]laneResult, 0, len(results))
 	for i := range results {
 		result := &results[i]
-		if result.err != nil {
-			filtered = append(filtered, *result)
-			continue
-		}
-		// A fallback means the requested lane did not answer; its audio
-		// track is whatever the winner happened to carry.
 		if result.fellBack {
-			continue
-		}
-		if dubbed {
-			// A dub request must not accept subbed rows.
-			if !result.isDub() {
-				continue
-			}
-		} else if result.isDub() {
-			// A sub request must not accept dubbed rows.
 			continue
 		}
 		filtered = append(filtered, *result)
@@ -511,64 +485,6 @@ func firstLaneError(results []laneResult) error {
 		}
 	}
 	return nil
-}
-
-// filterSourcesByLanguage applies the user's audio-language settings.
-// Anime is exempt: the sub/dub selector already owns that decision, so the
-// selected track is kept even if its language was globally disabled, while
-// foreign tracks never leak in. For movies and TV, unknown languages pass
-// because they cannot be compared to a setting, and a title whose languages
-// are all disabled keeps its rows so it never vanishes from the resolve
-// screen — playback filtering still honors the setting.
-func (c *Client) filterSourcesByLanguage(sources []provider.MediaSource, anime, dubbed bool) []provider.MediaSource {
-	if anime {
-		want := "ja"
-		if dubbed {
-			want = "en"
-		}
-		kept := make([]provider.MediaSource, 0, len(sources))
-		for i := range sources {
-			if code := strings.TrimSpace(sources[i].Language); code == "" || code == want {
-				kept = append(kept, sources[i])
-			}
-		}
-		return kept
-	}
-
-	kept := make([]provider.MediaSource, 0, len(sources))
-	var dropped []provider.MediaSource
-	for i := range sources {
-		if strings.TrimSpace(sources[i].Language) == "" || c.languageEnabled(sources[i].Language) {
-			kept = append(kept, sources[i])
-			continue
-		}
-		dropped = append(dropped, sources[i])
-	}
-	if len(kept) == 0 {
-		return dropped
-	}
-	return kept
-}
-
-// languageEnabled mirrors the TUI toggle semantics: a nil filter or a
-// missing key means enabled; only an explicit false disables.
-func (c *Client) languageEnabled(code string) bool {
-	if c.langFilter == nil {
-		return true
-	}
-	display := lang.Name(code)
-	for _, key := range []string{code, display} {
-		if key == "" {
-			continue
-		}
-		if v, ok := c.langFilter[key]; ok {
-			return v
-		}
-		if v, ok := c.langFilter[strings.ToLower(key)]; ok {
-			return v
-		}
-	}
-	return true
 }
 
 // movieEpisodes returns the single synthetic anime-movie episode for both

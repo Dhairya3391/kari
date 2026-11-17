@@ -188,6 +188,46 @@ func TestResolveSource(t *testing.T) {
 	if len(s.Subtitles) != 1 || s.Subtitles[0].Language != "en" {
 		t.Errorf("Subtitles = %+v", s.Subtitles)
 	}
+	if got := s.Audio.Languages; len(got) != 1 || got[0] != "ja" {
+		t.Errorf("Audio.Languages = %v, want [ja]", got)
+	}
+	if s.Quality != "Auto" || s.Height != 0 {
+		t.Errorf("Quality/Height = %q/%d, want Auto/0 (no guessed resolution)", s.Quality, s.Height)
+	}
+}
+
+func TestResolveSourceWithoutAudioLangLeavesLanguageUnknown(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/anime/playback-bootstrap/anilist/21":
+			_ = json.NewEncoder(w).Encode(bootstrapResponse{SettlarSelection: "sel"})
+		case "/api/anime/settlar/session":
+			_ = json.NewEncoder(w).Encode(sessionResponse{EmbedURL: srv.URL + "/embed?t=x"})
+		case "/api/embed/session":
+			_ = json.NewEncoder(w).Encode(playbackSession{Source: "https://media.settlar.io/stream.m3u8"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClientWithBaseURL(srv.URL, srv.URL)
+	sources, err := c.ResolveSource(context.Background(), "21", provider.Episode{
+		Episode: 1,
+		Audio:   provider.AudioDub,
+		ID:      "watch/anipm/21/dub/1",
+	})
+	if err != nil {
+		t.Fatalf("ResolveSource: %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("sources = %d, want 1", len(sources))
+	}
+	if sources[0].Language != "" || len(sources[0].Audio.Languages) != 0 {
+		t.Errorf("dub without a terminal code must stay unknown, got %q / %v",
+			sources[0].Language, sources[0].Audio.Languages)
+	}
 }
 
 func TestResolveSourceSubAndDubCarryAudioLanguage(t *testing.T) {
@@ -239,6 +279,9 @@ func TestResolveSourceSubAndDubCarryAudioLanguage(t *testing.T) {
 			}
 			if len(sources) != 1 || sources[0].Language != tc.lang || sources[0].URL != "https://media.settlar.io/"+tc.lang+".m3u8" {
 				t.Fatalf("ResolveSource() = %+v, want %s audio source", sources, tc.lang)
+			}
+			if got := sources[0].Audio.Languages; len(got) != 1 || got[0] != tc.lang {
+				t.Errorf("Audio.Languages = %v, want [%s]", got, tc.lang)
 			}
 		})
 	}

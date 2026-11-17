@@ -145,9 +145,6 @@ func (c *Client) FetchImage(ctx context.Context, tmdbID int, mediaType, title st
 			c.imgCache.Set(key, img)
 			return img, nil
 		}
-		// Disk entry is truncated/corrupt (e.g. killed mid-write before
-		// atomic writes): fall through and re-download rather than
-		// poisoning every future run.
 	}
 
 	posterURL, uerr := c.resolveURL(ctx, tmdbID, mediaType, title)
@@ -194,8 +191,6 @@ func (c *Client) FetchImageURL(ctx context.Context, rawURL, referer string) (ima
 			c.imgCache.Set(key, img)
 			return img, nil
 		}
-		// Corrupt disk entry: re-download below instead of failing
-		// permanently.
 	}
 
 	if referer == "" {
@@ -282,8 +277,6 @@ func (c *Client) downloadReferer(ctx context.Context, target, referer string) ([
 
 func cacheKey(tmdbID int, title, size string) string {
 	if tmdbID != 0 {
-		// The size rides in the key so a size upgrade (w500 → original)
-		// never serves stale smaller art from either cache.
 		if size == "" {
 			size = tmdbPosterSize
 		}

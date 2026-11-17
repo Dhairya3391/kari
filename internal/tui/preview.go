@@ -6,9 +6,22 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"kari/internal/filter"
 	"kari/internal/lang"
 	"kari/internal/provider"
-	"kari/internal/ranking"
+	"kari/internal/provider/kit"
+)
+
+const (
+	// previewMetaLines is the fixed height of the metadata block. Every
+	// asynchronous field owns a slot from the first frame, so late data only
+	// replaces the text inside its slot.
+	previewMetaLines = 14
+	// previewOverviewLines is the reserved synopsis slot inside the metadata
+	// block.
+	previewOverviewLines = 4
+	// previewSourceSlots reserves the ↑/↓ "more" rows of the source table.
+	previewSourceSlots = 2
 )
 
 // PreviewData holds all state necessary to render the Preview (Source Picker) screen.
@@ -26,7 +39,7 @@ type PreviewData struct {
 	ResumePosition   string // e.g. "13:08"
 	PosterBlock      string
 	Sources          []provider.MediaSource
-	RankedSources    []ranking.ScoredSource
+	RankedSources    []filter.RankedSource
 	SelectedIndex    int
 	PlayerName       string
 	Autoplay         bool
@@ -62,36 +75,30 @@ func RenderPreviewScreen(data PreviewData) string {
 	sourcesTitle := renderSourcesTitle(data, st)
 	rows = append(rows, sourcesTitle, "")
 
-	// 4. Tabular Sources List
-	sourcesTable := renderSourcesTable(data, st)
+	headerLines := strings.Count(header, "\n") + 1
+	windowSize := previewSourceWindow(data.Height)
+	if data.Height > 0 {
+		windowSize = max(1, max(4, data.Height-headerLines-5)-3)
+	}
+	sourcesTable := renderSourcesTable(data, st, windowSize)
 	rows = append(rows, sourcesTable)
 
-	// 5. Failure summary closes the section (below header, table, and
-	// everything between) so the layout reads finished instead of
-	// interrupting the show info mid-screen.
-	if failureLine := renderSourcesError(data, st); failureLine != "" {
-		rows = append(rows, "", failureLine)
-	}
-	// Body stays left-aligned: RenderFrame already centers the
-	// content column, so centering here too double-indents narrow tables
-	// to the right half on wide terminals.
+	// 5. Failure summary closes the section. Its two rows are reserved even
+	// when there is no failure, so a late failure never pushes the table down.
+	rows = append(rows, "", renderSourcesError(data, st))
 	return strings.Join(rows, "\n")
 }
 
+// showPreviewPoster reserves the poster column from the first frame whenever
+// the terminal is wide enough. It deliberately ignores whether artwork has
+// loaded: the slot is always drawn, so its arrival cannot move the metadata or
+// the source table.
 func showPreviewPoster(data PreviewData) bool {
-	return data.PosterBlock != "" && (data.TermWidth >= 80 || data.Width >= 70)
+	return data.TermWidth >= 80 || data.Width >= 70
 }
 
 func renderPreviewHeader(data PreviewData, st Styles) string {
-	// posterW is the total columns reserved by the poster block (image + gutter).
-	// Only count it when the poster is actually shown (same condition as the
-	// side-by-side layout below).
 	posterW := previewPosterWidth(data)
-	// metaW is the maximum columns available for the metadata text block.
-	// Every line appended to metaRows must fit within this so that the
-	// horizontal join never produces a line wider than data.Width — if it
-	// did, Bubble Tea's renderer would omit the end-of-line erase (\x1b[K)
-	// for that row, leaving old image cells visible on screen.
 	metaW := max(20, data.Width-posterW)
 	metaBlock := renderPreviewMeta(data, st, metaW)
 
@@ -102,18 +109,19 @@ func renderPreviewHeader(data PreviewData, st Styles) string {
 	// Layout side-by-side with poster on left
 	return lipgloss.JoinHorizontal(lipgloss.Top,
 		data.PosterBlock,
-		"    ",
+		strings.Repeat(" ", posterGutter),
 		metaBlock,
 	)
 }
 
-// previewPosterWidth is the number of columns the poster block reserves
-// (image plus its 4-column gutter), or 0 when the poster is hidden.
+// previewPosterWidth is the fixed number of columns the poster slot reserves
+// (image plus its gutter), or 0 when the poster is hidden. It never depends on
+// the rendered image, whose width varies with aspect ratio and protocol.
 func previewPosterWidth(data PreviewData) int {
 	if !showPreviewPoster(data) {
 		return 0
 	}
-	return lipgloss.Width(data.PosterBlock) + 4
+	return previewPosterMaxCols + posterGutter
 }
 
 // renderPreviewMeta builds the text block that sits beside the poster, or
@@ -121,21 +129,22 @@ func previewPosterWidth(data PreviewData) int {
 // renderPreviewHeader so the overlay layout key can compare exactly the
 // lines that share rows with a Sixel/iTerm2 placement (see overlayLayoutKey).
 func renderPreviewMeta(data PreviewData, st Styles, metaW int) string {
-	var metaRows []string
+	fit := func(s string) string { return truncate(s, metaW) }
+	empty := ""
+	metaRows := make([]string, 0, previewMetaLines)
 
-	// Series Title
-	metaRows = append(metaRows, st.Bold.Render(truncate(data.SeriesTitle, metaW)))
-
-	// Episode code & title
-	if data.EpisodeInfo != "" {
-		metaRows = append(metaRows, truncate(data.EpisodeInfo, metaW))
+	// Title, episode, genres/rating: three fixed rows.
+	metaRows = append(metaRows, fit(st.Bold.Render(truncate(data.SeriesTitle, metaW))))
+	if data.EpisodeInfo == "" {
+		metaRows = append(metaRows, empty)
+	} else {
+		metaRows = append(metaRows, fit(data.EpisodeInfo))
 	}
 
-	// Genres & Rating — build as plain text first, then truncate styled pieces.
 	var tagParts []string
 	ratingW := 0
 	if data.Rating != "" && data.Rating != "—" {
-		// "★ " + rating + " · " separator = reserve space for rating badge.
+		// Reserve space for the rating badge before the separator.
 		ratingW = lipgloss.Width("★ " + data.Rating + " · ")
 	}
 	if len(data.Genres) > 0 {
@@ -145,40 +154,39 @@ func renderPreviewMeta(data PreviewData, st Styles, metaW int) string {
 	if data.Rating != "" && data.Rating != "—" {
 		tagParts = append(tagParts, st.Current.Render("★ ")+data.Rating)
 	}
-	if len(tagParts) > 0 {
-		metaRows = append(metaRows, truncate(strings.Join(tagParts, st.Dim.Render(" · ")), metaW))
+	if len(tagParts) == 0 {
+		metaRows = append(metaRows, empty)
+	} else {
+		metaRows = append(metaRows, fit(strings.Join(tagParts, st.Dim.Render(" · "))))
 	}
 
-	// Plot synopsis
-	if data.Overview != "" {
-		metaRows = append(metaRows, "")
-		wrapped := wrapText(data.Overview, metaW, 4)
-		metaRows = append(metaRows, st.Dim.Render(wrapped))
-	}
-
-	// Audio line, Subtitles line, Autoplay & Resume lines
-	autoVal := "off"
-	if data.Autoplay {
-		autoVal = "on"
-	}
-
+	// Synopsis: a blank separator plus a fixed four-line slot.
 	metaRows = append(metaRows, "")
-	if data.AudioText != "" {
+	for _, line := range strings.Split(wrapFixed(data.Overview, metaW, previewOverviewLines), "\n") {
+		metaRows = append(metaRows, st.Dim.Render(line))
+	}
+
+	// Audio, subtitles, autoplay, skip data, resume: five fixed rows.
+	metaRows = append(metaRows, "")
+	if data.AudioText == "" {
+		metaRows = append(metaRows, st.Dim.Render("audio      ")+empty)
+	} else {
 		audioFmt := data.AudioText
 		if strings.HasPrefix(audioFmt, "sub") {
 			audioFmt = st.Current.Render("sub") + st.Dim.Render(strings.TrimPrefix(audioFmt, "sub"))
 		} else if strings.HasPrefix(audioFmt, "dub") {
 			audioFmt = st.Current.Render("dub") + st.Dim.Render(strings.TrimPrefix(audioFmt, "dub"))
 		}
-		metaRows = append(metaRows, st.Dim.Render("audio      ")+audioFmt)
+		metaRows = append(metaRows, fit(st.Dim.Render("audio      ")+audioFmt))
 	}
-	if data.SubtitlesText != "" {
+	if data.SubtitlesText == "" {
+		metaRows = append(metaRows, st.Dim.Render("subtitles  ")+empty)
+	} else {
 		subFmt := data.SubtitlesText
 		subType := data.SubtitleType
 		if subType == "" && strings.Contains(subFmt, " · ") {
 			parts := strings.SplitN(subFmt, " · ", 2)
-			subFmt = parts[0]
-			subType = parts[1]
+			subFmt, subType = parts[0], parts[1]
 		}
 		if strings.HasSuffix(subFmt, "✓") {
 			base := strings.TrimSpace(strings.TrimSuffix(subFmt, "✓"))
@@ -192,16 +200,24 @@ func renderPreviewMeta(data PreviewData, st Styles, metaW int) string {
 		if subType != "" {
 			subFmt += st.Dim.Render(" · " + subType)
 		}
-		metaRows = append(metaRows, truncate(st.Dim.Render("subtitles  ")+subFmt, metaW))
+		metaRows = append(metaRows, fit(st.Dim.Render("subtitles  ")+subFmt))
 	}
-	metaRows = append(metaRows, st.Dim.Render("autoplay   ")+st.Current.Render(autoVal))
-	if data.SkipInfo != "" {
-		metaRows = append(metaRows, truncate(st.Dim.Render("skip data  ")+st.Current.Render(data.SkipInfo), metaW))
+	autoVal := "off"
+	if data.Autoplay {
+		autoVal = "on"
 	}
-	if data.ResumePosition != "" {
-		metaRows = append(metaRows, st.Dim.Render("resume     ")+st.Current.Render(data.ResumePosition))
+	metaRows = append(metaRows, fit(st.Dim.Render("autoplay   ")+st.Current.Render(autoVal)))
+	if data.SkipInfo == "" {
+		metaRows = append(metaRows, st.Dim.Render("skip data  ")+empty)
+	} else {
+		metaRows = append(metaRows, fit(st.Dim.Render("skip data  ")+st.Current.Render(data.SkipInfo)))
 	}
-	return strings.Join(metaRows, "\n")
+	if data.ResumePosition == "" {
+		metaRows = append(metaRows, st.Dim.Render("resume     ")+st.Dim.Render("—"))
+	} else {
+		metaRows = append(metaRows, fit(st.Dim.Render("resume     ")+st.Current.Render(data.ResumePosition)))
+	}
+	return strings.Join(padLines(metaRows, previewMetaLines), "\n")
 }
 
 func renderSourcesTitle(data PreviewData, st Styles) string {
@@ -229,33 +245,48 @@ func renderSourcesError(data PreviewData, st Styles) string {
 		return ""
 	}
 	errText := st.Err.Render(fmt.Sprintf("✗ %s failed · %d found", data.FailedProvider, len(data.RankedSources)))
-	// Capital R: lowercase r restarts playback, R retries the
-	// failed provider. The old "r retry" hint sent users into
-	// restart instead of retry.
 	retryText := st.Dim.Render("R retry")
 	gap := max(1, data.Width-lipgloss.Width(errText)-lipgloss.Width(retryText))
 	return errText + strings.Repeat(" ", gap) + retryText
 }
 
-func renderSourcesTable(data PreviewData, st Styles) string {
+// previewSourceWindow is the fixed source-row viewport for a terminal height.
+func previewSourceWindow(height int) int {
+	switch {
+	case height >= 38:
+		return 12
+	case height >= 30:
+		return 9
+	case height >= 25:
+		return 7
+	default:
+		return 5
+	}
+}
+
+func renderSourcesTable(data PreviewData, st Styles, windowSize int) string {
+	if windowSize <= 0 {
+		windowSize = previewSourceWindow(data.Height)
+	}
+	tableLines := 1 + windowSize + previewSourceSlots
 	if len(data.RankedSources) == 0 {
 		// While providers are still resolving, an empty table means
-		// "sources are on the way", not "nothing found".
+		// "sources are on the way", not "nothing found". The reserved rows
+		// keep the table from growing when the first batch arrives.
+		var msg string
 		if data.Loading || data.LoadingProviders > 0 {
 			sp := data.SpinnerFrame
 			if sp == "" {
 				sp = "⠋"
 			}
-			return st.Current.Render(sp) + " " + st.Dim.Render("Getting sources from providers…")
+			msg = st.Current.Render(sp) + " " + st.Dim.Render("Getting sources from providers…")
+		} else {
+			msg = st.Dim.Render("  No playback sources found.")
 		}
-		return st.Dim.Render("  No playback sources found.")
+		return strings.Join(padLines([]string{msg}, tableLines), "\n")
 	}
 	var rows []string
 
-	// Audio column renders for non-anime modes: there it names the dubbed
-	// track language per source (defaulting to English). Anime audio is a
-	// sub/dub track choice shown in the header instead. Size stays out —
-	// sizes are unreliable across providers.
 	showAudio := data.Mode != provider.ModeAnime
 	audioWidth := 10
 	if data.Mode == provider.ModeLive {
@@ -275,19 +306,11 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 
 	// Visible window of rows: responsive to terminal height so sources aren't cramped.
 	total := len(data.RankedSources)
-	windowSize := 5
-	if data.Height >= 38 {
-		windowSize = 12
-	} else if data.Height >= 30 {
-		windowSize = 9
-	} else if data.Height >= 25 {
-		windowSize = 7
-	}
 	startIdx := windowStart(total, data.SelectedIndex, windowSize)
 	endIdx := min(total, startIdx+windowSize)
 
-	if startIdx > 0 {
-		rows = append(rows, st.Dim.Render(fmt.Sprintf("  ↑ %d more", startIdx)))
+	if hint := windowHint(startIdx, true, st); hint != "" {
+		rows = append(rows, hint)
 	}
 
 	for i := startIdx; i < endIdx; i++ {
@@ -303,10 +326,6 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 		quality := formatSourceQuality(src.Quality)
 		qualityStr := fmt.Sprintf("%-12s", truncate(quality, 12))
 
-		// The provider column names the integration serving the
-		// stream; the source column names the backend behind it so
-		// identical qualities from different backends stay
-		// distinguishable.
 		providerName := src.Resolver
 		if data.ProviderName != nil {
 			if name, ok := data.ProviderName[src.Resolver]; ok && name != "" {
@@ -342,11 +361,11 @@ func renderSourcesTable(data PreviewData, st Styles) string {
 		rows = append(rows, row)
 	}
 
-	if endIdx < total {
-		rows = append(rows, st.Dim.Render(fmt.Sprintf("  ↓ %d more", total-endIdx)))
+	if hint := windowHint(total-endIdx, false, st); hint != "" {
+		rows = append(rows, hint)
 	}
 
-	return strings.Join(rows, "\n")
+	return strings.Join(padLines(rows, tableLines), "\n")
 }
 
 // formatSourceAudio names the audio language for the sources table. A display
@@ -357,8 +376,6 @@ func formatSourceAudio(src provider.MediaSource, width int) string {
 	if label := strings.TrimSpace(src.AudioLabel); label != "" {
 		languages := strings.Split(label, " · ")
 		if len(languages) > 1 {
-			// Keep the multiple-language cue visible even when the full
-			// broadcast label cannot fit in the audio column.
 			return truncate(strings.TrimSpace(languages[0]), max(1, width-3)) + fmt.Sprintf(" +%d", len(languages)-1)
 		}
 		return label
@@ -370,10 +387,10 @@ func formatSourceAudio(src provider.MediaSource, width int) string {
 }
 
 func formatSourceQuality(raw string) string {
-	if ranking.IsAdaptiveQuality(raw) {
+	if kit.IsAdaptiveQuality(raw) {
 		return "Auto"
 	}
-	res := ranking.ParseResolution(raw)
+	res := kit.QualityHeight(raw)
 	switch {
 	case res >= 2160:
 		return "4K"

@@ -61,6 +61,13 @@ type ModeRow struct {
 	Accent      lipgloss.AdaptiveColor
 }
 
+// AddonRow is one configured Stremio addon shown in Settings > Add-ons.
+type AddonRow struct {
+	Name   string // addon alias when loaded, else the manifest URL host
+	Host   string
+	Loaded bool
+}
+
 // SettingsData carries all state needed to render the Settings screen.
 type SettingsData struct {
 	ActiveCategory  SettingsCategory
@@ -103,6 +110,7 @@ type SettingsData struct {
 	// Providers values
 	ProviderRows          []ProviderRow
 	StremioAddonManifests []string
+	AddonRows             []AddonRow
 	AddonInputOpen        bool
 	AddonInputView        string
 	AddonTesting          bool
@@ -189,7 +197,7 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		case 0:
 			desc = "External player application used for video streaming."
 		case 1:
-			desc = "Target stream resolution: Highest, Data Saver (<=1080p), or Lowest."
+			desc = "Stream resolution for the active mode: All, Highest, Data Saver, Lowest, 2160p, 1080p, 720p, or 480p."
 		case 2:
 			desc = "Target download resolution: 4K (2160p), FHD (1080p), HD (720p), SD (480p), or Auto (same as stream)."
 		case 3:
@@ -201,21 +209,21 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		}
 
 	case CategoryLanguages:
-		// 0: Audio (movies & tv), 1: Subtitles
-		rows = append(rows, renderSettingRow("Audio (movies & tv)", formatVal(data.AudioSummary, data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))
-		rows = append(rows, renderSettingRow("Subtitles", formatVal(data.SubtitleLanguage, data.FocusedRowIndex == 1, st), data.FocusedRowIndex == 1, width, st))
+		// 0: Audio languages (global), 1: Subtitle language (active mode)
+		rows = append(rows, renderSettingRow("Audio languages", formatVal(data.AudioSummary, data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))
+		rows = append(rows, renderSettingRow("Subtitle language", formatVal(data.SubtitleLanguage, data.FocusedRowIndex == 1, st), data.FocusedRowIndex == 1, width, st))
 
 		switch data.FocusedRowIndex {
 		case 0:
-			desc = "enter on Audio opens a picker: space toggles audio languages."
+			desc = "Enter opens a picker: space toggles audio languages across every mode."
 		case 1:
-			desc = "Preferred subtitle language for streaming and downloads."
+			desc = "Preferred subtitle language for the active mode: Off, a language, or Any."
 		}
 
 	case CategoryAnime:
-		// 0: Audio track, 1: Subtitles, 2: Skip source, 3: Intro, 4: Outro, 5: Recap, 6: Preview
+		// 0: Audio track, 1: Anime subtitles, 2: Skip source, 3: Intro, 4: Outro, 5: Recap, 6: Preview
 		rows = append(rows, renderSettingRow("Audio track", formatVal(data.AnimeAudioTrack, data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))
-		rows = append(rows, renderSettingRow("Subtitles", formatVal(boolOnOff(data.AnimeSubtitles), data.FocusedRowIndex == 1, st), data.FocusedRowIndex == 1, width, st))
+		rows = append(rows, renderSettingRow("Anime subtitles", formatVal(boolOnOff(data.AnimeSubtitles), data.FocusedRowIndex == 1, st), data.FocusedRowIndex == 1, width, st))
 		rows = append(rows, renderSettingRow("Skip source", formatVal(data.SkipSource, data.FocusedRowIndex == 2, st), data.FocusedRowIndex == 2, width, st))
 		rows = append(rows, "", st.Dim.Render("SKIPPING"))
 		rows = append(rows, renderSettingRow("Intro", formatVal(boolAskAuto(data.AutoSkipIntro), data.FocusedRowIndex == 3, st), data.FocusedRowIndex == 3, width, st))
@@ -225,9 +233,9 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 
 		switch data.FocusedRowIndex {
 		case 0:
-			desc = "Choose the audio track used by default for anime."
+			desc = "Anime audio track: Auto, Sub, Dub, or Dual. Other modes are unaffected."
 		case 1:
-			desc = "Enable or disable subtitle overlay tracks for anime."
+			desc = "Anime subtitle mode: Off or Preferred (burned-in subs boosted)."
 		case 2:
 			desc = "Service engine used to resolve intro/outro skip chapters."
 		case 3:
@@ -262,20 +270,23 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		}
 	case CategoryAddons:
 		rows = append(rows, renderSettingRow("Add Stremio addon manifest", "[Enter] paste URL", data.FocusedRowIndex == 0, width, st))
-		for i, manifest := range data.StremioAddonManifests {
-			label := manifest
-			if len(label) > width-18 {
-				label = "…" + label[max(0, len(label)-(width-19)):]
+		if len(data.AddonRows) > 0 {
+			rows = append(rows, "", st.Dim.Render("── ADDONS ──"))
+		}
+		for i, addon := range data.AddonRows {
+			state := st.Dim.Render("○ not loaded")
+			if addon.Loaded {
+				state = st.Ok.Render("● active")
 			}
-			rows = append(rows, renderSettingRow(fmt.Sprintf("Addon %d", i+1), label, data.FocusedRowIndex == i+1, width, st))
+			rows = append(rows, renderSettingRow(addon.Name, state+"  "+addon.Host, data.FocusedRowIndex == i+1, width, st))
 		}
 		if data.AddonInputOpen {
-			rows = append(rows, "", "    "+st.Bold.Render("Manifest URL:"), "    "+data.AddonInputView, "    "+st.Dim.Render("Paste a configured Stremio addon manifest URL · Enter checks and adds · Esc cancels"))
+			rows = append(rows, "", "    "+st.Bold.Render("Manifest URL:"), "    "+data.AddonInputView, "    "+st.Dim.Render("Enter add · Esc cancel · direct HTTP streams only"))
 			if data.AddonTesting {
-				rows = append(rows, "    "+st.Dim.Render("Checking manifest and sample streams…"))
+				rows = append(rows, "    "+st.Dim.Render("Fetching addon manifest…"))
 			}
 		}
-		desc = "Enter tests and adds a Stremio addon manifest; d removes the selected addon."
+		desc = "Enter adds a Stremio addon manifest; d removes the selected addon."
 	case CategoryProviders:
 		var lastSection string
 		focusedLine := -1
@@ -296,13 +307,17 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		desc = "[Space]/[Enter] toggles provider for this section. Disabled providers are queried as fallback."
 		if data.Height > 0 {
 			maxLines := max(10, data.Height-6)
-			if len(rows) > maxLines && focusedLine >= 0 {
-				start := max(0, focusedLine-maxLines/2)
-				end := min(len(rows), start+maxLines)
-				if end-start < maxLines {
-					start = max(0, end-maxLines)
+			start, end, above, below := windowRange(len(rows), focusedLine, maxLines, 0)
+			if end > start {
+				windowed := make([]string, 0, maxLines)
+				if hint := windowHint(above, true, st); hint != "" {
+					windowed = append(windowed, hint)
 				}
-				rows = rows[start:end]
+				windowed = append(windowed, rows[start:end]...)
+				if hint := windowHint(below, false, st); hint != "" {
+					windowed = append(windowed, hint)
+				}
+				rows = windowed
 			}
 		}
 	case CategoryAccounts:

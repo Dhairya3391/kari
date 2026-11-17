@@ -12,8 +12,6 @@ import (
 // updateChapters handles keys on the chapter listing.
 func (m *modelImpl) updateChapters(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		// Bubbles uses horizontal arrows for whole-page jumps. Chapter lists
-		// have no horizontal choice, so keep their cursor on vertical movement.
 		if keyMsg.String() == "left" || keyMsg.String() == "right" {
 			return m, nil
 		}
@@ -35,6 +33,19 @@ func (m *modelImpl) updateChapters(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if visible := m.chapterList.VisibleItems(); len(visible) > 0 {
 				m.chapterList.Select(len(visible) - 1)
 			}
+			return m, nil
+		case keyMsg.String() == "pgup" || keyMsg.String() == "pgdown" ||
+			keyMsg.String() == "ctrl+u" || keyMsg.String() == "ctrl+d":
+			step := m.pageStep()
+			switch keyMsg.String() {
+			case "ctrl+u", "ctrl+d":
+				step = max(1, step/2)
+			}
+			delta := step
+			if keyMsg.String() == "pgup" || keyMsg.String() == "ctrl+u" {
+				delta = -delta
+			}
+			m.chapterList.Select(clampIndex(m.chapterList.Index()+delta, len(m.chapterList.Items())))
 			return m, nil
 		}
 	}
@@ -83,9 +94,6 @@ func (m *modelImpl) renderReaderFullscreen() string {
 	if m.showHelp {
 		footerText = "? / esc close help"
 	}
-	// Flag background work only while the current page itself has
-	// nothing to show yet; prefetching ahead must not paint a
-	// permanent "loading…" next to a fully rendered page.
 	if !m.showHelp {
 		if _, ready := m.readerRender[m.readerPage]; m.loading && !ready {
 			footerText += " · loading…"
@@ -143,9 +151,9 @@ func padBG(row string, width int) string {
 func (m *modelImpl) updateReader(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch {
-		case key.Matches(keyMsg, m.keys.ReaderNext):
+		case key.Matches(keyMsg, m.keys.ReaderNext), keyMsg.String() == "down":
 			return m, m.gotoReaderPage(m.readerPage + 1)
-		case key.Matches(keyMsg, m.keys.ReaderPrev):
+		case key.Matches(keyMsg, m.keys.ReaderPrev), keyMsg.String() == "up":
 			return m, m.gotoReaderPage(m.readerPage - 1)
 		case key.Matches(keyMsg, m.keys.ReaderNextChapter):
 			return m.stepReaderChapter(1)

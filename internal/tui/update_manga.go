@@ -150,9 +150,6 @@ func (m *modelImpl) onChaptersDone(msg chaptersDoneMsg) (tea.Model, tea.Cmd) {
 	m.chapters = msg.results
 	m.chapterList.SetItems(chaptersToItems(m.chapters, m.mangaResumeEntry()))
 	m.chapterList.Select(0)
-	// A history resume stashed its chapter/page before the listing
-	// arrived: jump straight in, keeping the saved page. A renamed or
-	// removed chapter just leaves the list for manual picking.
 	if m.pendingMangaResume != nil {
 		target := m.pendingMangaResume
 		m.pendingMangaResume = nil
@@ -266,10 +263,6 @@ func (m *modelImpl) onPagesDone(msg pagesDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.loading = false
 		m.loadingText = ""
-		// Removed uploads read as "unavailable — try another chapter",
-		// not a raw HTTP status. Dead runs auto-advance to the next
-		// chapter (bounded), so one removed upload doesn't end the
-		// session on titles mixing live and dead scanlations.
 		if errors.Is(msg.err, provider.ErrNoSources) {
 			if m.autoAdvance < maxAutoAdvance && m.chapterIndex+1 < len(m.chapters) {
 				m.autoAdvance++
@@ -280,8 +273,6 @@ func (m *modelImpl) onPagesDone(msg pagesDoneMsg) (tea.Model, tea.Cmd) {
 				m.setStatus(statusInfo, fmt.Sprintf("%s unavailable — trying next…", skipped))
 				return m.startChapterLoad(m.chapterIndex + 1)
 			}
-			// Same-provider options exhausted: look for the same chapter
-			// readable on any other source before giving up.
 			if !m.fallbackTried && m.selectedSeries != nil && m.selectedChapter != nil {
 				m.fallbackTried = true
 				m.loading = true
@@ -305,9 +296,6 @@ func (m *modelImpl) onPagesDone(msg pagesDoneMsg) (tea.Model, tea.Cmd) {
 	if m.selectedChapter != nil {
 		m.reportReading(*m.selectedChapter)
 	}
-	// A mid-read re-resolution lands back where the reader was; stale
-	// renders from the dead URLs are dropped and in-flight renders for
-	// them discarded via the bumped op ID.
 	m.readerRender = make(map[int]string)
 	m.readerOpID = m.newOpID()
 	target := 0
@@ -396,10 +384,6 @@ func (m *modelImpl) gotoReaderPage(idx int) tea.Cmd {
 	if len(m.pages) == 0 {
 		return nil
 	}
-	// Without a renderable protocol (or with images off) no page can ever
-	// render — say so once instead of spinning on "Loading page…".
-	// Terminals with no graphics protocol still get quadrant-block art
-	// via effectiveImgProtocol, so this only fires when images are off.
 	if m.effectiveImgProtocol() == termimg.ProtocolNone || !m.imagesEnabled {
 		m.loading = false
 		m.loadingText = ""
@@ -414,8 +398,6 @@ func (m *modelImpl) gotoReaderPage(idx int) tea.Cmd {
 		m.readerRender = make(map[int]string)
 		m.readerCols, m.readerRows = cols, rows
 	}
-	// A prefetched page is displayed without a new render message, so
-	// record it here instead of relying on onReaderPage.
 	if _, cached := m.readerRender[idx]; cached {
 		m.markMangaPageViewed(idx)
 	}
@@ -449,9 +431,6 @@ func (m *modelImpl) saveMangaProgress(page, total int) {
 		Mode:      string(provider.ModeManga),
 		MediaType: provider.MediaTypeManga,
 	}
-	// AniList import stores the catalog id on the entry; a page turn must
-	// not drop it, or later scrobbles lose the reliable id and fall back to
-	// ambiguous title matching.
 	anilistID := m.selectedSeries.AniListID
 	if anilistID == 0 {
 		for _, existing := range m.historyStore.All() {
@@ -575,10 +554,6 @@ func (m *modelImpl) onReaderPage(msg readerPageMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.err != nil {
 		if msg.index == m.readerPage {
-			// Upload replaced mid-read: re-resolve the chapter's
-			// pages once (bounded), keeping position. A repeated
-			// failure flows into the chapter-level recovery in
-			// onPagesDone (next chapter, then other sources).
 			if errors.Is(msg.err, provider.ErrNoSources) && !m.readerRelisted && m.selectedChapter != nil {
 				m.readerRelisted = true
 				m.readerResumePage = m.readerPage
@@ -588,10 +563,6 @@ func (m *modelImpl) onReaderPage(msg readerPageMsg) (tea.Model, tea.Cmd) {
 				m.pagesOpID = opID
 				return m, tea.Batch(m.spinner.Tick, m.pagesCmd(opID, *m.selectedChapter))
 			}
-			// A source can list stale image URLs while still returning a
-			// successful chapter listing. Check another provider after a
-			// page download or decode failure, not only after page listing
-			// failures.
 			if !m.fallbackTried && m.selectedSeries != nil && m.selectedChapter != nil {
 				m.fallbackTried = true
 				m.loading = true
@@ -611,8 +582,6 @@ func (m *modelImpl) onReaderPage(msg readerPageMsg) (tea.Model, tea.Cmd) {
 	if msg.index == m.readerPage {
 		m.loading = false
 		m.loadingText = ""
-		// Only the viewed page counts as progress: prefetched renders
-		// landing early must not bookmark pages the user never saw.
 		m.markMangaPageViewed(msg.index)
 	}
 	// Keep the prefetch window full as pages land.

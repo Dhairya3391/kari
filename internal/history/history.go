@@ -264,8 +264,6 @@ func NewStore(path string) (*Store, error) {
 		migrated := false
 		if err := json.Unmarshal(data, &format); err == nil && len(format.Entries) > 0 {
 			if format.Version < 2 {
-				// Migrate v1 manga entries: PositionSecs=page, DurationSecs=totalPages,
-				// EpisodeTitle=chapterNumber were the legacy encoding.
 				for i := range format.Entries {
 					e := &format.Entries[i]
 					if e.Mode == "manga" && e.MangaChapter == "" {

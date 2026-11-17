@@ -9,7 +9,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"kari/internal/lang"
 	"kari/internal/model"
 	"kari/internal/provider"
 )
@@ -36,10 +35,10 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addonTestCancel = nil
 		m.addonPendingURL = ""
 		if msg.err != nil {
-			return m, m.setStatusTimed(statusError, "Addon check failed: "+msg.err.Error())
+			return m, m.setStatusTimed(statusError, "Addon add failed: "+msg.err.Error())
 		}
 		if msg.addon == nil || m.registry == nil {
-			return m, m.setStatusTimed(statusError, "Addon check returned no provider")
+			return m, m.setStatusTimed(statusError, "Addon add returned no provider")
 		}
 		m.registry.Register(msg.addon)
 		m.modes = m.registry.AllModes()
@@ -51,7 +50,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addonInput.Blur()
 		m.settingsIndex = len(m.stremioAddonManifests)
 		m.saveSettings()
-		return m, m.setStatusTimed(statusSuccess, "Addon checked, saved, and enabled")
+		return m, m.setStatusTimed(statusSuccess, "Addon added, saved, and enabled")
 	case tea.KeyMsg:
 		if m.addonInputOpen {
 			if m.addonTesting {
@@ -134,31 +133,15 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.audioPickerIndex = 0
 				}
 				return m, nil
-			case "pgdn", "pgdown", "ctrl+d":
+			case "pgdown", "ctrl+d":
 				step := m.pageStep()
 				if len(allLangs) > 0 {
 					m.audioPickerIndex = min(len(allLangs)-1, m.audioPickerIndex+step)
 				}
 				return m, nil
-			// Physical spacebar reports " ", not "space" — match
-			// both, or the toggle silently never fires.
 			case " ", "space":
 				if m.audioPickerIndex < len(allLangs) {
-					if m.languageFilter == nil {
-						m.languageFilter = make(map[string]bool)
-					}
-					l := allLangs[m.audioPickerIndex]
-					// Committed-code toggle scheme: store the flipped
-					// value under both the code and display keys (an
-					// explicit true re-enables), and refuse to leave
-					// nothing enabled.
-					wasEnabled := m.languageEnabled(l.Code) || m.languageEnabled(l.Display)
-					m.languageFilter[l.Code] = !wasEnabled
-					m.languageFilter[l.Display] = !wasEnabled
-					if !m.hasEnabledLanguage() {
-						m.languageFilter[l.Code] = true
-						m.languageFilter[l.Display] = true
-					}
+					m.toggleAudioLanguage(allLangs[m.audioPickerIndex])
 					m.saveSettings()
 				}
 				return m, nil
@@ -338,6 +321,18 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.settingsIndex = maxRows - 1
 			}
 			return m, nil
+		case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+			step := m.pageStep()
+			switch msg.String() {
+			case "ctrl+u", "ctrl+d":
+				step = max(1, step/2)
+			}
+			delta := step
+			if msg.String() == "pgup" || msg.String() == "ctrl+u" {
+				delta = -delta
+			}
+			m.settingsIndex = clampIndex(m.settingsIndex+delta, m.maxRowsForCategory(m.settingsCategory))
+			return m, nil
 
 		case "left", "h":
 			if m.settingsCategory == CategoryPlayback && m.settingsIndex == 3 {
@@ -431,9 +426,6 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "i":
-			// Import the focused tracker's watched list into local
-			// history. One-way and additive: local progress is never
-			// overwritten, only missing entries filled in.
 			if m.settingsCategory == CategoryAccounts {
 				if m.settingsIndex == 0 {
 					return m.startHistoryImport("anilist")
@@ -484,8 +476,8 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			if len(m.availablePlayers) > 1 {
 				m.selectedPlayer = (m.selectedPlayer + delta + len(m.availablePlayers)) % len(m.availablePlayers)
 			}
-		case 1: // Stream quality
-			m.qualityMode = (m.qualityMode + delta + 4) % 4
+		case 1: // Stream quality (active mode)
+			m.cycleQuality(m.appMode, delta)
 		case 2: // Download quality
 			m.downloadQuality = (m.downloadQuality + delta + 5) % 5
 		case 4: // Autoplay next episode
@@ -502,30 +494,19 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 		case 0: // Audio
 			m.audioPickerOpen = true
 			m.audioPickerIndex = 0
-		case 1: // Subtitles
-			if len(lang.SubtitleOptions) > 0 {
-				m.subtitleLanguageIndex = (m.subtitleLanguageIndex + delta + len(lang.SubtitleOptions)) % len(lang.SubtitleOptions)
-				m.subtitleLanguage = lang.SubtitleOptions[m.subtitleLanguageIndex]
-				if m.downloadService != nil {
-					m.downloadService.SetSubtitleLanguage(m.subtitleLanguage)
-				}
+		case 1: // Subtitle language (active mode)
+			m.cycleSubtitleLanguage(m.appMode, delta)
+			if m.downloadService != nil {
+				m.downloadService.SetSubtitleLanguage(m.subtitleLanguage)
 			}
 		}
 
 	case CategoryAnime:
 		switch m.settingsIndex {
-		case 0: // Audio track
-			if strings.EqualFold(m.audioMode, provider.AudioDub) {
-				m.audioMode = provider.AudioSub
-			} else {
-				m.audioMode = provider.AudioDub
-			}
-		case 1: // Subtitles
-			m.disableAnimeSubtitles = !m.disableAnimeSubtitles
-			m.invalidateSubtitleSync()
-			if m.subtitleService != nil {
-				m.subtitleService.SetDisableAnimeSubtitles(m.disableAnimeSubtitles)
-			}
+		case 0: // Anime audio track
+			m.cycleAudioTrack(delta)
+		case 1: // Anime subtitles
+			m.toggleAnimeSubtitles()
 		case 2: // Skip source
 			m.skipProvider = cycleSkipProvider(m.skipProvider, delta < 0)
 		case 3: // Intro
@@ -679,33 +660,11 @@ func (m *modelImpl) updateProviderPriorityPicker(key string) {
 }
 
 func (m *modelImpl) cycleProviderPriority(mode provider.ContentType, delta int) {
-	options := m.preferredProviderOptions(mode)
-	if len(options) == 0 {
-		return
-	}
-	index := 0
-	for i, option := range options {
-		if option.ID == m.preferredProviderForMode(mode) {
-			index = i
-			break
-		}
-	}
-	selected := options[(index+delta+len(options))%len(options)].ID
-	if m.preferredProviders == nil {
-		m.preferredProviders = make(map[string]string)
-	}
-	if selected == "" {
-		delete(m.preferredProviders, string(mode))
-	} else {
-		m.preferredProviders[string(mode)] = selected
-	}
+	m.cyclePreferredProvider(mode, delta)
 }
 
 func (m *modelImpl) preferredProviderForMode(mode provider.ContentType) string {
-	if m.preferredProviders == nil {
-		return ""
-	}
-	return m.preferredProviders[string(mode)]
+	return m.filterScope.For(mode).PreferredProvider
 }
 
 func (m *modelImpl) preferredProviderOptions(mode provider.ContentType) []ProviderRow {

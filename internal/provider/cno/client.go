@@ -2,9 +2,9 @@
 // a high-definition streaming service for movies, TV series, and animation.
 //
 // Catalog search and episode listings reuse the shared TMDB-keyed streambase.
-// Playback streams resolve directly from Cno's HLS infrastructure across
-// multiple server tiers (Server 20 and Server 21) with adaptive multi-bitrate
-// ladders up to 4K, enriched with OpenSubtitles WebVTT tracks.
+// Playback streams resolve directly from the HLS server advertised by the
+// site's own movie/episode source listing, with adaptive multi-bitrate ladders
+// up to 4K, enriched with OpenSubtitles WebVTT tracks.
 //
 // Every returned HLS playlist is directly playable by mpv without local helper proxies.
 package cno

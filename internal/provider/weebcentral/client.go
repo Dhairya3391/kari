@@ -71,9 +71,11 @@ func NewClientWithBaseURL(baseURL string) (*Client, error) {
 }
 
 // throttle spaces requests so bursts (search + chapter listing + page
-// resolution) never hammer the site.
+// resolution) never hammer the site. One browsing step issues three calls in
+// a row, so a wide interval is directly felt as lag; 120ms keeps the request
+// rate modest (~8 req/s) while halving that cost.
 func (c *Client) throttle(ctx context.Context) error {
-	const minInterval = 300 * time.Millisecond
+	const minInterval = 120 * time.Millisecond
 	c.throttleMu.Lock()
 	defer c.throttleMu.Unlock()
 	if wait := minInterval - time.Since(c.lastReq); wait > 0 {
@@ -141,10 +143,6 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 	}
 	var out []provider.SearchResult
 	seen := make(map[string]struct{})
-	// Positional slicing (not first-match search): the fragment
-	// repeats each result for mobile and desktop, so windows must start
-	// at their own match and run to the next *different* series — same-id
-	// repeats (cover link, title link) belong to one window.
 	locs := seriesIDRe.FindAllStringSubmatchIndex(body, -1)
 	for i, loc := range locs {
 		id := body[loc[2]:loc[3]]
@@ -232,9 +230,6 @@ func seriesTitle(seg string) string {
 // variants decode nowhere in the app's image pipeline, so they are
 // deliberately never used.
 func seriesCover(seg, id string) string {
-	// Per-result substring match (not a shared regex) so a neighboring
-	// article's cover can never leak in, with no per-call regexp
-	// compilation: the ID is dynamic per result.
 	marker := "/cover/fallback/" + id + ".jpg"
 	idx := strings.Index(seg, marker)
 	if idx < 0 {

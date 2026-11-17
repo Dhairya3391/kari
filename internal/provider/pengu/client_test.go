@@ -67,8 +67,6 @@ func TestBuildConfigSegment(t *testing.T) {
 	if parsed["source_experimental"] == "on" {
 		t.Errorf("source_experimental should not be enabled")
 	}
-	// These backends play via Kari's header handling (verified with live
-	// mpv probes), so they stay enabled.
 	for _, key := range []string{
 		"source_moviebox", "source_2peckle", "source_4khdhub", "source_vegamovies",
 		"source_vaplayer", "source_vidfast", "source_cinefreak", "source_cinejoy",
@@ -172,6 +170,12 @@ func TestParseStreamItem(t *testing.T) {
 	if src.Language != "hi" {
 		t.Errorf("Language = %q, want hi", src.Language)
 	}
+	if got := src.Audio.Languages; len(got) != 1 || got[0] != "hi" {
+		t.Errorf("Audio.Languages = %v, want [hi]", got)
+	}
+	if src.Height != 2160 {
+		t.Errorf("Height = %d, want 2160", src.Height)
+	}
 	if len(src.Subtitles) != 1 || src.Subtitles[0].Language != "en" {
 		t.Errorf("Subtitles = %+v, want 1 english track", src.Subtitles)
 	}
@@ -239,26 +243,27 @@ func TestParseStreamItemAniPmHardSoft(t *testing.T) {
 		wantQuality string
 		wantLang    string
 		wantSubType string
+		wantTrack   provider.AudioTrack
 	}{
 		{
 			"🐧 PenguPlay 🧊 1080p • Ani.pm · Sub",
 			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Sub\n📝 Subtitles: English, French, Arabic",
-			softSubs, "1080p", "", provider.SubTypeSoft,
+			softSubs, "1080p", "", provider.SubTypeSoft, provider.TrackSub,
 		},
 		{
 			"🐧 PenguPlay 🧊 1080p • Ani.pm · Dub",
 			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Dub\n🎧 Audio: English\n📝 Subtitles: English CC (Dub), English",
-			softSubs, "1080p", "en", provider.SubTypeSoft,
+			softSubs, "1080p", "en", provider.SubTypeSoft, provider.TrackDub,
 		},
 		{
 			"🐧 PenguPlay 🧊 1080p • Ani.pm · Hard Sub",
 			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Hard Sub\n🙊 No included subtitles",
-			nil, "1080p", "", provider.SubTypeHard,
+			nil, "1080p", "", provider.SubTypeHard, provider.TrackSub,
 		},
 		{
 			"🐧 PenguPlay 🧊 1080p • Ani.pm · Hard Dub",
 			"📡 Naruto: Shippuden - Episode 1 • S01E01\n🎞️ 1080p • HLS\n🛰️ Source: Ani.pm · Hard Dub\n🎧 Audio: English\n🙊 No included subtitles",
-			nil, "1080p", "en", provider.SubTypeHard,
+			nil, "1080p", "en", provider.SubTypeHard, provider.TrackDub,
 		},
 	} {
 		src := parseStreamItem(mk(tc.name, tc.desc, tc.subs))
@@ -273,6 +278,9 @@ func TestParseStreamItemAniPmHardSoft(t *testing.T) {
 		}
 		if src.SubType != tc.wantSubType {
 			t.Errorf("SubType(%q) = %q, want %q", tc.name, src.SubType, tc.wantSubType)
+		}
+		if src.Audio.Track != tc.wantTrack {
+			t.Errorf("Audio.Track(%q) = %q, want %q", tc.name, src.Audio.Track, tc.wantTrack)
 		}
 		if src.Type != provider.SourceTypeHLS {
 			t.Errorf("Type(%q) = %q, want hls", tc.name, src.Type)
@@ -496,8 +504,6 @@ func TestResolveSourceKeepsDistinctEncodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSource: %v", err)
 	}
-	// promo skipped, exact URL duplicate collapsed, Movy.sx excluded:
-	// 2 distinct 4KHDHub encodes + 1 Cinejoy.
 	if len(sources) != 3 {
 		t.Fatalf("sources = %d, want 3: %+v", len(sources), sources)
 	}
@@ -617,6 +623,9 @@ func TestParseStreamItemFilenameLanguage(t *testing.T) {
 	src := parseStreamItem(item)
 	if src.Language != "hi" {
 		t.Errorf("Language = %q, want hi", src.Language)
+	}
+	if got := src.Audio.Languages; len(got) != 1 || got[0] != "hi" {
+		t.Errorf("Audio.Languages = %v, want [hi]", got)
 	}
 	if src.Quality != "1080p" || src.Backend != "HDHub4u" {
 		t.Errorf("quality/backend = %q/%q, want 1080p/HDHub4u", src.Quality, src.Backend)
@@ -777,33 +786,12 @@ func TestFetchPenguStreamsRateLimit(t *testing.T) {
 	})
 }
 
-func TestLiveFeaturesAndModes(t *testing.T) {
+func TestModesExcludeLive(t *testing.T) {
 	c := &Client{}
-	modes := c.Modes()
-	var hasLive bool
-	for _, m := range modes {
+	for _, m := range c.Modes() {
 		if m.Name == provider.ModeLive {
-			hasLive = true
-			break
+			t.Fatal("Pengu must not advertise live mode: its live catalog returns no playable rows")
 		}
-	}
-	if !hasLive {
-		t.Fatal("expected ModeLive in Modes()")
-	}
-
-	f := c.Features(provider.ModeLive)
-	if !f.AllowEmptyQuery {
-		t.Errorf("expected AllowEmptyQuery=true for ModeLive")
-	}
-	if !f.NoCachedSearches {
-		t.Errorf("expected NoCachedSearches=true for ModeLive")
-	}
-	if f.SearchPlaceholder == "" {
-		t.Errorf("expected non-empty SearchPlaceholder for ModeLive")
-	}
-	dl := c.Deadlines(provider.ModeLive)
-	if dl.Source != 40*time.Second {
-		t.Errorf("expected Source deadline 40s for ModeLive, got %v", dl.Source)
 	}
 }
 

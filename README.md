@@ -62,7 +62,7 @@ Type a query, press `Space`, pick a result, press `Enter` to play. `Tab` switche
 Players: mpv, IINA, VLC, MPV Android, MX Player. Capability matrix in [docs/PLAYERS.md](docs/PLAYERS.md).
 Providers per mode: [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
-To add an add-on, open Settings with `s`, choose **Add-ons**, then **Add Stremio addon manifest**. Kari checks the manifest and a sample stream before saving it.
+To add an add-on, open Settings with `s`, choose **Add-ons**, then **Add Stremio addon manifest**. Kari fetches the HTTP(S) manifest and accepts any reachable HTTP addon; no playback probe is required. Addons that only expose YouTube, torrent, or external-app links are saved but produce no playable streams — Kari needs a direct HTTP stream URL.
 
 ## Essential keys
 

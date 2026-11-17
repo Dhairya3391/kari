@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	providerID        = "anivault"
-	sourceAnimeHeaven = "animeheaven"
+	providerID         = "anivault"
+	sourceAnimeHeaven  = "animeheaven"
+	backendAnimeHeaven = "AnimeHeaven"
 )
 
 // Client implements AniVault's catalog and incremental playback capabilities.
@@ -62,7 +63,7 @@ func (c *Client) RequiresEpisodeListForMovies() bool { return true }
 
 // Features declares separate sub/dub resolution for anime.
 func (c *Client) Features(mode provider.ContentType) provider.Features {
-	return provider.Features{AudioSelection: mode == provider.ModeAnime}
+	return provider.Features{}
 }
 
 func (c *Client) get(ctx context.Context, path string) ([]byte, error) {
@@ -124,7 +125,6 @@ func redactPath(path string) string {
 type watchResponse struct {
 	Server       string        `json:"server"`
 	Source       string        `json:"source"`
-	Servers      []apiServer   `json:"servers"`
 	EmbedURL     string        `json:"embedUrl"`
 	M3U8         string        `json:"m3u8"`
 	HLSProxyURL  string        `json:"hlsProxyUrl"`

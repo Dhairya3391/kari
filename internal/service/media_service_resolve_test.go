@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -150,6 +153,142 @@ func TestResolveSerialPublication(t *testing.T) {
 	}
 }
 
+// TestResolvePublishesEnrichedSnapshots keeps the "Auto" placeholder off the
+// screen and shows results as they finish: quality/bitrate arrive from the
+// adaptive probe, audio labels arrive just after from the non-blocking pass.
+func TestResolvePublishesEnrichedSnapshots(t *testing.T) {
+	var entered sync.Once
+	probeEntered := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		entered.Do(func() { close(probeEntered) })
+		<-releaseProbe
+		fmt.Fprint(w, "#EXTM3U\n"+
+			"#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"English\",LANGUAGE=\"en\"\n"+
+			"#EXT-X-STREAM-INF:BANDWIDTH=23000000,RESOLUTION=3840x2160,CODECS=\"hvc1.2.4.L153.B0\"\n"+
+			"video.m3u8\n")
+	}))
+	defer server.Close()
+	defer func() {
+		select {
+		case <-releaseProbe:
+		default:
+			close(releaseProbe)
+		}
+	}()
+
+	fast := &stubProvider{
+		name: "fast", mode: provider.ModeMovies,
+		sources: []provider.MediaSource{{
+			URL: server.URL + "/master.m3u8", Type: provider.SourceTypeHLS, Quality: "Auto",
+		}},
+	}
+	svc := NewMediaService(newTestRegistry(fast))
+	snapshots := make(chan model.ResolvedMedia, 16)
+	done := make(chan resolutionOutcome, 1)
+	go func() {
+		media, err := svc.Resolve(context.Background(), provider.ModeMovies,
+			provider.SearchResult{ID: "1"}, provider.Episode{}, func(snapshot model.ResolvedMedia) {
+				snapshots <- snapshot
+			}, ResolveOptions{})
+		done <- resolutionOutcome{media: media, err: err}
+	}()
+
+	awaitResolutionSignal(t, probeEntered)
+	select {
+	case <-snapshots:
+		t.Fatal("snapshot was published before the playlist probe finished")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(releaseProbe)
+
+	sawQuality, sawAudio := false, false
+	deadline := time.After(2 * time.Second)
+	for !sawQuality || !sawAudio {
+		select {
+		case snapshot := <-snapshots:
+			if len(snapshot.Playback) != 1 {
+				t.Fatalf("snapshot playback = %+v, want one source", snapshot.Playback)
+			}
+			src := snapshot.Playback[0]
+			if src.Quality == "4K (2160p)" && src.Bitrate == 23_000_000 {
+				sawQuality = true
+			}
+			if src.AudioLabel == "English" {
+				sawAudio = true
+			}
+		case <-deadline:
+			t.Fatalf("enriched snapshots missing (quality=%v audio=%v)", sawQuality, sawAudio)
+		}
+	}
+	select {
+	case result := <-done:
+		if result.err != nil || len(result.media.Playback) != 1 {
+			t.Fatalf("resolve = %+v, %v", result.media, result.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("resolve did not finish after releasing the probe")
+	}
+}
+
+// TestResolveCollectsStaggeredProviders verifies that slower providers still
+// contribute when earlier ones have already delivered sources.
+func TestResolveCollectsStaggeredProviders(t *testing.T) {
+	delays := []time.Duration{200 * time.Millisecond, 2500 * time.Millisecond, 4 * time.Second, 5500 * time.Millisecond}
+	provs := make([]provider.Provider, 0, len(delays))
+	for i, delay := range delays {
+		provs = append(provs, &resolutionCallStub{
+			stubProvider: stubProvider{name: fmt.Sprintf("p%d", i), mode: provider.ModeMovies},
+			resolve: func(ctx context.Context) ([]provider.MediaSource, error) {
+				select {
+				case <-time.After(delay):
+					return []provider.MediaSource{{URL: "https://cdn.example/" + fmt.Sprint(delay) + ".mp4"}}, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			},
+		})
+	}
+	svc := NewMediaService(newTestRegistry(provs...))
+	start := time.Now()
+	media, err := svc.Resolve(context.Background(), provider.ModeMovies,
+		provider.SearchResult{ID: "1"}, provider.Episode{}, nil, ResolveOptions{})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	t.Logf("OBSERVED: elapsed=%v sources=%d (providers=%d)", elapsed, len(media.Playback), len(provs))
+	if len(media.Playback) < len(provs) {
+		t.Errorf("only %d of %d providers contributed", len(media.Playback), len(provs))
+	}
+}
+
+// TestResolveDoesNotBlameProviderThatDelivered verifies that a provider which
+// delivered sources is not reported as a failure when its stream later ends.
+func TestResolveDoesNotBlameProviderThatDelivered(t *testing.T) {
+	winner := &resolutionStreamStub{
+		resolutionCallStub: resolutionCallStub{
+			stubProvider: stubProvider{name: "winner", mode: provider.ModeMovies},
+			deadline:     300 * time.Millisecond,
+		},
+		stream: func(ctx context.Context, updates chan<- []provider.MediaSource) error {
+			updates <- []provider.MediaSource{{URL: "https://cdn.example/winner.mp4"}}
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	svc := NewMediaService(newTestRegistry(winner))
+	if _, err := svc.Resolve(context.Background(), provider.ModeMovies,
+		provider.SearchResult{ID: "1"}, provider.Episode{}, nil, ResolveOptions{}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	for _, name := range svc.LastFailures() {
+		if strings.EqualFold(name, "winner") {
+			t.Fatalf("provider that delivered sources was recorded as a failure: %v", svc.LastFailures())
+		}
+	}
+}
+
 // TestResolveBoundsUncooperativeProviders preserves partial success and returns
 // on cancellation even when direct or streaming calls have not returned.
 func TestResolveBoundsUncooperativeProviders(t *testing.T) {
@@ -224,8 +363,6 @@ func TestResolveBoundsUncooperativeProviders(t *testing.T) {
 					t.Fatal("resolve waited for an uncooperative provider")
 				}
 				before := callbackCount.Load()
-				// Release after Resolve returns: a late error must remain confined
-				// to the adapter, never triggering another publication.
 				unblock()
 				awaitResolutionSignal(t, returned)
 				if callbackCount.Load() != before {
@@ -348,6 +485,42 @@ func TestSourceResolutionLateReturn(t *testing.T) {
 	}
 }
 
+// TestResolveProviderDeadlineBoundsManifestProbe proves post-resolve HLS
+// probing honours the provider's own source deadline instead of the much
+// longer overall resolve budget.
+func TestResolveProviderDeadlineBoundsManifestProbe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(2 * time.Second):
+		case <-r.Context().Done():
+			return
+		}
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=1920x1080\nsegment.m3u8\n")
+	}))
+	defer server.Close()
+
+	p := &resolutionCallStub{
+		stubProvider: stubProvider{name: "slow-probe", mode: provider.ModeMovies},
+		deadline:     150 * time.Millisecond,
+		resolve: func(context.Context) ([]provider.MediaSource, error) {
+			return []provider.MediaSource{{
+				URL:     server.URL + "/master.m3u8",
+				Quality: "Auto",
+				Type:    provider.SourceTypeHLS,
+			}}, nil
+		},
+	}
+	svc := NewMediaService(newTestRegistry(p))
+	start := time.Now()
+	if _, err := svc.Resolve(context.Background(), provider.ModeMovies,
+		provider.SearchResult{ID: "1"}, provider.Episode{}, nil, ResolveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("resolve took %v, want the 150ms provider deadline to bound the probe", elapsed)
+	}
+}
+
 // TestResolveSkipsRedundantBatches still publishes completion after skipping
 // empty and duplicate stream batches, and keeps nested callback data detached.
 func TestResolveSkipsRedundantBatches(t *testing.T) {
@@ -388,4 +561,80 @@ func TestResolveSkipsRedundantBatches(t *testing.T) {
 		result.Playback[0].SkipTimes.OpEnd != 90 || result.Subtitles[0].URL != "https://cdn.example/en.vtt" {
 		t.Fatalf("callback mutated later result: %+v", result)
 	}
+}
+
+// TestResolveRetryNeverUsesDisabledProviders proves a retry cannot fall back
+// to providers the user disabled. An excluded winner's rows live in the
+// caller's aggregate, so this call's empty aggregator is not a genuine
+// "every enabled provider failed" signal.
+func TestResolveRetryNeverUsesDisabledProviders(t *testing.T) {
+	series := provider.SearchResult{Title: "T", ID: "21", Provider: "miruro", Type: provider.ModeAnime}
+	episode := provider.Episode{ID: "watch/miruro/21/sub/1180", Episode: 1180, Audio: provider.AudioSub}
+
+	t.Run("exclude", func(t *testing.T) {
+		var disabledCalls int
+		winner := &resolveStub{name: "miruro", mode: provider.ModeAnime,
+			sources: []provider.MediaSource{{URL: "https://cdn.example.com/miruro.m3u8", Quality: "1080p"}}}
+		failing := &resolveStub{name: "failing", mode: provider.ModeAnime, err: provider.ErrTimeout}
+		disabled := &countStub{
+			resolveStub: resolveStub{name: "anicine", mode: provider.ModeAnime,
+				sources: []provider.MediaSource{{URL: "https://cdn.example.com/anicine.m3u8", Quality: "1080p"}}},
+			calls: &disabledCalls,
+		}
+
+		svc := NewMediaService(newTestRegistry(winner, failing, disabled))
+		svc.SetDisabledProviders([]string{"anime:anicine"})
+
+		if _, err := svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil, ResolveOptions{}); err != nil {
+			t.Fatalf("seed resolve: %v", err)
+		}
+		if disabledCalls != 0 {
+			t.Fatalf("full resolve queried disabled provider %d times, want 0", disabledCalls)
+		}
+
+		// The retry excludes the winner and the re-queried provider fails again,
+		// leaving this call's aggregator empty. The disabled fallback must stay off.
+		resolved, _ := svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil,
+			ResolveOptions{Exclude: []string{"miruro"}})
+		if disabledCalls != 0 {
+			t.Errorf("retry queried disabled provider %d times, want 0", disabledCalls)
+		}
+		for _, src := range resolved.Playback {
+			if src.Resolver == "anicine" {
+				t.Errorf("retry merged a disabled provider's source: %+v", src)
+			}
+		}
+	})
+
+	t.Run("retry", func(t *testing.T) {
+		var disabledCalls int
+		failing := &resolveStub{name: "failing", mode: provider.ModeAnime, err: provider.ErrTimeout}
+		disabled := &countStub{
+			resolveStub: resolveStub{name: "anicine", mode: provider.ModeAnime,
+				sources: []provider.MediaSource{{URL: "https://cdn.example.com/anicine.m3u8", Quality: "1080p"}}},
+			calls: &disabledCalls,
+		}
+
+		svc := NewMediaService(newTestRegistry(failing, disabled))
+		svc.SetDisabledProviders([]string{"anime:anicine"})
+
+		// A full resolve still uses the disabled last-resort fallback.
+		resolved, err := svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil, ResolveOptions{})
+		if err != nil {
+			t.Fatalf("seed resolve: %v", err)
+		}
+		if len(resolved.Playback) != 1 || resolved.Playback[0].Resolver != "anicine" {
+			t.Fatalf("full-resolve fallback = %+v, want anicine", resolved.Playback)
+		}
+		if disabledCalls != 1 {
+			t.Fatalf("full resolve queried disabled provider %d times, want 1", disabledCalls)
+		}
+
+		// A Retry-only call is still a retry and must not fall back either.
+		_, _ = svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil,
+			ResolveOptions{Retry: []string{"failing"}})
+		if disabledCalls != 1 {
+			t.Errorf("retry queried disabled provider %d times, want 1 (unchanged)", disabledCalls)
+		}
+	})
 }

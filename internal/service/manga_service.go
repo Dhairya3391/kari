@@ -49,9 +49,6 @@ func (s *MangaService) FetchChapters(ctx context.Context, series provider.Search
 	if err != nil {
 		return nil, err
 	}
-	// AniDream's chapter endpoint is cold-cached upstream and can take over
-	// 30s to produce a first listing, so the bound must clear the provider's
-	// own client timeout instead of truncating legitimate cold fetches.
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	chapters, err := ms.FetchChapters(ctx, series)
@@ -111,8 +108,6 @@ func (s *MangaService) ResolveReadableChapter(ctx context.Context, series provid
 			continue
 		}
 		ms := route.Manga
-		// Per-call bounds inside the 60s overall budget: one slow
-		// provider must not starve the remaining fallbacks.
 		searchCtx, searchCancel := context.WithTimeout(ctx, 15*time.Second)
 		results, err := ms.Search(searchCtx, series.Title, provider.ModeManga)
 		searchCancel()

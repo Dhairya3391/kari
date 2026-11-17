@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/config"
+	"kari/internal/filter"
 	"kari/internal/model"
 	"kari/internal/provider"
-	"kari/internal/ranking"
 	"kari/internal/service"
 )
 
@@ -179,7 +179,7 @@ func TestPreviewSubtitleCheckmarkWaitsForDownloadedPath(t *testing.T) {
 		Playback:  []provider.MediaSource{{URL: "https://cdn.example.com/movie.m3u8", Quality: "1080p", Resolver: "movysx"}},
 		Subtitles: []model.SubtitleTrack{{URL: "https://cdn.example.com/en.vtt", Language: "en"}},
 	}
-	m.rankedSources = []ranking.ScoredSource{{Source: m.resolved.Playback[0]}}
+	m.rankedSources = []filter.RankedSource{{Source: m.resolved.Playback[0]}}
 	data := m.collectPreviewData(100, 24, lipgloss.AdaptiveColor{})
 	if data.SubtitlesText != "en" {
 		t.Fatalf("subtitle text = %q, want no checkmark before download", data.SubtitlesText)
@@ -200,7 +200,7 @@ func TestCollectPreviewDataSubtitleProvider(t *testing.T) {
 		Language: "en",
 		Resolver: "cinecat",
 	}
-	m.rankedSources = []ranking.ScoredSource{{Source: m.resolved.Playback[0]}}
+	m.rankedSources = []filter.RankedSource{{Source: m.resolved.Playback[0]}}
 	data := m.collectPreviewData(100, 24, lipgloss.AdaptiveColor{})
 	if data.SubtitlesText != "en ✓" {
 		t.Errorf("SubtitlesText = %q, want 'en ✓'", data.SubtitlesText)
@@ -238,8 +238,6 @@ func TestTriggerSubtitleSyncRefetchesOnGrownPoolAfterFailure(t *testing.T) {
 	}}
 	m.resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
 	m.subtitleLanguage = "en"
-	// Simulate a completed first fetch against a one-track pool that
-	// found nothing: markers set, pool recorded, no track, op idle.
 	if cmd := m.triggerSubtitleSync(); cmd == nil {
 		t.Fatal("first fetch must start")
 	}
@@ -330,8 +328,6 @@ func TestTriggerSubtitleSyncSkipsWhileFetchInFlight(t *testing.T) {
 	if cmd := m.triggerSubtitleSync(); cmd == nil {
 		t.Fatal("first fetch must start")
 	}
-	// Pool grows while the first fetch is still in flight: wait for it
-	// instead of stacking a second fetch.
 	m.rawSubtitles = append(m.rawSubtitles, model.SubtitleTrack{
 		URL:      "https://cdn.example.com/en2.vtt",
 		Language: "en",
@@ -354,8 +350,6 @@ func TestAutoPlayAfterResolveSkipsWaitWhenSubtitlesReady(t *testing.T) {
 	m.subtitleLanguage = "en"
 	m.autoPlayAfterResolve = true
 	m.resolveOpID = 5
-	// Simulate the early fetch having completed before resolve-done:
-	// markers match, pool recorded, track secured.
 	if cmd := m.triggerSubtitleSync(); cmd == nil {
 		t.Fatal("first fetch must start")
 	}
@@ -428,22 +422,22 @@ func TestHardSubAnimeDoesNotWaitForExternalSubtitle(t *testing.T) {
 	}
 }
 
-func TestHardSubAnimeFetchesProviderProvidedTracks(t *testing.T) {
+func TestHardSubAnimeSkipsProviderProvidedTracks(t *testing.T) {
 	m := readySourceModel()
 	m.appMode = provider.ModeAnime
 	m.resolved.MediaType = provider.MediaTypeAnime
 	m.resolved.Playback[0].SubType = provider.SubTypeHard
 	m.refreshRanking()
-	// The source's own provider shipped subtitle tracks for the episode
-	// (exact or same-provider mirror): the fetch must run.
+	// Even the source's own provider track is redundant on a hard sub: the
+	// captions are already burned in, so no sidecar should be fetched.
 	m.rawSubtitles = []model.SubtitleTrack{{
 		URL:      "https://cdn.example.com/provider-en.vtt",
 		Language: "en",
 		Resolver: "movysx",
 	}}
 
-	if !m.subtitlesWanted() {
-		t.Fatal("hard-sub anime must still fetch provider-provided subtitles")
+	if m.subtitlesWanted() {
+		t.Fatal("hard-sub anime must not fetch provider-provided subtitles")
 	}
 }
 
@@ -463,6 +457,31 @@ func TestHardSubAnimeIgnoresForeignProviderTracks(t *testing.T) {
 
 	if m.subtitlesWanted() {
 		t.Fatal("hard-sub anime must not fetch another provider's subtitles")
+	}
+}
+
+func TestHardSubSkipsEvenWithAttachedTracks(t *testing.T) {
+	m := readySourceModel()
+	m.appMode = provider.ModeAnime
+	m.resolved.MediaType = provider.MediaTypeAnime
+	m.resolved.Playback[0].SubType = provider.SubTypeHard
+	m.resolved.Playback[0].Subtitles = []provider.SubtitleOption{{Language: "en"}}
+	m.refreshRanking()
+
+	if m.subtitlesWanted() {
+		t.Fatal("hard-sub source must skip sidecars even when tracks are attached")
+	}
+}
+
+func TestSoftSubStillFetchesSubtitles(t *testing.T) {
+	m := readySourceModel()
+	m.appMode = provider.ModeAnime
+	m.resolved.MediaType = provider.MediaTypeAnime
+	m.resolved.Playback[0].SubType = provider.SubTypeSoft
+	m.refreshRanking()
+
+	if !m.subtitlesWanted() {
+		t.Fatal("soft-sub source must still fetch subtitles")
 	}
 }
 

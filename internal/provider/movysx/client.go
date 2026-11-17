@@ -20,6 +20,7 @@ import (
 	"kari/internal/httpclient"
 	"kari/internal/lang"
 	"kari/internal/provider"
+	"kari/internal/provider/kit"
 	"kari/internal/provider/streambase"
 	"kari/internal/tmdb"
 )
@@ -35,28 +36,16 @@ type Client struct {
 	streamBase string
 	tmdbBase   string
 	seedCache  sync.Map // key: int tmdbID → seedEntry
-	langFilter map[string]bool
 }
 
 // NewClient constructs the Movy.sx provider over the shared TMDB search base.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
-	return NewClientWithLanguageFilter(keyPool, nil)
-}
-
-// NewClientWithLanguageFilter constructs Movy.sx with an explicit language filter.
-func NewClientWithLanguageFilter(keyPool *tmdb.KeyPool, langFilter map[string]bool) (*Client, error) {
-	return NewClientWithBaseURLAndLanguageFilter(keyPool, defaultStreamBase, langFilter)
+	return NewClientWithBaseURL(keyPool, defaultStreamBase)
 }
 
 // NewClientWithBaseURL constructs the provider against a custom source
 // service base URL (used in tests).
 func NewClientWithBaseURL(keyPool *tmdb.KeyPool, apiBase string) (*Client, error) {
-	return NewClientWithBaseURLAndLanguageFilter(keyPool, apiBase, nil)
-}
-
-// NewClientWithBaseURLAndLanguageFilter constructs the provider against a custom
-// source service base URL and explicit language filter.
-func NewClientWithBaseURLAndLanguageFilter(keyPool *tmdb.KeyPool, apiBase string, langFilter map[string]bool) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
 		return nil, err
@@ -67,7 +56,6 @@ func NewClientWithBaseURLAndLanguageFilter(keyPool *tmdb.KeyPool, apiBase string
 		keyPool:    keyPool,
 		streamBase: strings.TrimRight(apiBase, "/"),
 		tmdbBase:   config.TMDBAPIBase,
-		langFilter: langFilter,
 	}, nil
 }
 
@@ -166,8 +154,9 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 }
 
 // mapMerged converts merged shard results into media sources: dedupe by
-// URL, direct CDN addresses with the Movy referer, dubbed audio rows as
-// language-tagged sources.
+// URL, direct CDN addresses with the Movy referer, and dubbed audio rows as
+// typed dub tracks. Main lanes carry no upstream audio tag, so their audio
+// identity is left empty for the central language filter to handle.
 func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 	subs := make([]provider.SubtitleOption, 0, len(m.subtitles))
 	for _, s := range m.subtitles {
@@ -185,17 +174,14 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 			continue
 		}
 		seen[key] = struct{}{}
-		if !c.languageEnabled("en") {
-			continue
-		}
 		sources = append(sources, provider.MediaSource{
 			URL:       s.url,
 			Quality:   s.quality,
+			Height:    sourceHeight(s.quality),
 			Backend:   s.backend,
 			Type:      streamType(s.url, s.typ),
 			Referer:   movyReferer,
 			UserAgent: config.DesktopUserAgent,
-			Language:  "en",
 			Subtitles: subs,
 		})
 	}
@@ -205,25 +191,35 @@ func (c *Client) mapMerged(m *mergedResults) []provider.MediaSource {
 			continue
 		}
 		seen[key] = struct{}{}
-		if !c.languageEnabled(a.lang) {
-			continue
-		}
 		quality := strings.TrimSpace(a.quality)
 		if quality == "" {
 			quality = "auto"
 		}
 		sources = append(sources, provider.MediaSource{
-			URL:       a.url,
-			Quality:   quality,
-			Backend:   a.backend,
-			Type:      streamType(a.url, a.typ),
-			Referer:   movyReferer,
+			URL:     a.url,
+			Quality: quality,
+			Height:  sourceHeight(quality),
+			Backend: a.backend,
+			Type:    streamType(a.url, a.typ),
+			Referer: movyReferer,
+			Audio: provider.AudioInfo{
+				Languages: []string{lang.FromLabel(a.label)},
+				Track:     provider.TrackDub,
+			},
 			UserAgent: config.DesktopUserAgent,
-			Language:  a.lang,
 			Subtitles: subs,
 		})
 	}
 	return sources
+}
+
+// sourceHeight returns the declared resolution height. Adaptive rows stay
+// unknown: their real tier is picked by the player from the manifest.
+func sourceHeight(quality string) int {
+	if kit.IsAdaptiveQuality(quality) {
+		return 0
+	}
+	return kit.QualityHeight(quality)
 }
 
 // streamType classifies a resolver stream for the player/downloader
@@ -282,26 +278,6 @@ var movyAudioLanguages = []provider.AudioLanguage{
 // AudioLanguages implements provider.AudioLanguagesSource.
 func (c *Client) AudioLanguages() []provider.AudioLanguage {
 	return movyAudioLanguages
-}
-
-func (c *Client) languageEnabled(tag string) bool {
-	if c.langFilter == nil {
-		return true
-	}
-	code := lang.Normalize(tag)
-	display := lang.Name(code)
-	for _, k := range []string{tag, code, display} {
-		if k == "" {
-			continue
-		}
-		if v, ok := c.langFilter[k]; ok {
-			return v
-		}
-		if v, ok := c.langFilter[strings.ToLower(k)]; ok {
-			return v
-		}
-	}
-	return true
 }
 
 var (

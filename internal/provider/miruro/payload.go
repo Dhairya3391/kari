@@ -9,11 +9,6 @@ import (
 	"kari/internal/provider"
 )
 
-// This file maps hydrated __data.json values onto the typed shapes Miruro
-// emits: search items, episode entries, and watch tracks. All access is by
-// key name — never by array position — so unrelated catalog growth cannot
-// shift the parse.
-
 // searchItem is one catalog entry from the search payload.
 type searchItem struct {
 	showID      string
@@ -57,8 +52,6 @@ func searchItems(body []byte) ([]searchItem, error) {
 				if !ok {
 					continue
 				}
-				// Only catalog entries carry external_ids; anything
-				// else is a different list sharing the envelope.
 				if _, ok := m["external_ids"]; !ok {
 					continue
 				}
@@ -192,9 +185,11 @@ func decodeEpisodes(slots []any, roster any) ([]episodeEntry, error) {
 
 // streamEntry is one playable file of a server.
 type streamEntry struct {
-	url     string
-	format  string
-	quality string
+	url        string
+	format     string
+	quality    string
+	resolution string
+	codec      string
 }
 
 // serverEntry is one backend serving a provider's track.
@@ -220,7 +215,10 @@ type subtitleEntry struct {
 	language string
 	label    string
 	file     string
-	def      bool
+	// format is the upstream-declared subtitle format. When present it takes
+	// precedence over the file extension, which CDNs often obscure.
+	format string
+	def    bool
 }
 
 type trackEntry struct {
@@ -415,6 +413,8 @@ func decodeProvider(pm map[string]any) providerEntry {
 					st := streamEntry{url: strings.TrimSpace(u)}
 					st.format, _ = asString(tm["format"])
 					st.quality, _ = asString(tm["quality"])
+					st.resolution, _ = asString(tm["resolution"])
+					st.codec, _ = asString(tm["codec"])
 					se.streams = append(se.streams, st)
 				}
 			}
@@ -431,6 +431,7 @@ func decodeProvider(pm map[string]any) providerEntry {
 			se.language, _ = asString(sm["language"])
 			se.label, _ = asString(sm["label"])
 			se.file, _ = asString(sm["file"])
+			se.format, _ = asString(sm["format"])
 			se.def, _ = sm["default"].(bool)
 			if strings.TrimSpace(se.file) == "" {
 				continue

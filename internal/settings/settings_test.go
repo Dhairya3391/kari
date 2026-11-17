@@ -5,6 +5,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"kari/internal/filter"
+	"kari/internal/provider"
 )
 
 func TestNormalizedModesDefaults(t *testing.T) {
@@ -198,5 +201,75 @@ func TestStartupSearchActiveEnabled(t *testing.T) {
 	}
 	if parsed.StartupSearchActiveEnabled() {
 		t.Error("JSON with startup_search_active: false should parse to false")
+	}
+}
+
+func TestEffectiveFiltersMigratesLegacyFieldsOnce(t *testing.T) {
+	d := &Data{
+		QualityMode:           1,
+		DownloadQuality:       11,
+		LanguageFilter:        map[string]bool{"hi": true, "English": false},
+		SubtitleLanguage:      "ja",
+		DefaultAnimeAudio:     "dub",
+		DisableAnimeSubtitles: true,
+		PreferredProviders:    map[string]string{"anime": "anikoto"},
+	}
+
+	scope := d.EffectiveFilters()
+	if !d.FiltersMigrated {
+		t.Fatal("first EffectiveFilters call must mark the document migrated")
+	}
+	if got := scope.For(provider.ModeMovies).Quality; got != filter.QualityFHD {
+		t.Errorf("movies quality = %v, want FHD (legacy download tier 11)", got)
+	}
+	if got := scope.For(provider.ModeAnime).Track; got != provider.TrackDub {
+		t.Errorf("anime track = %v, want dub", got)
+	}
+	if got := scope.For(provider.ModeAnime).Subtitles.Mode; got != filter.SubtitleOff {
+		t.Errorf("anime subtitles = %v, want off", got)
+	}
+	if got := scope.For(provider.ModeAnime).PreferredProvider; got != "anikoto" {
+		t.Errorf("anime provider = %q, want anikoto", got)
+	}
+	if scope.For(provider.ModeAnime).Audio.Allows("en") {
+		t.Error("English must be disabled by the legacy filter")
+	}
+
+	// A later call must not re-seed from legacy fields.
+	d.QualityMode = 3
+	if got := d.EffectiveFilters().For(provider.ModeMovies).Quality; got != filter.QualityFHD {
+		t.Errorf("migrated scope was re-seeded from legacy fields: %v", got)
+	}
+}
+
+func TestFiltersScopeJSONRoundTrip(t *testing.T) {
+	prefs := filter.Preferences{
+		Quality:           filter.QualityDataSaver,
+		Audio:             filter.NewLanguagePreference([]string{"Hindi", "ja"}, []string{"English"}),
+		Track:             provider.TrackDual,
+		Subtitles:         filter.SubtitlePreference{Mode: filter.SubtitlePreferred, Language: "hi"},
+		PreferredProvider: "pengu",
+	}
+	in := &Data{FiltersMigrated: true, Filters: filter.Scope{
+		Defaults: prefs,
+		ByMode:   map[provider.ContentType]filter.Preferences{provider.ModeAnime: prefs},
+	}}
+	body, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Data
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.EffectiveFilters().For(provider.ModeAnime)
+	if got.Quality != prefs.Quality || got.Track != prefs.Track || got.PreferredProvider != prefs.PreferredProvider {
+		t.Errorf("round-trip lost preferences: %+v", got)
+	}
+	if !reflect.DeepEqual(got.Audio.Enabled, []string{"hi", "ja"}) {
+		t.Errorf("audio enabled = %v, want canonical [hi ja]", got.Audio.Enabled)
+	}
+	if !got.Audio.Allows("hi") || got.Audio.Allows("en") {
+		t.Errorf("audio disable set not preserved: %+v", got.Audio)
 	}
 }

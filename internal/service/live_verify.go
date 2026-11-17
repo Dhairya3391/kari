@@ -5,16 +5,16 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"kari/internal/provider"
+	"kari/internal/timeouts"
 )
 
 const (
 	// liveVerifyTimeout bounds the whole verification pass for one provider
 	// batch. Probes run concurrently, so this is the added playback-start
 	// latency even when several mirrors are dead.
-	liveVerifyTimeout = 6 * time.Second
+	liveVerifyTimeout = timeouts.LiveVerify
 	// liveVerifyParallelism keeps a provider batch from opening dozens of
 	// sockets at once while still checking mirrors in parallel.
 	liveVerifyParallelism = 8

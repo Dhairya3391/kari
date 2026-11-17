@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"kari/internal/provider"
@@ -46,29 +45,27 @@ func TestParseStreamItemDubDisplay(t *testing.T) {
 	if src.Language != "fr" {
 		t.Errorf("Language = %q, want fr", src.Language)
 	}
+	if got := src.Audio.Languages; len(got) != 1 || got[0] != "fr" {
+		t.Errorf("Audio.Languages = %v, want [fr]", got)
+	}
+	if src.Audio.Track != provider.TrackDub {
+		t.Errorf("Audio.Track = %q, want dub", src.Audio.Track)
+	}
+	if src.Bitrate != 1300000 {
+		t.Errorf("Bitrate = %d, want 1300000 from the Mbps marker", src.Bitrate)
+	}
+	if src.Height != 1080 {
+		t.Errorf("Height = %d, want 1080", src.Height)
+	}
 	if src.Quality != "1080p" || src.Backend != "MovieBox" {
 		t.Errorf("quality/backend = %q/%q, want 1080p/MovieBox", src.Quality, src.Backend)
 	}
 }
 
-func TestLanguageEnabledSemantics(t *testing.T) {
-	c := &Client{}
-	if !c.languageEnabled("fr", "French") {
-		t.Error("nil filter must enable everything")
-	}
-	c2 := &Client{langFilter: map[string]bool{"fr": false}}
-	if c2.languageEnabled("fr", "French") {
-		t.Error("explicit false must disable")
-	}
-	if !c2.languageEnabled("hi", "Hindi") {
-		t.Error("missing key must stay enabled")
-	}
-}
-
-// TestResolveFiltersForeignAudio serves MovieBox-style rows: a French dub,
-// an English original, and a same-file mirror pair. With French disabled,
-// only the original and one mirror survive.
-func TestResolveFiltersForeignAudio(t *testing.T) {
+// TestResolveKeepsAllLanguagesWithTypedAudio serves MovieBox-style rows: a
+// French dub, an English original, and a same-file mirror pair. Every lane is
+// emitted with typed audio metadata; the central pipeline decides what to keep.
+func TestResolveKeepsAllLanguagesWithTypedAudio(t *testing.T) {
 	origBase := penguAPIBase
 	defer func() { penguAPIBase = origBase }()
 
@@ -85,20 +82,30 @@ func TestResolveFiltersForeignAudio(t *testing.T) {
 	defer server.Close()
 
 	penguAPIBase = server.URL
-	c := &Client{httpClient: server.Client(), configSegment: "ztest", langFilter: map[string]bool{"fr": false}}
+	c := &Client{httpClient: server.Client(), configSegment: "ztest"}
 
 	sources, err := c.ResolveSource(context.Background(), "603", provider.Episode{})
 	if err != nil {
 		t.Fatalf("ResolveSource: %v", err)
 	}
-	// orig + one 720p mirror (same file/size collapses); French dropped.
-	if len(sources) != 2 {
-		t.Fatalf("sources = %d, want 2: %+v", len(sources), sources)
+	// orig + one 720p mirror (same file/size collapses) + French dub.
+	if len(sources) != 3 {
+		t.Fatalf("sources = %d, want 3: %+v", len(sources), sources)
 	}
+	foundFrench := false
 	for _, s := range sources {
-		if strings.Contains(s.Quality, "French") {
-			t.Errorf("disabled French audio leaked: %+v", s)
+		if len(s.Audio.Languages) > 0 && s.Audio.Languages[0] == "fr" {
+			foundFrench = true
+			if s.Audio.Track != provider.TrackDub {
+				t.Errorf("French row Track = %q, want dub", s.Audio.Track)
+			}
 		}
+		if s.Bitrate <= 0 {
+			t.Errorf("source has no parsed bitrate: %+v", s)
+		}
+	}
+	if !foundFrench {
+		t.Error("provider-level filtering must no longer drop French audio")
 	}
 }
 
@@ -130,9 +137,9 @@ func TestResolveKeepsForeignAudioWithoutFilter(t *testing.T) {
 	}
 }
 
-// TestResolveFallsBackWhenAllFiltered ensures a title available only in a
-// disabled language still plays instead of erroring.
-func TestResolveFallsBackWhenAllFiltered(t *testing.T) {
+// TestResolveKeepsOnlyDeclaredLanguage proves a lone foreign-dub row is kept
+// with its typed identity instead of being silently defaulted to English.
+func TestResolveKeepsOnlyDeclaredLanguage(t *testing.T) {
 	origBase := penguAPIBase
 	defer func() { penguAPIBase = origBase }()
 
@@ -146,14 +153,20 @@ func TestResolveFallsBackWhenAllFiltered(t *testing.T) {
 	defer server.Close()
 
 	penguAPIBase = server.URL
-	c := &Client{httpClient: server.Client(), configSegment: "ztest", langFilter: map[string]bool{"fr": false}}
+	c := &Client{httpClient: server.Client(), configSegment: "ztest"}
 
 	sources, err := c.ResolveSource(context.Background(), "603", provider.Episode{})
 	if err != nil {
 		t.Fatalf("ResolveSource: %v", err)
 	}
 	if len(sources) != 1 || sources[0].Language != "fr" {
-		t.Fatalf("expected fallback French audio, got %+v", sources)
+		t.Fatalf("expected declared French audio, got %+v", sources)
+	}
+	if got := sources[0].Audio.Languages; len(got) != 1 || got[0] != "fr" {
+		t.Errorf("Audio.Languages = %v, want [fr]", got)
+	}
+	if sources[0].Audio.Track != provider.TrackDub {
+		t.Errorf("Audio.Track = %q, want dub", sources[0].Audio.Track)
 	}
 }
 

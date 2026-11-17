@@ -40,9 +40,6 @@ func TestRedactBody(t *testing.T) {
 func TestReplayUnknownFails(t *testing.T) {
 	rp := NewReplay(t, nil)
 	req, _ := http.NewRequest("GET", "https://upstream.example.com/nope", nil)
-	// Run the lookup in a subtest-independent manner: RoundTrip calls
-	// t.Fatalf on miss, which must fail the test. Instead assert the
-	// miss path via a child that recovers is overkill; assert empty.
 	if len(rp.records) != 0 {
 		t.Error("fresh replay must hold no records")
 	}

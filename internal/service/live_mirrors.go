@@ -8,20 +8,19 @@ import (
 	"unicode"
 
 	"kari/internal/provider"
+	"kari/internal/timeouts"
 )
 
 const (
-	// liveMirrorTimeout bounds the whole cross-provider fallback pass. It only
-	// runs when the selected provider produced nothing playable, so a short
-	// budget keeps a dead channel from stalling the playback screen.
-	liveMirrorTimeout = 8 * time.Second
-	// liveMirrorProviderTimeout caps one mirror provider inside that pass;
-	// live catalogs can hang, and the fallback is best-effort.
-	liveMirrorProviderTimeout = 6 * time.Second
+	// liveMirrorTimeout bounds the whole cross-provider fallback pass. It is
+	// bounded by the central policy so a dead channel never hangs the UI.
+	liveMirrorTimeout = timeouts.LiveMirror
+	// liveMirrorProviderTimeout caps one mirror provider inside that pass.
+	liveMirrorProviderTimeout = timeouts.LiveMirror
 	// liveMirrorGrace is how long the pass keeps collecting extra mirrors
 	// after the first one lands. One working source is enough to play, so
 	// waiting for every provider would only slow the dead-channel path.
-	liveMirrorGrace = 1500 * time.Millisecond
+	liveMirrorGrace = timeouts.LiveMirrorGrace
 )
 
 // liveMirror is one fallback provider batch resolved for the same channel

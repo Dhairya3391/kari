@@ -92,6 +92,30 @@ func TestRenderSettingsScreenDoesNotRepeatCategoryHeading(t *testing.T) {
 	}
 }
 
+func TestRenderSettingsScreenAddonsShowsReadableRows(t *testing.T) {
+	data := SettingsData{
+		ActiveCategory:  CategoryAddons,
+		FocusedRowIndex: 1,
+		Width:           100,
+		Accent:          ResolveAccent(model.KindAnime, "Auto"),
+		AddonRows: []AddonRow{
+			{Name: "HdHub", Host: "hdhub.example", Loaded: true},
+			{Name: "free.flixnest.app", Host: "free.flixnest.app"},
+		},
+	}
+	rendered := RenderSettingsScreen(data)
+	for _, want := range []string{"HdHub", "hdhub.example", "free.flixnest.app", "● active", "○ not loaded", "── ADDONS ──", "Enter adds a Stremio addon manifest"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("addons screen missing %q:\n%s", want, rendered)
+		}
+	}
+	for _, unwanted := range []string{"Addon 1", "Addon 2", "tests and adds", "eyJ0b3J"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Errorf("addons screen still contains %q:\n%s", unwanted, rendered)
+		}
+	}
+}
+
 func TestProviderPriorityEditorShowsAllModesAndControls(t *testing.T) {
 	data := SettingsData{
 		ProviderPriorityOpen: true,
@@ -158,10 +182,11 @@ func TestCleanErrorForUIRateLimited(t *testing.T) {
 func TestCollectSettingsData_SubtitlesAndPoster(t *testing.T) {
 	m := &modelImpl{
 		registry:         &provider.Registry{},
-		subtitleLanguage: "ja",
+		appMode:          provider.ModeMovies,
 		imagesEnabled:    true,
 		settingsCategory: CategoryLanguages,
 	}
+	m.setSubtitleLanguage(provider.ModeMovies, "ja")
 	data := m.collectSettingsData(80, 24)
 	if data.SubtitleLanguage != "Japanese" {
 		t.Errorf("SubtitleLanguage = %q, want %q", data.SubtitleLanguage, "Japanese")
@@ -170,7 +195,7 @@ func TestCollectSettingsData_SubtitlesAndPoster(t *testing.T) {
 		t.Errorf("PosterArtwork = false, want true")
 	}
 
-	m.subtitleLanguage = "off"
+	m.setSubtitleLanguage(provider.ModeMovies, "off")
 	m.imagesEnabled = false
 	data2 := m.collectSettingsData(80, 24)
 	if data2.SubtitleLanguage != "Off" {

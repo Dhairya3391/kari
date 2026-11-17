@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
@@ -21,14 +20,15 @@ import (
 	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/subtitles"
+	"kari/internal/timeouts"
 	"kari/internal/util"
 )
 
 const (
 	subtitleCacheSize               = 100
-	subtitleFetchTimeout            = 15 * time.Second
-	subtitleProviderCandidateLimit  = 3
-	subtitleProviderDownloadTimeout = 8 * time.Second
+	subtitleFetchTimeout            = timeouts.SubtitleFetch
+	subtitleProviderCandidateLimit  = timeouts.SubtitleCandidateLimit
+	subtitleProviderDownloadTimeout = timeouts.SubtitleDownload
 )
 
 // SubtitleService selects and materializes one subtitle track for playback.
@@ -198,7 +198,7 @@ func (s *SubtitleService) fetch(
 		}
 	}
 
-	if !isAnime && subtitleFallbackReady(media) && s.openSubtitles != nil && s.openSubtitles.Configured() {
+	if !isAnime && s.openSubtitles != nil && s.openSubtitles.Configured() {
 		track, found, err := s.openSubtitles.FetchBestSubtitle(
 			ctx,
 			mediaTitle,
@@ -219,10 +219,6 @@ func (s *SubtitleService) fetch(
 		return model.SubtitleTrack{}, errors.New("no subtitles found")
 	}
 	return model.SubtitleTrack{}, fmt.Errorf("no subtitles found: %w", errors.Join(failures...))
-}
-
-func subtitleFallbackReady(media model.ResolvedMedia) bool {
-	return media.TotalResolvers <= 0 || len(media.CompletedResolvers) >= media.TotalResolvers
 }
 
 func (s *SubtitleService) areAnimeSubtitlesDisabled() bool {
@@ -322,7 +318,7 @@ func (s *SubtitleService) downloadProviderCandidates(
 			continue
 		}
 		toProbe = append(toProbe, track)
-		if len(toProbe) >= 3 {
+		if len(toProbe) >= subtitleProviderCandidateLimit {
 			break
 		}
 	}
@@ -345,40 +341,58 @@ func (s *SubtitleService) downloadProviderCandidates(
 		return model.SubtitleTrack{}, errors.Join(failures...)
 	}
 
-	type subResult struct {
-		track model.SubtitleTrack
-		err   error
-	}
+	downloadBase, cancelDownloads := context.WithTimeout(context.Background(), subtitleProviderDownloadTimeout)
+	waitCtx, cancelWait := context.WithTimeout(ctx, subtitleProviderDownloadTimeout)
+	defer cancelWait()
 
-	downloadCtx, cancel := context.WithTimeout(ctx, subtitleProviderDownloadTimeout)
-	defer cancel()
-
-	ch := make(chan subResult, len(toProbe))
+	ch := make(chan subtitleDownloadResult, len(toProbe))
 	for _, track := range toProbe {
-		go func() {
-			downloaded, err := s.downloadProviderSubtitle(downloadCtx, media, track)
-			ch <- subResult{track: downloaded, err: err}
-		}()
+		go func(track model.SubtitleTrack) {
+			downloaded, err := s.downloadProviderSubtitle(downloadBase, media, track)
+			ch <- subtitleDownloadResult{track: downloaded, err: err}
+		}(track)
 	}
 
-	for range toProbe {
+	remaining := len(toProbe)
+	for remaining > 0 {
 		select {
 		case res := <-ch:
+			remaining--
 			if res.err == nil && usableCachedTrack(res.track) {
+				go s.backfillSubtitleDownloads(ch, remaining, cancelDownloads)
 				return res.track, nil
 			}
 			if res.err != nil {
 				failures = append(failures, res.err)
 			}
-		case <-downloadCtx.Done():
-			failures = append(failures, downloadCtx.Err())
+		case <-waitCtx.Done():
+			failures = append(failures, waitCtx.Err())
+			go s.backfillSubtitleDownloads(ch, remaining, cancelDownloads)
+			return model.SubtitleTrack{}, errors.Join(failures...)
 		}
 	}
-
+	cancelDownloads()
 	if len(failures) == 0 {
 		return model.SubtitleTrack{}, nil
 	}
 	return model.SubtitleTrack{}, errors.Join(failures...)
+}
+
+// subtitleDownloadResult is one candidate's download outcome.
+type subtitleDownloadResult struct {
+	track model.SubtitleTrack
+	err   error
+}
+
+// backfillSubtitleDownloads drains the remaining download results so no
+// producer goroutine is left blocked. Each successful download has already
+// written its subtitle file to the cache.
+func (s *SubtitleService) backfillSubtitleDownloads(ch <-chan subtitleDownloadResult, remaining int, cancel context.CancelFunc) {
+	defer cancel()
+	for remaining > 0 {
+		<-ch
+		remaining--
+	}
 }
 
 func (s *SubtitleService) downloadProviderSubtitle(

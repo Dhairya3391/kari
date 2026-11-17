@@ -270,6 +270,102 @@ func Normalize(raw string) string {
 	return code
 }
 
+// FromLabel resolves a provider-supplied language label to a canonical code.
+// Upstream labels carry trailing noise — source annotations
+// ("english (cr english)"), bracketed tags ("[SoM]"), hearing-impaired
+// markers ("Hi5", "SDH"), and ordinal suffixes ("Brazilian10") — that would
+// otherwise make identical languages compare unequal. The cleaned, lowercased
+// label is fed through Normalize; unknown names fall back to the cleaned text
+// itself so nothing is silently dropped.
+func FromLabel(raw string) string {
+	cleaned := scrubLabel(raw)
+	if normalized := Normalize(cleaned); normalized != cleaned {
+		return normalized
+	}
+	return cleaned
+}
+
+// scrubLabel strips non-language decoration from a raw upstream label and
+// returns the lowercased remainder. It is deliberately conservative with
+// digits: a trailing number is only removed when it attaches directly to a
+// name, so regional codes such as "es-419" keep their meaningful suffix.
+func scrubLabel(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+
+	// Bracketed tags and text after a track separator describe the source,
+	// not the language; the language name itself comes first.
+	s = stripBracketed(s)
+	if i := strings.IndexAny(s, "·•|"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.IndexByte(s, '('); i >= 0 {
+		s = s[:i]
+	}
+
+	fields := strings.Fields(s)
+	if len(fields) > 1 && isHIMarker(fields[len(fields)-1]) {
+		last := fields[len(fields)-1]
+		s = strings.TrimSpace(strings.TrimSuffix(s, last))
+	}
+	return stripTrailingDigits(strings.TrimSpace(s))
+}
+
+// stripBracketed removes every [...]-delimited annotation group from s.
+func stripBracketed(s string) string {
+	for {
+		start := strings.IndexByte(s, '[')
+		if start < 0 {
+			return s
+		}
+		end := strings.IndexByte(s, ']')
+		if end < start {
+			return s
+		}
+		s = s[:start] + s[end+1:]
+	}
+}
+
+// isHIMarker reports whether token is a hearing-impaired marker such as
+// "hi", "hi5", or "sdh". Tokens are lowercased by the caller before matching.
+func isHIMarker(token string) bool {
+	switch token {
+	case "hi", "sdh":
+		return true
+	}
+	return strings.HasPrefix(token, "hi") && allDigits(token[2:])
+}
+
+// stripTrailingDigits removes a digit run that directly follows a name
+// letter. A hyphen before the digits marks a regional code ("es-419"), which
+// must survive intact for alias lookup.
+func stripTrailingDigits(s string) string {
+	end := len(s)
+	start := end
+	for start > 0 && s[start-1] >= '0' && s[start-1] <= '9' {
+		start--
+	}
+	if start == end || start == 0 || !isASCIILetter(s[start-1]) {
+		return s
+	}
+	return s[:start]
+}
+
+func isASCIILetter(b byte) bool {
+	return b >= 'a' && b <= 'z'
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // Name returns the English display name for a language tag in any form
 // Normalize understands, falling back to the (normalized) tag itself,
 // uppercased, if it's not in the curated lists. All user-facing rendering
@@ -304,4 +400,40 @@ func Names(raw []string) string {
 		display = append(display, Name(code))
 	}
 	return strings.Join(display, " · ")
+}
+
+// Canonicalize maps each tag through Normalize, drops empty results, and
+// returns the surviving codes in first-seen order without duplicates.
+func Canonicalize(list []string) []string {
+	seen := make(map[string]struct{}, len(list))
+	var out []string
+	for _, tag := range list {
+		code := Normalize(tag)
+		if code == "" {
+			continue
+		}
+		if _, dup := seen[code]; dup {
+			continue
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+	return out
+}
+
+// FromCodeOrLabel resolves an audio language from a provider code and its
+// human-readable label. Some upstreams (notably bingr) use "fi" for Filipino
+// even though "fi" is the valid ISO 639-1 code for Finnish, so aliasing "fi"
+// globally would break genuine Finnish tracks. When the label resolves to a
+// curated language it is trusted over the code — "fi" plus "Filipino" yields
+// "fil" while "fi" plus "Finnish" stays "fi". Otherwise the code is normalized.
+func FromCodeOrLabel(code, label string) string {
+	if label != "" {
+		if candidate := FromLabel(label); candidate != "" {
+			if _, curated := names[candidate]; curated {
+				return candidate
+			}
+		}
+	}
+	return Normalize(code)
 }

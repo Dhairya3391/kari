@@ -85,8 +85,6 @@ func TestPenguFullAudit(t *testing.T) {
 			}
 			requireSources(t, p.Name(), sources)
 
-			// Dedupe repeat stream URLs so shared mirrors are probed once
-			// but every quality row still counts in the report.
 			seen := map[string][]int{}
 			unique := []provider.MediaSource{}
 			for _, src := range provider.FilterDirectSources(sources) {

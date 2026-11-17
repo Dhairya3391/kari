@@ -49,7 +49,6 @@ type ReleaseItem struct {
 	NextEpisode        int
 	UnwatchedCount     int
 	Status             WatchStatus
-	Badge              string
 }
 
 // FilterMode specifies which releases are displayed on the calendar screen.

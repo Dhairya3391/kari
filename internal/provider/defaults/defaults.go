@@ -2,7 +2,6 @@ package defaults
 
 import (
 	"context"
-	"fmt"
 	"kari/internal/config"
 	"kari/internal/logging"
 	"kari/internal/provider"
@@ -15,20 +14,18 @@ import (
 	"kari/internal/provider/atsu"
 	"kari/internal/provider/bingr"
 	"kari/internal/provider/cinecat"
+	"kari/internal/provider/cinejoy"
 	"kari/internal/provider/cno"
 	"kari/internal/provider/famelack"
-	"kari/internal/provider/iptvorg"
 	"kari/internal/provider/jellyfin"
 	"kari/internal/provider/mapple"
 	"kari/internal/provider/miruro"
-	"kari/internal/provider/moovie"
 	"kari/internal/provider/movysx"
 	"kari/internal/provider/pengu"
 	"kari/internal/provider/solis"
-	"kari/internal/provider/stability"
 	"kari/internal/provider/stremioaddon"
 	"kari/internal/provider/sweetfox"
-	"kari/internal/provider/timstreams"
+	"kari/internal/provider/thedaddy"
 	"kari/internal/provider/vidrift"
 	"kari/internal/provider/vyla"
 	"kari/internal/provider/weebcentral"
@@ -49,7 +46,7 @@ var DefaultProviders = []provider.Descriptor{
 	{
 		ID: "movysx",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return movysx.NewClientWithLanguageFilter(d.KeyPool, d.LanguageFilter)
+			return movysx.NewClient(d.KeyPool)
 		},
 	},
 	{
@@ -77,12 +74,6 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
-		ID: "moovie",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return moovie.NewClientWithLanguageFilter(d.KeyPool, d.LanguageFilter)
-		},
-	},
-	{
 		ID: "solis",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return solis.NewClient(d.KeyPool)
@@ -92,6 +83,12 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "cinecat",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return cinecat.NewClient(d.KeyPool)
+		},
+	},
+	{
+		ID: "cinejoy",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return cinejoy.NewClient(d.KeyPool)
 		},
 	},
 	{
@@ -115,13 +112,13 @@ var DefaultProviders = []provider.Descriptor{
 	{
 		ID: "vidrift",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return vidrift.NewClientWithLanguageFilter(d.KeyPool, d.LanguageFilter)
+			return vidrift.NewClient(d.KeyPool)
 		},
 	},
 	{
 		ID: "bingr",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return bingr.NewClientWithLanguageFilter(d.KeyPool, d.LanguageFilter)
+			return bingr.NewClient(d.KeyPool)
 		},
 	},
 	{
@@ -139,31 +136,19 @@ var DefaultProviders = []provider.Descriptor{
 	{
 		ID: "pengu",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return pengu.NewClientWithLanguageFilter(d.KeyPool, d.Config.PenguAuthToken, d.LanguageFilter)
+			return pengu.NewClient(d.KeyPool, d.Config.PenguAuthToken)
 		},
 	},
 	{
-		ID: "timstreams",
+		ID: "thedaddy",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return timstreams.NewClient()
+			return thedaddy.NewClient(config.TheDaddyBase)
 		},
 	},
 	{
 		ID: "famelack",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return famelack.NewClient()
-		},
-	},
-	{
-		ID: "iptvorg",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return iptvorg.NewClient()
-		},
-	},
-	{
-		ID: "stability",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return stability.NewClient()
 		},
 	},
 	{
@@ -197,17 +182,16 @@ var DefaultProviders = []provider.Descriptor{
 
 // NewDefaultRegistry constructs every enabled default provider and registers
 // it. A factory failure skips that provider with a logged warning — startup
-// continues with the remaining integrations. langFilter carries the user's
-// audio-language settings (nil = everything enabled); factories that care
-// receive it via provider.Deps.
-func NewDefaultRegistry(keyPool *tmdb.KeyPool, cfg *config.Config, langFilter map[string]bool) (*provider.Registry, error) {
+// continues with the remaining integrations. Audio-language preferences are
+// applied once by the domain filter pipeline, never by providers themselves.
+func NewDefaultRegistry(keyPool *tmdb.KeyPool, cfg *config.Config) (*provider.Registry, error) {
 	registry := &provider.Registry{}
 	for _, d := range DefaultProviders {
 		if d.When != nil && !d.When(cfg) {
 			logging.Debug("provider disabled by configuration", "provider", d.ID)
 			continue
 		}
-		p, err := d.Factory(provider.Deps{Config: cfg, KeyPool: keyPool, LanguageFilter: langFilter})
+		p, err := d.Factory(provider.Deps{Config: cfg, KeyPool: keyPool})
 		if err != nil {
 			logging.Error("provider construction failed; skipping registration", "provider", d.ID, "err", err)
 			continue
@@ -217,21 +201,14 @@ func NewDefaultRegistry(keyPool *tmdb.KeyPool, cfg *config.Config, langFilter ma
 	return registry, nil
 }
 
-// LoadConfiguredStremioAddon loads a previously validated addon without
-// repeating the playback probe used when it was added.
+// LoadConfiguredStremioAddon loads a previously configured addon from its
+// manifest URL.
 func LoadConfiguredStremioAddon(ctx context.Context, manifestURL string, keyPool *tmdb.KeyPool) (provider.Provider, error) {
 	return stremioaddon.NewClient(ctx, manifestURL, keyPool)
 }
 
-// LoadStremioAddon validates a configured manifest and confirms that it
-// resolves an item from its own catalog before making it available to Kari.
+// LoadStremioAddon loads and validates the HTTP manifest of a Stremio addon
+// before making it available to Kari. It does not run a playback probe.
 func LoadStremioAddon(ctx context.Context, manifestURL string, keyPool *tmdb.KeyPool) (provider.Provider, error) {
-	addon, err := stremioaddon.NewClient(ctx, manifestURL, keyPool)
-	if err != nil {
-		return nil, err
-	}
-	if err := addon.Probe(ctx); err != nil {
-		return nil, fmt.Errorf("test addon streams: %w", err)
-	}
-	return addon, nil
+	return stremioaddon.NewClient(ctx, manifestURL, keyPool)
 }

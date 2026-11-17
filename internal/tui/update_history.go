@@ -130,6 +130,23 @@ func (m *modelImpl) updateHistory(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.playHistoryGroup(item.key)
 			}
 			return m, nil
+		case msg.String() == "pgup" || msg.String() == "pgdown" ||
+			msg.String() == "ctrl+u" || msg.String() == "ctrl+d":
+			step := m.pageStep()
+			switch msg.String() {
+			case "ctrl+u", "ctrl+d":
+				step = max(1, step/2)
+			}
+			delta := step
+			if msg.String() == "pgup" || msg.String() == "ctrl+u" {
+				delta = -delta
+			}
+			previous := m.historySelectedIndex()
+			m.historyList.Select(clampIndex(m.historyList.Index()+delta, len(m.historyList.Items())))
+			if m.historySelectedIndex() != previous {
+				return m, m.triggerHistoryPoster()
+			}
+			return m, nil
 		}
 	}
 
@@ -485,8 +502,6 @@ func (m *modelImpl) onHistoryResolveSeries(msg historyResolveSeriesMsg) (tea.Mod
 
 	series := msg.series
 	m.selectedSeries = &series
-	// Manga resume skips the episode/preview pipeline entirely:
-	// chapters screen, then straight into the saved chapter and page.
 	if m.appMode == provider.ModeManga {
 		tuiLog.Info("history resume: opening manga chapters", "title", series.Title)
 		return m.resumeMangaSeries(msg.entry, series)
@@ -495,7 +510,6 @@ func (m *modelImpl) onHistoryResolveSeries(msg historyResolveSeriesMsg) (tea.Mod
 	m.resolved = nil
 	m.manualPlaybackSelected = false
 	m.clearPreviewPoster()
-	m.selectedPlayback = 0
 	m.episodeResults = nil
 	m.episodeCache.valid = false
 	m.episodeIndex = -1

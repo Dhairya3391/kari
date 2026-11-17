@@ -63,9 +63,6 @@ func (m *modelImpl) onUpdateCheck(msg updateCheckMsg) (tea.Model, tea.Cmd) {
 		tuiLog.Info("auto-update enabled; downloading in background", "version", msg.latestVersion)
 		return m, m.autoUpdateCmd(msg.release)
 	}
-	// Don't stomp on a status the user is actively reading (an error,
-	// a download result, etc.) — this notice can wait for the status
-	// line to be free rather than interrupt something more relevant.
 	if m.statusText != "" {
 		return m, nil
 	}

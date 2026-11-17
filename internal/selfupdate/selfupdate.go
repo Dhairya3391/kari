@@ -77,9 +77,6 @@ func (r *Release) CommitSHA() (string, error) {
 
 // GetLatestRelease fetches metadata for the newest published release.
 func GetLatestRelease() (*Release, error) {
-	// Use the shared client: on Termux/Android it swaps in a public DNS
-	// resolver (Cloudflare/Google) because the system resolver can be broken
-	// (e.g. "lookup api.github.com on [::1]:53: connection refused").
 	client := httpclient.New()
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
 	resp, err := client.Get(url)

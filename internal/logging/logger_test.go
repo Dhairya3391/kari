@@ -98,9 +98,6 @@ func TestInit_KariLogStderr_RedirectedFile(t *testing.T) {
 	}
 	defer func() { _ = Close() }()
 
-	// In `go test`, stdout/stderr is normally redirected to a test runner pipe/buffer.
-	// Regardless of whether stderr is a pipe in `go test` or a terminal, StderrSuppressed
-	// must match whether shouldMirrorStderr was false.
 	expectedSuppressed := !ShouldMirrorStderr(os.Stdout, os.Stderr)
 	if StderrSuppressed() != expectedSuppressed {
 		t.Fatalf("StderrSuppressed() = %v, want %v", StderrSuppressed(), expectedSuppressed)

@@ -2,6 +2,7 @@ package cno
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -46,30 +47,32 @@ func TestCnoModesAndMetadata(t *testing.T) {
 }
 
 func TestCnoResolveMovie(t *testing.T) {
-	s20Manifest := `#EXTM3U
-#EXT-X-VERSION:7
-#EXT-X-STREAM-INF:BANDWIDTH=10222043,RESOLUTION=1920x1080
-https://v.cno.to/hls/test/1080p/index.m3u8`
-
-	s21Manifest := `#EXTM3U
-#EXT-X-STREAM-INF:BANDWIDTH=16258889,RESOLUTION=3840x1604
-https://v.lumenbox.top/v/token/3840x1604/index.m3u8
+	const movieDetail = `{"sources":[` +
+		`{"kind":"embed","url":"https://example.test/embed"},` +
+		`{"kind":"hls","url":"/api/s/21/movie/6977?v=9","label":"Server 21"}]}`
+	const hlsManifest = `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=16258889,RESOLUTION=3840x2160
+https://v.lumenbox.top/v/token/3840x2160/index.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=6125483,RESOLUTION=1920x1080
 https://v.lumenbox.top/v/token/1920x1080/index.m3u8`
+	const subListJSON = `{"files":[{"id":"os-123","lang":"en","label":"English"},{"id":"os-456","lang":"es","label":"Spanish"}]}`
 
-	subListJSON := `{"files":[{"id":"os-123","lang":"en","label":"English"},{"id":"os-456","lang":"es","label":"Spanish"}]}`
-
+	var sawVersionedHLS, sawDeadServer bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/api/movie/6977":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(movieDetail))
+		case strings.Contains(r.URL.Path, "/api/s/20/"):
+			sawDeadServer = true
+			http.NotFound(w, r)
+		case r.URL.Path == "/api/s/21/movie/6977":
+			sawVersionedHLS = r.URL.Query().Get("v") == "9"
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = w.Write([]byte(hlsManifest))
 		case strings.Contains(r.URL.Path, "/api/subs/list/movie/6977"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(subListJSON))
-		case strings.Contains(r.URL.Path, "/api/s/20/movie/6977"):
-			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-			_, _ = w.Write([]byte(s20Manifest))
-		case strings.Contains(r.URL.Path, "/api/s/21/movie/6977"):
-			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-			_, _ = w.Write([]byte(s21Manifest))
 		default:
 			http.NotFound(w, r)
 		}
@@ -86,48 +89,50 @@ https://v.lumenbox.top/v/token/1920x1080/index.m3u8`
 		t.Fatalf("ResolveSource failed: %v", err)
 	}
 
-	// Should have 1 from s20 + 2 from s21 = 3 sources
-	if len(sources) != 3 {
-		t.Fatalf("expected 3 sources, got %d", len(sources))
+	if sawDeadServer {
+		t.Error("the retired server 20 endpoint must not be requested")
+	}
+	if !sawVersionedHLS {
+		t.Error("HLS path from the detail listing was not used verbatim")
+	}
+	if len(sources) != 2 {
+		t.Fatalf("expected 2 HLS sources, got %d", len(sources))
 	}
 
-	// Verify s20 source
-	s20 := sources[0]
-	if !strings.Contains(s20.URL, "https://v.cno.to/hls/test/1080p/index.m3u8") {
-		t.Errorf("s20 URL mismatch: %s", s20.URL)
+	first := sources[0]
+	if first.Quality != "2160p" || first.Height != 2160 || first.Bitrate != 16258889 {
+		t.Errorf("4K metadata mismatch: %+v", first)
 	}
-	if len(s20.Subtitles) != 2 {
-		t.Errorf("expected 2 subtitles, got %d", len(s20.Subtitles))
+	if first.Backend != "Server 21" {
+		t.Errorf("backend = %q, want %q", first.Backend, "Server 21")
 	}
-	if s20.Subtitles[0].Language != "en" {
-		t.Errorf("sub 0 language = %s, want en", s20.Subtitles[0].Language)
+	if len(first.ExtraArgs) == 0 || !strings.Contains(first.ExtraArgs[0], "extension_picky=0") {
+		t.Errorf("missing expected extra args: %v", first.ExtraArgs)
 	}
-
-	// Verify s21 source
-	s21_4k := sources[1]
-	if s21_4k.Quality != "2160p" {
-		t.Errorf("s21_4k quality = %s, want 2160p", s21_4k.Quality)
-	}
-	if len(s21_4k.ExtraArgs) == 0 || !strings.Contains(s21_4k.ExtraArgs[0], "extension_picky=0") {
-		t.Errorf("missing expected extra args on s21: %v", s21_4k.ExtraArgs)
+	for _, s := range sources {
+		if len(s.Subtitles) != 2 || s.Subtitles[0].Language != "en" || s.Subtitles[1].Language != "es" {
+			t.Errorf("subtitle mismatch on %s: %v", s.URL, s.Subtitles)
+		}
 	}
 }
 
 func TestCnoResolveStream(t *testing.T) {
-	s20Manifest := `#EXTM3U
+	const tvDetail = `{"sources":[{"kind":"hls","url":"/api/s/21/tv/1396/1/2?v=3","label":"Server 21"}]}`
+	const hlsManifest = `#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=6015211,RESOLUTION=1920x1080
-https://v.cno.to/hls/breakingbad/1080p/index.m3u8`
+https://v.lumenbox.top/v/token/1080p/index.m3u8`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/api/tv/1396/episode/1/2":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tvDetail))
+		case r.URL.Path == "/api/s/21/tv/1396/1/2":
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = w.Write([]byte(hlsManifest))
 		case strings.Contains(r.URL.Path, "/api/subs/list/tv/1396/1/2"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"files":[{"id":"os-tv1","lang":"en","label":"English"}]}`))
-		case strings.Contains(r.URL.Path, "/api/s/20/tv/1396/1/2"):
-			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-			_, _ = w.Write([]byte(s20Manifest))
-		case strings.Contains(r.URL.Path, "/api/s/21/tv/1396/1/2"):
-			http.Error(w, "server 21 offline", http.StatusServiceUnavailable)
 		default:
 			http.NotFound(w, r)
 		}
@@ -146,7 +151,6 @@ https://v.cno.to/hls/breakingbad/1080p/index.m3u8`
 		Episode: 2,
 	}, updates)
 	close(updates)
-
 	if err != nil {
 		t.Fatalf("ResolveStream failed: %v", err)
 	}
@@ -155,30 +159,34 @@ https://v.cno.to/hls/breakingbad/1080p/index.m3u8`
 	for batch := range updates {
 		all = append(all, batch...)
 	}
-
 	if len(all) != 1 {
 		t.Fatalf("expected 1 source from streaming updates, got %d", len(all))
 	}
-	if !strings.Contains(all[0].URL, "https://v.cno.to/hls/breakingbad/1080p/index.m3u8") {
+	if !strings.Contains(all[0].URL, "https://v.lumenbox.top/v/token/1080p/index.m3u8") {
 		t.Errorf("TV URL mismatch: %s", all[0].URL)
+	}
+	if len(all[0].Subtitles) != 1 || all[0].Subtitles[0].Language != "en" {
+		t.Errorf("TV subtitle mismatch: %v", all[0].Subtitles)
 	}
 }
 
 func TestCnoResolveTV(t *testing.T) {
-	s20Manifest := `#EXTM3U
+	const tvDetail = `{"sources":[{"kind":"hls","url":"/api/s/21/tv/1396/1/2?v=3","label":"Server 21"}]}`
+	const hlsManifest = `#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=6015211,RESOLUTION=1920x1080
-https://v.cno.to/hls/breakingbad/1080p/index.m3u8`
+https://v.lumenbox.top/v/token/1080p/index.m3u8`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/api/tv/1396/episode/1/2":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(tvDetail))
+		case r.URL.Path == "/api/s/21/tv/1396/1/2":
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = w.Write([]byte(hlsManifest))
 		case strings.Contains(r.URL.Path, "/api/subs/list/tv/1396/1/2"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"files":[{"id":"os-tv1","lang":"en","label":"English"}]}`))
-		case strings.Contains(r.URL.Path, "/api/s/20/tv/1396/1/2"):
-			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-			_, _ = w.Write([]byte(s20Manifest))
-		case strings.Contains(r.URL.Path, "/api/s/21/tv/1396/1/2"):
-			http.Error(w, "server 21 offline", http.StatusServiceUnavailable)
 		default:
 			http.NotFound(w, r)
 		}
@@ -198,15 +206,36 @@ https://v.cno.to/hls/breakingbad/1080p/index.m3u8`
 	if err != nil {
 		t.Fatalf("ResolveSource failed: %v", err)
 	}
-
 	if len(sources) != 1 {
-		t.Fatalf("expected 1 source from server 20, got %d", len(sources))
+		t.Fatalf("expected 1 source, got %d", len(sources))
 	}
-	if !strings.Contains(sources[0].URL, "https://v.cno.to/hls/breakingbad/1080p/index.m3u8") {
+	if !strings.Contains(sources[0].URL, "https://v.lumenbox.top/v/token/1080p/index.m3u8") {
 		t.Errorf("TV URL mismatch: %s", sources[0].URL)
 	}
 	if len(sources[0].Subtitles) != 1 || sources[0].Subtitles[0].Language != "en" {
 		t.Errorf("TV subtitle mismatch: %v", sources[0].Subtitles)
+	}
+}
+
+func TestCnoResolveNoHLSSource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/movie/6977" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sources":[{"kind":"embed","url":"https://example.test/embed"}]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	client, err := NewClientWithURL(&tmdb.KeyPool{}, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURL failed: %v", err)
+	}
+
+	_, err = client.ResolveSource(context.Background(), "6977", provider.Episode{TMDBID: 6977})
+	if !errors.Is(err, provider.ErrNoSources) {
+		t.Fatalf("expected ErrNoSources for embed-only listing, got %v", err)
 	}
 }
 

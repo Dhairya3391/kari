@@ -76,23 +76,40 @@ func TestEpisodesRepeatedDownAtEndDoesNotBlockMovingUp(t *testing.T) {
 	}
 }
 
-func TestFilterRedundantEpisodeNavigationDropsOnlyBoundaryRepeats(t *testing.T) {
+func TestFilterRedundantNavigationDropsOnlyBoundaryRepeats(t *testing.T) {
 	m := episodesTestModel()
 	m.currentSeasonEpisodes()
 	m.seasonEpisodeIndex = len(m.episodeCache.filtered) - 1
 
 	down := tea.KeyMsg{Type: tea.KeyDown}
-	if got := FilterRedundantEpisodeNavigation(m, down); got != nil {
+	if got := FilterRedundantNavigation(m, down); got != nil {
 		t.Fatalf("down at end = %v, want it filtered", got)
 	}
 	up := tea.KeyMsg{Type: tea.KeyUp}
-	if got := FilterRedundantEpisodeNavigation(m, up); got == nil {
+	if got := FilterRedundantNavigation(m, up); got == nil {
 		t.Fatal("up at end was filtered")
 	}
 
 	m.seasonEpisodeIndex = 0
-	if got := FilterRedundantEpisodeNavigation(m, up); got != nil {
+	if got := FilterRedundantNavigation(m, up); got != nil {
 		t.Fatalf("up at start = %v, want it filtered", got)
+	}
+}
+
+// The help overlay scrolls with up/down itself. The filter must not drop those
+// keys at the underlying list's boundary, or help becomes unscrollable.
+func TestFilterRedundantNavigationKeepsHelpKeys(t *testing.T) {
+	m := episodesTestModel()
+	m.currentSeasonEpisodes()
+	m.showHelp = true
+
+	m.seasonEpisodeIndex = 0
+	if got := FilterRedundantNavigation(m, tea.KeyMsg{Type: tea.KeyUp}); got == nil {
+		t.Fatal("up at the list start must reach the help overlay")
+	}
+	m.seasonEpisodeIndex = len(m.episodeCache.filtered) - 1
+	if got := FilterRedundantNavigation(m, tea.KeyMsg{Type: tea.KeyDown}); got == nil {
+		t.Fatal("down at the list end must reach the help overlay")
 	}
 }
 
@@ -313,8 +330,6 @@ func TestCollectDownloadsDataActiveBatchAndSingle(t *testing.T) {
 		t.Errorf("pressing 'p' when paused must resume download")
 	}
 
-	// Test cancelling queued item with 'x' (select index 1 which is queued).
-	// Cancel is destructive, so it now needs the double-press confirmation.
 	m.downloadsIndex = 1
 	mdl, _ = m.updateDownloads(runeKey("x"))
 	m = mdl.(*modelImpl)

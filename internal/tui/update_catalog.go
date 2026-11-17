@@ -29,6 +29,10 @@ func (m *modelImpl) onSearchDone(msg searchDoneMsg) (tea.Model, tea.Cmd) {
 			m.seriesResults = nil
 			m.seriesList.SetItems(nil)
 			m.clearSearchPoster()
+			if m.appMode == provider.ModeLive {
+				m.liveUpdatedAt = time.Now()
+				m.liveSources = 0
+			}
 			m.setStatus(statusWarn, fmt.Sprintf("No results found for %q — press Tab to switch categories", msg.usedQuery))
 			m.queryInput.Focus()
 			return m, textinput.Blink
@@ -45,6 +49,8 @@ func (m *modelImpl) onSearchDone(msg searchDoneMsg) (tea.Model, tea.Cmd) {
 	m.seriesResults = append([]provider.SearchResult(nil), msg.results...)
 	if m.appMode == provider.ModeLive {
 		m.searchIndex = 0
+		m.liveUpdatedAt = time.Now()
+		m.liveSources = distinctProviderCount(m.seriesResults)
 	}
 	// A fresh result list drops any stale / text filter.
 	m.resultsFilter = ""
@@ -209,7 +215,18 @@ func (m *modelImpl) onEpisodesDone(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.setStatus(statusInfo, "")
 	}
-	return m, m.maybeFetchEpisodeTitles()
+	return m, tea.Batch(m.maybeFetchEpisodeTitles(), m.episodesDetailsCmd())
+}
+
+// episodesDetailsCmd loads the score and genres shown in the episodes pane.
+func (m *modelImpl) episodesDetailsCmd() tea.Cmd {
+	if m.selectedSeries == nil || m.selectedSeries.TMDBID == 0 {
+		return nil
+	}
+	if len(m.previewGenres) > 0 && m.previewRating != "" {
+		return nil
+	}
+	return m.triggerPreviewDetails()
 }
 
 // placeholderEpisodeRE matches provider placeholder titles ("Episode 12",
@@ -261,10 +278,6 @@ func (m *modelImpl) maybeFetchEpisodeTitles() tea.Cmd {
 		if err != nil {
 			tuiLog.Debug("anilist episode titles fetch failed", "anilist_id", anilistID, "err", err)
 		}
-		// AniList's streamingEpisodes only name the episodes it has licensed
-		// (e.g. the first 26 of Naruto's 220), so backfill the still-missing
-		// rows from TMDB keyed by absolute episode number. AniList wins on
-		// conflicts.
 		missing := false
 		for num := range needed {
 			if _, ok := titles[num]; !ok {
@@ -380,4 +393,15 @@ func (m *modelImpl) handleUnavailableAudio() *modelImpl {
 	}
 	m.setStatus(statusWarn, message)
 	return m
+}
+
+// distinctProviderCount reports how many integrations contributed results.
+func distinctProviderCount(results []provider.SearchResult) int {
+	seen := make(map[string]struct{})
+	for _, result := range results {
+		if result.Provider != "" {
+			seen[result.Provider] = struct{}{}
+		}
+	}
+	return len(seen)
 }

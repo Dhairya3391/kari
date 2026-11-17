@@ -7,13 +7,15 @@ import (
 	"time"
 
 	"kari/internal/provider"
+	"kari/internal/timeouts"
 )
 
 const (
-	episodeOverallTimeout = 45 * time.Second
-	// episodeTitlesTimeout bounds one parallel title lookup to the fastest
-	// usable catalog, including the case where every catalog hangs.
-	episodeTitlesTimeout = 3 * time.Second
+	episodeOverallTimeout = timeouts.EpisodesOverall
+	// episodeTitlesTimeout bounds the foreground title lookup. Titles that
+	// arrive later are merged into the cache by the backfill pass, so a slow
+	// catalog never replaces real titles with generic ones permanently.
+	episodeTitlesTimeout = timeouts.EpisodeTitles
 )
 
 // FetchEpisodes retrieves episode results from the selected provider and
@@ -65,9 +67,6 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 		return nil, fmt.Errorf("the source for this title does not support episodes")
 	}
 
-	// Naming sources already have catalog-scoped titles in their own
-	// rosters. Avoid waiting for a separate availability roster followed by
-	// a second title request. Dub still requires verified audio availability.
 	if mode == provider.ModeAnime && !strings.EqualFold(strings.TrimSpace(audioMode), provider.AudioDub) {
 		if episodes, ok := s.namedEpisodeRoster(ctx, mode, series); ok {
 			return filterEpisodesByAudio(episodes, audioMode), nil
@@ -237,8 +236,6 @@ func (s *MediaService) applyEpisodeTitleLookup(
 			}
 			return episodes
 		}
-		// Do not populate the title cache for failed or empty roster requests.
-		s.episodeTitles.Set(lookup.cacheKey, titles)
 	}
 	for i := range episodes {
 		if title := strings.TrimSpace(titles[episodes[i].Episode]); title != "" {
@@ -275,19 +272,20 @@ func (s *MediaService) episodeTitleSources(mode provider.ContentType, series pro
 	return out
 }
 
-// firstEpisodeTitles returns the first provider-supplied title map and
-// cancels sibling lookups so naming latency is bounded by the fastest source.
+type episodeTitleResult struct {
+	titles map[int]string
+}
+
+// firstEpisodeTitles returns the first provider-supplied title map so naming
+// latency is bounded by the fastest source. Sibling lookups keep running under
+// a detached budget and are drained by collectEpisodeTitles, so a slow but
+// valid catalog is cached for the next load instead of being discarded.
 func (s *MediaService) firstEpisodeTitles(ctx context.Context, sources []provider.EpisodeTitlesSource, series provider.SearchResult) (map[int]string, bool) {
 	if len(sources) == 0 {
 		return nil, false
 	}
-	childCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	type titleResult struct {
-		titles map[int]string
-	}
-	// Each source can finish even when a sibling wins or the request ends.
-	results := make(chan titleResult, len(sources))
+	childCtx, cancel := context.WithTimeout(context.Background(), timeouts.EpisodeTitleFill)
+	results := make(chan episodeTitleResult, len(sources))
 	for _, source := range sources {
 		go func(source provider.EpisodeTitlesSource) {
 			titles, err := source.FetchEpisodeTitles(childCtx, series)
@@ -295,20 +293,58 @@ func (s *MediaService) firstEpisodeTitles(ctx context.Context, sources []provide
 				mediaLog.Debug("episode titles unavailable from source", "source", source, "err", err)
 				titles = nil
 			}
-			results <- titleResult{titles: titles}
+			results <- episodeTitleResult{titles: titles}
 		}(source)
 	}
-	for range sources {
+
+	cacheKey := fmt.Sprintf("titles:%s:%s", series.Type, strings.TrimSpace(series.ID))
+	remaining := len(sources)
+	for remaining > 0 {
 		select {
 		case <-ctx.Done():
+			go s.collectEpisodeTitles(cacheKey, nil, results, remaining, cancel)
 			return nil, false
 		case result := <-results:
+			remaining--
 			if len(result.titles) > 0 {
+				merged := make(map[int]string, len(result.titles))
+				for episode, title := range result.titles {
+					merged[episode] = title
+				}
+				if remaining > 0 {
+					go s.collectEpisodeTitles(cacheKey, merged, results, remaining, cancel)
+				} else {
+					cancel()
+					s.episodeTitles.Set(cacheKey, merged)
+				}
 				return result.titles, true
 			}
 		}
 	}
+	cancel()
 	return nil, false
+}
+
+// collectEpisodeTitles drains the remaining title lookups and merges every
+// non-empty map into the cache. Keeping the producer context alive until the
+// channel is empty ensures no in-flight title response is dropped.
+func (s *MediaService) collectEpisodeTitles(cacheKey string, merged map[int]string, results <-chan episodeTitleResult, remaining int, cancel context.CancelFunc) {
+	defer cancel()
+	if merged == nil {
+		merged = make(map[int]string)
+	}
+	for remaining > 0 {
+		res := <-results
+		remaining--
+		for episode, title := range res.titles {
+			if strings.TrimSpace(title) != "" {
+				merged[episode] = title
+			}
+		}
+	}
+	if len(merged) > 0 {
+		s.episodeTitles.Set(cacheKey, merged)
+	}
 }
 
 func genericEpisodeTitle(number int) string {

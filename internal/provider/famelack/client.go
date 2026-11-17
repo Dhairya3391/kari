@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ import (
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/kit"
 )
 
 var (
@@ -59,7 +61,15 @@ const (
 	maxDirectoryBytes = 16 << 20
 	// directoryCacheKey is the singleflight key for the catalog refresh.
 	directoryCacheKey = "channels"
+	// hlsProbeTimeout bounds each per-stream master probe so one slow CDN
+	// cannot stall resolution of the rest of the channel's streams.
+	hlsProbeTimeout = 3 * time.Second
 )
+
+// reURLResolution picks an explicit pixel-height token ("…/720p/…") out of a
+// stream URL. It deliberately ignores words such as "live" or "master" so a
+// URL cannot be misread as a known resolution when no master probe succeeds.
+var reURLResolution = regexp.MustCompile(`(?i)(?:^|[^0-9])(\d{3,4})p(?:[^0-9]|$)`)
 
 // channel is one Famelack directory entry. The JSON field names are
 // Famelack's compressed catalog vocabulary, kept private to this package.
@@ -205,14 +215,23 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		if len(streams) == 0 {
 			break
 		}
+		// The directory's Languages field describes the channel, not the
+		// audio tracks a given mirror actually carries, so it stays search
+		// metadata. The service sets AudioLabel from the HLS manifest when
+		// the master declares real audio renditions.
 		sources := make([]provider.MediaSource, 0, len(streams))
-		audioLabel := lang.Names(ch.Languages)
 		for _, streamURL := range streams {
+			height, bitrate := streamMeta(ctx, c.httpClient, streamURL)
+			quality := "Auto"
+			if height > 0 {
+				quality = kit.QualityLabelFromHeight(height)
+			}
 			sources = append(sources, provider.MediaSource{
-				URL:        streamURL,
-				Quality:    "Auto",
-				Type:       streamType(streamURL),
-				AudioLabel: audioLabel,
+				URL:     streamURL,
+				Quality: quality,
+				Type:    streamType(streamURL),
+				Height:  height,
+				Bitrate: bitrate,
 			})
 		}
 		return sources, nil
@@ -500,6 +519,28 @@ func playableStreams(ch channel) []string {
 		streams = append(streams, streamURL)
 	}
 	return streams
+}
+
+// streamMeta reads a stream's peak height and declared bitrate. Famelack's
+// HLS masters carry RESOLUTION and BANDWIDTH, so the master is probed first;
+// an unreachable master falls back to an explicit resolution token in the URL.
+// Both values stay zero when the upstream declares neither.
+func streamMeta(ctx context.Context, hc *http.Client, streamURL string) (height, bitrate int) {
+	probeCtx, cancel := context.WithTimeout(ctx, hlsProbeTimeout)
+	defer cancel()
+	variants, err := kit.ParseHLSVariants(probeCtx, hc, streamURL, nil)
+	if err == nil && len(variants) > 0 {
+		height, bitrate = kit.SourceMetaFromVariants(variants)
+		if height > 0 {
+			return height, bitrate
+		}
+	}
+	if m := reURLResolution.FindStringSubmatch(streamURL); len(m) == 2 {
+		if h := kit.QualityHeight(m[1] + "p"); h > 0 {
+			return h, 0
+		}
+	}
+	return 0, 0
 }
 
 // streamType classifies a channel stream for the player layer. Famelack

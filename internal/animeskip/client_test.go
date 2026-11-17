@@ -123,8 +123,6 @@ func TestBestEpisode(t *testing.T) {
 		t.Fatalf("expected unmatched absolute number to be ignored, got %+v", ep25)
 	}
 
-	// Repeated episode numbers are ambiguous until a title identifies one.
-	// A local episode number can only select a single entry.
 	ep5 := bestEpisode([]episodeMeta{
 		{ID: "season-episode-5-a", Number: "5"},
 		{ID: "season-episode-5-b", Number: "5"},

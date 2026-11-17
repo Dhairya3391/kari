@@ -27,8 +27,6 @@ const (
 	ProtocolBlocks
 	// ProtocolSixel renders images via DECSIXEL graphics.
 	ProtocolSixel
-	// ProtocolIterm renders images via the iTerm2 inline-images protocol
-	// (also understood by WezTerm, Rio, Mintty, mlterm and iTerm2 itself).
 	ProtocolIterm
 	// ProtocolKitty renders images via the Kitty graphics protocol.
 	ProtocolKitty
@@ -128,14 +126,6 @@ func Detect() Protocol {
 	term := strings.ToLower(strings.TrimSpace(os.Getenv("TERM")))
 	termProgram := strings.ToLower(strings.TrimSpace(os.Getenv("TERM_PROGRAM")))
 
-	// WezTerm on Windows cannot receive Kitty graphics: the ConPTY layer
-	// between the app and the terminal drops the APC sequences, so images
-	// never appear (WezTerm's own Kitty implementation is also incomplete).
-	// Its iTerm2 support does pass through ConPTY and works on every
-	// platform, so prefer that over the Kitty capability it advertises.
-	// This must come before the IsKittyCapable check, which reports true
-	// for WezTerm via TERM_PROGRAM. WSL clients sit behind the same ConPTY
-	// layer, so they are gated the same way.
 	if strings.Contains(termProgram, "wezterm") && weztermNeedsIterm() {
 		return ProtocolIterm
 	}

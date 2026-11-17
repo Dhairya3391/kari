@@ -15,14 +15,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/kit"
 	"kari/internal/provider/streambase"
+	"kari/internal/timeouts"
 	"kari/internal/tmdb"
 )
 
@@ -160,7 +161,7 @@ func (c *Client) filterWarpPlaceholderSources(ctx context.Context, sources []pro
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			checkCtx, cancel := context.WithTimeout(ctx, timeouts.SolisCheck)
 			defer cancel()
 			blocked[index] = c.isWarpPlaceholder(checkCtx, sources[index])
 		}(i)
@@ -286,7 +287,7 @@ func (c *Client) ResolveStream(
 			}
 			src := toMediaSource(s, currentSubs)
 			if is4KQuality(src.Quality) {
-				checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+				checkCtx, cancel := context.WithTimeout(ctx, timeouts.SolisCheck)
 				blocked := c.isWarpPlaceholder(checkCtx, src)
 				cancel()
 				if blocked {
@@ -318,8 +319,6 @@ func (c *Client) ResolveStream(
 			if len(emitted) > 0 {
 				updated := make([]provider.MediaSource, len(emitted))
 				for i := range emitted {
-					// Keep any per-source tracks and add the stream-level
-					// list, which may arrive before or after this source.
 					emitted[i].Subtitles = mergeSubtitleOptions(emitted[i].Subtitles, currentSubs)
 					updated[i] = emitted[i]
 				}
@@ -422,13 +421,11 @@ func toMediaSource(s apiSource, fallbackSubs []provider.SubtitleOption) provider
 	if strings.TrimSpace(s.Source) != "" {
 		backend = strings.TrimSpace(s.Source)
 	}
-	// API 1.1.0+ attaches the subtitle list to every source. Merge it ahead of
-	// the response/stream-level list so a lane keeps its own tracks without
-	// losing tracks that only arrived at the broader level.
 	subs := mergeSubtitleOptions(toSubtitleOptions(s.Subtitles), fallbackSubs)
 	src := provider.MediaSource{
 		URL:       strings.TrimSpace(s.URL),
 		Quality:   quality,
+		Height:    kit.QualityHeight(quality),
 		Backend:   backend,
 		Type:      strings.TrimSpace(s.Type),
 		Referer:   strings.TrimSpace(s.Referer),

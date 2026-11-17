@@ -9,6 +9,7 @@ import (
 	"kari/internal/lang"
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/provider/kit"
 )
 
 // sourceAggregator merges playback sources and subtitle tracks from all
@@ -74,8 +75,21 @@ func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) b
 	if len(dst.ExtraArgs) == 0 {
 		dst.ExtraArgs = slices.Clone(src.ExtraArgs)
 	}
-	if SourceQuality(src.Quality) > SourceQuality(dst.Quality) {
+	if !kit.IsAdaptiveQuality(src.Quality) &&
+		(kit.IsAdaptiveQuality(dst.Quality) || kit.QualityHeight(src.Quality) > kit.QualityHeight(dst.Quality)) {
 		dst.Quality = src.Quality
+	}
+	if src.Height > dst.Height {
+		dst.Height = src.Height
+	}
+	if src.Bitrate > dst.Bitrate {
+		dst.Bitrate = src.Bitrate
+	}
+	if len(dst.Audio.Languages) == 0 {
+		dst.Audio.Languages = src.Audio.Languages
+	}
+	if dst.Audio.Track == provider.TrackUnknown {
+		dst.Audio.Track = src.Audio.Track
 	}
 	var missing []provider.SubtitleOption
 	for _, sub := range src.Subtitles {
@@ -93,7 +107,8 @@ func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) b
 		before.FallbackOnly != dst.FallbackOnly || before.Referer != dst.Referer ||
 		before.UserAgent != dst.UserAgent || before.CookieHeader != dst.CookieHeader ||
 		before.Language != dst.Language || before.AudioLabel != dst.AudioLabel ||
-		before.Quality != dst.Quality || !slices.Equal(before.ExtraArgs, dst.ExtraArgs) ||
+		before.Quality != dst.Quality || before.Bitrate != dst.Bitrate ||
+		!slices.Equal(before.ExtraArgs, dst.ExtraArgs) ||
 		len(before.Subtitles) != len(dst.Subtitles)
 }
 
@@ -254,6 +269,56 @@ func (a *sourceAggregator) add(providerName string, batch []provider.MediaSource
 		}
 	}
 	return changed
+}
+
+// replaceProviderSources swaps a provider's published rows for batch. Late
+// enrichment can reveal that rows added from earlier progressive snapshots
+// were shadowed duplicates; add() cannot remove them, so callers use this to
+// replace the provider's whole contribution before the final publish.
+func (a *sourceAggregator) replaceProviderSources(providerName string, batch []provider.MediaSource) bool {
+	// An empty batch means "no update", not "remove everything": earlier
+	// snapshots may have published valid rows that add() could not replace.
+	valid := make([]provider.MediaSource, 0, len(batch))
+	for _, src := range batch {
+		if sourceDedupeIdentity(src) != "" {
+			valid = append(valid, src)
+		}
+	}
+	if len(valid) == 0 {
+		return false
+	}
+
+	kept := make([]provider.MediaSource, 0, len(a.sources))
+	for _, src := range a.sources {
+		if !strings.EqualFold(src.Resolver, providerName) {
+			kept = append(kept, src)
+		}
+	}
+	a.sources = kept
+	a.sourceIndex = make(map[string]int, len(a.sources)+len(valid))
+	for i, src := range a.sources {
+		a.sourceIndex[sourceDedupeIdentity(src)] = i
+	}
+
+	// Subtitle tracks belong to the source row they were fetched with. Drop
+	// tracks whose row is gone, then let add() re-register the new batch's
+	// tracks through the normal dedupe path.
+	live := make(map[string]struct{}, len(a.sources))
+	for _, src := range a.sources {
+		live[src.TransportIdentity()] = struct{}{}
+	}
+	subs := a.subs[:0]
+	for _, sub := range a.subs {
+		if _, ok := live[sub.SourceID]; ok {
+			subs = append(subs, sub)
+		}
+	}
+	a.subs = subs
+	a.seenSubs = make(map[string]struct{}, len(a.subs))
+	for _, sub := range a.subs {
+		a.seenSubs[strings.TrimSpace(sub.URL)+"\x00"+sub.SourceID] = struct{}{}
+	}
+	return a.add(providerName, valid)
 }
 
 // sort preserves the arrival order of playable sources across providers,

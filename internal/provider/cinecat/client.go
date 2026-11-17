@@ -2,9 +2,10 @@
 // a streaming web application for movies, television series, and animated content.
 //
 // Catalog search and episode listings reuse the shared TMDB-keyed streambase.
-// Playback streams resolve from Cinecat's adaptive ZCDN edge plus every lane the
-// upstream sources API currently advertises, enriched with multi-language
-// subtitles from the Granite subtitle service.
+// Playback streams resolve from Cinecat's adaptive ZCDN edge, its self-hosted
+// Aphrodite content edge, plus every lane the upstream sources API currently
+// advertises, enriched with multi-language subtitles from the Granite subtitle
+// service.
 //
 // Every returned HLS playlist is directly playable by mpv without local helper proxies.
 package cinecat
@@ -30,12 +31,13 @@ var (
 
 // Client implements provider.Provider against the Cinecat catalog and CDN.
 type Client struct {
-	base        *streambase.Base
-	httpClient  *http.Client
-	cdnBase     string
-	subsBase    string
-	siteBase    string
-	sourcesBase string
+	base          *streambase.Base
+	httpClient    *http.Client
+	cdnBase       string
+	aphroditeBase string
+	subsBase      string
+	siteBase      string
+	sourcesBase   string
 }
 
 // NewClient constructs the Cinecat provider using the shared TMDB search base
@@ -44,6 +46,7 @@ func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
 	return NewClientWithURLs(
 		keyPool,
 		config.CinecatCDNBase,
+		config.CinecatAphroditeBase,
 		config.CinecatSubsBase,
 		config.CinecatBase,
 		config.CinecatSourcesAPIBase,
@@ -51,19 +54,21 @@ func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
 }
 
 // NewClientWithURLs constructs the Cinecat provider with custom upstream endpoints,
-// allowing offline tests to mock CDN, subtitle, and sources servers without network access.
-func NewClientWithURLs(keyPool *tmdb.KeyPool, cdnBase, subsBase, siteBase, sourcesBase string) (*Client, error) {
+// allowing offline tests to mock CDN, Aphrodite, subtitle, and sources servers
+// without network access.
+func NewClientWithURLs(keyPool *tmdb.KeyPool, cdnBase, aphroditeBase, subsBase, siteBase, sourcesBase string) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
 		return nil, fmt.Errorf("cinecat streambase: %w", err)
 	}
 	return &Client{
-		base:        base,
-		httpClient:  httpclient.NewWithUserAgent(config.DesktopUserAgent),
-		cdnBase:     strings.TrimRight(cdnBase, "/"),
-		subsBase:    strings.TrimRight(subsBase, "/"),
-		siteBase:    strings.TrimRight(siteBase, "/"),
-		sourcesBase: strings.TrimRight(sourcesBase, "/"),
+		base:          base,
+		httpClient:    httpclient.NewWithUserAgent(config.DesktopUserAgent),
+		cdnBase:       strings.TrimRight(cdnBase, "/"),
+		aphroditeBase: strings.TrimRight(aphroditeBase, "/"),
+		subsBase:      strings.TrimRight(subsBase, "/"),
+		siteBase:      strings.TrimRight(siteBase, "/"),
+		sourcesBase:   strings.TrimRight(sourcesBase, "/"),
 	}, nil
 }
 

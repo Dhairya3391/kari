@@ -9,11 +9,11 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 
 	"kari/internal/config"
+	"kari/internal/filter"
 	"kari/internal/history"
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/provider"
-	"kari/internal/ranking"
 	"kari/internal/service"
 )
 
@@ -122,14 +122,14 @@ func TestStalePlayResultDoesNotMutateCurrentOperation(t *testing.T) {
 // drops the old audio's rows instead of merging into them.
 func TestToggleAnimeAudioClearsResolved(t *testing.T) {
 	m := unavailableTestModel()
-	m.audioMode = provider.AudioDub
+	m.setAudioTrack(provider.TrackDub)
 	m.resolved = &model.ResolvedMedia{
 		SeriesTitle: "ONE PIECE",
 		Playback: []provider.MediaSource{
 			{URL: "https://cdn.example.com/dub.m3u8", Quality: "1080p", Resolver: "x"},
 		},
 	}
-	m.rankedSources = []ranking.ScoredSource{
+	m.rankedSources = []filter.RankedSource{
 		{Source: provider.MediaSource{URL: "https://cdn.example.com/dub.m3u8"}},
 	}
 
@@ -150,14 +150,14 @@ func TestToggleAnimeAudioClearsResolved(t *testing.T) {
 // arriving sources do not merge with the previous track's sources.
 func TestToggleAnimeAudioDoesNotAppendOldSources(t *testing.T) {
 	m := unavailableTestModel()
-	m.audioMode = provider.AudioDub
+	m.setAudioTrack(provider.TrackDub)
 	m.resolved = &model.ResolvedMedia{
 		SeriesTitle: "ONE PIECE",
 		Playback: []provider.MediaSource{
 			{URL: "https://cdn.example.com/dub.m3u8", Quality: "1080p", Resolver: "x"},
 		},
 	}
-	m.rankedSources = []ranking.ScoredSource{
+	m.rankedSources = []filter.RankedSource{
 		{Source: provider.MediaSource{URL: "https://cdn.example.com/dub.m3u8"}},
 	}
 

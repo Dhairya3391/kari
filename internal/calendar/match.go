@@ -1,7 +1,6 @@
 package calendar
 
 import (
-	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -72,25 +71,17 @@ func CrossReference(releases []Release, store *history.Store, now time.Time) []R
 
 func buildReleaseItem(rel Release, matched []history.Entry, now time.Time) ReleaseItem {
 	if len(matched) == 0 {
-		badge := fmt.Sprintf("Ep %d", rel.Episode)
-		if rel.Mode == provider.ModeTV && rel.Season > 0 {
-			badge = fmt.Sprintf("S%02dE%02d", rel.Season, rel.Episode)
-		}
 		return ReleaseItem{
 			Release:            rel,
-			InHistory:          false,
 			LastWatchedSeason:  0,
 			LastWatchedEpisode: 0,
 			NextEpisode:        1,
 			UnwatchedCount:     rel.Episode,
 			Status:             StatusNotStarted,
-			Badge:              badge,
 		}
 	}
 
-	isAnime := rel.Mode == provider.ModeAnime
-
-	if isAnime {
+	if rel.Mode == provider.ModeAnime {
 		return buildAnimeReleaseItem(rel, matched, now)
 	}
 	return buildSeriesReleaseItem(rel, matched, now)
@@ -98,21 +89,14 @@ func buildReleaseItem(rel Release, matched []history.Entry, now time.Time) Relea
 
 func buildAnimeReleaseItem(rel Release, matched []history.Entry, now time.Time) ReleaseItem {
 	maxWatched := 0
-	hasIncomplete := false
-
 	for _, e := range matched {
-		if e.Episode > maxWatched {
-			if e.Complete || e.PercentComplete >= 0.85 {
-				maxWatched = e.Episode
-			} else if e.PositionSecs > 5 || e.PercentComplete > 0 {
-				hasIncomplete = true
-				if e.Episode > maxWatched {
-					maxWatched = e.Episode - 1
-					if maxWatched < 0 {
-						maxWatched = 0
-					}
-				}
-			}
+		if e.Episode <= maxWatched {
+			continue
+		}
+		if e.Complete || e.PercentComplete >= 0.85 {
+			maxWatched = e.Episode
+		} else if e.PositionSecs > 5 || e.PercentComplete > 0 {
+			maxWatched = max(0, e.Episode-1)
 		}
 	}
 
@@ -126,31 +110,12 @@ func buildAnimeReleaseItem(rel Release, matched []history.Entry, now time.Time) 
 	if maxWatched >= rel.Episode {
 		item.Status = StatusUpToDate
 		item.NextEpisode = rel.Episode
-		item.UnwatchedCount = 0
-		item.Badge = fmt.Sprintf("✓ Ep %d watched", rel.Episode)
 		return item
 	}
 
 	item.NextEpisode = maxWatched + 1
 	item.UnwatchedCount = rel.Episode - maxWatched
-
-	if item.UnwatchedCount == 1 {
-		if isSameDay(rel.AiringAt, now) {
-			item.Status = StatusNewToday
-			item.Badge = fmt.Sprintf("▶ Ep %d (new today)", rel.Episode)
-		} else if rel.AiringAt.After(now) {
-			item.Status = StatusNewToday
-			item.Badge = fmt.Sprintf("▶ Ep %d (airs %s)", rel.Episode, rel.AiringAt.Local().Format("15:04"))
-		} else {
-			item.Status = StatusBehind
-			item.Badge = fmt.Sprintf("▶ Ep %d (1 to watch)", rel.Episode)
-		}
-	} else {
-		item.Status = StatusBehind
-		item.Badge = fmt.Sprintf("Left: Ep %d-%d (%d left)", item.NextEpisode, rel.Episode, item.UnwatchedCount)
-	}
-
-	_ = hasIncomplete
+	item.Status = behindOrNew(item.UnwatchedCount, rel, now)
 	return item
 }
 
@@ -179,44 +144,36 @@ func buildSeriesReleaseItem(rel Release, matched []history.Entry, now time.Time)
 	}
 
 	if !hasSeasonMatch {
-		// Viewer watched earlier seasons, but hasn't started this season
 		item.LastWatchedSeason = maxWatchedSeason
 		item.LastWatchedEpisode = 0
 		item.NextEpisode = 1
 		item.UnwatchedCount = rel.Episode
 		item.Status = StatusBehind
-		item.Badge = fmt.Sprintf("Left: S%02dE01-E%02d (%d left)", rel.Season, rel.Episode, rel.Episode)
 		return item
 	}
 
 	if maxWatchedEpInSeason >= rel.Episode {
 		item.Status = StatusUpToDate
 		item.NextEpisode = rel.Episode
-		item.UnwatchedCount = 0
-		item.Badge = fmt.Sprintf("✓ S%02dE%02d watched", rel.Season, rel.Episode)
 		return item
 	}
 
 	item.NextEpisode = maxWatchedEpInSeason + 1
 	item.UnwatchedCount = rel.Episode - maxWatchedEpInSeason
-
-	if item.UnwatchedCount == 1 {
-		if isSameDay(rel.AiringAt, now) {
-			item.Status = StatusNewToday
-			item.Badge = fmt.Sprintf("▶ S%02dE%02d (new today)", rel.Season, rel.Episode)
-		} else if rel.AiringAt.After(now) {
-			item.Status = StatusNewToday
-			item.Badge = fmt.Sprintf("▶ S%02dE%02d (airs %s)", rel.Season, rel.Episode, rel.AiringAt.Local().Format("15:04"))
-		} else {
-			item.Status = StatusBehind
-			item.Badge = fmt.Sprintf("▶ S%02dE%02d (1 to watch)", rel.Season, rel.Episode)
-		}
-	} else {
-		item.Status = StatusBehind
-		item.Badge = fmt.Sprintf("Left: S%02dE%02d-E%02d (%d left)", rel.Season, item.NextEpisode, rel.Episode, item.UnwatchedCount)
-	}
-
+	item.Status = behindOrNew(item.UnwatchedCount, rel, now)
 	return item
+}
+
+// behindOrNew distinguishes the single-episode case that airs today or later
+// from a backlog the viewer has to catch up on.
+func behindOrNew(unwatched int, rel Release, now time.Time) WatchStatus {
+	if unwatched != 1 {
+		return StatusBehind
+	}
+	if isSameDay(rel.AiringAt, now) || rel.AiringAt.After(now) {
+		return StatusNewToday
+	}
+	return StatusBehind
 }
 
 // BuildWeeklySchedule arranges releases into 7 consecutive day schedules starting at weekStart.

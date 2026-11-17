@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"kari/internal/provider"
@@ -53,6 +54,43 @@ func newFixture(t *testing.T) *Client {
 		t.Fatalf("NewClientWithBases: %v", err)
 	}
 	return c
+}
+
+// TestMiruroReusesFetchedRoster keeps the service's title lookup from
+// downloading the same watch payload a second time.
+func TestMiruroReusesFetchedRoster(t *testing.T) {
+	var canonicalWatchRequests atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/search/__data.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, searchFixture)
+	})
+	mux.HandleFunc("/watch/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/x/") {
+			fmt.Fprint(w, `{"type":"redirect","location":"/watch/SHOWID/naruto?ep=1"}`)
+			return
+		}
+		canonicalWatchRequests.Add(1)
+		fmt.Fprint(w, `{"type":"data","nodes":[{"type":"data","data":[0]}]}`+"\n"+episodesChunk+"\n"+tracksChunk+"\n")
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c, err := NewClientWithBases(srv.URL, srv.URL+"/graphql")
+	if err != nil {
+		t.Fatalf("NewClientWithBases: %v", err)
+	}
+	ctx := context.Background()
+	series := provider.SearchResult{ID: "20", Title: "Naruto"}
+	if _, err := c.FetchEpisodes(ctx, series); err != nil {
+		t.Fatalf("FetchEpisodes: %v", err)
+	}
+	if _, err := c.FetchEpisodeTitles(ctx, series); err != nil {
+		t.Fatalf("FetchEpisodeTitles: %v", err)
+	}
+	if got := canonicalWatchRequests.Load(); got != 1 {
+		t.Fatalf("canonical watch requests = %d, want 1 (slug probe + one payload)", got)
+	}
 }
 
 func TestMiruroCapabilities(t *testing.T) {
@@ -184,6 +222,35 @@ func TestMiruroResolveSub(t *testing.T) {
 	} else if s.Subtitles[0].Referer != "https://megaplay.buzz/" {
 		t.Errorf("subtitle Referer = %q, want server Referer", s.Subtitles[0].Referer)
 	}
+	if s.Height != 0 {
+		t.Errorf("Height = %d, want 0 (upstream resolution is null)", s.Height)
+	}
+}
+
+// TestSubtitleFormatWinsOverExtension proves an upstream-declared caption
+// format is honoured even when the CDN hides the real extension.
+func TestSubtitleFormatWinsOverExtension(t *testing.T) {
+	pe := providerEntry{
+		name:  "bee",
+		track: "ssub",
+		servers: []serverEntry{{
+			server:  "Vidstream-1",
+			referer: "https://megaplay.buzz/",
+			streams: []streamEntry{{url: "https://cdn.example.com/master.m3u8", format: "hls"}},
+		}},
+		subtitles: []subtitleEntry{
+			{file: "https://cdn.example.com/opaque?id=1", format: "vtt", language: "en"},
+			{file: "https://cdn.example.com/video.m3u8", format: "vtt", language: "ja"},
+			{file: "https://cdn.example.com/track.vtt", format: "mp4", language: "fr"},
+		},
+	}
+	got := serverSources(pe)
+	if len(got) != 1 || len(got[0].Subtitles) != 2 {
+		t.Fatalf("sources/subtitles = %d/%v, want 1/2 kept by format", len(got), got)
+	}
+	if got[0].Subtitles[0].Language != "en" || got[0].Subtitles[1].Language != "ja" {
+		t.Errorf("subtitle languages = %+v, want en and ja", got[0].Subtitles)
+	}
 }
 
 func TestMiruroResolveDubUnavailable(t *testing.T) {
@@ -200,8 +267,6 @@ func TestMiruroResolveDubUnavailable(t *testing.T) {
 
 func TestMiruroResolveCrossProviderEpisode(t *testing.T) {
 	c := newFixture(t)
-	// Another provider's episode handle carries no show ID; resolution
-	// falls back to the AniList search match (cache is cold here).
 	sources, err := c.ResolveSource(context.Background(), "20", provider.Episode{
 		Episode: 1,
 		Audio:   provider.AudioSub,

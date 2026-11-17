@@ -46,7 +46,7 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.downloadsIndex = 0
 			}
 			return m, nil
-		case "pgdn", "pgdown", "ctrl+d":
+		case "pgdown", "ctrl+d":
 			step := m.pageStep()
 			if totalItems > 0 {
 				m.downloadsIndex = min(totalItems-1, m.downloadsIndex+step)
@@ -80,10 +80,6 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "p":
 			if !m.downloadPaused {
-				// Pause: cancel the running context but keep every partial
-				// file (.aria2 control file / .part fragments) on disk —
-				// they are the resume checkpoints — and keep the batch
-				// state so the row stays visible with its progress.
 				if m.batchInProgress || m.cancelDownload != nil || m.downloadOpID != 0 {
 					m.downloadPaused = true
 					if m.batchCancel != nil {
@@ -119,8 +115,6 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 					toastCmd := m.setToast("resolving interrupted download", ToastInfo)
 					return m, tea.Batch(toastCmd, m.resumePendingDownloadCmd(m.downloadOpID, job))
 				}
-				// Resume: re-run the same sources. aria2c picks up the
-				// .aria2 checkpoint, yt-dlp continues from .part files.
 				m.downloadPaused = false
 				if m.batchInProgress && len(m.batchEpisodes) > 0 {
 					opID := m.newOpID()
@@ -141,8 +135,6 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.setToast("download resumed", ToastSuccess)
 			}
 		case "x", "delete", "backspace":
-			// Double-press confirmation for anything destructive, matching
-			// the x-stop and q-quit conventions elsewhere.
 			if !m.confirmStop {
 				m.confirmStop = true
 				prompt := "Press x again to cancel (partials are deleted)"
@@ -158,8 +150,6 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(data.Active) > 0 && m.downloadsIndex < len(data.Active) {
 				item := data.Active[m.downloadsIndex]
 				if item.Queued {
-					// Restart from the active episode so the worker observes the
-					// shortened queue without losing its resumable partial files.
 					targetIdx := max(0, m.batchCurrent-1) + m.downloadsIndex
 					if targetIdx >= 0 && targetIdx < len(m.batchEpisodes) {
 						m.batchEpisodes = append(m.batchEpisodes[:targetIdx], m.batchEpisodes[targetIdx+1:]...)
@@ -187,9 +177,6 @@ func (m *modelImpl) updateDownloads(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.setToast(fmt.Sprintf("cancelled %s", item.Title), ToastInfo)
 				}
 				if m.batchInProgress && len(m.batchEpisodes) > 0 {
-					// Skip the active episode: cancel its context, remove its
-					// partial files (a cancelled download is not resumed),
-					// then continue with the rest of the queue.
 					if m.batchCancel != nil {
 						m.batchCancel()
 						m.batchCancel = nil

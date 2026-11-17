@@ -149,10 +149,15 @@ func (p *IINAPlayer) Play(sources []provider.MediaSource, media model.ResolvedMe
 	var defaultSkipArgs []string
 	var defaultSkipScript string
 	var defaultResolved bool
+	// IINA speaks mpv's IPC and loads the same skip Lua script, so it can
+	// receive late skip timings through the shared live sink just like mpv.
+	skipSink := newLiveSkipSink(p.skipSettings)
+	skipClients := p.skipClients
+	skipClients.SkipSink = skipSink
 	getDefaultSkipArgs := func() ([]string, string) {
 		if !defaultResolved {
 			defaultSkipArgs, defaultSkipScript = getSkipArgs(
-				p.skipClients,
+				skipClients,
 				p.skipSettings,
 				media,
 				p.skipCache,
@@ -174,7 +179,7 @@ func (p *IINAPlayer) Play(sources []provider.MediaSource, media model.ResolvedMe
 		} else {
 			skipArgs, _ = getDefaultSkipArgs()
 		}
-		return playSingleSourceWithIINA(bin, source, media, skipArgs, p.progressObserver)
+		return playSingleSourceWithIINA(bin, source, media, skipArgs, p.progressObserver, skipSink)
 	})
 }
 
@@ -195,7 +200,7 @@ func iinaBinary() string {
 
 // playSingleSourceWithIINA plays one source through the shared readiness
 // check; IINA speaks mpv's IPC protocol so real stats come back.
-func playSingleSourceWithIINA(binary string, source provider.MediaSource, media model.ResolvedMedia, aniskipArgs []string, observer ProgressObserver) (PlaybackResult, error) {
+func playSingleSourceWithIINA(binary string, source provider.MediaSource, media model.ResolvedMedia, aniskipArgs []string, observer ProgressObserver, skipSink *liveSkipSink) (PlaybackResult, error) {
 	socketPath := DefaultMPVSocketPath()
 	args := buildIINAArgs(source, media, socketPath, aniskipArgs)
 	result := startPlayerWithStartupCheck(startupCheck{
@@ -205,6 +210,7 @@ func playSingleSourceWithIINA(binary string, source provider.MediaSource, media 
 		sourceURL:  source.URL,
 		isLive:     media.IsLive(),
 		observer:   observer,
+		skipSink:   skipSink,
 	})
 	if result.succeeded() {
 		return result.playback, nil
@@ -269,12 +275,6 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 	args = appendIINASubtitleArgs(args, media.SubtitlePath(), media.SubtitleLanguage)
 	args = appendAudioLangArgs(args, source.Language)
 	args = append(args, aniskipArgs...)
-	// IINA puts the URL in [files] before "--", so mpv per-file brackets
-	// (--{ … --}) inside the "--" section cannot scope options to that URL.
-	// When a subtitle is loaded and ExtraArgs carry --demuxer-lavf-format=,
-	// that override bleeds onto the subtitle file open and silently drops it.
-	// Strip the format override in that case: miruro CDNs serve
-	// proper Content-Type headers so lavf auto-detects HLS by content probe.
 	return append(args, iinaExtraArgs(source.ExtraArgs, media.SubtitlePath())...)
 }
 

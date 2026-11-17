@@ -7,16 +7,6 @@ import (
 	"sort"
 )
 
-// AniDream is a TanStack Start application: every catalog, playback, and
-// reader call goes through a hashed /_serverFn endpoint whose input and
-// output are encoded with Seroval, not plain JSON. The encoder below covers
-// the subset Kari sends (objects, arrays, strings, numbers, booleans, null);
-// the decoder covers the subset the server returns, including the error
-// envelope TanStack wraps around every handler result.
-//
-// Reference: Seroval node tags are stable wire values, not an implementation
-// detail of one bundle.
-
 // serovalEncoder assigns the reference ids Seroval needs for cyclic graphs.
 // Kari's payloads are trees, so ids are simply allocated in traversal order.
 type serovalEncoder struct {
@@ -107,16 +97,12 @@ func (d *serovalDecoder) decode(node any) (any, error) {
 	case 2:
 		return decodeSpecial(m["s"]), nil
 	case 3:
-		// Dates are transported as their ISO string, which is already the
-		// representation every caller wants.
 		return m["s"], nil
 	case 9:
 		return d.decodeArray(m)
 	case 10, 11:
 		return d.decodeObject(m)
 	case 25:
-		// Error nodes carry the error's fields directly in "s"; each field
-		// value is itself a Seroval node.
 		inner, ok := m["s"].(map[string]any)
 		if !ok {
 			return nil, nil

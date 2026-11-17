@@ -77,8 +77,6 @@ func (c *Client) authGET(ctx context.Context, url string) (*http.Response, error
 	if err != nil {
 		return nil, err
 	}
-	// The legacy X-Emby-Token header is rejected by current Jellyfin; the
-	// MediaBrowser Authorization header works across current and older servers.
 	req.Header.Set("Authorization", `MediaBrowser Token="`+c.apiKey+`"`)
 	return c.http.Do(req)
 }
@@ -89,8 +87,6 @@ func (c *Client) authGET(ctx context.Context, url string) (*http.Response, error
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	logging.Debug("search start", "provider", c.Name(), "query", query)
 
-	// Match against the cached library so short and partial queries work;
-	// an empty query browses the whole library.
 	library, err := c.getLibrary(ctx)
 	if err != nil {
 		if strings.TrimSpace(query) == "" {

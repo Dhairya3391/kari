@@ -210,9 +210,6 @@ func TestBuildMPVArgsIncludesIPCServer(t *testing.T) {
 }
 
 func TestBuildMPVArgsAutoDetectsHLSDemuxer(t *testing.T) {
-	// mpv detects HLS by content; forcing --demuxer=lavf --demuxer-lavf-format=hls
-	// at the player level caused glitched A/V on some streams. Providers with a
-	// host-specific demuxer quirk opt in themselves via ExtraArgs.
 	args := buildMPVArgs(provider.MediaSource{
 		URL:  "https://example.com/stream.m3u8",
 		Type: provider.SourceTypeHLS,
@@ -512,7 +509,7 @@ func TestMPVLoadsSelectedLocalSubtitle(t *testing.T) {
 		},
 	}
 
-	if _, err := playSingleSource(source, media, nil, nil); err != nil {
+	if _, err := playSingleSource(source, media, nil, nil, nil); err != nil {
 		t.Fatalf("playSingleSource: %v", err)
 	}
 }

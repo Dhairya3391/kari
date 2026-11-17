@@ -30,14 +30,7 @@ type ResolveOptions struct {
 // arrive. Callbacks finish before Resolve returns and must return promptly.
 func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, series provider.SearchResult, episode provider.Episode, onResult func(model.ResolvedMedia), opts ResolveOptions) (model.ResolvedMedia, error) {
 	allRoutes := s.registry.PlanForMode(mode).Playback
-	// mirrorRoutes keeps every registered provider for the live fallback:
-	// the ResolutionID filter below narrows the primary batch to the selected
-	// provider's native handle, which is exactly why a dead channel needs a
-	// title-keyed search on the siblings.
 	mirrorRoutes := allRoutes
-	// Filter to providers capable of resolving this specific title so
-	// provider-specific handles (e.g. live sports, non-TMDB items) do not
-	// spawn dead goroutines that falsely report completed or failed resolvers.
 	if series.ID != "" {
 		resolvable := make([]provider.Route, 0, len(allRoutes))
 		for _, route := range allRoutes {
@@ -92,10 +85,6 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			forcedRetry[name] = struct{}{}
 		}
 	}
-	// Bound the whole resolve so a slow/hung transport host can't leave the
-	// "Preparing playback" screen spinning indefinitely. Each provider is
-	// additionally bounded by its declared source deadline, or the default
-	// budget when it declares none.
 	ctx, cancel := context.WithTimeout(ctx, sourcesOverallTimeout)
 	defer cancel()
 
@@ -117,9 +106,6 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	}
 
 	totalTargetResolvers := len(primaryRoutes)
-	// Helper to build ResolvedMedia from current aggregated sources.
-	// Slices are copied so the snapshot handed to callers never aliases the
-	// shared backing arrays that other goroutines keep mutating.
 	buildResolved := func() model.ResolvedMedia {
 		completedCopy := make([]string, len(completedResolvers))
 		copy(completedCopy, completedResolvers)
@@ -148,8 +134,6 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 
 	var mu sync.Mutex
 	var publicationMu sync.Mutex
-	// Reserve delivery order before changing the aggregate. Locking only around
-	// callbacks would still let an older snapshot overtake a newer one.
 	publish := func(update func() bool) {
 		publicationMu.Lock()
 		defer publicationMu.Unlock()
@@ -169,12 +153,18 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		agg.sort()
 		return true
 	}
+	// replaceSources swaps a provider's published batch instead of only adding
+	// to it. Enrichment publishes snapshots progressively; without replacement
+	// a later drop of shadowed tiers could never remove the rows already added.
+	replaceSources := func(name string, batch []provider.MediaSource) bool {
+		if !agg.replaceProviderSources(name, batch) {
+			return false
+		}
+		agg.sort()
+		return true
+	}
 	var failures []string
 	var failedOrder []string
-	// audioUnavailableOnly stays true while every recorded failure is a
-	// verified-missing track (not a transport error): then the aggregate
-	// error carries the sentinel so callers can hide the episode instead
-	// of retrying a title that cannot exist.
 	audioUnavailableOnly := true
 	failedSet := make(map[string]struct{})
 	noteFailed := func(name string) {
@@ -186,7 +176,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	}
 
 	runBatch := func(batch []provider.Route) error {
-		g, _ := errgroup.WithContext(ctx)
+		g, gCtx := errgroup.WithContext(ctx)
 		for _, route := range batch {
 			p := route.Provider
 			episodeSource := route.Playback
@@ -205,7 +195,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 					return nil
 				}
 				timeout := providerSourceTimeout(route)
-				pCtx, pCancel := context.WithTimeout(ctx, timeout)
+				pCtx, pCancel := context.WithTimeout(gCtx, timeout)
 				defer pCancel()
 				mediaID, ok := series.ResolutionID(mode, p.Name())
 				if !ok {
@@ -263,20 +253,52 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 							continue
 						}
 						batch = cloneMediaSources(batch)
-						// Live providers declare reachability probes so dead
-						// mirrors are dropped before the first snapshot reaches
-						// the player. Verification stays inside the provider's
-						// own source deadline.
-						if verifier, ok := p.(provider.LiveStreamVerifier); ok && len(batch) > 0 {
-							batch = verifyLiveSources(pCtx, mode, verifier, batch)
+						if len(batch) == 0 {
+							continue
 						}
-						if len(batch) > 0 {
-							batch = discoverManifestAudio(pCtx, batch)
-							gotSources = true
+						gotSources = true
+						if verifier, ok := p.(provider.LiveStreamVerifier); ok {
+							probeBatch := cloneMediaSources(batch)
+							var verified, enriched []provider.MediaSource
+							var checks sync.WaitGroup
+							checks.Add(2)
+							go func() {
+								defer checks.Done()
+								verified = verifyLiveSources(pCtx, mode, verifier, batch)
+							}()
+							go func() {
+								defer checks.Done()
+								enriched = discoverManifestAudio(pCtx, s.manifestHTTP, probeBatch)
+							}()
+							checks.Wait()
+							batch = mergeManifestAudio(verified, enriched)
+							if len(batch) > 0 {
+								publish(func() bool { return addSources(p.Name(), batch) })
+							}
+						} else {
+							// Probe only adaptive rows, and publish a snapshot as
+							// each one finishes. Sources that already carry a real
+							// tier (movysx, cinejoy, …) need no probe, so their
+							// first snapshot is published immediately with no wait.
+							before := len(batch)
+							batch, _ = enrichAdaptiveSources(pCtx, s.manifestHTTP, batch, mode, func(snapshot []provider.MediaSource) {
+								publish(func() bool { return addSources(p.Name(), snapshot) })
+							})
+							dropped := len(batch) < before
+							// Audio labels are optional metadata; keep them off
+							// the critical path so they never delay playback.
+							batch = discoverManifestAudio(pCtx, s.manifestHTTP, batch)
+							if dropped {
+								// Progressive snapshots may have published rows
+								// that enrichment later found shadowed; only a
+								// full replacement can remove them.
+								publish(func() bool { return replaceSources(p.Name(), batch) })
+							} else {
+								publish(func() bool { return addSources(p.Name(), batch) })
+							}
 						}
-						publish(func() bool { return addSources(p.Name(), batch) })
 					case <-pCtx.Done():
-						if ctx.Err() == nil {
+						if ctx.Err() == nil && !gotSources && errors.Is(pCtx.Err(), context.DeadlineExceeded) {
 							recordFailure(fmt.Errorf("%s: source deadline exceeded: %w", p.Name(), provider.ErrTimeout))
 						}
 						break streamLoop
@@ -300,7 +322,8 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	sourcesCount := len(agg.sources)
 	mu.Unlock()
 
-	if sourcesCount == 0 && len(disabledRoutes) > 0 && ctx.Err() == nil {
+	isFullResolve := len(opts.Exclude) == 0 && len(opts.Retry) == 0
+	if isFullResolve && sourcesCount == 0 && len(disabledRoutes) > 0 && ctx.Err() == nil {
 		mediaLog.Debug("resolve: enabled providers returned no sources, attempting fallback to disabled providers",
 			"mode", mode, "disabled", len(disabledRoutes))
 		mu.Lock()
@@ -360,8 +383,6 @@ func startSourceResolution(
 	mediaID string,
 	episode provider.Episode,
 ) (<-chan []provider.MediaSource, <-chan error) {
-	// Four batches absorb short stream bursts without unbounded queuing. One
-	// terminal result lets even a late provider return without a waiting reader.
 	updates := make(chan []provider.MediaSource, 4)
 	finished := make(chan error, 1)
 	go func() {

@@ -73,16 +73,6 @@ func DeleteAllKitty() string {
 //     the new image is smaller than the last one shown in that slot. So
 //     every call deletes imageID's previous placement before drawing.
 func renderKitty(img image.Image, cellW, cellH int, imageID uint32, termCols, termRows int) (string, error) {
-	// Downscale to display size before encoding: transmitting source
-	// pixels for multi-megapixel uploads turns every frame into
-	// megabytes of escape sequences that terminals silently drop
-	// (blank reader on large pages), while the on-screen box only ever
-	// shows cellW x cellH cells worth. termCols/termRows are the live
-	// terminal dimensions, used to measure the real cell size — encoding
-	// at the assumed 8x16 fallback size and letting the terminal upscale
-	// is what made every image render soft. Same cap discipline as the
-	// Sixel path (roomier: PNG compresses better than Sixel RLE);
-	// never upscales.
 	cw, ch := cellPixels(termCols, termRows)
 	pxW, pxH := fitKittyPixels(img, cellW, cellH, cw, ch)
 	small := img
@@ -120,14 +110,6 @@ func renderKitty(img image.Image, cellW, cellH int, imageID uint32, termCols, te
 		seq.WriteString(rasterm.KITTY_IMG_FTR)
 	}
 
-	// The escape sequence itself has no printable characters, so anything
-	// measuring this string's width (lipgloss.JoinHorizontal, when placing
-	// text next to it) sees ~0 and doesn't reserve any columns for the
-	// image — the next block then gets placed starting at the same column
-	// the image occupies, overlapping it. Padding with cellW real spaces
-	// makes the line's measured width match its actual on-screen width; the
-	// terminal just treats them as an ordinary cursor advance since C=1
-	// already stopped it from moving on its own.
 	seq.WriteString(strings.Repeat(" ", cellW))
 
 	if cellH > 1 {

@@ -20,51 +20,45 @@ type EpisodeItem struct {
 
 // EpisodesData holds the state needed to render the Episodes screen.
 type EpisodesData struct {
-	SeriesTitle      string
-	Episodes         []provider.Episode
-	filteredEpisodes []provider.Episode
-	episodeIndices   []int
-	episodeListReady bool
-	HistoryIndex     history.EpisodeIndex
-	SelectedIndex    int
-	SeasonCount      int
-	ActiveSeason     int
-	SelectMode       bool
-	SelectedIDs      map[int]struct{}
-	FilterQuery      string
-	Filtering        bool // true while the user is typing a / filter
-	Loading          bool
-	LoadingText      string
-	SpinnerFrame     string
-	Width            int
-	Height           int
-	Accent           lipgloss.AdaptiveColor
-	// Inspector pane fields (shown at >= 110 terminal width)
-	PosterBlock    string // pre-rendered poster or half-block art
-	SeriesYear     string // "2023"
-	SeriesKind     string // "TV", "Anime", etc.
-	SeriesRating   string // "9.38" — omit if empty
-	SeriesGenres   []string
-	SeriesOverview string
-	TermWidth      int // full terminal width (not content width)
-	// Selected episode detail for pane bottom
+	SeriesTitle          string
+	Episodes             []provider.Episode
+	filteredEpisodes     []provider.Episode
+	episodeIndices       []int
+	episodeListReady     bool
+	HistoryIndex         history.EpisodeIndex
+	SelectedIndex        int
+	SeasonCount          int
+	ActiveSeason         int
+	SelectMode           bool
+	SelectedIDs          map[int]struct{}
+	FilterQuery          string
+	Filtering            bool // true while the user is typing a / filter
+	Loading              bool
+	LoadingText          string
+	SpinnerFrame         string
+	Width                int
+	Height               int
+	Accent               lipgloss.AdaptiveColor
+	PosterBlock          string
+	SeriesYear           string
+	SeriesKind           string
+	SeriesRating         string
+	SeriesGenres         []string
+	CardHeight           int
+	TermWidth            int
 	SelectedEpisodeTitle string
-	SelectedEpisodeAired string // "2023-09-29" — omit if empty
 }
 
 // RenderEpisodesScreen renders the Episodes screen matching KARI_TUI_SPEC §4.3 and plan §5.3.
 func RenderEpisodesScreen(data EpisodesData) string {
 	st := NewStyles(data.Accent)
 
-	// Determine whether to show the right inspector pane.
 	showPane := data.TermWidth >= 80 && data.Width >= 65
-
-	// Compute column widths.
 	listW := data.Width
 	paneW := 0
 	if showPane {
-		paneW = min(36, max(24, data.Width/3))
-		listW = data.Width - paneW - 4 // 4-char generous gutter
+		paneW = min(32, max(22, data.Width/4))
+		listW = data.Width - paneW - 4
 		if listW < 36 {
 			listW = 36
 			paneW = data.Width - listW - 4
@@ -75,17 +69,86 @@ func RenderEpisodesScreen(data EpisodesData) string {
 	if !showPane {
 		return strings.Join(leftLines, "\n")
 	}
+	cardHeight := data.CardHeight
+	if cardHeight <= 0 {
+		cardHeight = data.Height
+	}
+	rightLines := renderInspectorPane(data, paneW, cardHeight, st)
+	lines := max(len(leftLines), len(rightLines))
+	return joinColumns(padLines(leftLines, lines), padLines(rightLines, lines), listW, paneW)
+}
 
-	rightLines := renderInspectorPane(data, paneW, st)
-	return joinColumns(leftLines, rightLines, listW, paneW)
+// renderInspectorPane shows the series identity, score, genres, and selected
+// episode beside the list. The synopsis lives only on the preview page.
+func renderInspectorPane(data EpisodesData, paneW, height int, st Styles) []string {
+	posterRows := detailsPosterRows(height)
+	lineCount := posterRows + 7
+	lines := strings.Split(fixedBlock(data.PosterBlock, paneW, posterRows), "\n")
+	lines = append(lines, "", "")
+
+	title := data.SeriesTitle
+	if title == "" {
+		title = "—"
+	}
+	lines = append(lines, truncate(title, paneW))
+
+	var metaParts []string
+	if data.SeriesYear != "" {
+		metaParts = append(metaParts, st.Dim.Render(data.SeriesYear))
+	}
+	if data.SeriesKind != "" {
+		metaParts = append(metaParts, st.Dim.Render(data.SeriesKind))
+	}
+	if data.SeriesRating != "" {
+		metaParts = append(metaParts, st.Current.Render("★ ")+st.Dim.Render(data.SeriesRating))
+	}
+	if len(metaParts) == 0 {
+		lines = append(lines, "")
+	} else {
+		lines = append(lines, truncate(strings.Join(metaParts, st.Dim.Render(" · ")), paneW))
+	}
+
+	if len(data.SeriesGenres) == 0 {
+		lines = append(lines, "")
+	} else {
+		lines = append(lines, st.Dim.Render(truncate(strings.Join(data.SeriesGenres, " · "), paneW)))
+	}
+
+	lines = append(lines, "")
+	if data.SelectedEpisodeTitle == "" {
+		lines = append(lines, "")
+	} else {
+		lines = append(lines, st.Dim.Render("selected  ")+truncate(data.SelectedEpisodeTitle, max(1, paneW-10)))
+	}
+
+	return padLines(lines, lineCount)
+}
+
+// joinColumns merges left and right line slices side-by-side with a fixed gutter.
+func joinColumns(left, right []string, leftW, _ int) string {
+	n := max(len(left), len(right))
+	out := make([]string, n)
+	for i := range out {
+		l, r := "", ""
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		lPad := leftW - lipgloss.Width(l)
+		if lPad < 0 {
+			lPad = 0
+		}
+		out[i] = l + strings.Repeat(" ", lPad) + strings.Repeat(" ", posterGutter) + r
+	}
+	return strings.Join(out, "\n")
 }
 
 // renderEpisodeList renders the left episode list column and returns a slice of lines.
 func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 	var rows []string
 
-	// 1. Series title header, truncated so long titles never push
-	// past the column into the inspector pane.
 	totalText := fmt.Sprintf("%d episodes", len(data.Episodes))
 	if len(data.Episodes) == 1 {
 		totalText = "1 episode"
@@ -95,8 +158,6 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 	gap := max(1, listW-lipgloss.Width(headerLeft)-lipgloss.Width(headerRight))
 	rows = append(rows, headerLeft+strings.Repeat(" ", gap)+headerRight)
 
-	// 2. Season tab strip (only if show has > 1 season), windowed
-	// to the list column so long runs never bleed into the pane.
 	if data.SeasonCount > 1 {
 		seasonStrip := RenderSeasonTabs(data.SeasonCount, data.ActiveSeason, data.Accent, listW)
 		rows = append(rows, "", seasonStrip)
@@ -104,10 +165,6 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 
 	rows = append(rows, "")
 
-	// While loading with no rows yet, the body stays header-only: the
-	// fixed loading row above the footer carries the spinner, so no
-	// inline line appears/disappears to shift the list, and no
-	// premature "no episodes" flashes.
 	if data.Loading {
 		return rows
 	}
@@ -117,8 +174,6 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 		return rows
 	}
 
-	// Filter to active season, then by text query. SelectedIndex addresses
-	// the final filtered list.
 	seasonEpisodes, origIndices := data.filteredEpisodes, data.episodeIndices
 	if !data.episodeListReady {
 		seasonEpisodes, origIndices = service.FilterEpisodeList(data.Episodes, data.ActiveSeason, data.FilterQuery)
@@ -133,18 +188,13 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 		return rows
 	}
 
-	// 3. Episode rows with scroll window
-	visibleHeight := data.Height - len(rows) - 3
-	if visibleHeight < 5 {
-		visibleHeight = 5
+	// 3. Episode rows with scroll window and hints. windowRange reserves the
+	// two hint rows so the viewport never shifts when a hint appears.
+	startIndex, endIndex, above, below := windowRange(len(seasonEpisodes), data.SelectedIndex, data.Height, len(rows))
+	if hint := windowHint(above, true, st); hint != "" {
+		rows = append(rows, hint)
 	}
 
-	startIndex := windowStart(len(seasonEpisodes), data.SelectedIndex, visibleHeight)
-	endIndex := min(len(seasonEpisodes), startIndex+visibleHeight)
-
-	// 3. Episode rows with scroll window. Only visible rows need styled
-	// progress labels; formatting the full roster on every repaint stalls
-	// navigation for long-running series.
 	multiSeason := data.SeasonCount > 1
 	rightCols := make([]string, endIndex-startIndex)
 	rightW := 0
@@ -159,6 +209,9 @@ func renderEpisodeList(data EpisodesData, listW int, st Styles) []string {
 		ep := seasonEpisodes[i]
 		isFocused := i == data.SelectedIndex
 		rows = append(rows, renderEpisodeRow(ep, origIndices[i], isFocused, multiSeason, rightCols[i-startIndex], rightW, data, listW, st))
+	}
+	if hint := windowHint(below, false, st); hint != "" {
+		rows = append(rows, hint)
 	}
 
 	// In Select Mode, show selection count summary line before footer
@@ -181,83 +234,6 @@ func FilterEpisodesByText(episodes []provider.Episode, idxs []int, query string)
 // filterToSeason returns the episodes for the active season and their original indices.
 func filterToSeason(episodes []provider.Episode, _ int, activeSeason int) ([]provider.Episode, []int) {
 	return service.FilterEpisodeList(episodes, activeSeason, "")
-}
-
-// renderInspectorPane renders the right pane: poster + series meta + selected episode detail.
-func renderInspectorPane(data EpisodesData, paneW int, st Styles) []string {
-	var lines []string
-
-	// Poster block (pre-rendered, may be multi-line)
-	if data.PosterBlock != "" {
-		lines = append(lines, strings.Split(data.PosterBlock, "\n")...)
-		lines = append(lines, "")
-	}
-
-	// Series title
-	if data.SeriesTitle != "" {
-		lines = append(lines, truncate(data.SeriesTitle, paneW))
-	}
-
-	// Year · Kind · Rating
-	var metaParts []string
-	if data.SeriesYear != "" {
-		metaParts = append(metaParts, st.Dim.Render(data.SeriesYear))
-	}
-	if data.SeriesKind != "" {
-		metaParts = append(metaParts, st.Dim.Render(data.SeriesKind))
-	}
-	if data.SeriesRating != "" {
-		metaParts = append(metaParts, st.Current.Render("★ ")+st.Dim.Render(data.SeriesRating))
-	}
-	if len(metaParts) > 0 {
-		lines = append(lines, truncate(strings.Join(metaParts, st.Dim.Render(" · ")), paneW))
-	}
-
-	// Genres
-	if len(data.SeriesGenres) > 0 {
-		genreStr := strings.Join(data.SeriesGenres, " · ")
-		lines = append(lines, st.Dim.Render(truncate(genreStr, paneW)))
-	}
-
-	// Overview (use shared wrapText from results.go)
-	if data.SeriesOverview != "" {
-		lines = append(lines, "")
-		wrapped := wrapText(data.SeriesOverview, paneW, 8)
-		lines = append(lines, st.Dim.Render(wrapped))
-	}
-
-	// Selected episode detail
-	if data.SelectedEpisodeTitle != "" {
-		lines = append(lines, "")
-		lines = append(lines, truncate(data.SelectedEpisodeTitle, paneW))
-	}
-	if data.SelectedEpisodeAired != "" {
-		lines = append(lines, st.Dim.Render("aired "+data.SelectedEpisodeAired))
-	}
-
-	return lines
-}
-
-// joinColumns merges left and right line slices side-by-side with a generous 4-char gutter.
-func joinColumns(left, right []string, leftW, _ int) string {
-	n := max(len(left), len(right))
-	out := make([]string, n)
-	for i := range out {
-		var l, r string
-		if i < len(left) {
-			l = left[i]
-		}
-		if i < len(right) {
-			r = right[i]
-		}
-		// Pad left column to leftW, then 4-char gutter, then right column
-		lPad := leftW - lipgloss.Width(l)
-		if lPad < 0 {
-			lPad = 0
-		}
-		out[i] = l + strings.Repeat(" ", lPad) + "    " + r
-	}
-	return strings.Join(out, "\n")
 }
 
 // historyEntryFor looks up progress for one episode, or nil.
@@ -367,10 +343,6 @@ func renderEpisodeRow(ep provider.Episode, index int, isFocused bool, multiSeaso
 	// Pad the right column to the widest visible one so titles align.
 	rightPadded := rightCol + strings.Repeat(" ", max(0, rightW-lipgloss.Width(rightCol)))
 
-	// cursor + status + code + gap + title + gap + right: the two
-	// 2-char gaps both count, so rows land exactly on listW. (A missing
-	// gap here once rendered every row 4 cells wide, and the terminal
-	// wrapped the overflow into the inspector pane.)
 	fixedW := 2 + 2 + lipgloss.Width(code) + 2 + 2 + rightW
 	titleW := listW - fixedW
 	if titleW < 15 {

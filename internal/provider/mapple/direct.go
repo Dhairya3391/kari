@@ -24,11 +24,19 @@ import (
 	"kari/internal/provider/kit"
 )
 
-const nextActionSubtitles = "40b40d9f0a6d65ec7ecc1fe5d977b0df335f81263c"
+// Mapple rotates the subtitles server-action hash on deploys, so the live
+// value is scraped from the watch page HTML. The constant is only a fallback
+// for pages that do not expose a parseable ID. actionIDScanRadius bounds how
+// far from an action marker an ID may appear in that HTML.
+const (
+	nextActionSubtitles = "40b40d9f0a6d65ec7ecc1fe5d977b0df335f81263c"
+	actionIDScanRadius  = 200
+)
 
 var (
-	reResolution = regexp.MustCompile(`(?i)\bRESOLUTION=(\d+)x(\d+)\b`)
-	reBandwidth  = regexp.MustCompile(`(?i)\bBANDWIDTH=(\d+)\b`)
+	reResolution  = regexp.MustCompile(`(?i)\bRESOLUTION=(\d+)x(\d+)\b`)
+	reBandwidth   = regexp.MustCompile(`(?i)\bBANDWIDTH=(\d+)\b`)
+	reHexActionID = regexp.MustCompile(`[0-9a-f]{40,42}`)
 )
 
 type hlsVariant struct {
@@ -71,6 +79,27 @@ type subtitleTrack struct {
 	URL   string `json:"url"`
 	Lang  string `json:"lang"`
 	Label string `json:"label"`
+}
+
+// subtitleFetchParams groups the per-title inputs of a subtitles server-action
+// call, including the action ID scraped from the watch page.
+type subtitleFetchParams struct {
+	watchPath string
+	tmdbID    int
+	mediaType string
+	season    int
+	epNum     int
+	actionID  string
+}
+
+// actionIDSource bundles the inputs needed to resolve the live subtitles
+// server-action ID from a watch page and the scripts it references.
+type actionIDSource struct {
+	ctx           context.Context
+	sessionClient *http.Client
+	siteBase      string
+	watchURL      string
+	html          string
 }
 
 func parseCoordinates(mediaID string, episode provider.Episode) (int, string, int, int, error) {
@@ -145,6 +174,244 @@ func solvePow(ctx context.Context, challenge string, difficulty int) string {
 	}
 }
 
+// fetchWatchPage loads the watch page once to establish session cookies and to
+// capture the HTML that advertises the current Next.js server-action IDs.
+func fetchWatchPage(ctx context.Context, sessionClient *http.Client, watchURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, watchURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("mapple watch page request: %w", err)
+	}
+	req.Header.Set("User-Agent", config.DesktopUserAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+
+	resp, err := sessionClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("mapple watch page visit: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("mapple watch page status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return "", fmt.Errorf("mapple read watch page: %w", err)
+	}
+	return string(body), nil
+}
+
+// setBrowserFetchHeaders adds the same-origin fetch headers a browser sends to
+// Mapple's protected API endpoints. The site rejects those calls with a
+// "Site session required" error when Origin and Sec-Fetch-* are missing. HLS
+// media fetches must not use them: the CDN serves playlists directly and the
+// player derives Origin from Referer on its own.
+func setBrowserFetchHeaders(req *http.Request, siteBase string) {
+	req.Header.Set("Origin", siteBase)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+}
+
+// extractNextActionID returns the subtitles server-action ID advertised by the
+// watch page HTML. Next.js ships the ID beside the action name in its client
+// reference data, so extraction looks for a hex ID near a known marker and
+// falls back to the last known constant when the page exposes none.
+func extractNextActionID(html string) string {
+	for _, marker := range []string{"fetchSubtitlesAction", "Next-Action", "next_action", "actionId"} {
+		if id := actionIDNear(html, marker); id != "" {
+			return id
+		}
+	}
+	return nextActionSubtitles
+}
+
+// actionIDNear returns the hex ID closest to marker in html, or empty when the
+// marker is absent or no ID-like token sits near it.
+func actionIDNear(html, marker string) string {
+	idx := strings.Index(strings.ToLower(html), strings.ToLower(marker))
+	if idx < 0 {
+		return ""
+	}
+	start := idx - actionIDScanRadius
+	if start < 0 {
+		start = 0
+	}
+	end := idx + len(marker) + actionIDScanRadius
+	if end > len(html) {
+		end = len(html)
+	}
+	window := html[start:end]
+
+	matches := reHexActionID.FindAllStringIndex(window, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	markerPos := idx - start
+	best, bestDist := 0, len(html)
+	for i, m := range matches {
+		dist := m[0] - markerPos
+		if dist < 0 {
+			dist = -dist
+		}
+		if dist < bestDist {
+			best, bestDist = i, dist
+		}
+	}
+	m := matches[best]
+	return window[m[0]:m[1]]
+}
+
+// resolveSubtitleActionID returns the live subtitles server-action ID. Next.js
+// ships the ID in a linked script chunk, so those chunks are check first; the
+// watch page markers and the known constant remain the last-resort fallbacks.
+func resolveSubtitleActionID(src actionIDSource) string {
+	if id := scanChunksForActionID(src); id != "" {
+		return id
+	}
+	return extractNextActionID(src.html)
+}
+
+// scanChunksForActionID fetches the same-origin scripts referenced by the watch
+// page and returns the first subtitles action ID they advertise. Fetching is
+// bounded by chunk count, body size, and worker count so one playback cannot
+// turn into an unbounded crawl.
+func scanChunksForActionID(src actionIDSource) string {
+	const (
+		maxChunkURLs = 48
+		chunkWorkers = 6
+	)
+	chunkURLs := scriptURLs(src.html, src.watchURL)
+	if len(chunkURLs) == 0 {
+		return ""
+	}
+	if len(chunkURLs) > maxChunkURLs {
+		chunkURLs = chunkURLs[:maxChunkURLs]
+	}
+
+	ctx, cancel := context.WithCancel(src.ctx)
+	defer cancel()
+
+	jobs := make(chan string)
+	found := make(chan string, len(chunkURLs))
+	var wg sync.WaitGroup
+	for i := 0; i < chunkWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for chunkURL := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				if id := fetchChunkActionID(ctx, src, chunkURL); id != "" {
+					select {
+					case found <- id:
+					default:
+					}
+				}
+			}
+		}()
+	}
+
+feed:
+	for _, chunkURL := range chunkURLs {
+		select {
+		case jobs <- chunkURL:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	close(found)
+
+	for id := range found {
+		if id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+// scriptURLs returns deduplicated same-origin JavaScript URLs referenced by
+// the watch page, including chunk paths embedded in Next.js flight data.
+func scriptURLs(html, pageURL string) []string {
+	const maxScriptURLs = 64
+	base, err := url.Parse(pageURL)
+	if err != nil {
+		return nil
+	}
+	normalized := strings.ReplaceAll(html, `\/`, `/`)
+	reChunk := regexp.MustCompile(`/_next/static/chunks/[A-Za-z0-9_.+\-]+\.js(?:\?[^"'\\<>\s]*)?`)
+	reSrc := regexp.MustCompile(`(?i)<script\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')`)
+
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(raw string) {
+		if len(out) >= maxScriptURLs {
+			return
+		}
+		raw = strings.ReplaceAll(strings.TrimSpace(raw), `\"`, `"`)
+		if raw == "" {
+			return
+		}
+		ref, err := url.Parse(raw)
+		if err != nil {
+			return
+		}
+		resolved := base.ResolveReference(ref)
+		if resolved.Scheme != base.Scheme || resolved.Host != base.Host {
+			return
+		}
+		if !strings.HasSuffix(resolved.Path, ".js") {
+			return
+		}
+		if _, ok := seen[resolved.String()]; ok {
+			return
+		}
+		seen[resolved.String()] = struct{}{}
+		out = append(out, resolved.String())
+	}
+
+	for _, match := range reChunk.FindAllString(normalized, -1) {
+		add(match)
+	}
+	for _, match := range reSrc.FindAllStringSubmatch(normalized, -1) {
+		if match[1] != "" {
+			add(match[1])
+		} else {
+			add(match[2])
+		}
+	}
+	return out
+}
+
+// fetchChunkActionID downloads one script chunk and returns the subtitles
+// action ID advertised next to its createServerReference call, if any.
+func fetchChunkActionID(ctx context.Context, src actionIDSource, chunkURL string) string {
+	const chunkReadLimit = 1 << 20
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chunkURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", config.DesktopUserAgent)
+	req.Header.Set("Referer", src.watchURL)
+	setBrowserFetchHeaders(req, src.siteBase)
+
+	resp, err := src.sessionClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, chunkReadLimit))
+	if err != nil {
+		return ""
+	}
+	return actionIDNear(string(body), "fetchSubtitlesAction")
+}
+
 func (c *Client) fetchSources(
 	ctx context.Context,
 	tmdbID int,
@@ -171,6 +438,19 @@ func (c *Client) fetchSources(
 	sessionClient := *c.httpClient
 	sessionClient.Jar = jar
 
+	watchURL := fmt.Sprintf("%s/%s", c.siteBase, watchPath)
+	watchHTML, err := fetchWatchPage(ctx, &sessionClient, watchURL)
+	if err != nil {
+		return err
+	}
+	actionID := resolveSubtitleActionID(actionIDSource{
+		ctx:           ctx,
+		sessionClient: &sessionClient,
+		siteBase:      c.siteBase,
+		watchURL:      watchURL,
+		html:          watchHTML,
+	})
+
 	var (
 		wg        sync.WaitGroup
 		subtitles []provider.SubtitleOption
@@ -180,13 +460,20 @@ func (c *Client) fetchSources(
 	go func() {
 		defer wg.Done()
 		var err error
-		subtitles, err = c.fetchSubtitles(ctx, &sessionClient, watchPath, tmdbID, mediaType, season, epNum)
+		subtitles, err = c.fetchSubtitles(ctx, &sessionClient, subtitleFetchParams{
+			watchPath: watchPath,
+			tmdbID:    tmdbID,
+			mediaType: mediaType,
+			season:    season,
+			epNum:     epNum,
+			actionID:  actionID,
+		})
 		if err != nil {
 			logging.Debug("mapple subtitles failed", "tmdb", tmdbID, "err", err)
 		}
 	}()
 
-	sources, err := c.resolveStreamURL(ctx, &sessionClient, watchPath, tmdbID, mediaType, tvSlug)
+	sources, err := c.resolveStreamURL(ctx, &sessionClient, watchURL, tmdbID, mediaType, tvSlug)
 	wg.Wait()
 
 	if err != nil {
@@ -210,27 +497,12 @@ func (c *Client) fetchSources(
 func (c *Client) resolveStreamURL(
 	ctx context.Context,
 	sessionClient *http.Client,
-	watchPath string,
+	watchURL string,
 	tmdbID int,
 	mediaType string,
 	tvSlug string,
 ) ([]provider.MediaSource, error) {
-	watchURL := fmt.Sprintf("%s/%s", c.siteBase, watchPath)
 
-	// Step 1: Visit watch page to establish session cookies
-	initReq, err := http.NewRequestWithContext(ctx, http.MethodGet, watchURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("mapple init request: %w", err)
-	}
-	initReq.Header.Set("User-Agent", config.DesktopUserAgent)
-	initResp, err := sessionClient.Do(initReq)
-	if err != nil {
-		return nil, fmt.Errorf("mapple init visit: %w", err)
-	}
-	initResp.Body.Close()
-
-	// Step 2: Request the UI session token. This mirrors the page's inline
-	// bootstrap exactly: no body, no Content-Type, and same-origin only.
 	sessReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.siteBase+"/api/ui/session", nil)
 	if err != nil {
 		return nil, fmt.Errorf("mapple session request: %w", err)
@@ -238,6 +510,7 @@ func (c *Client) resolveStreamURL(
 	sessReq.Header.Set("User-Agent", config.DesktopUserAgent)
 	sessReq.Header.Set("Referer", watchURL)
 	sessReq.Header.Set("Accept", "application/json")
+	setBrowserFetchHeaders(sessReq, c.siteBase)
 
 	sessResp, err := sessionClient.Do(sessReq)
 	if err != nil {
@@ -255,9 +528,6 @@ func (c *Client) resolveStreamURL(
 		return nil, fmt.Errorf("mapple invalid session token: %w", err)
 	}
 
-	// Step 2b: Bind the request token to a device session. The page posts a
-	// screen_view track immediately after bootstrapping; without it the
-	// media-session endpoint rejects the token as invalid.
 	if err := c.syncSession(ctx, sessionClient, watchURL); err != nil {
 		logging.Debug("mapple session sync failed; continuing", "err", err)
 	}
@@ -277,6 +547,7 @@ func (c *Client) resolveStreamURL(
 	mediaReq.Header.Set("User-Agent", config.DesktopUserAgent)
 	mediaReq.Header.Set("Referer", watchURL)
 	mediaReq.Header.Set("Content-Type", "application/json")
+	setBrowserFetchHeaders(mediaReq, c.siteBase)
 
 	mediaResp, err := sessionClient.Do(mediaReq)
 	if err != nil {
@@ -317,6 +588,7 @@ func (c *Client) resolveStreamURL(
 		powReq.Header.Set("User-Agent", config.DesktopUserAgent)
 		powReq.Header.Set("Referer", watchURL)
 		powReq.Header.Set("Content-Type", "application/json")
+		setBrowserFetchHeaders(powReq, c.siteBase)
 
 		powResp, err := sessionClient.Do(powReq)
 		if err != nil {
@@ -338,32 +610,43 @@ func (c *Client) resolveStreamURL(
 		return nil, fmt.Errorf("mapple missing stream token")
 	}
 
-	// Step 4: Encrypt endpoint parameters and resolve every advertised lane.
-	// The page exposes short source IDs (s2, s25); some titles carry useful
-	// mirrors on more than one, so merge them instead of stopping at the
-	// first success.
 	sourceIDs := []string{"s2", "s25"}
+	type laneResult struct {
+		sources []provider.MediaSource
+		err     error
+	}
+	laneResults := make([]laneResult, len(sourceIDs))
+	var lanes sync.WaitGroup
+	for i, sourceID := range sourceIDs {
+		lanes.Add(1)
+		go func(i int, sourceID string) {
+			defer lanes.Done()
+			masterURL, sourceLabel, laneErr := c.resolveEncryptedSource(ctx, sessionClient, watchURL,
+				tmdbID, mediaType, tvSlug, sourceID, session.Token, streamToken)
+			if laneErr != nil {
+				laneResults[i].err = laneErr
+				return
+			}
+			if masterURL == "" {
+				return
+			}
+			laneSources, laneErr := c.fetchMasterSources(ctx, sessionClient, masterURL, sourceLabel)
+			laneResults[i] = laneResult{sources: laneSources, err: laneErr}
+		}(i, sourceID)
+	}
+	lanes.Wait()
+
 	var (
 		sources []provider.MediaSource
 		seen    = make(map[string]struct{})
 		lastErr = provider.ErrNoSources
 	)
-	for _, sourceID := range sourceIDs {
-		masterURL, sourceLabel, laneErr := c.resolveEncryptedSource(ctx, sessionClient, watchURL,
-			tmdbID, mediaType, tvSlug, sourceID, session.Token, streamToken)
-		if laneErr != nil {
-			lastErr = laneErr
+	for _, result := range laneResults {
+		if result.err != nil {
+			lastErr = result.err
 			continue
 		}
-		if masterURL == "" {
-			continue
-		}
-		laneSources, laneErr := c.fetchMasterSources(ctx, sessionClient, masterURL, sourceLabel)
-		if laneErr != nil {
-			lastErr = laneErr
-			continue
-		}
-		for _, src := range laneSources {
+		for _, src := range result.sources {
 			if _, ok := seen[src.URL]; ok {
 				continue
 			}
@@ -458,6 +741,7 @@ func (c *Client) syncSession(ctx context.Context, sessionClient *http.Client, wa
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 	req.Header.Set("Referer", watchURL)
 	req.Header.Set("Content-Type", "application/json")
+	setBrowserFetchHeaders(req, c.siteBase)
 
 	resp, err := sessionClient.Do(req)
 	if err != nil {
@@ -499,6 +783,7 @@ func (c *Client) resolveEncryptedSource(
 	encReq.Header.Set("User-Agent", config.DesktopUserAgent)
 	encReq.Header.Set("Referer", watchURL)
 	encReq.Header.Set("Content-Type", "application/json")
+	setBrowserFetchHeaders(encReq, c.siteBase)
 
 	encResp, err := sessionClient.Do(encReq)
 	if err != nil {
@@ -537,6 +822,7 @@ func (c *Client) resolveEncryptedSource(
 	}
 	streamReq.Header.Set("User-Agent", config.DesktopUserAgent)
 	streamReq.Header.Set("Referer", watchURL)
+	setBrowserFetchHeaders(streamReq, c.siteBase)
 
 	streamResp, err := sessionClient.Do(streamReq)
 	if err != nil {
@@ -561,42 +847,36 @@ func snippet(body []byte) string {
 	return text
 }
 
-func (c *Client) fetchSubtitles(
-	ctx context.Context,
-	sessionClient *http.Client,
-	watchPath string,
-	tmdbID int,
-	mediaType string,
-	season, epNum int,
-) ([]provider.SubtitleOption, error) {
+func (c *Client) fetchSubtitles(ctx context.Context, sessionClient *http.Client, p subtitleFetchParams) ([]provider.SubtitleOption, error) {
 	var bodyPayload []byte
-	if mediaType == provider.MediaTypeTV {
+	if p.mediaType == provider.MediaTypeTV {
 		bodyPayload, _ = json.Marshal([]map[string]any{
 			{
-				"mediaId":   tmdbID,
+				"mediaId":   p.tmdbID,
 				"mediaType": "tv",
-				"season":    strconv.Itoa(season),
-				"episode":   strconv.Itoa(epNum),
+				"season":    strconv.Itoa(p.season),
+				"episode":   strconv.Itoa(p.epNum),
 			},
 		})
 	} else {
 		bodyPayload, _ = json.Marshal([]map[string]any{
 			{
-				"mediaId":   tmdbID,
+				"mediaId":   p.tmdbID,
 				"mediaType": "movie",
 			},
 		})
 	}
 
-	targetURL := fmt.Sprintf("%s/%s", c.siteBase, watchPath)
+	targetURL := fmt.Sprintf("%s/%s", c.siteBase, p.watchPath)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(bodyPayload))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 	req.Header.Set("Referer", targetURL)
-	req.Header.Set("Next-Action", nextActionSubtitles)
+	req.Header.Set("Next-Action", p.actionID)
 	req.Header.Set("Content-Type", "text/plain;charset=UTF-8")
+	setBrowserFetchHeaders(req, c.siteBase)
 
 	resp, err := sessionClient.Do(req)
 	if err != nil {

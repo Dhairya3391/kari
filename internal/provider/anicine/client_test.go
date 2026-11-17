@@ -48,8 +48,13 @@ func newFixture(t *testing.T) (*Client, *httptest.Server) {
 		fmt.Fprint(w, `<html><body><div>redesigned</div></body></html>`)
 	})
 
-	// MegaPlay's AniList mapping is preferred; the MAL route remains a
-	// fallback when a title is indexed only by MAL.
+	mux.HandleFunc("/anime/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		fmt.Fprint(w, "#EXTM3U\n"+
+			"#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=\"avc1.640028,mp4a.40.2\"\n1080.m3u8\n"+
+			"#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720\n720.m3u8\n")
+	})
+
 	mux.HandleFunc("/stream/ani/151807/1/sub", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprint(w, `<html><body><div class="player" data-id="999">File 999 - sub</div></body></html>`)
@@ -70,7 +75,7 @@ func newFixture(t *testing.T) (*Client, *httptest.Server) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"enc":%q,"tracks":[{"file":"https://cdn.example.com/sub.vtt","label":"English","kind":"captions"}]}`,
+		fmt.Fprintf(w, `{"enc":%q,"tracks":[{"file":"https://cdn.example.com/sub.vtt","label":"English","kind":"captions"}],"intro":{"start":30,"end":90},"outro":{"start":1300,"end":1360}}`,
 			fixtureEnc)
 	})
 
@@ -81,7 +86,32 @@ func newFixture(t *testing.T) (*Client, *httptest.Server) {
 	if err != nil {
 		t.Fatalf("NewClientWithBaseURL: %v", err)
 	}
+	c.http = cdnClient(srv)
 	return c, srv
+}
+
+// cdnClient routes every host to the test server so CDN-looking master URLs
+// survive the direct-URL check while probes land on the local fixture.
+func cdnClient(srv *httptest.Server) *http.Client {
+	return &http.Client{Transport: fixtureTransport{
+		target: srv.Listener.Addr().String(),
+		base:   http.DefaultTransport,
+	}}
+}
+
+// fixtureTransport rewrites each request's scheme and host to the test server.
+// The test server speaks plain HTTP, so a TLS dial would fail the handshake.
+type fixtureTransport struct {
+	target string
+	base   http.RoundTripper
+}
+
+func (rt fixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.URL.Scheme = "http"
+	clone.URL.Host = rt.target
+	clone.Host = ""
+	return rt.base.RoundTrip(clone)
 }
 
 func TestAnicineCapabilities(t *testing.T) {
@@ -147,8 +177,39 @@ func TestAnicineAnimeResolve(t *testing.T) {
 	if s1.Type != provider.SourceTypeHLS || s1.Referer == "" || s1.UserAgent == "" {
 		t.Errorf("mpv transport incomplete: %+v", s1)
 	}
-	if len(s1.Subtitles) != 1 {
-		t.Errorf("expected 1 subtitle, got %+v", s1.Subtitles)
+	if len(s1.Subtitles) != 1 || s1.Subtitles[0].Language != "en" {
+		t.Errorf("expected 1 English subtitle, got %+v", s1.Subtitles)
+	}
+	if s1.Height != 1080 || s1.Bitrate != 5000000 {
+		t.Errorf("height/bitrate = %d/%d, want 1080/5000000", s1.Height, s1.Bitrate)
+	}
+	if s1.Quality != "1080p" {
+		t.Errorf("quality = %q, want 1080p", s1.Quality)
+	}
+	if s1.Audio.Track != provider.TrackSub {
+		t.Errorf("audio track = %q, want sub", s1.Audio.Track)
+	}
+	if s1.SubType != provider.SubTypeSoft {
+		t.Errorf("subtitle kind = %q, want soft", s1.SubType)
+	}
+	if s1.SkipTimes == nil || s1.SkipTimes.OpStart != 30 || s1.SkipTimes.EdEnd != 1360 {
+		t.Errorf("skip times = %+v, want intro 30 and outro end 1360", s1.SkipTimes)
+	}
+}
+
+func TestMegaplayTrack(t *testing.T) {
+	for _, tc := range []struct {
+		category string
+		want     provider.AudioTrack
+	}{
+		{"sub", provider.TrackSub},
+		{"dub", provider.TrackDub},
+		{"DUB", provider.TrackDub},
+		{"unknown", provider.TrackSub},
+	} {
+		if got := megaplayTrack(tc.category); got != tc.want {
+			t.Errorf("megaplayTrack(%q) = %q, want %q", tc.category, got, tc.want)
+		}
 	}
 }
 

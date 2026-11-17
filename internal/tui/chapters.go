@@ -40,9 +40,6 @@ func RenderChaptersScreen(data ChaptersData) string {
 		rows = append(rows, st.Dim.Render(truncate(strings.Join(data.Genres, " · "), data.Width)))
 	}
 
-	// While loading with no rows yet, the body stays header-only: the
-	// fixed loading row above the footer carries the spinner, so no
-	// premature "no chapters" flashes.
 	if data.Loading {
 		return strings.Join(rows, "\n")
 	}

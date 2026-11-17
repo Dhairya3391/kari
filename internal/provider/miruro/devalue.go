@@ -8,13 +8,6 @@ import (
 	"kari/internal/provider"
 )
 
-// This file holds the minimal hydrator for SvelteKit __data.json payloads,
-// which serialize with devalue: values live in a flat array and composite
-// values reference siblings by numeric index. Only the shapes Miruro emits
-// are supported: dicts (string keys), lists, strings, numbers, booleans,
-// and null. Numbers that fit the array are references; out-of-range
-// numbers, booleans, strings, and null are literals.
-
 // svelteDoc is one __data.json line: either the initial data document or
 // a streamed chunk (watch responses arrive as data + chunks).
 type svelteDoc struct {

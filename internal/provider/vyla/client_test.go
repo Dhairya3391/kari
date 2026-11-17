@@ -104,6 +104,12 @@ func TestVylaResolveStreamMovieSSE(t *testing.T) {
 	if s1.Quality != "1080P" || s1.Backend != "XDownloader" {
 		t.Errorf("quality/backend = %s/%s, want 1080P/XDownloader", s1.Quality, s1.Backend)
 	}
+	if s1.Height != 1080 {
+		t.Errorf("s1.Height = %d, want 1080", s1.Height)
+	}
+	if len(s1.Audio.Languages) != 0 || s1.Audio.Track != provider.TrackUnknown {
+		t.Errorf("vyla must not guess audio metadata: %+v", s1.Audio)
+	}
 	if s1.Referer != "https://films365.org" {
 		t.Errorf("expected referer https://films365.org, got %s", s1.Referer)
 	}
@@ -118,6 +124,16 @@ func TestVylaResolveStreamMovieSSE(t *testing.T) {
 	}
 	if s2.Quality != "2160P" || s2.Backend != "111477" {
 		t.Errorf("quality/backend = %s/%s, want 2160P/111477", s2.Quality, s2.Backend)
+	}
+	if s2.Height != 2160 {
+		t.Errorf("s2.Height = %d, want 2160", s2.Height)
+	}
+}
+
+func TestVylaSubtitleLabelsUseFromLabel(t *testing.T) {
+	subs := toSubtitleOptions([]vylaSubtitle{{Label: "Brazilian3", File: "https://subs.example.com/pt.vtt"}})
+	if len(subs) != 1 || subs[0].Language != "pt" {
+		t.Fatalf("subtitles = %+v, want Brazilian3 canonicalized to pt", subs)
 	}
 }
 func TestVylaResolveSourceTV(t *testing.T) {

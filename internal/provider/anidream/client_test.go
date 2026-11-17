@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,14 @@ import (
 func serve(t *testing.T, hash string, result any) *Client {
 	t.Helper()
 	mux := http.NewServeMux()
+	mux.HandleFunc("/master.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		fmt.Fprint(w, "#EXTM3U\n"+
+			"#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"Japanese\",LANGUAGE=\"jpn\",DEFAULT=YES\n"+
+			"#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"English\",LANGUAGE=\"eng\"\n"+
+			"#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080,AUDIO=\"aud\",CODECS=\"avc1.640028,mp4a.40.2\"\n1080.m3u8\n"+
+			"#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720,AUDIO=\"aud\"\n720.m3u8\n")
+	})
 	mux.HandleFunc("/_serverFn/"+hash, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Tsr-Serverfn") == "" {
 			t.Errorf("missing x-tsr-serverFn header")
@@ -42,7 +51,30 @@ func serve(t *testing.T, hash string, result any) *Client {
 	if err != nil {
 		t.Fatalf("NewClientWithBase: %v", err)
 	}
+	c.http = fixtureClient(srv)
 	return c
+}
+
+// fixtureClient sends CDN-looking master requests to the local test server,
+// rewriting HTTPS to HTTP because the fixture server speaks plain HTTP.
+func fixtureClient(srv *httptest.Server) *http.Client {
+	return &http.Client{Transport: fixtureTransport{
+		target: srv.Listener.Addr().String(),
+		base:   http.DefaultTransport,
+	}}
+}
+
+type fixtureTransport struct {
+	target string
+	base   http.RoundTripper
+}
+
+func (rt fixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.URL.Scheme = "http"
+	clone.URL.Host = rt.target
+	clone.Host = ""
+	return rt.base.RoundTrip(clone)
 }
 
 // decodeServerFnPayload verifies the request envelope and returns its data.
@@ -289,6 +321,16 @@ func TestResolveSource(t *testing.T) {
 	}
 	if source.SkipTimes == nil || source.SkipTimes.OpStart != 30 || source.SkipTimes.EdEnd != 1445 {
 		t.Errorf("skip times = %+v", source.SkipTimes)
+	}
+	if source.Height != 1080 || source.Bitrate != 8000000 || source.Quality != "1080p" {
+		t.Errorf("resolution metadata = %d/%d/%q, want 1080/8000000/1080p",
+			source.Height, source.Bitrate, source.Quality)
+	}
+	if got := source.Audio.Languages; len(got) != 2 || got[0] != "ja" || got[1] != "en" {
+		t.Errorf("audio languages = %v, want [ja en]", got)
+	}
+	if source.Audio.Track != provider.TrackDual {
+		t.Errorf("audio track = %q, want dual", source.Audio.Track)
 	}
 }
 

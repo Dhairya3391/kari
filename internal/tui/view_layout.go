@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -43,51 +45,53 @@ func (m *modelImpl) accentOverride() string {
 	return ""
 }
 
+// crossfadeSteps is the number of interpolation steps in a theme transition.
+const crossfadeSteps = 16
+
+// buildCrossfadePalette precomputes every intermediate theme once, at the
+// start of a transition. View() runs at up to 71fps during a crossfade, so
+// parsing hex colors and lerping them on every frame is pure overhead.
+func buildCrossfadePalette(from, to ModeTheme) [crossfadeSteps + 1]ModeTheme {
+	var palette [crossfadeSteps + 1]ModeTheme
+	fromDark := HexToRGBA(from.Accent.Dark)
+	toDark := HexToRGBA(to.Accent.Dark)
+	fromLight := HexToRGBA(from.Accent.Light)
+	toLight := HexToRGBA(to.Accent.Light)
+	fromDimDark := HexToRGBA(from.AccentDim.Dark)
+	toDimDark := HexToRGBA(to.AccentDim.Dark)
+	fromDimLight := HexToRGBA(from.AccentDim.Light)
+	toDimLight := HexToRGBA(to.AccentDim.Light)
+	for step := 0; step <= crossfadeSteps; step++ {
+		frac := float64(step) / float64(crossfadeSteps)
+		palette[step] = ModeTheme{
+			Accent: lipgloss.AdaptiveColor{
+				Dark:  RGBToHex(SmoothMixRGB(fromDark, toDark, frac)),
+				Light: RGBToHex(SmoothMixRGB(fromLight, toLight, frac)),
+			},
+			AccentDim: lipgloss.AdaptiveColor{
+				Dark:  RGBToHex(SmoothMixRGB(fromDimDark, toDimDark, frac)),
+				Light: RGBToHex(SmoothMixRGB(fromDimLight, toDimLight, frac)),
+			},
+		}
+	}
+	return palette
+}
+
 func (m *modelImpl) currentModeTheme() ModeTheme {
-	override := m.accentOverride()
-	target := ThemeFor(m.currentKind(), override)
-
 	if !m.crossfadeActive {
-		return target
+		return ThemeFor(m.currentKind(), m.accentOverride())
 	}
-
-	// Crossfade lerp in RGB over 16 steps (0..16 / 16.0) with smootherstep easing
-	frac := float64(m.crossfadeStep) / 16.0
-	if frac > 1.0 {
-		frac = 1.0
+	if m.crossfadePalette[0].Accent.Dark == "" {
+		m.crossfadePalette = buildCrossfadePalette(m.crossfadeFrom, m.crossfadeTo)
 	}
-
-	dest := target
-	if m.crossfadeTo.Accent.Dark != "" {
-		dest = m.crossfadeTo
+	step := m.crossfadeStep
+	if step < 0 {
+		step = 0
 	}
-
-	fromDark := HexToRGBA(m.crossfadeFrom.Accent.Dark)
-	toDark := HexToRGBA(dest.Accent.Dark)
-	fromLight := HexToRGBA(m.crossfadeFrom.Accent.Light)
-	toLight := HexToRGBA(dest.Accent.Light)
-
-	curDark := SmoothMixRGB(fromDark, toDark, frac)
-	curLight := SmoothMixRGB(fromLight, toLight, frac)
-
-	fromDimDark := HexToRGBA(m.crossfadeFrom.AccentDim.Dark)
-	toDimDark := HexToRGBA(dest.AccentDim.Dark)
-	fromDimLight := HexToRGBA(m.crossfadeFrom.AccentDim.Light)
-	toDimLight := HexToRGBA(dest.AccentDim.Light)
-
-	curDimDark := SmoothMixRGB(fromDimDark, toDimDark, frac)
-	curDimLight := SmoothMixRGB(fromDimLight, toDimLight, frac)
-
-	return ModeTheme{
-		Accent: lipgloss.AdaptiveColor{
-			Dark:  RGBToHex(curDark),
-			Light: RGBToHex(curLight),
-		},
-		AccentDim: lipgloss.AdaptiveColor{
-			Dark:  RGBToHex(curDimDark),
-			Light: RGBToHex(curDimLight),
-		},
+	if step > crossfadeSteps {
+		step = crossfadeSteps
 	}
+	return m.crossfadePalette[step]
 }
 
 func (m *modelImpl) currentAccent() lipgloss.AdaptiveColor {
@@ -119,16 +123,23 @@ func (m *modelImpl) View() string {
 		if !m.searchPosterVisible() {
 			cleanup.WriteString(m.imgProtocol.Cleanup(kittySearchImageID))
 		}
+		if !m.livePosterVisible() {
+			cleanup.WriteString(m.imgProtocol.Cleanup(kittyLiveImageID))
+		}
 		if !m.historyPosterVisible() {
 			cleanup.WriteString(m.imgProtocol.Cleanup(kittyHistoryImageID))
 		}
 		if !m.previewPosterVisible() {
 			cleanup.WriteString(m.imgProtocol.Cleanup(kittyPreviewImageID))
 		}
+		if !m.calendarPosterVisible() {
+			cleanup.WriteString(m.imgProtocol.Cleanup(kittyCalendarImageID))
+		}
 		if !m.readerPageVisible() {
 			cleanup.WriteString(m.imgProtocol.Cleanup(kittyReaderImageID))
 		}
-		if !m.searchPosterVisible() && !m.previewPosterVisible() && !m.readerPageVisible() {
+		if !m.searchPosterVisible() && !m.livePosterVisible() && !m.previewPosterVisible() &&
+			!m.calendarPosterVisible() && !m.readerPageVisible() {
 			cleanup.WriteString(m.imgProtocol.DeleteAll())
 		}
 		output = cleanup.String() + output
@@ -159,7 +170,7 @@ func (m *modelImpl) contentWidth() int {
 // layout hides as an on-screen placement would make overlayLayoutKey clear
 // the screen for an image that was never drawn.
 func (m *modelImpl) searchPosterVisible() bool {
-	if !m.imagesEnabled || m.showHelp || m.animeStatusPickerOpen || m.searchPoster == "" {
+	if !m.imagesEnabled || m.showHelp || m.animeStatusPickerOpen || m.appMode == provider.ModeLive {
 		return false
 	}
 	switch m.activeView {
@@ -174,13 +185,23 @@ func (m *modelImpl) searchPosterVisible() bool {
 	}
 }
 
+// livePosterVisible reports whether the live guide is drawing its "On now"
+// artwork. The width gate mirrors RenderLiveResultsScreen's inspector split;
+// counting a hidden poster would make overlay cleanup clear the wrong slot.
+func (m *modelImpl) livePosterVisible() bool {
+	if m.activeView != viewSearch || m.appMode != provider.ModeLive ||
+		m.showHelp || m.animeStatusPickerOpen || !m.imagesEnabled {
+		return false
+	}
+	if len(m.seriesResults) == 0 {
+		return false
+	}
+	return m.contentWidth() >= liveInspectorMinWidth &&
+		m.effectiveBodyHeight() >= liveMinInspectorHeight
+}
+
 func (m *modelImpl) previewPosterVisible() bool {
-	// No resolved check: retries nil out m.resolved while re-resolving
-	// the same episode, and the nil window emitted a Kitty delete for
-	// a still-valid poster every frame (blank art after refresh). The
-	// poster belongs to the selected series/episode, which retries
-	// never change; title switches already clear the slot explicitly.
-	if m.activeView != viewPreview || m.showHelp || m.animeStatusPickerOpen || !m.imagesEnabled || m.previewPoster == "" {
+	if m.activeView != viewPreview || m.showHelp || m.animeStatusPickerOpen || !m.imagesEnabled {
 		return false
 	}
 	// Mirrors showPreviewPoster in preview.go.
@@ -191,19 +212,73 @@ func (m *modelImpl) previewPosterVisible() bool {
 // metadata block: the lines a sixel/iterm2 poster shares rows with. Styling
 // is stripped because adaptive/crossfade colors can change without any text
 // being rewritten, and only text writes erase an overlay image.
+//
+// Rendering the block costs a styled layout pass on every message, while the
+// overlay key is consulted on each spinner tick and crossfade frame. The
+// cached signature is keyed by the metadata that feeds the block, so ticks
+// that cannot change it reuse the previous text.
 func (m *modelImpl) previewHeaderSignature() string {
 	accent := m.currentAccent()
 	data := m.collectPreviewData(m.contentWidth(), m.height, accent)
 	metaW := max(20, data.Width-previewPosterWidth(data))
-	return ansi.Strip(renderPreviewMeta(data, NewStyles(accent), metaW))
+	fingerprint := previewMetaFingerprint(data, metaW)
+	if m.previewHeader.valid && m.previewHeader.fingerprint == fingerprint {
+		return m.previewHeader.signature
+	}
+	signature := ansi.Strip(renderPreviewMeta(data, NewStyles(accent), metaW))
+	m.previewHeader = previewHeaderCache{fingerprint: fingerprint, signature: signature, valid: true}
+	return signature
+}
+
+// previewMetaFingerprint hashes every input of renderPreviewMeta so a cached
+// signature survives until the metadata or available width actually changes.
+// Styles are excluded: their escape codes are stripped from the signature.
+func previewMetaFingerprint(data PreviewData, metaW int) uint64 {
+	h := fnv.New64a()
+	var width [8]byte
+	binary.LittleEndian.PutUint64(width[:], uint64(metaW))
+	h.Write(width[:])
+	for _, field := range []string{
+		data.SeriesTitle, data.EpisodeInfo, data.Rating, data.Overview,
+		data.AudioText, data.SubtitlesText, data.SubtitleType,
+		data.SubtitleProvider, data.SkipInfo, data.ResumePosition,
+	} {
+		h.Write([]byte(field))
+		h.Write([]byte{0})
+	}
+	for _, genre := range data.Genres {
+		h.Write([]byte(genre))
+		h.Write([]byte{0})
+	}
+	if data.Autoplay {
+		h.Write([]byte{1})
+	} else {
+		h.Write([]byte{0})
+	}
+	return h.Sum64()
 }
 
 func (m *modelImpl) historyPosterVisible() bool {
-	if m.activeView != viewHistory || m.showHelp || m.animeStatusPickerOpen || !m.imagesEnabled || m.historyPoster == "" {
+	if m.activeView != viewHistory || m.showHelp || m.animeStatusPickerOpen || !m.imagesEnabled {
 		return false
 	}
 	// Mirrors showPosterPane in history.go, which gates on content width.
 	return m.contentWidth() >= 100
+}
+
+// calendarPosterVisible reports whether the calendar detail pane is actually
+// drawing the cover. The width gate mirrors RenderCalendarScreen's split, and
+// the height gate mirrors the slot reservation in collectCalendarData;
+// counting a hidden poster would make overlay cleanup clear the wrong slot.
+func (m *modelImpl) calendarPosterVisible() bool {
+	if m.activeView != viewCalendar || m.showHelp || m.animeStatusPickerOpen || !m.imagesEnabled {
+		return false
+	}
+	if m.contentWidth() < calendarDetailPaneWidth {
+		return false
+	}
+	detailHeight := calendarDetailBodyHeight(m.effectiveBodyHeight())
+	return calendarPosterFits(detailHeight)
 }
 
 // readerPageVisible reports whether the fullscreen reader is drawing a
@@ -246,23 +321,20 @@ func (m *modelImpl) overlayLayoutKey() string {
 	if m.searchPosterVisible() {
 		fmt.Fprintf(&placements, "|search:%d:%d", m.searchPosterOpID, len(m.searchPoster))
 	}
+	if m.livePosterVisible() {
+		fmt.Fprintf(&placements, "|live:%d:%d", m.livePosterOpID, len(m.livePoster))
+	}
 	if m.previewPosterVisible() {
 		fmt.Fprintf(&placements, "|preview:%d:%d", m.previewPosterOpID, len(m.previewPoster))
-		// Sixel and iTerm2 paint into the text cells, so any line written
-		// under a poster erases that slice of the image. Unlike the search
-		// and history panes, preview metadata arrives asynchronously
-		// (overview, subtitles, skip data, resume), rewriting rows the
-		// poster covers and leaving it broken into horizontal strips.
-		// Folding the header text into the key makes such a change request
-		// the screen clear that repaints the poster over the new layout.
 		placements.WriteByte(':')
 		placements.WriteString(m.previewHeaderSignature())
 	}
 	if m.historyPosterVisible() {
 		fmt.Fprintf(&placements, "|history:%d:%d", m.historyPosterOpID, len(m.historyPoster))
 	}
-	// Help replaces the reader page, so a page behind help is not a
-	// placement; removing it must request a clear.
+	if m.calendarPosterVisible() {
+		fmt.Fprintf(&placements, "|calendar:%d:%d", m.calendarPosterOpID, len(m.calendarPoster))
+	}
 	if m.activeView == viewReader && !m.showHelp {
 		if rendered, ok := m.readerRender[m.readerPage]; ok {
 			fmt.Fprintf(&placements, "|reader:%d:%d:%d:%d:%d",
@@ -317,6 +389,34 @@ func (m *modelImpl) activeDownloadBadge(st Styles) string {
 	return ""
 }
 
+// statusRowCount mirrors the status block built in renderMainView: a loading
+// line plus at most one of toast, timed status, or "Now Playing". Overlay
+// visibility gates use it so they reserve the same body height the renderer
+// actually uses when a status row is on screen.
+func (m *modelImpl) statusRowCount() int {
+	n := 0
+	if m.loading {
+		n++
+	}
+	now := time.Now()
+	if m.activeToast != nil && !m.activeToast.IsExpired(now) {
+		return n + 1
+	}
+	if text := strings.TrimSpace(m.statusText); text != "" && (m.statusExpiresAt.IsZero() || now.Before(m.statusExpiresAt)) {
+		return n + 1
+	}
+	if m.playOpID != 0 && !m.loading {
+		return n + 1
+	}
+	return n
+}
+
+// effectiveBodyHeight is the body height after status rows are removed, the
+// same value renderMainView passes to renderScreenBody.
+func (m *modelImpl) effectiveBodyHeight() int {
+	return max(5, ComputeDims(m.width, m.height).BodyHeight-m.statusRowCount())
+}
+
 func (m *modelImpl) renderMainView() string {
 	accent := m.currentAccent()
 	dims := ComputeDims(m.width, m.height)
@@ -326,19 +426,12 @@ func (m *modelImpl) renderMainView() string {
 	crumbs := m.activeCrumbs()
 	badge := m.activeDownloadBadge(st)
 	header := RenderHeaderWithStatus(crumbs, accent, dims.ContentWidth, badge)
-	var body string
-	if m.showHelp {
-		body = m.renderHelpOverlayContent(dims.ContentWidth, accent)
-	} else if m.animeStatusPickerOpen {
-		body = m.renderAnimeStatusOverlayContent(dims.ContentWidth, accent)
-	} else {
-		body = m.renderScreenBody(dims, accent)
-	}
 
 	// Status block above the footer: the loading indicator lives here
 	// in a fixed slot so its appearance never shifts body content up
-	// or down a line. A live toast stacks below it; both are budgeted
-	// out of the body, which stays top-aligned.
+	// or down a line. It is computed before the body so every screen can
+	// size its window to the height that actually remains after the status
+	// rows are removed — otherwise RenderFrame clips the bottom hints.
 	var statusRows []string
 	if m.loading {
 		text := strings.TrimSpace(m.loadingText)
@@ -367,6 +460,17 @@ func (m *modelImpl) renderMainView() string {
 		statusRows = append(statusRows, lipgloss.PlaceHorizontal(dims.ContentWidth, lipgloss.Center, statusStyle.Render(text)))
 	} else if m.playOpID != 0 && !m.loading {
 		statusRows = append(statusRows, lipgloss.PlaceHorizontal(dims.ContentWidth, lipgloss.Center, st.Current.Render("▶ Now Playing")))
+	}
+
+	bodyDims := dims
+	bodyDims.BodyHeight = max(5, dims.BodyHeight-len(statusRows))
+	var body string
+	if m.showHelp {
+		body = m.renderHelpOverlayContent(dims.ContentWidth, accent)
+	} else if m.animeStatusPickerOpen {
+		body = m.renderAnimeStatusOverlayContent(dims.ContentWidth, accent)
+	} else {
+		body = m.renderScreenBody(bodyDims, accent)
 	}
 
 	// Footer
@@ -469,6 +573,18 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 	switch m.activeView {
 	case viewSearch:
 		if len(m.seriesResults) > 0 {
+			if m.appMode == provider.ModeLive {
+				return []KeyBinding{
+					{Key: "enter", Action: "watch"},
+					{Key: "space", Action: "search"},
+					{Key: "/", Action: "filter"},
+					{Key: "1/2/3", Action: "jump"},
+					{Key: "r", Action: "refresh"},
+					{Key: "tab/⇧tab", Action: "mode"},
+					{Key: "?", Action: "help"},
+					{Key: "esc", Action: "back"},
+				}
+			}
 			return []KeyBinding{
 				{Key: "enter", Action: "open"},
 				{Key: "space", Action: "search"},
@@ -622,14 +738,7 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 		)
 		return bindings
 	case viewCalendar:
-		return []KeyBinding{
-			{Key: "enter", Action: "resume/search"},
-			{Key: "←/→", Action: "day"},
-			{Key: "tab", Action: "filter"},
-			{Key: "/", Action: "filter title"},
-			{Key: "r", Action: "refresh"},
-			{Key: "esc", Action: "back"},
-		}
+		return calendarFooterHints()
 	default:
 		return []KeyBinding{
 			{Key: "esc", Action: "back"},
@@ -705,6 +814,19 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 	switch m.activeView {
 	case viewSearch:
 		if len(m.seriesResults) > 0 {
+			if m.appMode == provider.ModeLive {
+				screenName = "Live guide"
+				contextKeys = []KeyBinding{
+					{Key: "enter", Action: "watch channel"},
+					{Key: "↑↓ j k", Action: "move through guide"},
+					{Key: "1/2/3", Action: "jump live/upcoming/channels"},
+					{Key: "r", Action: "refresh live guide"},
+					{Key: "/", Action: "filter channels"},
+					{Key: "space", Action: "new search"},
+					{Key: "tab/⇧tab", Action: "cycle mode"},
+				}
+				break
+			}
 			screenName = "Results"
 			contextKeys = []KeyBinding{
 				{Key: "enter", Action: "open series"},
@@ -836,16 +958,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 		}
 	case viewCalendar:
 		screenName = "Calendar"
-		contextKeys = []KeyBinding{
-			{Key: "enter", Action: "resume unviewed or search show"},
-			{Key: "← / → / h / l", Action: "switch day (Mon..Sun)"},
-			{Key: "↑ / ↓ / k / j", Action: "select scheduled release"},
-			{Key: "tab / ⇧tab", Action: "cycle filter (All/Anime/Series/Watching)"},
-			{Key: "1 / 2 / 3 / 4", Action: "jump to filter mode"},
-			{Key: "/", Action: "filter releases by title"},
-			{Key: "r", Action: "refresh latest schedule"},
-			{Key: "esc", Action: "back"},
-		}
+		contextKeys = calendarKeyHints()
 	}
 
 	globalKeys := []KeyBinding{
@@ -863,6 +976,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 		ContextKeys: contextKeys,
 		GlobalKeys:  globalKeys,
 		Width:       width,
+		Scroll:      max(0, m.helpScroll),
 		Accent:      accent,
 	})
 }

@@ -79,8 +79,6 @@ func TestBuildActivityPausedShowsStoppedPosition(t *testing.T) {
 	np := NowPlaying{Media: model.ResolvedMedia{SeriesTitle: "Show", MediaType: provider.MediaTypeTV}}
 	act := buildActivity(np, Progress{PositionSecs: 100, DurationSecs: 600, Paused: true}, now)
 
-	// Discord renders the start clock even while paused, so the elapsed time
-	// must reflect where playback stopped rather than falling back to 0:00.
 	if act.Timestamps == nil {
 		t.Fatal("timestamps = nil, want start anchored to the paused position")
 	}

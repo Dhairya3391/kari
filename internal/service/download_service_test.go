@@ -156,9 +156,6 @@ func TestBatchDownloadContinuesPastFailures(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("results = %+v", results)
 	}
-	// Both episodes resolve through the TMDB cross-provider path (the
-	// failing stub only fails direct origin calls), so the batch
-	// completes without aborting and reports progress per episode.
 	for i, r := range results {
 		if r.Err != nil {
 			t.Errorf("ep %d err=%v", i, r.Err)
@@ -596,8 +593,6 @@ func TestCompletedDownloads(t *testing.T) {
 	}
 	_ = os.Chtimes(doneFile2, now, now)
 
-	// A video copied into the same download folder by the user is not a
-	// Kari download and must not appear in Kari's Downloads view.
 	if err := os.WriteFile(filepath.Join(root, "Shrek.mkv"), []byte("user media"), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"kari/internal/downloader"
+	"kari/internal/filter"
 	"kari/internal/history"
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/provider"
-	"kari/internal/ranking"
 	"kari/internal/service"
 	"strings"
 	"time"
@@ -35,8 +35,12 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 		cacheKey := fmt.Sprintf("%s:%s", mode, query)
 		if cacheable && cacheGeneration == m.searchCacheGeneration.Load() {
 			if entry, ok := m.searchCache.Get(cacheKey); ok {
-				logging.Debug("search cache hit", "mode", mode, "query", query)
-				return searchDoneMsg{results: entry.results, usedQuery: entry.usedQuery, warnings: entry.warnings, opID: opID, err: nil}
+				serviceKey := fmt.Sprintf("%s:%s", mode, strings.ToLower(strings.TrimSpace(query)))
+				if m.mediaService == nil || !m.mediaService.SearchBackfillFresh(serviceKey, entry.cachedAt) {
+					logging.Debug("search cache hit", "mode", mode, "query", query)
+					return searchDoneMsg{results: entry.results, usedQuery: entry.usedQuery, warnings: entry.warnings, opID: opID, err: nil}
+				}
+				logging.Debug("search cache bypassed for fresh backfill", "mode", mode, "query", query)
 			}
 		}
 
@@ -47,6 +51,7 @@ func (m *modelImpl) searchCmd(opID int, query string) tea.Cmd {
 				results:   results,
 				usedQuery: usedQuery,
 				warnings:  warnings,
+				cachedAt:  time.Now(),
 			})
 		}
 
@@ -86,8 +91,6 @@ func (m *modelImpl) resolveCmd(opID int, series provider.SearchResult, episode p
 	}
 	ctx, cancel := context.WithCancel(parent)
 	m.resolveCancel = cancel
-	// Snapshots are cumulative, so one pending update is enough. Each load
-	// owns its channel: abandoned subscriptions cannot steal a newer load.
 	updates := make(chan tea.Msg, 1)
 	m.resolveChan = updates
 	mediaService := m.mediaService
@@ -103,8 +106,6 @@ func (m *modelImpl) resolveCmd(opID int, series provider.SearchResult, episode p
 					return
 				default:
 				}
-				// Replace only an unread snapshot; never queue obsolete list
-				// rebuilds behind keyboard events and the terminal renderer.
 				select {
 				case <-updates:
 				default:
@@ -116,8 +117,6 @@ func (m *modelImpl) resolveCmd(opID int, series provider.SearchResult, episode p
 			}
 			resolved, err := mediaService.Resolve(ctx, mode, series, episode, onResult,
 				service.ResolveOptions{Exclude: exclude, Retry: retry})
-			// The service owns the fetch deadline. An expired fetch must still
-			// deliver completion so the preview can stop its loading state.
 			select {
 			case updates <- resolveDoneMsg{resolved: resolved, opID: opID, err: err}:
 			case <-ctx.Done():
@@ -241,8 +240,6 @@ func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 			providerName = src.Quality
 		}
 	}
-	// Built on the Update goroutine (reads model state); the closure below
-	// only touches the thread-safe presence client.
 	nowPlaying, publishPresence := m.nowPlayingFor(resolved)
 	return func() tea.Msg {
 		if publishPresence {
@@ -270,8 +267,6 @@ func (m *modelImpl) loadStartupAddonCmd(manifestURL string) tea.Cmd {
 }
 
 func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd {
-	// The caller preserves the highlighted source at the front. Re-applying
-	// the preferred provider here would silently download a different row.
 	if len(resolved.Subtitles) == 0 && len(m.rawSubtitles) > 0 {
 		resolved.Subtitles = append([]model.SubtitleTrack{}, m.rawSubtitles...)
 	}
@@ -294,17 +289,6 @@ func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd 
 				default:
 				}
 			})
-			// Unlike progress ticks above, the completion message must
-			// never be dropped: nothing else clears m.loading or
-			// re-enables starting another download, so a non-blocking
-			// send here (channel full from a backlog of progress
-			// updates the UI hasn't drained yet) would leave the app
-			// stuck showing "Downloading..." forever. It only sends
-			// once per download, so blocking briefly is harmless. The
-			// ctx.Done() case only fires if the user explicitly
-			// cancelled (Stop/Quit) — in that case the UI already reset
-			// itself synchronously, nobody will read this value, and
-			// without this escape the goroutine would block forever.
 			select {
 			case m.downloadChan <- downloadDoneMsg{opID: opID, err: err}:
 			case <-ctx.Done():
@@ -318,6 +302,25 @@ func (m *modelImpl) downloadCmd(opID int, resolved model.ResolvedMedia) tea.Cmd 
 			title:     title,
 		}
 	}
+}
+
+// preferredProviderSources moves the preferred resolver's rows ahead of the
+// others for downloads. The downloader consumes plain MediaSources, so the
+// rows are unwrapped after the single domain grouping pass.
+func preferredProviderSources(sources []provider.MediaSource, preferred string) []provider.MediaSource {
+	if preferred == "" || len(sources) < 2 {
+		return sources
+	}
+	ranked := make([]filter.RankedSource, len(sources))
+	for i, src := range sources {
+		ranked[i] = filter.RankedSource{Source: src, OriginalIndex: i}
+	}
+	grouped := filter.GroupByProvider(ranked, preferred)
+	out := make([]provider.MediaSource, len(grouped))
+	for i, row := range grouped {
+		out[i] = row.Source
+	}
+	return out
 }
 
 func (m *modelImpl) resumePendingDownloadCmd(opID int, job service.DownloadJob) tea.Cmd {
@@ -360,7 +363,7 @@ func (m *modelImpl) resumePendingDownloadCmd(opID int, job service.DownloadJob) 
 			}
 			resolved, err := m.mediaService.Resolve(ctx, job.Mode, job.Series, job.Episode, nil, service.ResolveOptions{})
 			if err == nil {
-				resolved.Playback = ranking.PreferProvider(resolved.Playback, m.preferredProviderForMode(job.Mode))
+				resolved.Playback = preferredProviderSources(resolved.Playback, m.preferredProviderForMode(job.Mode))
 				err = m.downloadService.Download(ctx, resolved, func(dp downloader.DownloadProgress) {
 					select {
 					case m.downloadChan <- downloadProgressMsg{opID: opID, progress: dp.Percent, totalSize: dp.TotalSize, speed: dp.Speed, downloaded: dp.Downloaded, eta: dp.ETA}:

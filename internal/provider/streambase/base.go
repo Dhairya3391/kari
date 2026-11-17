@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -20,6 +19,7 @@ import (
 	"kari/internal/httpclient"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/timeouts"
 	"kari/internal/tmdb"
 	"kari/internal/util"
 )
@@ -66,7 +66,7 @@ const tmdbAnimationGenreID = 16
 // fallbackSearchTimeout bounds one direct-TMDB fallback attempt. It starts
 // from a fresh context so a fallback can run even when the failed index
 // attempt already consumed the caller's context deadline.
-const fallbackSearchTimeout = 10 * time.Second
+const fallbackSearchTimeout = timeouts.StreambaseFallback
 
 // Search resolves titles to TMDB ids. For ModeCartoon, it queries TMDB
 // multi-search directly and filters exclusively for animation titles (genre
@@ -95,10 +95,6 @@ func (b *Base) Search(ctx context.Context, query string, mode provider.ContentTy
 			return nil, err
 		}
 		logging.Debug("stream search index failed, falling back to direct TMDB search", "mode", mode, "query", query, "err", err)
-		// The failed index attempt may have already burned the caller's
-		// context deadline, which would doom the fallback immediately. Start
-		// from a fresh budget that keeps the values but not the stale
-		// deadline.
 		fallbackCtx, fallbackCancel := context.WithTimeout(context.WithoutCancel(ctx), fallbackSearchTimeout)
 		defer fallbackCancel()
 		fallbackResults, fallbackErr := b.searchTMDB(fallbackCtx, query, mode)
@@ -113,8 +109,6 @@ func (b *Base) Search(ctx context.Context, query string, mode provider.ContentTy
 		return nil, provider.ErrNoResults
 	}
 
-	// Normalize the media type to the selected mode — meilisearch results
-	// may carry a different vocabulary than the mode the user picked.
 	providerResults := make([]provider.SearchResult, 0, len(results))
 	for _, r := range results {
 		mediaType := r.MediaType
@@ -233,8 +227,6 @@ func (b *Base) searchTMDBCartoons(ctx context.Context, query string) ([]provider
 	}
 
 	hits := page1.Results
-	// If page 1 has fewer than 10 animation items and more pages exist, fetch
-	// page 2 to provide a richer search result set.
 	if page1.TotalPages > 1 && countAnimationHits(hits) < 10 {
 		page2, err := b.fetchTMDBMultiSearchPage(ctx, query, 2)
 		if err == nil && len(page2.Results) > 0 {

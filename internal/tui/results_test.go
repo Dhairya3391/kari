@@ -25,6 +25,54 @@ func resultsLoadingData() ResultsData {
 	}
 }
 
+// cardTitleRow returns the output row (0-based) of the details card's bold
+// title. The left results table also contains the title, but its rows carry
+// the media-type label ("Anime") and the "▌" cursor; the card title line has
+// neither, so those rows can be excluded.
+func cardTitleRow(t *testing.T, out, title string) int {
+	t.Helper()
+	for i, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, title) && !strings.Contains(line, "Anime") && !strings.Contains(line, "▌") {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestResultsCardTextIgnoresTransientStatusRow proves the selected title and
+// year in the details card do not shift when a status/loading row appears and
+// shrinks the body by one line. The card is sized from CardHeight, which stays
+// constant; only Height changes with the transient row.
+func TestResultsCardTextIgnoresTransientStatusRow(t *testing.T) {
+	base := ResultsData{
+		Query:         "one piece",
+		Mode:          provider.ModeAnime,
+		Results:       []provider.SearchResult{{Title: "ONE PIECE", Year: "1999"}},
+		SelectedIndex: 0,
+		PosterBlock:   "POSTER",
+		CardHeight:    30,
+		Width:         100,
+		TermWidth:     120,
+		Height:        30,
+		Accent:        ResolveAccent(model.KindAnime, "Auto"),
+	}
+	withoutStatus := RenderResultsScreen(base)
+	withStatus := base
+	withStatus.Height = 29 // one fewer body row while a loading line is shown
+	withStatus.Loading = true
+	withStatus.LoadingText = "Loading episodes..."
+	withStatusLoading := RenderResultsScreen(withStatus)
+
+	rowA := cardTitleRow(t, withoutStatus, "ONE PIECE")
+	rowB := cardTitleRow(t, withStatusLoading, "ONE PIECE")
+	if rowA < 0 || rowB < 0 {
+		t.Fatalf("selected title not found: without=%d with=%d\n---\n%s\n---\n%s", rowA, rowB, withoutStatus, withStatusLoading)
+	}
+	if rowA != rowB {
+		t.Errorf("card title shifted from row %d to %d when a status row appeared", rowA, rowB)
+	}
+}
+
 // Loading results show the header only: no inline spinner line, no
 // premature "no results" flash.
 func TestResultsLoadingRendersNoInlineLoader(t *testing.T) {
@@ -136,6 +184,11 @@ func TestLiveResultsShowProviderAndChannelDetails(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("live list must show %q, got:\n%s", want, out)
 		}
+	}
+	// The second channel's category appears when it becomes the selection.
+	data.SelectedIndex = 1
+	if out := RenderLiveResultsScreen(data); !strings.Contains(out, "Football") {
+		t.Errorf("live inspector must show the selected channel's category:\n%s", out)
 	}
 }
 

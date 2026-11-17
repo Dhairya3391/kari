@@ -103,8 +103,6 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 	byNumber := make(map[int]catalogEpisode, len(metadata))
 	for _, entry := range metadata {
 		number := int(entry.Number)
-		// Integer watch routes cannot address fractional specials without
-		// silently playing a neighbouring episode.
 		if number <= 0 || entry.Number != float64(number) {
 			continue
 		}
@@ -120,23 +118,21 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 	if season <= 0 {
 		season = 1
 	}
-	episodes := make([]provider.Episode, 0, count*2)
+	episodes := make([]provider.Episode, 0, count)
 	for number := 1; number <= count; number++ {
 		entry := byNumber[number]
 		title := kit.Clean(entry.Title)
 		if title == "" {
 			title = fmt.Sprintf("Episode %d", number)
 		}
-		for _, audio := range []string{provider.AudioSub, provider.AudioDub} {
-			episodes = append(episodes, provider.Episode{
-				ID:      fmt.Sprintf("watch/anivault/hoshika/%s/%s/%d", shortID, audio, number),
-				Title:   title,
-				Season:  season,
-				Episode: number,
-				Audio:   audio,
-				Filler:  entry.Filler,
-			})
-		}
+		episodes = append(episodes, provider.Episode{
+			ID:      fmt.Sprintf("watch/anivault/hoshika/%s/%s/%d", shortID, provider.AudioSub, number),
+			Title:   title,
+			Season:  season,
+			Episode: number,
+			Audio:   provider.AudioSub,
+			Filler:  entry.Filler,
+		})
 	}
 	return episodes, nil
 }

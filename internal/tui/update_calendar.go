@@ -12,6 +12,11 @@ import (
 )
 
 func (m *modelImpl) openCalendar() tea.Cmd {
+	if m.activeView == viewCalendar {
+		m.refreshCalendarHistory()
+		return nil
+	}
+
 	m.pushView(viewCalendar)
 	m.clearStatus()
 
@@ -166,12 +171,20 @@ func (m *modelImpl) updateCalendar(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case keyMsg.String() == "pgup" || keyMsg.String() == "ctrl+u":
-		m.calendarReleaseIndex = max(0, m.calendarReleaseIndex-10)
+		step := m.pageStep()
+		if keyMsg.String() == "ctrl+u" {
+			step = max(1, step/2)
+		}
+		m.calendarReleaseIndex = max(0, m.calendarReleaseIndex-step)
 		return m, nil
 
 	case keyMsg.String() == "pgdown" || keyMsg.String() == "ctrl+d":
+		step := m.pageStep()
+		if keyMsg.String() == "ctrl+d" {
+			step = max(1, step/2)
+		}
 		if len(filtered) > 0 {
-			m.calendarReleaseIndex = min(len(filtered)-1, m.calendarReleaseIndex+10)
+			m.calendarReleaseIndex = min(len(filtered)-1, m.calendarReleaseIndex+step)
 		}
 		return m, nil
 
@@ -179,7 +192,6 @@ func (m *modelImpl) updateCalendar(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.calendarSchedule.Days) > 0 {
 			m.calendarDayIndex = (m.calendarDayIndex + len(m.calendarSchedule.Days) - 1) % len(m.calendarSchedule.Days)
 			m.calendarReleaseIndex = 0
-			m.calendarScrollOffset = 0
 		}
 		return m, nil
 
@@ -187,7 +199,6 @@ func (m *modelImpl) updateCalendar(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.calendarSchedule.Days) > 0 {
 			m.calendarDayIndex = (m.calendarDayIndex + 1) % len(m.calendarSchedule.Days)
 			m.calendarReleaseIndex = 0
-			m.calendarScrollOffset = 0
 		}
 		return m, nil
 
@@ -297,16 +308,50 @@ func (m *modelImpl) activateCalendarRelease(item calendar.ReleaseItem) (tea.Mode
 	return m.startSearchFromInput()
 }
 
+// syncCalendarPoster (re)loads the cover whenever the selected release changes.
+// The release ID keys the slot so unrelated messages (spinner ticks, status
+// updates, a loaded cover) never restart an in-flight or completed fetch.
+func (m *modelImpl) syncCalendarPoster() tea.Cmd {
+	if m.activeView != viewCalendar || !m.imagesEnabled || m.posterClient == nil {
+		return nil
+	}
+	detailHeight := calendarDetailBodyHeight(ComputeDims(m.width, m.height).BodyHeight)
+	if !calendarPosterFits(detailHeight) {
+		return nil
+	}
+	filtered := m.currentFilteredCalendarReleases()
+	if m.calendarReleaseIndex < 0 || m.calendarReleaseIndex >= len(filtered) {
+		return nil
+	}
+	item := filtered[m.calendarReleaseIndex]
+	key := item.Release.ID
+	if key == "" || key == m.calendarPosterKey {
+		return nil
+	}
+	m.calendarPosterKey = key
+	return m.triggerCalendarPoster(item)
+}
+
 func (m *modelImpl) collectCalendarData(width, height int, accent lipgloss.AdaptiveColor) CalendarData {
 	if m.calendarFilter == "" {
 		m.calendarFilter = calendar.FilterAll
+	}
+
+	detailHeight := calendarDetailBodyHeight(height)
+	poster := ""
+	if calendarPosterFits(detailHeight) {
+		poster = insetFixedBlock(
+			posterBlock(m.calendarPoster, m.calendarPosterUnavailable, m.imgProtocol, kittyCalendarImageID, m.imagesEnabled),
+			calendarPosterMaxCols,
+			calendarPosterRows(detailHeight),
+			posterInset,
+		)
 	}
 
 	return CalendarData{
 		Schedule:      m.calendarSchedule,
 		DayIndex:      m.calendarDayIndex,
 		SelectedIndex: m.calendarReleaseIndex,
-		ScrollOffset:  m.calendarScrollOffset,
 		Filter:        m.calendarFilter,
 		FilterQuery:   m.calendarQuery,
 		Filtering:     m.calendarFiltering,
@@ -314,5 +359,7 @@ func (m *modelImpl) collectCalendarData(width, height int, accent lipgloss.Adapt
 		Height:        height,
 		Accent:        accent,
 		Loading:       m.loading,
+		Now:           time.Now(),
+		PosterBlock:   poster,
 	}
 }

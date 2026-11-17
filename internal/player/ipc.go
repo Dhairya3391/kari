@@ -83,8 +83,6 @@ func (s *playbackStats) playing() bool {
 
 func newIPCSerializer(conn net.Conn) *bufio.Scanner {
 	sc := bufio.NewScanner(conn)
-	// mpv can emit events/large payloads on the same socket; use a generous
-	// buffer so a single oversized line doesn't permanently kill the scanner.
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	return sc
 }

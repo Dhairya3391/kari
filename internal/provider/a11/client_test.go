@@ -37,32 +37,46 @@ func TestA11Metadata(t *testing.T) {
 
 func TestExtractQuality(t *testing.T) {
 	tests := []struct {
-		input string
-		want  string
+		input      string
+		want       string
+		wantHeight int
 	}{
 		{
-			input: "The.Dark.Knight.2008.UHD.BluRay.2160p.DTS-HD.MA.5.1.HEVC.REMUX-FraMeSToR.mkv [a11 54.3 GB]",
-			want:  "2160P [Remux 54.3 GB]",
+			input:      "The.Dark.Knight.2008.UHD.BluRay.2160p.DTS-HD.MA.5.1.HEVC.REMUX-FraMeSToR.mkv [a11 54.3 GB]",
+			want:       "2160P [Remux 54.3 GB]",
+			wantHeight: 2160,
 		},
 		{
-			input: "The.Dark.Knight.2008.INTERNAL.IMAX.2160p.UHD.BluRay.x265.HDR.DD5.1-Pahe.in.mkv [a11 5.3 GB]",
-			want:  "2160P [IMAX 5.3 GB]",
+			input:      "The.Dark.Knight.2008.INTERNAL.IMAX.2160p.UHD.BluRay.x265.HDR.DD5.1-Pahe.in.mkv [a11 5.3 GB]",
+			want:       "2160P [IMAX 5.3 GB]",
+			wantHeight: 2160,
 		},
 		{
-			input: "Breaking.Bad.S01E01.1080p.BluRay.x264.mkv 2.1 GB",
-			want:  "1080P [BluRay 2.1 GB]",
+			input:      "Breaking.Bad.S01E01.1080p.BluRay.x264.mkv 2.1 GB",
+			want:       "1080P [BluRay 2.1 GB]",
+			wantHeight: 1080,
 		},
 		{
-			input: "Unknown Title",
-			want:  "2160P [Direct]",
+			input:      "Unknown Title",
+			want:       "UNKNOWN [Direct]",
+			wantHeight: 0,
 		},
 	}
 
 	for _, tc := range tests {
-		got := extractQuality(tc.input)
-		if got != tc.want {
-			t.Errorf("extractQuality(%q) = %q, want %q", tc.input, got, tc.want)
+		got, height := extractQuality(tc.input)
+		if got != tc.want || height != tc.wantHeight {
+			t.Errorf("extractQuality(%q) = (%q, %d), want (%q, %d)", tc.input, got, height, tc.want, tc.wantHeight)
 		}
+	}
+}
+
+func TestLabelLanguage(t *testing.T) {
+	if got := labelLanguage("Movie.2024.Hindi.2160p.BluRay.mkv [a11 50 GB]"); got != "hi" {
+		t.Errorf("explicit Hindi token = %q, want hi", got)
+	}
+	if got := labelLanguage("The.Dark.Knight.2008.UHD.BluRay.2160p.mkv"); got != "" {
+		t.Errorf("title words must not become language codes, got %q", got)
 	}
 }
 
@@ -117,6 +131,12 @@ func TestA11ResolveStreamMovie(t *testing.T) {
 	}
 	if sources[0].Quality != "2160P [Remux 54.3 GB]" {
 		t.Errorf("expected 2160P [Remux 54.3 GB], got %s", sources[0].Quality)
+	}
+	if sources[0].Height != 2160 {
+		t.Errorf("sources[0].Height = %d, want 2160", sources[0].Height)
+	}
+	if sources[1].Height != 1080 {
+		t.Errorf("sources[1].Height = %d, want 1080", sources[1].Height)
 	}
 	if sources[0].Backend != "BluRay Remux" {
 		t.Errorf("expected BluRay Remux source name, got %q", sources[0].Backend)

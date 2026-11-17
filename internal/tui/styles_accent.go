@@ -24,8 +24,9 @@ type Styles struct {
 	Underline   lipgloss.Style
 
 	// Status & Indicators
-	Ok  lipgloss.Style
-	Err lipgloss.Style
+	Ok   lipgloss.Style
+	Warn lipgloss.Style
+	Err  lipgloss.Style
 
 	// Overlay & Modals
 	OverlayBox lipgloss.Style
@@ -33,6 +34,10 @@ type Styles struct {
 	// Form & Values
 	EditableValue lipgloss.Style
 }
+
+// maxCachedStyles bounds the accent-keyed style cache. The crossfade's
+// 17 intermediate accents per transition are the main source of growth.
+const maxCachedStyles = 128
 
 var (
 	stylesMu    sync.RWMutex
@@ -50,6 +55,9 @@ func NewStyles(accent lipgloss.AdaptiveColor) Styles {
 
 	st = buildStyles(accent)
 	stylesMu.Lock()
+	if len(stylesCache) >= maxCachedStyles {
+		stylesCache = make(map[lipgloss.AdaptiveColor]Styles)
+	}
 	stylesCache[accent] = st
 	stylesMu.Unlock()
 	return st
@@ -89,6 +97,10 @@ func buildStyles(accent lipgloss.AdaptiveColor) Styles {
 
 		Ok: lipgloss.NewStyle().
 			Foreground(ColorOk),
+
+		Warn: lipgloss.NewStyle().
+			Foreground(ColorWarn).
+			Bold(true),
 
 		Err: lipgloss.NewStyle().
 			Foreground(ColorErr),

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"kari/internal/downloader"
 	"kari/internal/provider"
-	"kari/internal/ranking"
+	"kari/internal/provider/kit"
 	"kari/internal/service"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -103,10 +103,10 @@ func downloadSourceQualityLabel(quality string) string {
 	if quality == "" {
 		return ""
 	}
-	if ranking.IsAdaptiveQuality(quality) {
+	if kit.IsAdaptiveQuality(quality) {
 		return "Auto"
 	}
-	switch res := ranking.ParseResolution(quality); {
+	switch res := kit.QualityHeight(quality); {
 	case res >= 2160:
 		return "4K"
 	case res >= 1080:
@@ -218,12 +218,6 @@ func (m *modelImpl) batchDownloadCmd(
 				}
 			}
 
-			// See the equivalent comment in downloadCmd: the completion
-			// message must always be delivered or the batch UI never
-			// clears its loading state, so this send is intentionally
-			// blocking while progress ticks above stay droppable. The
-			// ctx.Done() case escapes a blocked send if the user
-			// explicitly cancelled the batch (UI already reset itself).
 			select {
 			case m.batchChan <- batchDoneMsg{
 				opID:      opID,
@@ -265,9 +259,6 @@ func (m *modelImpl) onBatchDone(msg batchDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.downloadOpID {
 		return m, m.batchSubscription()
 	}
-	// A user pause surfaces as a batch completion with the pause flag set:
-	// keep ALL batch state (progress, remaining episodes, active files) so
-	// the p handler can resume, and keep the paused row visible.
 	if m.downloadPaused {
 		m.batchCancel = nil
 		m.downloadOpID = 0

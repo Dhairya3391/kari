@@ -90,17 +90,21 @@ func RenderHistoryScreen(data HistoryData) string {
 		return strings.Join(append(rows, st.Dim.Render("Nothing here yet. Play something and it shows up.")), "\n")
 	}
 
-	showPosterPane := layoutData.Width >= 100 && strings.TrimSpace(layoutData.PosterBlock) != ""
+	showPosterPane := layoutData.Width >= 100
 	if !showPosterPane {
 		list := renderHistoryList(layoutData, layoutData.Width, st)
 		return strings.Join(append(rows, list), "\n")
 	}
 
 	rightWidth := max(posterPlaceholderWidth, layoutData.Width/4)
-	const paneGap = 6
+	const paneGap = 3
 	leftWidth := layoutData.Width - rightWidth - paneGap
-	left := renderHistoryList(layoutData, leftWidth, st)
-	right := renderHistoryDetails(layoutData, rightWidth, st)
+	leftLines := strings.Split(renderHistoryList(layoutData, leftWidth, st), "\n")
+	rightLines := strings.Split(renderHistoryDetails(layoutData, rightWidth, layoutData.Height, st), "\n")
+	lines := max(len(leftLines), len(rightLines))
+	leftLines, rightLines = padLines(leftLines, lines), padLines(rightLines, lines)
+	left := strings.Join(leftLines, "\n")
+	right := strings.Join(rightLines, "\n")
 	joined := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		lipgloss.NewStyle().Width(leftWidth).Render(left),
@@ -414,9 +418,13 @@ func historyRowPosition(entry history.Entry) string {
 	return position
 }
 
-func renderHistoryDetails(data HistoryData, width int, st Styles) string {
+// renderHistoryDetails reserves its poster and text rows up front so a late
+// poster or selection change cannot resize the details column.
+func renderHistoryDetails(data HistoryData, width, height int, st Styles) string {
+	posterRows := posterSlotRows(height, historyPosterMaxRows)
+	lineCount := posterRows + 4
 	if data.SelectedIndex < 0 || data.SelectedIndex >= len(data.Groups) {
-		return ""
+		return strings.Join(make([]string, lineCount), "\n")
 	}
 	group := data.Groups[data.SelectedIndex]
 	entry := group.ContinueEntry
@@ -427,14 +435,16 @@ func renderHistoryDetails(data HistoryData, width int, st Styles) string {
 	if title == "" {
 		title = entry.Title
 	}
+	if title == "" {
+		title = "—"
+	}
 	rows := []string{
 		st.Dim.Render("Selected title"),
 		st.Bold.Render(truncate(title, width)),
+		"",
 	}
-	if data.PosterBlock != "" {
-		rows = append(rows, "", data.PosterBlock)
-	}
-	return strings.Join(rows, "\n")
+	rows = append(rows, strings.Split(fixedBlock(data.PosterBlock, width, posterRows), "\n")...)
+	return strings.Join(padLines(rows, lineCount), "\n")
 }
 
 func renderInlineConfirm(prompt string, _ int, st Styles) string {

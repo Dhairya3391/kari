@@ -150,8 +150,6 @@ func TestAutoImportSourcesListsConnected(t *testing.T) {
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	// Long-lived tokens: AniList implicit-grant tokens carry no expiry,
-	// Trakt tokens get a future one.
 	if err := os.WriteFile(filepath.Join(cfgDir, "anilist_token.json"), []byte(`{"access_token":"x","expires_at":"0001-01-01T00:00:00Z"}`), 0o600); err != nil {
 		t.Fatalf("write anilist token: %v", err)
 	}

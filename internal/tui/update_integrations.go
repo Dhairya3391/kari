@@ -444,8 +444,6 @@ func (m *modelImpl) autoHistoryImportCmd() tea.Cmd {
 		for _, source := range sources {
 			items, err := m.fetchSourceItems(ctx, source)
 			if err != nil {
-				// A source that errored simply contributes nothing;
-				// the next startup (or a manual import) retries it.
 				tuiLog.Debug("startup sync fetch failed", "source", source, "err", err)
 				continue
 			}
@@ -464,8 +462,6 @@ func (m *modelImpl) onHistoryImport(msg historyImportMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.historyImportOpID {
 		return m, nil
 	}
-	// Startup sync runs in the background and does not own the foreground
-	// loader; completing it must not hide an active episode/search request.
 	if !msg.quiet {
 		m.loading = false
 		m.loadingText = ""

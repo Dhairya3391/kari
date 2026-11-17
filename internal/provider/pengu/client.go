@@ -35,6 +35,7 @@ import (
 	"kari/internal/provider/anilist"
 	"kari/internal/provider/kit"
 	"kari/internal/provider/streambase"
+	"kari/internal/timeouts"
 	"kari/internal/tmdb"
 )
 
@@ -52,8 +53,8 @@ var (
 	// reDubSubMarker matches MovieBox-style audio markers in filenames:
 	// "{lang}dubaudio" (dubbed audio) vs "{lang}subaudio" (original audio
 	// with subtitles) vs "OriginalAudio".
-	reDubSubMarker  = regexp.MustCompile(`(?i)([a-z]+)(dub|sub)audio`)
-	reQualityHeight = regexp.MustCompile(`(?i)\b(4k|2160|1080|720|480|360)p?\b`)
+	reDubSubMarker = regexp.MustCompile(`(?i)([a-z]+)(dub|sub)audio`)
+	reBitrate      = regexp.MustCompile(`(?i)~?\s*(\d+(?:\.\d+)?)\s*Mbps\b`)
 	// reHardSubRow / reHardDubRow match upstream burned-in subtitle
 	// markers ("Hard Sub", "Hard Dub", "HardSub"). Ani.pm serves each
 	// title in soft and hard variants; the markers are the only signal
@@ -93,13 +94,8 @@ type Client struct {
 	// episode counts; config.AniListAPIBase in production, overrideable
 	// in tests.
 	anilistBase string
-	// langFilter mirrors the user's audio-language settings (see
-	// internal/settings LanguageFilter): nil or missing keys mean enabled.
-	// It filters foreign dubbed audio at resolve time; original-audio and
-	// English rows always pass.
-	langFilter map[string]bool
-	malMu      sync.Mutex
-	malCache   map[int]int
+	malMu       sync.Mutex
+	malCache    map[int]int
 }
 
 type penguStreamItem struct {
@@ -155,12 +151,6 @@ type penguCatalogMeta struct {
 
 // NewClient constructs the Pengu provider over the shared TMDB search base.
 func NewClient(keyPool *tmdb.KeyPool, authToken string) (*Client, error) {
-	return NewClientWithLanguageFilter(keyPool, authToken, nil)
-}
-
-// NewClientWithLanguageFilter is NewClient with the user's audio-language
-// filter applied at resolve time (nil = everything enabled).
-func NewClientWithLanguageFilter(keyPool *tmdb.KeyPool, authToken string, langFilter map[string]bool) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
 		return nil, err
@@ -182,28 +172,7 @@ func NewClientWithLanguageFilter(keyPool *tmdb.KeyPool, authToken string, langFi
 		segAnime:      segAnime,
 		anilistBase:   config.AniListAPIBase,
 		malCache:      make(map[int]int),
-		langFilter:    langFilter,
 	}, nil
-}
-
-// languageEnabled mirrors the TUI toggle semantics: a nil filter or a
-// missing key means enabled; only an explicit false disables.
-func (c *Client) languageEnabled(code, display string) bool {
-	if c.langFilter == nil {
-		return true
-	}
-	for _, key := range []string{code, display} {
-		if key == "" {
-			continue
-		}
-		if v, ok := c.langFilter[key]; ok {
-			return v
-		}
-		if v, ok := c.langFilter[strings.ToLower(key)]; ok {
-			return v
-		}
-	}
-	return true
 }
 
 // Alias implements provider.Presenter.
@@ -218,12 +187,7 @@ func (c *Client) Modes() []provider.Mode {
 		{Name: provider.ModeMovies, Priority: 2},
 		{Name: provider.ModeTV, Priority: 2},
 		{Name: provider.ModeCartoon, Priority: 2},
-		// Anime resolves through the anime config segment (Ani.pm,
-		// Reanime, Miruro, KissKH, 2Peckle, MovieBox). Priority
-		// trails the direct scrapers: same-height ties prefer direct CDN
-		// rows over proxied ones, while Pengu still adds fallback depth.
 		{Name: provider.ModeAnime, Priority: 3},
-		{Name: provider.ModeLive, Priority: 1},
 	}
 }
 
@@ -246,7 +210,7 @@ func (c *Client) Features(mode provider.ContentType) provider.Features {
 // scrapers while keeping other modes on the shared service budget.
 func (c *Client) Deadlines(mode provider.ContentType) provider.Deadlines {
 	if mode == provider.ModeAnime || mode == provider.ModeLive {
-		return provider.Deadlines{Source: 40 * time.Second}
+		return provider.Deadlines{Source: timeouts.SourcePerProvider}
 	}
 	return provider.Deadlines{}
 }
@@ -288,10 +252,6 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 		return c.searchLive(ctx, query)
 	}
 	if mode == provider.ModeAnime {
-		// Shared AniList index (cached + singleflighted across every
-		// anime provider), so joining the fan-out costs no extra
-		// upstream search. Bare AniList IDs dedupe against the direct
-		// providers' rows in the merged list.
 		if strings.TrimSpace(query) == "" {
 			return nil, provider.ErrNoResults
 		}
@@ -454,10 +414,6 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			mediaType = provider.MediaTypeTV
 		}
 
-		// Try MAL-based Stremio ID first because Pengu's anime scrapers
-		// (Ani.pm, Reanime, 2Peckle) natively index by MyAnimeList ID,
-		// answering in ~1s whereas anilist: mapping often returns 0 streams
-		// or takes 5-10s upstream. Fall back to anilist: if mal: returns no sources.
 		anilistID, ok := parseAnilistID(mediaID)
 		if !ok {
 			anilistID, ok = parseAnilistID(episode.ID)
@@ -553,10 +509,7 @@ func (c *Client) resolveLiveSource(ctx context.Context, stremioID string) ([]pro
 }
 
 func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string, tmdbID int, isAnime bool) ([]provider.MediaSource, error) {
-	// Pengu's separate subtitle resource is fast and should finish while its
-	// stream aggregator is resolving. Bound the wait so a slow subtitle index
-	// cannot hold up otherwise playable sources.
-	subtitleCtx, cancelSubtitles := context.WithTimeout(ctx, 2*time.Second)
+	subtitleCtx, cancelSubtitles := context.WithTimeout(ctx, timeouts.PenguSubtitleCtx)
 	defer cancelSubtitles()
 	type subtitleResult struct {
 		options []provider.SubtitleOption
@@ -582,7 +535,7 @@ func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string
 
 	seenURLs := make(map[string]bool)
 	seenGroup := make(map[string]bool)
-	var kept, dropped []resolveCandidate
+	var candidates []resolveCandidate
 
 	for _, stream := range resp.Streams {
 		if strings.TrimSpace(stream.URL) == "" || isHousekeepingEntry(stream) {
@@ -598,8 +551,6 @@ func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string
 		seenURLs[stream.URL] = true
 
 		source := parseStreamItem(stream)
-		// Collapse only exact mirrors: distinct encodes from the same backend
-		// carry different filenames/sizes and are kept as separate choices.
 		groupKey := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d",
 			source.Backend, source.Quality, source.Language, source.Type, source.SubType,
 			stream.BehaviorHints.Filename, stream.BehaviorHints.VideoSize)
@@ -608,24 +559,11 @@ func (c *Client) resolveStreams(ctx context.Context, mediaType, stremioID string
 		}
 		seenGroup[groupKey] = true
 
-		// Foreign-language audio the user didn't enable is dropped here
-		// so it never floods the picker; original-audio, English, enabled
-		// languages, and undetectable tracks always pass.
-		trackLang := streamAudioLanguage(stream)
-		if trackLang == "" {
-			trackLang = "en"
-		}
-		if (!isAnime || trackLang != "ja") && !c.languageEnabled(trackLang, lang.Name(trackLang)) {
-			dropped = append(dropped, resolveCandidate{source: source, stream: stream})
-			continue
-		}
-		kept = append(kept, resolveCandidate{source: source, stream: stream})
+		// Every declared lane is emitted with its typed audio identity;
+		// language filtering happens once in the central filter pipeline.
+		candidates = append(candidates, resolveCandidate{source: source, stream: stream})
 	}
 
-	candidates := kept
-	if len(candidates) == 0 && len(dropped) > 0 {
-		candidates = dropped
-	}
 	sources := collapseMirrors(candidates)
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources
@@ -736,9 +674,6 @@ type resolveCandidate struct {
 // rows sharing backend, height, language, container, and a known nonzero
 // size keep the most capable container (progressive mp4 over manifests).
 func collapseMirrors(candidates []resolveCandidate) []provider.MediaSource {
-	// Stable-sort candidates so progressive MP4 (rank 0) and HLS (rank 1)
-	// precede fragile DASH manifests (rank 2), preserving upstream order
-	// within each container tier.
 	slices.SortStableFunc(candidates, func(a, b resolveCandidate) int {
 		return containerRank(streamContainer(a.source)) - containerRank(streamContainer(b.source))
 	})
@@ -776,18 +711,29 @@ func collapseMirrors(candidates []resolveCandidate) []provider.MediaSource {
 	return sources
 }
 
-// qualityHeight extracts the vertical resolution from a quality label
-// ("1080p …" → 1080, "4K …" → 2160); unknown labels sort as 0.
+// qualityHeight extracts the vertical resolution from a quality label via the
+// shared parser. Adaptive and live rows stay unknown: no picture height is
+// declared for them.
 func qualityHeight(quality string) int {
-	m := reQualityHeight.FindString(quality)
-	if m == "" {
+	lower := strings.ToLower(strings.TrimSpace(quality))
+	if lower == "auto" || lower == "live" || kit.IsAdaptiveQuality(quality) {
 		return 0
 	}
-	if strings.EqualFold(m, "4k") {
-		return 2160
+	return kit.QualityHeight(quality)
+}
+
+// streamBitrate parses the Mbps figure Pengu embeds in filenames and
+// descriptions into bits per second, zero when none is declared.
+func streamBitrate(combined string) int {
+	match := reBitrate.FindStringSubmatch(combined)
+	if len(match) < 2 {
+		return 0
 	}
-	n, _ := strconv.Atoi(strings.TrimSuffix(strings.ToLower(m), "p"))
-	return n
+	rate, err := strconv.ParseFloat(match[1], 64)
+	if err != nil || rate <= 0 {
+		return 0
+	}
+	return int(rate * 1_000_000)
 }
 
 // streamContainer classifies a source for mirror preference: progressive
@@ -878,8 +824,6 @@ func (c *Client) searchLive(ctx context.Context, query string) ([]provider.Searc
 	for i, cat := range catalogs {
 		go func(idx int, catalogID string) {
 			metas, err := c.fetchCatalog(ctx, catalogID, trimmedQuery)
-			// The channel is buffered to len(catalogs), so an abandoned
-			// straggler (caller returned on ctx.Done) never blocks.
 			resChan <- catResult{index: idx, metas: metas, err: err}
 		}(i, cat)
 	}
@@ -1037,7 +981,7 @@ func isExcludedStream(stream penguStreamItem) bool {
 	return strings.Contains(combined, "movysx") || strings.Contains(combined, "movy.sx") ||
 		strings.Contains(combined, "anikoto") ||
 		strings.Contains(combined, "ani.pm") || strings.Contains(combined, "anipm") ||
-		strings.Contains(combined, "111477") || strings.Contains(combined, "cno.to")
+		strings.Contains(combined, "111477")
 }
 
 // isHousekeepingEntry reports whether a stream item is one of Pengu's own
@@ -1272,23 +1216,12 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 		sourceName = canonProviderName(m)
 	}
 
-	// 3. Audio Language. MovieBox-style "{lang}dubaudio"/"{lang}subaudio"
-	// filename markers are an extra signal for codes full-text detection
-	// misses (e.g. "esla", "ptbr"). Ani.pm rows use a restricted detector:
-	// their "📝 Subtitles: English, French, …" list names subtitle tracks,
-	// and the shared full-text scan mistakes one for dub audio (a soft-sub
-	// row labeled "(French)" that a French-audio filter would then drop).
-	// Only the explicit Audio:/Language: line and filename markers count.
 	audioLang := streamAudioLanguage(stream)
 	if sourceName == "Ani.pm" {
 		audioLang = aniPmAudioLanguage(stream)
 	}
 	subType := ""
 	if sourceName == "Ani.pm" || sourceName == "Reanime" {
-		// Ani.pm declares burned-in vs toggleable subtitles per row:
-		// hard variants carry no subtitle tracks, soft variants do.
-		// Tagging SubType keeps same-resolution variants distinct in
-		// quality labels and lets ranking prefer hardsubs in anime mode.
 		if isHardSubRow(combined) {
 			subType = provider.SubTypeHard
 		} else {
@@ -1297,10 +1230,6 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 	}
 	quality := res
 
-	// 4. Stream Type: manifests stay HLS; progressive containers
-	// (mp4/mkv/webm/…) are progressive. Extensionless URLs consult the
-	// Stremio filename hint (already present, no extra request) before
-	// falling back to the HLS default for signed manifests.
 	streamType := provider.SourceTypeHLS
 	lowerURL := strings.ToLower(stream.URL)
 	lowerFile := strings.ToLower(stream.BehaviorHints.Filename)
@@ -1360,9 +1289,15 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 		})
 	}
 
+	audio := provider.AudioInfo{Track: streamAudioTrack(stream, combined)}
+	if audioLang != "" {
+		audio.Languages = []string{audioLang}
+	}
 	return provider.MediaSource{
 		URL:          stream.URL,
 		Quality:      quality,
+		Height:       qualityHeight(combined),
+		Bitrate:      streamBitrate(combined),
 		Backend:      sourceName,
 		Referer:      referer,
 		Type:         streamType,
@@ -1370,7 +1305,32 @@ func parseStreamItem(stream penguStreamItem) provider.MediaSource {
 		UserAgent:    userAgent,
 		CookieHeader: cookie,
 		Language:     audioLang,
+		Audio:        audio,
 		SubType:      subType,
+	}
+}
+
+// streamAudioTrack reports the track kind declared by a stream's filename
+// markers or Ani.pm row label. A stream with no such declaration stays
+// TrackUnknown — silence, single-track audio, and undetectable dubs are not
+// claimed as a sub or dub track.
+func streamAudioTrack(stream penguStreamItem, combined string) provider.AudioTrack {
+	if m := reDubSubMarker.FindStringSubmatch(stream.BehaviorHints.Filename); len(m) > 2 {
+		switch strings.ToLower(m[2]) {
+		case "dub":
+			return provider.TrackDub
+		case "sub":
+			return provider.TrackSub
+		}
+	}
+	lower := strings.ToLower(combined)
+	switch {
+	case strings.Contains(lower, "hard dub"), strings.Contains(lower, "· dub"), strings.Contains(lower, "dub audio"):
+		return provider.TrackDub
+	case strings.Contains(lower, "hard sub"), strings.Contains(lower, "· sub"), strings.Contains(lower, "sub audio"):
+		return provider.TrackSub
+	default:
+		return provider.TrackUnknown
 	}
 }
 

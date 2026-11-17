@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"kari/internal/animeskip"
 	"kari/internal/aniskip"
@@ -175,6 +177,138 @@ func TestGetSkipArgs_EmptyTitle(t *testing.T) {
 	}, newTestSkipCache())
 	if args != nil || scriptPath != "" {
 		t.Fatalf("expected nil args for empty title, got args=%v path=%s", args, scriptPath)
+	}
+}
+
+func TestGetSkipArgsForegroundWaitKeepsLookupRunning(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	var once sync.Once
+	httpClient := &http.Client{Transport: mockRoundTripper(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Host {
+		case "graphql.anilist.co":
+			once.Do(func() { close(started) })
+			<-release
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"data":{"Media":{"id":105310,"idMal":38671}}}`)),
+				Header:     make(http.Header),
+			}, nil
+		case "api.aniskip.com":
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"found":true,"results":[{"interval":{"start_time":190,"end_time":280},"skip_type":"op"}]}`)),
+				Header:     make(http.Header),
+			}, nil
+		default:
+			return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+		}
+	})}
+	clients := SkipClients{AniSkip: aniskip.NewClient(httpClient), HTTP: httpClient}
+	cache := newTestSkipCache()
+	media := model.ResolvedMedia{SeriesTitle: "Fire Force", SeriesURL: "105310", MediaType: "anime", SeasonNumber: 1, EpisodeNumber: 9}
+
+	type outcome struct {
+		args   []string
+		script string
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		args, script := getSkipArgs(clients, SkipSettings{Provider: "aniskip"}, media, cache)
+		done <- outcome{args: args, script: script}
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("lookup never started")
+	}
+	select {
+	case <-done:
+		t.Fatal("getSkipArgs returned before the foreground wait elapsed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case res := <-done:
+		cleanupSkipScript(res.script)
+	case <-time.After(3 * time.Second):
+		t.Fatal("foreground wait did not release playback")
+	}
+	close(release)
+
+	// The lookup keeps going and fills the cache after playback started.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if times, ok := cache.Get(skipCacheKey(media, "aniskip")); ok && hasSkipSegments(times) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background lookup did not populate the skip cache")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestGetSkipArgsTimeoutInstallsSkipHandler verifies that a late lookup still
+// loads the Lua handler into mpv, otherwise the live kari-skip-update message
+// has no receiver and the whole feature is a no-op.
+func TestGetSkipArgsTimeoutInstallsSkipHandler(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	var once sync.Once
+	httpClient := &http.Client{Transport: mockRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "graphql.anilist.co" {
+			once.Do(func() { close(started) })
+			<-release
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+	})}
+	clients := SkipClients{
+		AniSkip:  aniskip.NewClient(httpClient),
+		HTTP:     httpClient,
+		SkipSink: newLiveSkipSink(SkipSettings{Provider: "aniskip"}),
+	}
+	media := model.ResolvedMedia{SeriesTitle: "Fire Force", SeriesURL: "105310", MediaType: "anime"}
+
+	done := make(chan struct {
+		args   []string
+		script string
+	}, 1)
+	go func() {
+		args, script := getSkipArgs(clients, SkipSettings{Provider: "aniskip"}, media, newTestSkipCache())
+		done <- struct {
+			args   []string
+			script string
+		}{args, script}
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("lookup never started")
+	}
+	var got struct {
+		args   []string
+		script string
+	}
+	select {
+	case got = <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("foreground wait did not release playback")
+	}
+	close(release)
+	defer cleanupSkipScript(got.script)
+	if got.script == "" {
+		t.Fatal("timeout path returned no Lua script; late skip injection would be dropped")
+	}
+	found := false
+	for _, arg := range got.args {
+		if strings.HasPrefix(arg, "--script=") && strings.Contains(arg, "kari-skip-") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("timeout path args %v do not install the skip handler", got.args)
 	}
 }
 

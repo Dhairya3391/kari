@@ -71,8 +71,6 @@ func probeLiveURL(ctx context.Context, hc *http.Client, source MediaSource, rawU
 	if err == nil {
 		return probe, nil
 	}
-	// A range request is an optimization, not a requirement: retry once
-	// without it when a server refuses the range.
 	if ranged {
 		if unpaged, _, retryErr := doLiveProbe(ctx, hc, source, rawURL); retryErr == nil {
 			return unpaged, nil

@@ -103,8 +103,6 @@ func (c *Client) anilistPosterURL(ctx context.Context, title string) (string, er
 	if err != nil {
 		return "", err
 	}
-	// Largest first: pixel-level terminals (kitty/sixel) show the
-	// difference; the disk/memory caches make the bigger download once.
 	if media.CoverImage.ExtraLarge != "" {
 		return media.CoverImage.ExtraLarge, nil
 	}

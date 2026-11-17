@@ -123,10 +123,17 @@ func TestResolveSourceMovie(t *testing.T) {
 	if sources[0].Type != provider.SourceTypeHLS {
 		t.Errorf("m3u8 source Type = %q, want hls", sources[0].Type)
 	}
+	if sources[0].Height != 2160 {
+		t.Errorf("m3u8 source Height = %d, want 2160", sources[0].Height)
+	}
 	if sources[1].Type != provider.SourceTypeMP4 {
 		t.Errorf("mp4 source Type = %q, want mp4", sources[1].Type)
 	}
 	for _, s := range sources {
+		// Movy does not tag main lanes with an upstream audio language.
+		if s.Language != "" || len(s.Audio.Languages) != 0 || s.Audio.Track != provider.TrackUnknown {
+			t.Errorf("main lane must not invent audio metadata: %+v", s)
+		}
 		if s.Referer != config.MovyReferer {
 			t.Errorf("Referer = %q, want %q", s.Referer, config.MovyReferer)
 		}
@@ -208,8 +215,11 @@ func TestResolveSourceAudioRows(t *testing.T) {
 		t.Fatalf("want main + 1 deduped Hindi row, got %+v", sources)
 	}
 	dub := sources[1]
-	if dub.Language != "hi" {
-		t.Errorf("dub Language = %q, want hi", dub.Language)
+	if got := dub.Audio.Languages; len(got) != 1 || got[0] != "hi" {
+		t.Errorf("dub Audio.Languages = %v, want [hi]", got)
+	}
+	if dub.Audio.Track != provider.TrackDub {
+		t.Errorf("dub Audio.Track = %q, want dub", dub.Audio.Track)
 	}
 	if dub.Type != provider.SourceTypeHLS {
 		t.Errorf("dub Type = %q, want hls", dub.Type)
@@ -262,7 +272,9 @@ func TestResolveSourceSeedCached(t *testing.T) {
 	}
 }
 
-func TestResolveSourceLanguageFilter(t *testing.T) {
+// TestResolveSourceKeepsAllLanguages proves providers emit every tagged lane;
+// audio-language filtering now happens once in the central filter pipeline.
+func TestResolveSourceKeepsAllLanguages(t *testing.T) {
 	fx := newMovyFixture(t, func() string {
 		return `{"sources":[
 			{"url":"https://cdn.example.com/en.m3u8","quality":"1080p"},
@@ -272,19 +284,27 @@ func TestResolveSourceLanguageFilter(t *testing.T) {
 		],"subtitles":[]}`
 	})
 	c := fx.client()
-	c.langFilter = map[string]bool{"ta": false, "Tamil": false, "te": false, "Telugu": false}
 
 	sources, err := c.ResolveSource(context.Background(), "1396", provider.Episode{TMDBID: 1396, Season: 1, Episode: 1})
 	if err != nil {
 		t.Fatalf("ResolveSource failed: %v", err)
 	}
-	if len(sources) != 2 {
-		t.Fatalf("want 2 sources (main + Hindi), got %d: %+v", len(sources), sources)
+	if len(sources) != 4 {
+		t.Fatalf("want all 4 languages, got %d: %+v", len(sources), sources)
 	}
+	want := map[string]bool{"hi": true, "ta": true, "te": true}
 	for _, s := range sources {
-		if s.Language == "ta" || s.Language == "te" {
-			t.Errorf("disabled language %q should not be present", s.Language)
+		if len(s.Audio.Languages) == 0 {
+			continue
 		}
+		code := s.Audio.Languages[0]
+		if !want[code] || s.Audio.Track != provider.TrackDub {
+			t.Errorf("unexpected typed dub audio: %+v", s.Audio)
+		}
+		delete(want, code)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing dubbed languages: %v", want)
 	}
 }
 

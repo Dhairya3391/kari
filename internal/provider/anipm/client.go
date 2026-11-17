@@ -400,7 +400,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		}
 		subLang := lang.Normalize(sub.SrcLang)
 		if subLang == "" {
-			subLang = lang.Normalize(sub.Label)
+			subLang = lang.FromLabel(sub.Label)
 		}
 		if subLang == "" {
 			subLang = "und"
@@ -413,24 +413,17 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 		})
 	}
 
-	audioCode := "ja"
-	if strings.EqualFold(channel, "dub") {
-		audioCode = "en"
-	}
-	if pb.AudioLang != "" {
-		if norm := lang.Normalize(pb.AudioLang); norm != "" {
-			audioCode = norm
-		}
-	}
+	audioCode := lang.Normalize(pb.AudioLang)
 
 	source := provider.MediaSource{
 		URL:       pb.Source,
-		Quality:   "1080p",
+		Quality:   "Auto",
 		Backend:   "Ani.pm",
 		Type:      provider.SourceTypeHLS,
 		Referer:   config.AniPMMediaReferer,
 		UserAgent: config.DesktopUserAgent,
 		Language:  audioCode,
+		Audio:     provider.AudioInfo{Languages: lang.Canonicalize([]string{pb.AudioLang})},
 		Subtitles: subtitles,
 	}
 

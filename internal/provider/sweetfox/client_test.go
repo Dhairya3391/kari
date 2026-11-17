@@ -89,6 +89,12 @@ func TestSweetFoxResolveMovie(t *testing.T) {
 		switch r.URL.Query().Get("sources") {
 		case "s1":
 			writeJSON(t, w, map[string]any{
+				"meta": map[string]any{
+					"spoken_languages": []map[string]string{
+						{"iso_639_1": "en", "name": "English"},
+						{"iso_639_1": "fr", "name": "French"},
+					},
+				},
 				"source": map[string]any{
 					"source": "s1",
 					"label":  "Bloodstone",
@@ -203,8 +209,6 @@ https://cdn.example.com/s5/seg0.ts
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
-	// Route the public test CDN host to the local mock so HLS probing never
-	// touches the network while variant URLs stay "direct" for the filter.
 	client.httpClient.Transport = rewriteTransport{target: strings.TrimPrefix(srv.URL, "http://")}
 
 	sources, err := client.ResolveSource(context.Background(), "550", provider.Episode{TMDBID: 550})
@@ -212,9 +216,6 @@ https://cdn.example.com/s5/seg0.ts
 		t.Fatalf("ResolveSource failed: %v", err)
 	}
 
-	// s1: 4K + 1080p (its local Auto master is dropped by FilterDirectSources).
-	// s4: HLS quality expands to 4K + 1080p + Auto.
-	// s2: 1080p + 480p. s3: deduped against s1. s5: one Auto row. s7: unavailable.
 	want := []struct {
 		quality string
 		backend string
@@ -238,6 +239,14 @@ https://cdn.example.com/s5/seg0.ts
 		if sources[i].Backend != expected.backend {
 			t.Errorf("sources[%d].Backend = %q, want %q", i, sources[i].Backend, expected.backend)
 		}
+		if expected.quality == "4K (2160p)" {
+			if sources[i].Height != 2160 {
+				t.Errorf("sources[%d].Height = %d, want 2160", i, sources[i].Height)
+			}
+			if sources[i].Bitrate != 16000000 {
+				t.Errorf("sources[%d].Bitrate = %d, want 16000000", i, sources[i].Bitrate)
+			}
+		}
 		if sources[i].Referer != playerBase+"/" {
 			t.Errorf("sources[%d].Referer = %q, want player referer", i, sources[i].Referer)
 		}
@@ -251,6 +260,12 @@ https://cdn.example.com/s5/seg0.ts
 
 	if !strings.HasSuffix(sources[0].URL, "/s1/2160.m3u8") {
 		t.Errorf("sources[0].URL = %q, want the 4K variant", sources[0].URL)
+	}
+	if got := sources[0].Audio.Languages; len(got) != 2 || got[0] != "en" || got[1] != "fr" {
+		t.Errorf("sources[0].Audio.Languages = %v, want [en fr] from meta.spoken_languages", got)
+	}
+	if sources[0].Audio.Track != provider.TrackUnknown {
+		t.Errorf("sources[0].Audio.Track = %q, want unknown", sources[0].Audio.Track)
 	}
 	if !strings.HasSuffix(sources[2].URL, "/s4/2160.m3u8") {
 		t.Errorf("sources[2].URL = %q, want the 4K variant from the HLS quality", sources[2].URL)
@@ -378,8 +393,6 @@ func TestSweetFoxNonDirectSourcesBecomeErrNoSources(t *testing.T) {
 func TestSweetFoxAPIErrorsSurface(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/movie", func(w http.ResponseWriter, r *http.Request) {
-		// 403 is not retried by the shared client, so the lane error surfaces
-		// directly instead of becoming a transport give-up.
 		http.Error(w, "blocked", http.StatusForbidden)
 	})
 
@@ -439,6 +452,45 @@ func TestQualityLabelAndType(t *testing.T) {
 	}
 	if got := qualityType(apiQuality{}, "https://cdn.example.com/a.m3u8"); got != provider.SourceTypeHLS {
 		t.Errorf("inferred type = %q, want hls", got)
+	}
+}
+
+func TestCollectSubtitlesDedupeByLanguageAndSource(t *testing.T) {
+	results := []laneResult{{
+		subtitles: []apiSubtitle{
+			{Label: "English", File: "https://subs.example.com/en-1.vtt", Source: "subdl"},
+			{Label: "English", File: "https://subs.example.com/en-2.vtt", Source: "subdl"},
+			{Label: "English", File: "https://subs.example.com/en-3.vtt", Source: "opensubtitles"},
+			{Label: "French", File: "https://subs.example.com/fr.vtt", Source: "subdl"},
+		},
+	}}
+	subs := collectSubtitles(results)
+	if len(subs) != 3 {
+		t.Fatalf("subtitles = %+v, want 3 unique language/source tracks", subs)
+	}
+	if subs[0].Language != "en" || subs[2].Language != "fr" {
+		t.Errorf("subtitle languages = %q %q, want en fr", subs[0].Language, subs[2].Language)
+	}
+}
+
+func TestLaneSourcesUsesUpstreamLabelAsBackend(t *testing.T) {
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), "https://api.example.com", "https://player.example.com")
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
+	sources := c.laneSources(context.Background(), laneResult{
+		server: server{key: "s1", label: "Hardcoded"},
+		source: &apiSource{
+			Label:     "Upstream Lane",
+			URL:       "https://cdn.example.com/master.m3u8",
+			Qualities: []apiQuality{{Quality: "1080p", URL: "https://cdn.example.com/1080.mp4", Type: "mp4"}},
+		},
+	}, nil)
+	if len(sources) != 1 || sources[0].Backend != "Upstream Lane" {
+		t.Fatalf("sources = %+v, want Upstream Lane backend", sources)
+	}
+	if sources[0].Height != 1080 {
+		t.Errorf("Height = %d, want 1080", sources[0].Height)
 	}
 }
 

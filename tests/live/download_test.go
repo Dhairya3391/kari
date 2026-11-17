@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"kari/internal/downloader"
+	"kari/internal/filter"
 	"kari/internal/provider"
 	"kari/internal/service"
 )
@@ -45,7 +46,7 @@ func TestDownloadFetchesRealMedia(t *testing.T) {
 	if len(resolved.Playback) == 0 {
 		t.Fatal("resolve produced no playback sources")
 	}
-	sources := service.FilterPlaybackSources(resolved.Playback, 3 /* lowest quality */, nil)
+	sources := filter.SelectTier(resolved.Playback, filter.QualityLowest)
 	if len(sources) == 0 {
 		t.Fatal("quality filter removed all sources")
 	}
@@ -59,9 +60,6 @@ func TestDownloadFetchesRealMedia(t *testing.T) {
 	)
 	dl := downloader.NewYTDLPDownloader()
 
-	// A full episode is hundreds of MB; a bounded window proves the
-	// pipeline while keeping CI-time sane. Cancelled context makes the
-	// engine clean up its own partial files.
 	runCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
@@ -78,10 +76,6 @@ func TestDownloadFetchesRealMedia(t *testing.T) {
 		},
 	})
 
-	// Success means the resolve→download pipeline demonstrably moved real
-	// bytes: either the file completed, or progress climbed while we gave
-	// it a bounded window. (On budget expiry the engine deliberately
-	// removes its .part artifacts, so post-hoc file size proves nothing.)
 	completed := err == nil
 	if !completed && runCtx.Err() == nil && ctx.Err() == nil {
 		t.Fatalf("download failed outright: %v", err)

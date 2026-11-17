@@ -44,7 +44,7 @@ func newRegistry(t *testing.T) *provider.Registry {
 	if err != nil {
 		t.Fatalf("config load: %v", err)
 	}
-	reg, err := defaults.NewDefaultRegistry(tmdb.NewKeyPool(cfg.TMDBAPIKeys), cfg, nil)
+	reg, err := defaults.NewDefaultRegistry(tmdb.NewKeyPool(cfg.TMDBAPIKeys), cfg)
 	if err != nil {
 		t.Fatalf("registry: %v", err)
 	}

@@ -34,8 +34,6 @@ type Dims struct {
 // pushed against one margin. Content is always centered: the column never
 // hugs the left edge.
 func ComputeDims(width, height int) Dims {
-	// Centered gutters shrink as the terminal narrows, floored at
-	// minContentMargin so text never touches the edge.
 	gutter := (width - maxContentWidth) / 2
 	if gutter < minContentMargin {
 		gutter = minContentMargin

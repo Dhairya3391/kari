@@ -35,7 +35,7 @@ type fixture struct {
 // newFixture starts the fixture server and constructs a client pointed at
 // it. Source URLs in payloads stay on external hosts because
 // provider.FilterDirectSources rejects localhost.
-func newFixture(t *testing.T, langFilter map[string]bool) (*Client, *fixture) {
+func newFixture(t *testing.T) (*Client, *fixture) {
 	t.Helper()
 	fx := &fixture{
 		embed:     make(map[string]string),
@@ -48,9 +48,9 @@ func newFixture(t *testing.T, langFilter map[string]bool) (*Client, *fixture) {
 	t.Cleanup(srv.Close)
 	fx.baseURL = srv.URL
 
-	client, err := NewClientWithURLsAndLanguageFilter(tmdb.NewKeyPool([]string{"k"}), srv.URL, srv.URL, langFilter)
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"k"}), srv.URL, srv.URL)
 	if err != nil {
-		t.Fatalf("NewClientWithURLsAndLanguageFilter: %v", err)
+		t.Fatalf("NewClientWithURLs: %v", err)
 	}
 	return client, fx
 }
@@ -146,9 +146,9 @@ func proxyStream(providerName, proxyURL string) string {
 
 // movieFixture serves a TMDB movie with every general lane plus baked
 // BigBang and Vexon addresses.
-func movieFixture(t *testing.T, langFilter map[string]bool) (*Client, *fixture) {
+func movieFixture(t *testing.T) (*Client, *fixture) {
 	t.Helper()
-	client, fx := newFixture(t, langFilter)
+	client, fx := newFixture(t)
 	fx.embed["movie/27205"] = embedHTML(
 		`{"tmdbId":"27205","type":"movie","season":null,"episode":null,"playbackToken":"tok-movie","anime":false,`+
 			`"bigbangUrl":"https://cdn.example.com/bigbang/index.m3u8.png?exp=1&sig=x",`+
@@ -172,9 +172,9 @@ func movieFixture(t *testing.T, langFilter map[string]bool) (*Client, *fixture) 
 }
 
 // animeFixture serves an anime episode with both VidRift anime lanes.
-func animeFixture(t *testing.T, subFallback, dubFallback bool, langFilter map[string]bool) (*Client, *fixture) {
+func animeFixture(t *testing.T, subFallback, dubFallback bool) (*Client, *fixture) {
 	t.Helper()
-	client, fx := newFixture(t, langFilter)
+	client, fx := newFixture(t)
 	fx.embed["anilist/1429/1"] = embedHTML(
 		`{"tmdbId":"1429","type":"tv","season":1,"episode":1,"playbackToken":"tok-anime",`+
 			`"anime":["anime","animedub"],"bigbangUrl":"https://cdn.example.com/bigbang/index.m3u8",`+
@@ -292,7 +292,7 @@ func TestRouteFor(t *testing.T) {
 }
 
 func TestResolveMovieBuildsSources(t *testing.T) {
-	client, fx := movieFixture(t, nil)
+	client, fx := movieFixture(t)
 
 	sources, err := client.ResolveSource(context.Background(), "27205", provider.Episode{TMDBID: 27205})
 	if err != nil {
@@ -324,6 +324,9 @@ func TestResolveMovieBuildsSources(t *testing.T) {
 	if original.Language != "" || original.Quality != "1080p" || original.Type != provider.SourceTypeHLS {
 		t.Errorf("original = %+v", original)
 	}
+	if original.Height != 1080 {
+		t.Errorf("original Height = %d, want 1080", original.Height)
+	}
 	if original.Backend != "Orion" {
 		t.Errorf("original Backend = %q, want Orion", original.Backend)
 	}
@@ -337,6 +340,12 @@ func TestResolveMovieBuildsSources(t *testing.T) {
 	}
 	if hindi.Language != "hi" || hindi.Type != provider.SourceTypeMP4 || hindi.Quality != "480p" {
 		t.Errorf("hindi = %+v", hindi)
+	}
+	if hindi.Height != 480 {
+		t.Errorf("hindi Height = %d, want 480", hindi.Height)
+	}
+	if got := hindi.Audio.Languages; len(got) != 1 || got[0] != "hi" {
+		t.Errorf("hindi Audio.Languages = %v, want [hi]", got)
 	}
 
 	vela, ok := byURL["https://edge.reelvault.click/proxy?u=vela"]
@@ -388,7 +397,7 @@ func TestResolveMovieBuildsSources(t *testing.T) {
 }
 
 func TestResolveMovieUsesCaches(t *testing.T) {
-	client, fx := movieFixture(t, nil)
+	client, fx := movieFixture(t)
 	episode := provider.Episode{TMDBID: 27205}
 
 	first, err := client.ResolveSource(context.Background(), "27205", episode)
@@ -416,7 +425,7 @@ func TestResolveMovieUsesCaches(t *testing.T) {
 }
 
 func TestResolveMovieKeepsPartialLaneResults(t *testing.T) {
-	client, fx := movieFixture(t, nil)
+	client, fx := movieFixture(t)
 	client.laneBudget = 200 * time.Millisecond
 	fx.delay["movie/27205|lyra"] = time.Second
 
@@ -435,7 +444,7 @@ func TestResolveMovieKeepsPartialLaneResults(t *testing.T) {
 }
 
 func TestResolveTVUsesSeasonAndEpisode(t *testing.T) {
-	client, fx := newFixture(t, nil)
+	client, fx := newFixture(t)
 	fx.embed["tv/1399/1/2"] = embedHTML(
 		`{"tmdbId":"1399","type":"tv","season":1,"episode":2,"playbackToken":"tok-tv","anime":false,`+
 			`"bigbangUrl":"","bigbangSubtitles":[],"evionUrl":"","vexonUrl":"","selfhostUrl":null}`,
@@ -468,7 +477,7 @@ func TestResolveTVUsesSeasonAndEpisode(t *testing.T) {
 }
 
 func TestResolveAnimeSubAndDub(t *testing.T) {
-	client, fx := animeFixture(t, false, false, nil)
+	client, fx := animeFixture(t, false, false)
 
 	sub, err := client.ResolveSource(context.Background(), "1429", provider.Episode{
 		Season: 1, Episode: 1, Audio: provider.AudioSub, ID: "watch/vidrift/1429/sub/1", TMDBID: 1429,
@@ -482,11 +491,17 @@ func TestResolveAnimeSubAndDub(t *testing.T) {
 	if sub[0].URL != "https://edge.reelvault.click/proxy?u=sub" {
 		t.Errorf("sub url = %q", sub[0].URL)
 	}
-	if sub[0].Language != "ja" {
-		t.Errorf("sub language = %q, want ja", sub[0].Language)
+	if sub[0].Language != "" || len(sub[0].Audio.Languages) != 0 {
+		t.Errorf("sub language must stay unknown when the lane declares none: %+v", sub[0])
 	}
-	if sub[0].SubType != provider.SubTypeSoft {
-		t.Errorf("sub type = %q, want soft", sub[0].SubType)
+	if sub[0].Audio.Track != provider.TrackSub {
+		t.Errorf("sub Audio.Track = %q, want sub", sub[0].Audio.Track)
+	}
+	if sub[0].Height != 1080 {
+		t.Errorf("sub Height = %d, want 1080", sub[0].Height)
+	}
+	if sub[0].SubType != "" {
+		t.Errorf("sub type = %q, want unknown (no hard/soft marker)", sub[0].SubType)
 	}
 	if len(sub[0].Subtitles) == 0 {
 		t.Error("sub source is missing subtitles")
@@ -504,8 +519,11 @@ func TestResolveAnimeSubAndDub(t *testing.T) {
 	if dub[0].URL != "https://edge.reelvault.click/proxy?u=dub" {
 		t.Errorf("dub url = %q", dub[0].URL)
 	}
-	if dub[0].Language != "en" {
-		t.Errorf("dub language = %q, want en", dub[0].Language)
+	if dub[0].Language != "" || len(dub[0].Audio.Languages) != 0 {
+		t.Errorf("dub language must stay unknown when the lane declares none: %+v", dub[0])
+	}
+	if dub[0].Audio.Track != provider.TrackDub {
+		t.Errorf("dub Audio.Track = %q, want dub", dub[0].Audio.Track)
 	}
 
 	fx.mu.Lock()
@@ -525,7 +543,7 @@ func TestResolveAnimeSubAndDub(t *testing.T) {
 
 func TestResolveAnimeRejectsFallbacks(t *testing.T) {
 	t.Run("dub falls back to sub", func(t *testing.T) {
-		client, _ := animeFixture(t, false, true, nil)
+		client, _ := animeFixture(t, false, true)
 		_, err := client.ResolveSource(context.Background(), "1429", provider.Episode{
 			Season: 1, Episode: 1, Audio: provider.AudioDub, ID: "watch/vidrift/1429/dub/1", TMDBID: 1429,
 		})
@@ -535,7 +553,7 @@ func TestResolveAnimeRejectsFallbacks(t *testing.T) {
 	})
 
 	t.Run("sub falls back to another lane", func(t *testing.T) {
-		client, _ := animeFixture(t, true, false, nil)
+		client, _ := animeFixture(t, true, false)
 		_, err := client.ResolveSource(context.Background(), "1429", provider.Episode{
 			Season: 1, Episode: 1, Audio: provider.AudioSub, ID: "watch/vidrift/1429/sub/1", TMDBID: 1429,
 		})
@@ -546,7 +564,7 @@ func TestResolveAnimeRejectsFallbacks(t *testing.T) {
 }
 
 func TestResolveAnimeMovieRoute(t *testing.T) {
-	client, fx := newFixture(t, nil)
+	client, fx := newFixture(t)
 	fx.embed["anilist/21519/1"] = embedHTML(
 		`{"tmdbId":"372058","type":"movie","season":null,"episode":null,"playbackToken":"tok-movie-anime",`+
 			`"anime":["anime","animedub"],"bigbangUrl":"","bigbangSubtitles":[],"evionUrl":"","vexonUrl":"","selfhostUrl":null}`,
@@ -575,57 +593,8 @@ func TestResolveAnimeMovieRoute(t *testing.T) {
 	}
 }
 
-func TestFilterSourcesByLanguage(t *testing.T) {
-	sources := []provider.MediaSource{
-		{URL: "unknown"},
-		{URL: "hindi", Language: "hi"},
-		{URL: "tamil", Language: "ta"},
-		{URL: "english", Language: "en"},
-	}
-
-	client := &Client{langFilter: map[string]bool{"hi": false, "Tamil": false}}
-	got := client.filterSourcesByLanguage(sources, false, false)
-	if urls := sourceURLs(got); strings.Join(urls, ",") != "unknown,english" {
-		t.Errorf("filtered movies = %v, want [unknown english]", urls)
-	}
-
-	// A globally disabled language must not hide an explicitly picked anime
-	// track, but foreign tracks still never leak in.
-	client = &Client{langFilter: map[string]bool{"ja": false, "en": false}}
-	got = client.filterSourcesByLanguage([]provider.MediaSource{
-		{URL: "ja", Language: "ja"},
-		{URL: "en", Language: "en"},
-		{URL: "hi", Language: "hi"},
-	}, true, false)
-	if urls := sourceURLs(got); strings.Join(urls, ",") != "ja" {
-		t.Errorf("anime sub = %v, want [ja]", urls)
-	}
-	got = client.filterSourcesByLanguage([]provider.MediaSource{
-		{URL: "ja", Language: "ja"},
-		{URL: "en", Language: "en"},
-	}, true, true)
-	if urls := sourceURLs(got); strings.Join(urls, ",") != "en" {
-		t.Errorf("anime dub = %v, want [en]", urls)
-	}
-
-	// Non-anime titles never vanish entirely when every language is off.
-	client = &Client{langFilter: map[string]bool{"en": false}}
-	got = client.filterSourcesByLanguage([]provider.MediaSource{{URL: "en", Language: "en"}}, false, false)
-	if len(got) != 1 {
-		t.Errorf("all-disabled fallback = %v, want the dropped row", sourceURLs(got))
-	}
-}
-
-func sourceURLs(sources []provider.MediaSource) []string {
-	urls := make([]string, 0, len(sources))
-	for i := range sources {
-		urls = append(urls, sources[i].URL)
-	}
-	return urls
-}
-
 func TestFetchEpisodesAnime(t *testing.T) {
-	client, fx := newFixture(t, nil)
+	client, fx := newFixture(t)
 	fx.anilist = `{"data":{"Media":{"id":1,"idMal":2,"title":{"romaji":"Test Anime"},` +
 		`"format":"TV","episodes":2,"status":"FINISHED","seasonYear":2024}}}`
 
@@ -659,7 +628,7 @@ func TestFetchEpisodesAnime(t *testing.T) {
 }
 
 func TestFetchEpisodesAnimeMovie(t *testing.T) {
-	client, _ := newFixture(t, nil)
+	client, _ := newFixture(t)
 	series := provider.SearchResult{
 		Title:     "Your Name",
 		ID:        "21519",
@@ -686,7 +655,7 @@ func TestFetchEpisodesAnimeMovie(t *testing.T) {
 }
 
 func TestFetchEpisodesRejectsInvalidAnimeID(t *testing.T) {
-	client, _ := newFixture(t, nil)
+	client, _ := newFixture(t)
 	_, err := client.FetchEpisodes(context.Background(), provider.SearchResult{
 		ID:        "not-a-number",
 		AniListID: 1,
@@ -698,8 +667,33 @@ func TestFetchEpisodesRejectsInvalidAnimeID(t *testing.T) {
 	}
 }
 
+// A transport error on the only anime lane must survive filtering so
+// firstLaneError can surface it, rather than degrading to "audio unavailable".
+func TestFilterAnimeLanesKeepsErrorsForDiagnostics(t *testing.T) {
+	transportErr := errors.New("lane timeout")
+	results := []laneResult{
+		{lane: "anime", err: transportErr},
+	}
+	filtered := filterAnimeLanes(results)
+	if len(filtered) != 1 {
+		t.Fatalf("filtered = %v, want the error row kept", filtered)
+	}
+	if got := firstLaneError(filtered); !errors.Is(got, transportErr) {
+		t.Fatalf("firstLaneError = %v, want %v", got, transportErr)
+	}
+
+	// Fallback rows remain dropped even when they also carry an error.
+	withFallback := []laneResult{
+		{lane: "anime", err: transportErr},
+		{lane: "dub", err: errors.New("fallback"), fellBack: true},
+	}
+	if got := len(filterAnimeLanes(withFallback)); got != 1 {
+		t.Fatalf("filtered count = %d, want 1 (fallback dropped)", got)
+	}
+}
+
 func TestResolveUnsuccessfulLaneReturnsSentinel(t *testing.T) {
-	client, fx := newFixture(t, nil)
+	client, fx := newFixture(t)
 	fx.embed["anilist/1429/1"] = embedHTML(
 		`{"tmdbId":"1429","type":"tv","season":1,"episode":1,"playbackToken":"tok-dub-fail",`+
 			`"anime":["anime","animedub"],"bigbangUrl":"","bigbangSubtitles":[],"evionUrl":"","vexonUrl":"","selfhostUrl":null}`,
@@ -713,5 +707,50 @@ func TestResolveUnsuccessfulLaneReturnsSentinel(t *testing.T) {
 	})
 	if !errors.Is(err, provider.ErrAudioUnavailable) {
 		t.Fatalf("err = %v, want ErrAudioUnavailable", err)
+	}
+}
+
+func TestFetchLaneSendsBrowserFetchHeaders(t *testing.T) {
+	var mu sync.Mutex
+	var captured http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/source/") {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		captured = r.Header.Clone()
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"success":false}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"k"}), srv.URL, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
+	route := "movie/27205"
+	if _, err := client.fetchLane(context.Background(), route, "tok", "orion"); err != nil {
+		t.Fatalf("fetchLane: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if captured == nil {
+		t.Fatal("no /api/source request was captured")
+	}
+	want := map[string]string{
+		"Sec-Fetch-Mode": "cors",
+		"Sec-Fetch-Dest": "empty",
+		"Sec-Fetch-Site": "same-origin",
+		"User-Agent":     config.DesktopUserAgent,
+		"Referer":        srv.URL + "/embed/" + route,
+		"Accept":         "application/json",
+	}
+	for header, value := range want {
+		if got := captured.Get(header); got != value {
+			t.Errorf("%s = %q, want %q", header, got, value)
+		}
 	}
 }

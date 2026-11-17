@@ -295,8 +295,6 @@ func bestEpisode(episodes []episodeMeta, seasonNum, episodeNum int, episodeTitle
 		return numbered
 	}
 
-	// Exact titles can recover a numbering offset, but partial title matches
-	// may identify a different episode and are not safe skip data.
 	if cleanTarget == "" {
 		return nil
 	}

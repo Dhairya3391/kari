@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -66,6 +67,9 @@ const (
 
 // adLog scopes every line from this package with its identity.
 var adLog = logging.With("component", "provider.anidream")
+
+// reHLSLanguage extracts the LANGUAGE attribute of an HLS EXT-X-MEDIA line.
+var reHLSLanguage = regexp.MustCompile(`(?i)\bLANGUAGE="([^"]*)"`)
 
 // Client implements the anime and manga capabilities of AniDream.
 type Client struct {
@@ -294,12 +298,19 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			lastErr = fmt.Errorf("empty stream URL: %w", provider.ErrNoSources)
 			continue
 		}
+		height, bitrate, audioLangs := c.masterMeta(ctx, data.StreamURL)
 		source := provider.MediaSource{
 			URL:       data.StreamURL,
-			Quality:   "Auto",
+			Quality:   qualityFromHeight(height),
 			Referer:   config.AniDreamReferer,
 			Type:      provider.SourceTypeHLS,
 			UserAgent: config.DesktopUserAgent,
+			Height:    height,
+			Bitrate:   bitrate,
+			Audio: provider.AudioInfo{
+				Languages: audioLangs,
+				Track:     declaredAudioTrack(data, audioLangs),
+			},
 			SubType:   provider.SubTypeSoft,
 			Subtitles: subtitleOptions(data.Subtitles),
 			SkipTimes: skipTimes(data.Chapters),
@@ -572,6 +583,76 @@ func chapterOrder(number string) float64 {
 		return 1e18
 	}
 	return value
+}
+
+// masterMeta reads the streamed HLS master for its best rendition and the
+// languages of its audio renditions. A failed probe leaves all values unknown;
+// the stream URL itself stays playable as an adaptive master.
+func (c *Client) masterMeta(ctx context.Context, masterURL string) (height, bitrate int, languages []string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, masterURL, nil)
+	if err != nil {
+		return 0, 0, nil
+	}
+	req.Header.Set("User-Agent", config.DesktopUserAgent)
+	req.Header.Set("Referer", config.AniDreamReferer)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, 0, nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if err != nil {
+		return 0, 0, nil
+	}
+	text := string(body)
+	height, bitrate = kit.SourceMetaFromVariants(kit.ParseHLSVariantsText(masterURL, text))
+	return height, bitrate, hlsAudioLanguages(text)
+}
+
+// hlsAudioLanguages collects canonical codes from the master's AUDIO media
+// renditions. More than one distinct language means the manifest genuinely
+// carries selectable audio tracks.
+func hlsAudioLanguages(text string) []string {
+	var raw []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "#EXT-X-MEDIA:") ||
+			!strings.Contains(strings.ToUpper(line), "TYPE=AUDIO") {
+			continue
+		}
+		if m := reHLSLanguage.FindStringSubmatch(line); len(m) == 2 {
+			raw = append(raw, m[1])
+		}
+	}
+	return lang.Canonicalize(raw)
+}
+
+// declaredAudioTrack reports the audio kind from the playback metadata and
+// the manifest's rendition languages. It never infers sub or dub from the
+// episode request alone.
+func declaredAudioTrack(data *playbackData, languages []string) provider.AudioTrack {
+	if strings.EqualFold(strings.TrimSpace(data.Audio), "dual") || len(languages) > 1 {
+		return provider.TrackDual
+	}
+	for _, audio := range data.Audios {
+		switch strings.ToLower(strings.TrimSpace(audio)) {
+		case "dual", "multi":
+			return provider.TrackDual
+		}
+	}
+	return provider.TrackUnknown
+}
+
+// qualityFromHeight labels a probed rendition, falling back to the adaptive
+// label when the master declares no resolution.
+func qualityFromHeight(height int) string {
+	if height <= 0 {
+		return "Auto"
+	}
+	return kit.QualityLabelFromHeight(height)
 }
 
 // subtitleOptions maps AniDream's subtitle tracks to the shared DTO,

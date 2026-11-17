@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"kari/internal/httpclient"
 	"kari/internal/lang"
@@ -19,9 +20,6 @@ import (
 	"kari/internal/provider/anilist"
 	"kari/internal/provider/kit"
 )
-
-// This file fetches Miruro's __data.json endpoints, resolves AniList IDs
-// to watch coordinates, and ranks episode streams for mpv.
 
 // get fetches url with the request context, returning the capped body.
 // Non-2xx responses become typed HTTP errors.
@@ -129,7 +127,10 @@ func (c *Client) resolveShow(ctx context.Context, anilistID, titleHint, knownSho
 			}
 		}
 	}
-	slug := c.slugs[knownShowID]
+	slug := ""
+	if knownShowID != "" {
+		slug = c.slugFor(knownShowID)
+	}
 	c.mu.Unlock()
 
 	showID := knownShowID
@@ -156,7 +157,6 @@ func (c *Client) resolveShow(ctx context.Context, anilistID, titleHint, knownSho
 	if anilistID != "" {
 		c.byAniList[anilistID] = ref
 	}
-	c.slugs[showID] = slug
 	c.mu.Unlock()
 	return ref, nil
 }
@@ -243,8 +243,6 @@ func (c *Client) watchSlug(ctx context.Context, showID string) (string, error) {
 	if slug := redirectSlug(body); slug != "" {
 		return slug, nil
 	}
-	// No redirect: the placeholder was accepted (or the payload is the
-	// episode data itself); either way the probe slug loads the page.
 	return placeholderSlug, nil
 }
 
@@ -265,7 +263,6 @@ func (c *Client) fetchWatch(ctx context.Context, ref showRef, episode int, key s
 	}
 	if slug := redirectSlug(body); slug != "" && slug != ref.slug {
 		c.mu.Lock()
-		c.slugs[ref.showID] = slug
 		for id, r := range c.byAniList {
 			if r.showID == ref.showID {
 				r.slug = slug
@@ -291,6 +288,26 @@ func (c *Client) watchEpisodes(ctx context.Context, ref showRef, episode int) ([
 	if err != nil {
 		return nil, fmt.Errorf("miruro episodes: %w", err)
 	}
+	return eps, nil
+}
+
+// cachedEpisodes returns the show's roster, reusing the watch payload fetched
+// by an earlier episode-list or title request. Rosters are stable for a
+// session, while stream URLs are not — only the roster is cached here.
+func (c *Client) cachedEpisodes(ctx context.Context, ref showRef) ([]episodeEntry, error) {
+	c.mu.Lock()
+	cached, ok := c.rosters[ref.showID]
+	c.mu.Unlock()
+	if ok && time.Since(cached.at) < episodeRosterTTL {
+		return cached.entries, nil
+	}
+	eps, err := c.watchEpisodes(ctx, ref, 1)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.rosters[ref.showID] = cachedRoster{entries: eps, at: time.Now()}
+	c.mu.Unlock()
 	return eps, nil
 }
 
@@ -355,8 +372,6 @@ func rankStreams(tracks []trackEntry, order []string, category string) []provide
 			return out[i].SubType == provider.SubTypeHard && out[j].SubType != provider.SubTypeHard
 		})
 	}
-	// Challenged hosts stay listed; the service and ranking sorts
-	// place them last globally.
 	return out
 }
 
@@ -388,13 +403,8 @@ func serverSources(pe providerEntry) []provider.MediaSource {
 	subType := ""
 	switch pe.track {
 	case "ssub":
-		// Soft-sub pool: clean video plus toggleable external tracks.
 		subType = provider.SubTypeSoft
 	case provider.AudioSub:
-		// Hard-sub pool: the HLS playlists carry no subtitle
-		// renditions (AES segments, burned-in video), so the video
-		// itself is hard-subtitled even when the pool also lists
-		// downloadable sidecar files.
 		subType = provider.SubTypeHard
 	}
 	var out []provider.MediaSource
@@ -404,15 +414,15 @@ func serverSources(pe providerEntry) []provider.MediaSource {
 		}
 		subs := make([]provider.SubtitleOption, 0, len(pe.subtitles))
 		for _, s := range pe.subtitles {
-			if !kit.IsSubtitleURL(s.file) {
+			if !subtitleFileAllowed(s) {
 				continue
 			}
 			tag := lang.Normalize(strings.TrimSpace(s.language))
 			if tag == "" {
-				tag = lang.Normalize(strings.TrimSpace(s.label))
+				tag = lang.FromLabel(s.label)
 			}
 			if tag == "" {
-				tag = "en"
+				tag = "und"
 			}
 			subs = append(subs, provider.SubtitleOption{
 				URL: s.file, Language: tag, Default: s.def, Referer: strings.TrimSpace(srv.referer),
@@ -427,6 +437,9 @@ func serverSources(pe providerEntry) []provider.MediaSource {
 				continue
 			}
 			quality := kit.QualityLabel(st.quality, typ)
+			if label := declaredResolutionLabel(st.resolution); label != "" {
+				quality = label
+			}
 			suppressOrigin := strings.Contains(strings.ToLower(srv.referer), "megaplay.buzz")
 			skipTimes := pe.skipTimes
 			if skipTimes != nil {
@@ -451,6 +464,20 @@ func serverSources(pe providerEntry) []provider.MediaSource {
 	return out
 }
 
+// subtitleFileAllowed decides whether a sidecar is a real caption resource.
+// An upstream-declared format wins over the URL extension, which CDNs often
+// hide behind opaque paths or signed query strings.
+func subtitleFileAllowed(s subtitleEntry) bool {
+	switch strings.ToLower(strings.TrimSpace(s.format)) {
+	case "vtt", "webvtt", "srt", "ass", "ssa", "ttml", "dfxp", "sbv", "lrc":
+		return true
+	case "":
+		return kit.IsSubtitleURL(s.file)
+	default:
+		return false
+	}
+}
+
 // streamType classifies a stream URL for the player layer: explicit mp4
 // (or an mp4-shaped URL) becomes progressive, everything else HLS.
 func streamType(st streamEntry) string {
@@ -461,6 +488,20 @@ func streamType(st streamEntry) string {
 		return provider.SourceTypeHLS
 	}
 	return ""
+}
+
+// declaredResolutionLabel maps an upstream resolution field onto a canonical
+// quality label. It returns "" for absent or unrecognised values so callers
+// keep whatever quality the API declared.
+func declaredResolutionLabel(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	_, label := kit.NormalizeQuality(raw)
+	if label == "unknown" {
+		return ""
+	}
+	return label
 }
 
 // demuxerQuirk forces the HLS demuxer for playlists mpv cannot sniff: no

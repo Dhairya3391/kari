@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/filter"
 	"kari/internal/model"
 	"kari/internal/player"
 	"kari/internal/provider"
@@ -20,12 +21,15 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 
 	m := newTestSwitchModel()
 	m.configuredModes = []string{"movies", "tv", "anime", "cartoon", "live", "manga", "jellyfin"}
+	m.appMode = provider.ModeMovies
 	m.imagesEnabled = false
-	m.disableAnimeSubtitles = true
-	m.subtitleLanguage = "ja"
-	m.qualityMode = qualityHighest
+	m.filterScope = filter.FromLegacy(qualityAll, 0, nil, "", "", false, "")
+	m.setQuality(m.appMode, filter.QualityHighest)
+	m.setSubtitleLanguage(m.appMode, "ja")
+	m.toggleAnimeSubtitles() // anime subtitles off
+	m.setPreferredProvider(provider.ModeMovies, "vyla")
+	m.setPreferredProvider(provider.ModeAnime, "anikoto")
 	m.downloadQuality = downloadQualityFHD
-	m.preferredProviders = map[string]string{"movies": "vyla", "anime": "anikoto"}
 	m.autoplay = true
 	m.startupSync = true
 	m.defaultMode = "movies"
@@ -88,6 +92,18 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	wantDisabledProviders := []string{"anivault", "pengu"}
 	if !reflect.DeepEqual(saved.DisabledProviders, wantDisabledProviders) {
 		t.Errorf("saved.DisabledProviders = %v, want %v", saved.DisabledProviders, wantDisabledProviders)
+	}
+	if !saved.FiltersMigrated {
+		t.Error("saved.FiltersMigrated = false, want true")
+	}
+	if got := saved.Filters.For(m.appMode).Quality; got != filter.QualityHighest {
+		t.Errorf("saved scope quality = %v, want %v", got, filter.QualityHighest)
+	}
+	if got := saved.Filters.For(provider.ModeAnime).Subtitles.Mode; got != filter.SubtitleOff {
+		t.Errorf("saved anime subtitle mode = %v, want off", got)
+	}
+	if got := saved.Filters.For(provider.ModeMovies).PreferredProvider; got != "vyla" {
+		t.Errorf("saved movies provider = %q, want vyla", got)
 	}
 }
 
@@ -354,8 +370,6 @@ func TestModeReorderPersistsAcrossRestart(t *testing.T) {
 	t.Setenv("HOME", tempHome)
 
 	m := newTestSwitchModel()
-	// Focus on second mode (index 2 in Settings > Modes, where index 0 is Startup mode)
-	// Initially: anime, cartoon, live, manga, movies, tv, jellyfin, Stremio.
 	m.settingsIndex = 2 // cartoon (idx = 1)
 	m.reorderMode(-1)   // move cartoon before anime -> cartoon, anime, live...
 
