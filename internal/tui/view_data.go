@@ -331,10 +331,11 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		}
 	}
 	resumePos := m.currentResumePosition()
+	fullBodyHeight := ComputeDims(m.width, m.height).BodyHeight
 
 	poster := insetFixedBlock(
 		posterBlock(m.previewPoster, m.previewPosterUnavailable, m.imgProtocol, kittyPreviewImageID, m.imagesEnabled),
-		previewPosterMaxCols, posterSlotRows(height, previewPosterMaxRows), previewPosterInset,
+		previewPosterMaxCols, posterSlotRows(fullBodyHeight, previewPosterMaxRows), previewPosterInset,
 	)
 
 	var sources []provider.MediaSource
@@ -410,6 +411,8 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		Width:            width,
 		TermWidth:        m.width,
 		Height:           height,
+		windowHeight:     fullBodyHeight,
+		statusRows:       m.statusRowCount(),
 		Accent:           accent,
 		Mode:             m.appMode,
 	}

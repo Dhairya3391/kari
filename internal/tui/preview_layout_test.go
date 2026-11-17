@@ -105,6 +105,92 @@ func TestPreviewGeometryStableAcrossDataArrival(t *testing.T) {
 	}
 }
 
+func TestPreviewSourceRowsIgnoreStatusRow(t *testing.T) {
+	base := PreviewData{
+		SeriesTitle:   "Title",
+		TermWidth:     120,
+		Width:         112,
+		Height:        40,
+		windowHeight:  40,
+		Accent:        lipgloss.AdaptiveColor{},
+		RankedSources: rankedSources(20),
+	}
+
+	countRows := func(out string) int {
+		n := 0
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "cinejoy") {
+				n++
+			}
+		}
+		return n
+	}
+
+	idle := RenderPreviewScreen(base)
+	playing := base
+	playing.Height--
+	playing.statusRows = 1
+	active := RenderPreviewScreen(playing)
+	twoStatus := base
+	twoStatus.Height -= 2
+	twoStatus.statusRows = 2
+	twoActive := RenderPreviewScreen(twoStatus)
+
+	want := countRows(idle)
+	if want == 0 {
+		t.Fatal("idle preview rendered no source rows")
+	}
+	if got := countRows(active); got != want {
+		t.Errorf("source rows with status = %d, want %d (idle)", got, want)
+	}
+	if got := lineCount(active); got > playing.Height {
+		t.Errorf("playing preview has %d lines, budget %d", got, playing.Height)
+	}
+	if got := countRows(twoActive); got != want {
+		t.Errorf("source rows with two status rows = %d, want %d (idle)", got, want)
+	}
+	if got := lineCount(twoActive); got > twoStatus.Height {
+		t.Errorf("preview with two status rows has %d lines, budget %d", got, twoStatus.Height)
+	}
+}
+
+func TestPreviewSourceRowsStableAcrossPlaybackStatus(t *testing.T) {
+	m := readySourceModel()
+	m.width, m.height = 120, 40
+	m.activeView = viewPreview
+	m.rankedSources = rankedSources(20)
+
+	countRows := func(out string) int {
+		n := 0
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "cinejoy") {
+				n++
+			}
+		}
+		return n
+	}
+
+	idle := countRows(m.renderMainView())
+	if idle == 0 {
+		t.Fatal("idle preview rendered no source rows")
+	}
+	m.loading = true
+	m.loadingText = "Opening player..."
+	m.playOpID = 9
+	active := countRows(m.renderMainView())
+	if active != idle {
+		t.Errorf("source rows while playing = %d, want %d (idle)", active, idle)
+	}
+	m.statusText = "downloaded 12/12 episodes"
+	if m.statusRowCount() != 2 {
+		t.Fatalf("status rows = %d, want 2", m.statusRowCount())
+	}
+	twoActive := countRows(m.renderMainView())
+	if twoActive != idle {
+		t.Errorf("source rows with two status rows = %d, want %d (idle)", twoActive, idle)
+	}
+}
+
 func TestCollectEpisodesDataUsesSearchGenres(t *testing.T) {
 	m := &modelImpl{
 		selectedSeries: &provider.SearchResult{

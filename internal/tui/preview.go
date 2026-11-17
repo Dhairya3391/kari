@@ -56,11 +56,20 @@ type PreviewData struct {
 	Width        int
 	TermWidth    int
 	Height       int
+	windowHeight int
+	statusRows   int
 	Accent       lipgloss.AdaptiveColor
 	// Mode drives the audio column: anime audio is a sub/dub track choice
 	// shown in the header, so the per-source column renders for other
 	// modes only.
 	Mode provider.ContentType
+}
+
+func (data PreviewData) sourceWindowHeight() int {
+	if data.windowHeight > 0 {
+		return data.windowHeight
+	}
+	return data.Height
 }
 
 // RenderPreviewScreen renders the Preview source picker per KARI_TUI_SPEC §4.4.
@@ -73,19 +82,23 @@ func RenderPreviewScreen(data PreviewData) string {
 	rows = append(rows, header, "")
 	// 2. Sources Header Line (count or progressive loading state)
 	sourcesTitle := renderSourcesTitle(data, st)
-	rows = append(rows, sourcesTitle, "")
+	rows = append(rows, sourcesTitle)
 
 	headerLines := strings.Count(header, "\n") + 1
-	windowSize := previewSourceWindow(data.Height)
-	if data.Height > 0 {
-		windowSize = max(1, max(4, data.Height-headerLines-5)-3)
+	windowHeight := data.sourceWindowHeight()
+	windowSize := previewSourceWindow(windowHeight)
+	if windowHeight > 0 {
+		windowSize = max(1, max(4, windowHeight-headerLines-5)-3)
 	}
 	sourcesTable := renderSourcesTable(data, st, windowSize)
 	rows = append(rows, sourcesTable)
 
-	// 5. Failure summary closes the section. Its two rows are reserved even
-	// when there is no failure, so a late failure never pushes the table down.
-	rows = append(rows, "", renderSourcesError(data, st))
+	// 5. Failure summary closes the section. Its rows are reserved even when
+	// there is no failure, so a late failure never pushes the table down.
+	if data.statusRows < 2 {
+		rows = append(rows, "")
+	}
+	rows = append(rows, renderSourcesError(data, st))
 	return strings.Join(rows, "\n")
 }
 
@@ -266,7 +279,7 @@ func previewSourceWindow(height int) int {
 
 func renderSourcesTable(data PreviewData, st Styles, windowSize int) string {
 	if windowSize <= 0 {
-		windowSize = previewSourceWindow(data.Height)
+		windowSize = previewSourceWindow(data.sourceWindowHeight())
 	}
 	tableLines := 1 + windowSize + previewSourceSlots
 	if len(data.RankedSources) == 0 {
