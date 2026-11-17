@@ -9,7 +9,7 @@ on:
 jobs:
   changes:
     name: Detect code changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       code_changed: ${{ steps.filter.outputs.code_changed }}
     steps:
@@ -50,7 +50,7 @@ jobs:
     name: Vet, build & lint
     needs: changes
     if: needs.changes.outputs.code_changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7.0.1
@@ -78,7 +78,7 @@ jobs:
     name: Tests
     needs: changes
     if: needs.changes.outputs.code_changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7.0.1
@@ -97,13 +97,12 @@ jobs:
     name: Vulnerability scan
     needs: changes
     if: needs.changes.outputs.code_changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Govulncheck
         uses: golang/govulncheck-action@v1.1.0
         with:
           cache: true
           cache-dependency-path: go.sum
-          go-version-file: go.mod
           check-latest: false
           go-package: ./...
