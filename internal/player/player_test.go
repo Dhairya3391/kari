@@ -109,6 +109,29 @@ func TestBuildMPVArgsIncludesAlang(t *testing.T) {
 	}
 }
 
+// A manifest-discovered language must drive --alang even when the provider
+// leaves its own Language identity tag empty, as movie providers do.
+func TestBuildMPVArgsUsesManifestPreferredAudio(t *testing.T) {
+	source := provider.MediaSource{
+		URL:            "https://example.com/stream.m3u8",
+		PreferredAudio: "hi",
+	}
+	args := buildMPVArgs(source, model.ResolvedMedia{SeriesTitle: "Now You See Me"}, "/tmp/sock", nil)
+
+	found := false
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--alang=") {
+			found = true
+			if !strings.Contains(arg, "hi") {
+				t.Errorf("expected --alang to contain 'hi', got %q", arg)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("buildMPVArgs missing --alang for a manifest-discovered language: %v", args)
+	}
+}
+
 func TestBuildMPVArgsUsesPreferredSubtitleLanguage(t *testing.T) {
 	args := buildMPVArgs(provider.MediaSource{URL: "https://example.com/video.m3u8"}, model.ResolvedMedia{
 		SubtitleLanguage: "ja",

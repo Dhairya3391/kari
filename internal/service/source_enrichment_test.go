@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,8 +144,9 @@ func TestEnrichAdaptiveSourcesPublishesProgressively(t *testing.T) {
 	}
 }
 
-// Anime sub and dub identity lives in Language/SubType/ExtraArgs, never in
-// AudioLabel. Both probes and dedupe must leave those fields untouched.
+// Anime sub and dub transport identity lives in Language/SubType/ExtraArgs.
+// Both probes and dedupe must leave those fields untouched; audio selection
+// is separate and now comes from the HLS manifest (see the manifest tests).
 func TestEnrichmentPreservesAnimeSubDubIdentity(t *testing.T) {
 	server := newEnrichmentServer(t, 0)
 	sources := []provider.MediaSource{
@@ -179,6 +181,34 @@ func TestEnrichmentPreservesAnimeSubDubIdentity(t *testing.T) {
 	}
 	if len(dropShadowedTiers(enriched, []bool{true, true})) != 2 {
 		t.Fatal("sub and dub rows were collapsed into one")
+	}
+}
+
+func TestEnrichAdaptiveSourcesProbesManifestURL(t *testing.T) {
+	var probed atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		probed.Store(r.URL.Path)
+		if r.URL.Path == "/master.m3u8" {
+			fmt.Fprint(w, enrichmentMaster)
+			return
+		}
+		fmt.Fprint(w, "#EXTM3U\n#EXTINF:4.0,\nvariant.ts\n")
+	}))
+	defer server.Close()
+
+	sources := []provider.MediaSource{{
+		URL:         server.URL + "/variant.m3u8",
+		ManifestURL: server.URL + "/master.m3u8",
+		Type:        provider.SourceTypeHLS,
+		Quality:     "Auto",
+	}}
+	got, _ := enrichAdaptiveSources(context.Background(), httpclient.NewWithTimeout(manifestProbeTimeout), sources, provider.ModeMovies, nil)
+
+	if path, _ := probed.Load().(string); path != "/master.m3u8" {
+		t.Errorf("probed path = %q, want the master playlist", path)
+	}
+	if got[0].Quality != "4K (2160p)" || got[0].Bitrate != 23_000_000 {
+		t.Errorf("master enrichment = %q/%d, want 4K (2160p)/23000000", got[0].Quality, got[0].Bitrate)
 	}
 }
 

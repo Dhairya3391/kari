@@ -114,7 +114,7 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	confBuilder.WriteString("demuxer-max-back-bytes=20M\n")
 	confBuilder.WriteString("demuxer-readahead-secs=60\n")
 	confBuilder.WriteString("hls-bitrate=max\n")
-	if langList := formatAudioLangList(source.Language); langList != "" {
+	if langList := formatAudioLangList(source.AudioPreference()); langList != "" {
 		confBuilder.WriteString(fmt.Sprintf("alang=%s\n", langList))
 	}
 	if source.Referer != "" {

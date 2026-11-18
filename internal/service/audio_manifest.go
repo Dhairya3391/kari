@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 
@@ -66,8 +65,10 @@ func fetchManifestText(ctx context.Context, client *http.Client, src provider.Me
 	return string(body), true
 }
 
-// discoverManifestAudio adds track labels advertised by an HLS master. It runs
-// after sources are already visible, so slow CDNs never delay the UI.
+// discoverManifestAudio adds track languages advertised by an HLS master. It
+// runs after sources are already visible, so slow CDNs never delay the UI. The
+// discovered codes become the source's audio identity so the displayed label,
+// the language filter, and mpv's --alang all agree on one language.
 func discoverManifestAudio(ctx context.Context, client *http.Client, sources []provider.MediaSource) []provider.MediaSource {
 	probeCtx, cancel := context.WithTimeout(ctx, manifestBatchProbeTimeout)
 	defer cancel()
@@ -75,7 +76,7 @@ func discoverManifestAudio(ctx context.Context, client *http.Client, sources []p
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, manifestProbeConcurrency)
 	for i := range sources {
-		if sources[i].Type != provider.SourceTypeHLS && !isHLSURL(sources[i].URL) {
+		if sources[i].Type != provider.SourceTypeHLS && !isHLSURL(sources[i].URL) && !isHLSURL(sources[i].ManifestURL) {
 			continue
 		}
 		wg.Add(1)
@@ -87,13 +88,26 @@ func discoverManifestAudio(ctx context.Context, client *http.Client, sources []p
 			case <-probeCtx.Done():
 				return
 			}
-			text, ok := fetchManifestText(probeCtx, client, sources[index])
+			probeSrc := sources[index]
+			if probeSrc.ManifestURL != "" {
+				probeSrc.URL = probeSrc.ManifestURL
+			}
+			text, ok := fetchManifestText(probeCtx, client, probeSrc)
 			if !ok {
 				return
 			}
-			if labels := hlsAudioLabels(text); len(labels) > 0 {
-				sources[index].AudioLabel = strings.Join(labels, " · ")
+			tracks := hlsAudioTracks(text)
+			if len(tracks) == 0 {
+				return
 			}
+			codes := make([]string, 0, len(tracks))
+			for _, track := range tracks {
+				codes = append(codes, track.Code)
+			}
+			src := &sources[index]
+			src.Audio.Languages = codes
+			src.AudioLabel = lang.Names(codes)
+			src.PreferredAudio = codes[0]
 		}(i)
 	}
 	wg.Wait()
@@ -121,7 +135,7 @@ func enrichAdaptiveSources(ctx context.Context, client *http.Client, sources []p
 	indices := make([]int, 0, len(sources))
 	for i := range sources {
 		src := &sources[i]
-		if (src.Type != provider.SourceTypeHLS && !isHLSURL(src.URL)) || !kit.IsAdaptiveQuality(src.Quality) {
+		if (src.Type != provider.SourceTypeHLS && !isHLSURL(src.URL) && !isHLSURL(src.ManifestURL)) || !kit.IsAdaptiveQuality(src.Quality) {
 			continue
 		}
 		indices = append(indices, i)
@@ -145,13 +159,19 @@ func enrichAdaptiveSources(ctx context.Context, client *http.Client, sources []p
 			case <-probeCtx.Done():
 				return
 			}
-			text, ok := fetchManifestText(probeCtx, client, sources[i])
+			probeSrc := sources[i]
+			manifestURL := probeSrc.URL
+			if probeSrc.ManifestURL != "" {
+				probeSrc.URL = probeSrc.ManifestURL
+				manifestURL = probeSrc.ManifestURL
+			}
+			text, ok := fetchManifestText(probeCtx, client, probeSrc)
 			if !ok {
 				return
 			}
 			src := sources[i]
 			relabeled := false
-			enrichSourceFromVariants(&src, kit.ParseHLSVariantsText(src.URL, text), &relabeled)
+			enrichSourceFromVariants(&src, kit.ParseHLSVariantsText(manifestURL, text), &relabeled)
 			if src.Bitrate == 0 && !relabeled {
 				return
 			}
@@ -238,15 +258,23 @@ func mergeManifestAudio(verified, enriched []provider.MediaSource) []provider.Me
 		return verified
 	}
 	type probedFields struct {
-		audio   string
-		quality string
-		bitrate int
+		audio     string
+		preferred string
+		langs     []string
+		quality   string
+		bitrate   int
 	}
 	fields := make(map[string]probedFields, len(enriched))
 	for _, src := range enriched {
 		got := fields[src.URL]
 		if got.audio == "" {
 			got.audio = src.AudioLabel
+		}
+		if got.preferred == "" {
+			got.preferred = src.PreferredAudio
+		}
+		if len(got.langs) == 0 {
+			got.langs = src.Audio.Languages
 		}
 		if src.Bitrate > got.bitrate {
 			got.bitrate = src.Bitrate
@@ -258,13 +286,18 @@ func mergeManifestAudio(verified, enriched []provider.MediaSource) []provider.Me
 	}
 	for i := range verified {
 		got := fields[verified[i].URL]
-		// A probed label is the stream's own declared renditions, so it
-		// outranks any provider-supplied guess. Providers that only know
-		// the channel (its country or directory languages) leave the
-		// label empty anyway, which keeps the table honest about single-
-		// track mirrors.
+		// Probed fields are the stream's own declared renditions, so they
+		// outrank any provider-supplied guess. Providers that only know
+		// the channel (its country or directory languages) leave them
+		// empty, which keeps the table honest about single-track mirrors.
 		if got.audio != "" {
 			verified[i].AudioLabel = got.audio
+		}
+		if got.preferred != "" {
+			verified[i].PreferredAudio = got.preferred
+		}
+		if len(got.langs) > 0 {
+			verified[i].Audio.Languages = got.langs
 		}
 		if verified[i].Bitrate == 0 {
 			verified[i].Bitrate = got.bitrate
@@ -281,8 +314,14 @@ func isHLSURL(raw string) bool {
 	return err == nil && strings.HasSuffix(strings.ToLower(u.Path), ".m3u8")
 }
 
-func hlsAudioLabels(manifest string) []string {
-	labels := make(map[string]struct{})
+type hlsAudioTrack struct {
+	Code    string
+	Default bool
+}
+
+func hlsAudioTracks(manifest string) []hlsAudioTrack {
+	var tracks []hlsAudioTrack
+	seen := make(map[string]int)
 	scanner := bufio.NewScanner(strings.NewReader(manifest))
 	scanner.Buffer(make([]byte, 1024), 64<<10)
 	for scanner.Scan() {
@@ -291,24 +330,46 @@ func hlsAudioLabels(manifest string) []string {
 			continue
 		}
 		attrs := parseHLSAttributes(strings.TrimPrefix(line, "#EXT-X-MEDIA:"))
-		name := strings.TrimSpace(attrs["NAME"])
-		language := strings.TrimSpace(attrs["LANGUAGE"])
-		if name == "" || strings.EqualFold(name, "audio") || strings.EqualFold(name, "unknown") {
-			if language == "" || strings.EqualFold(language, "und") || strings.EqualFold(language, "unknown") {
-				continue
+		code := canonicalAudioCode(attrs["LANGUAGE"], attrs["NAME"])
+		if code == "" {
+			continue
+		}
+		isDefault := strings.EqualFold(strings.TrimSpace(attrs["DEFAULT"]), "YES")
+		if index, ok := seen[code]; ok {
+			if isDefault {
+				tracks[index].Default = true
 			}
-			name = lang.Name(language)
+			continue
 		}
-		if name != "" {
-			labels[name] = struct{}{}
+		seen[code] = len(tracks)
+		tracks = append(tracks, hlsAudioTrack{Code: code, Default: isDefault})
+	}
+	ordered := make([]hlsAudioTrack, 0, len(tracks))
+	for _, track := range tracks {
+		if track.Default {
+			ordered = append(ordered, track)
 		}
 	}
-	out := make([]string, 0, len(labels))
-	for label := range labels {
-		out = append(out, label)
+	for _, track := range tracks {
+		if !track.Default {
+			ordered = append(ordered, track)
+		}
 	}
-	sort.Strings(out)
-	return out
+	return ordered
+}
+
+func canonicalAudioCode(language, name string) string {
+	if code := lang.Normalize(language); code != "" && !strings.EqualFold(code, "und") {
+		if base, _, regional := strings.Cut(code, "-"); regional && lang.Name(base) != strings.ToUpper(base) {
+			return base
+		}
+		return code
+	}
+	label := strings.TrimSpace(name)
+	if label == "" || strings.EqualFold(label, "audio") || strings.EqualFold(label, "unknown") {
+		return ""
+	}
+	return lang.FromLabel(label)
 }
 
 func parseHLSAttributes(raw string) map[string]string {

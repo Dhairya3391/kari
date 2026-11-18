@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"kari/internal/filter"
-	"kari/internal/lang"
 	"kari/internal/provider"
 	"kari/internal/provider/kit"
 )
@@ -381,10 +380,9 @@ func renderSourcesTable(data PreviewData, st Styles, windowSize int) string {
 	return strings.Join(padLines(rows, tableLines), "\n")
 }
 
-// formatSourceAudio names the audio language for the sources table. A display
-// label wins because live channels may broadcast in several languages; then a
-// single detected track language; then a dash when the stream does not
-// advertise language metadata.
+// formatSourceAudio names the audio languages for the sources table. The
+// label is populated only from the stream's own HLS manifest, so a source
+// without declared renditions shows a dash rather than a provider guess.
 func formatSourceAudio(src provider.MediaSource, width int) string {
 	if label := strings.TrimSpace(src.AudioLabel); label != "" {
 		languages := strings.Split(label, " · ")
@@ -392,9 +390,6 @@ func formatSourceAudio(src provider.MediaSource, width int) string {
 			return truncate(strings.TrimSpace(languages[0]), max(1, width-3)) + fmt.Sprintf(" +%d", len(languages)-1)
 		}
 		return label
-	}
-	if l := strings.TrimSpace(src.Language); l != "" {
-		return lang.Name(l)
 	}
 	return "—"
 }

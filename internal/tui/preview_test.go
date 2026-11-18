@@ -112,7 +112,7 @@ func TestPreviewSourcesAudioColumn(t *testing.T) {
 	ranked := func() []filter.RankedSource {
 		return []filter.RankedSource{
 			{Source: provider.MediaSource{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p [MovieBox]", Resolver: "pengu"}},
-			{Source: provider.MediaSource{URL: "https://cdn.example.com/b.m3u8", Quality: "1080p [MovieBox] (Hindi)", Resolver: "pengu", Language: "hi"}},
+			{Source: provider.MediaSource{URL: "https://cdn.example.com/b.m3u8", Quality: "1080p [MovieBox] (Hindi)", Resolver: "pengu", AudioLabel: "Hindi"}},
 		}
 	}
 	t.Run("tv shows audio per row", func(t *testing.T) {
@@ -133,6 +133,25 @@ func TestPreviewSourcesAudioColumn(t *testing.T) {
 		}
 		if !strings.Contains(out, "Hindi") {
 			t.Errorf("Hindi audio missing, got:\n%s", out)
+		}
+	})
+	t.Run("provider language alone is not shown", func(t *testing.T) {
+		// A provider metadata tag is not manifest-declared audio, so the
+		// column must stay honest instead of claiming a language.
+		data := PreviewData{
+			RankedSources: []filter.RankedSource{{Source: provider.MediaSource{
+				URL: "https://cdn.example.com/c.m3u8", Language: "hi",
+			}}},
+			Mode:   provider.ModeTV,
+			Width:  100,
+			Accent: ResolveAccent(model.KindTV, "Auto"),
+		}
+		out := RenderPreviewScreen(data)
+		if strings.Contains(out, "Hindi") {
+			t.Errorf("provider-only language must not be displayed, got:\n%s", out)
+		}
+		if !strings.Contains(out, "—") {
+			t.Errorf("undeclared audio should show a dash, got:\n%s", out)
 		}
 	})
 	t.Run("multiple audio languages are explicit", func(t *testing.T) {

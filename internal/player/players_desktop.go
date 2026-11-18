@@ -105,7 +105,7 @@ func buildVLCArgs(source provider.MediaSource, media model.ResolvedMedia) []stri
 	if title := media.DisplayTitle(); title != "" {
 		args = append(args, "--meta-title="+sanitizeMediaTitle(title))
 	}
-	if lang := strings.ToLower(strings.TrimSpace(source.Language)); lang != "" {
+	if lang := strings.ToLower(strings.TrimSpace(source.AudioPreference())); lang != "" {
 		args = append(args, "--audio-language="+lang)
 	}
 	if subtitlePath := media.SubtitlePath(); subtitlePath != "" {
@@ -273,7 +273,7 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendIINASubtitleArgs(args, media.SubtitlePath(), media.SubtitleLanguage)
-	args = appendAudioLangArgs(args, source.Language)
+	args = appendAudioLangArgs(args, source.AudioPreference())
 	args = append(args, aniskipArgs...)
 	return append(args, iinaExtraArgs(source.ExtraArgs, media.SubtitlePath())...)
 }

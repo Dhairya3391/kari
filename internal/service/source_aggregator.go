@@ -56,6 +56,12 @@ func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) b
 	if dst.Backend == "" {
 		dst.Backend = src.Backend
 	}
+	if dst.ManifestURL == "" {
+		dst.ManifestURL = src.ManifestURL
+	}
+	if dst.PreferredAudio == "" {
+		dst.PreferredAudio = src.PreferredAudio
+	}
 	dst.FallbackOnly = dst.FallbackOnly && src.FallbackOnly
 	if dst.Referer == "" {
 		dst.Referer = src.Referer
@@ -106,7 +112,10 @@ func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) b
 	return before.SubType != dst.SubType || before.Backend != dst.Backend ||
 		before.FallbackOnly != dst.FallbackOnly || before.Referer != dst.Referer ||
 		before.UserAgent != dst.UserAgent || before.CookieHeader != dst.CookieHeader ||
+		before.ManifestURL != dst.ManifestURL ||
+		before.PreferredAudio != dst.PreferredAudio ||
 		before.Language != dst.Language || before.AudioLabel != dst.AudioLabel ||
+		!slices.Equal(before.Audio.Languages, dst.Audio.Languages) ||
 		before.Quality != dst.Quality || before.Bitrate != dst.Bitrate ||
 		!slices.Equal(before.ExtraArgs, dst.ExtraArgs) ||
 		len(before.Subtitles) != len(dst.Subtitles)

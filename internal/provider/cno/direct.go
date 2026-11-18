@@ -304,15 +304,16 @@ func (c *Client) fetchHLSSources(
 	var sources []provider.MediaSource
 	for _, v := range variants {
 		sources = append(sources, provider.MediaSource{
-			URL:       v.URL,
-			Quality:   v.Quality,
-			Height:    v.Height,
-			Bitrate:   v.Bandwidth,
-			Backend:   label,
-			Type:      provider.SourceTypeHLS,
-			Referer:   c.siteBase + "/",
-			UserAgent: config.DesktopUserAgent,
-			ExtraArgs: []string{"--demuxer-lavf-o=extension_picky=0,allowed_segment_extensions=ALL"},
+			URL:         v.URL,
+			ManifestURL: masterURL,
+			Quality:     v.Quality,
+			Height:      v.Height,
+			Bitrate:     v.Bandwidth,
+			Backend:     label,
+			Type:        provider.SourceTypeHLS,
+			Referer:     c.siteBase + "/",
+			UserAgent:   config.DesktopUserAgent,
+			ExtraArgs:   []string{"--demuxer-lavf-o=extension_picky=0,allowed_segment_extensions=ALL"},
 		})
 	}
 

@@ -289,7 +289,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 
 	pipeMpvArgs = appendTitleArgs(pipeMpvArgs, media.DisplayTitle())
 	pipeMpvArgs = appendSubtitleArgs(pipeMpvArgs, media.SubtitlePath(), media.SubtitleLanguage)
-	pipeMpvArgs = appendAudioLangArgs(pipeMpvArgs, source.Language)
+	pipeMpvArgs = appendAudioLangArgs(pipeMpvArgs, source.AudioPreference())
 	pipeMpvArgs = append(pipeMpvArgs, aniskipArgs...)
 	pipeMpvArgs = appendExtraArgsWithBracket(pipeMpvArgs, source.ExtraArgs, media.SubtitlePath())
 	if runtime.GOOS == "darwin" {
@@ -404,7 +404,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendSubtitleArgs(args, media.SubtitlePath(), media.SubtitleLanguage)
-	args = appendAudioLangArgs(args, source.Language)
+	args = appendAudioLangArgs(args, source.AudioPreference())
 	args = append(args, aniskipArgs...)
 	// ExtraArgs may contain --demuxer-lavf-format=hls (miruro). When
 	// a subtitle file is present, that format override bleeds onto the subtitle

@@ -220,9 +220,11 @@ func (s *SkipTimes) HasSegments() bool {
 // MediaSource is one playable stream. Providers fill everything except
 // Resolver, which MediaService stamps with the producing provider's name.
 type MediaSource struct {
-	URL      string
-	Quality  string
-	Resolver string
+	URL            string
+	ManifestURL    string
+	PreferredAudio string
+	Quality        string
+	Resolver       string
 	// Backend identifies the upstream lane or encoder independently of quality.
 	Backend      string
 	Referer      string
@@ -239,12 +241,11 @@ type MediaSource struct {
 	// Audio is the typed audio identity of the source. It replaces string
 	// matching against Language, Quality, Resolver, and AudioLabel.
 	Audio AudioInfo
-	// AudioLabel is the display-only audio language description for sources
-	// whose audio is not a single selectable track: live channels that
-	// broadcast in several languages, or sources whose language is inferred
-	// from metadata rather than a stream tag. It may name more than one
-	// language, so it must never drive --alang selection; Language remains
-	// the canonical single code for that.
+	// AudioLabel is the display-only audio language description, populated
+	// from the HLS master's declared renditions. It may name more than one
+	// language, so it must never drive --alang selection; PreferredAudio is
+	// the single code that does, with Language as the fallback for sources
+	// whose manifest declares no audio tracks.
 	AudioLabel string
 	// SubType marks the anime subtitle kind the upstream declares for this
 	// stream: "hard" (burned in), "soft" (toggleable), or "" unknown.
@@ -264,6 +265,16 @@ type MediaSource struct {
 	// when unknown. Ranking uses it to break ties between sources of equal
 	// resolution so the higher-bitrate encode is preferred.
 	Bitrate int
+}
+
+// AudioPreference returns the single language code for the player's --alang
+// selection. A language discovered from the HLS manifest wins; the provider's
+// Language tag is only a fallback for sources the probe could not enrich.
+func (s MediaSource) AudioPreference() string {
+	if code := strings.TrimSpace(s.PreferredAudio); code != "" {
+		return code
+	}
+	return s.Language
 }
 
 // TransportIdentity returns the canonical identity used to deduplicate a
