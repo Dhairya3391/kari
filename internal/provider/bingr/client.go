@@ -2,10 +2,10 @@
 // a multi-format media catalog providing movies, television series,
 // animation/cartoons, and anime.
 //
-// and cartoons, and the AniList index for anime. Stream resolution routes
-// through Bingr's backend shard cluster (Aphelion, Polaris, Bastion) for
-// movies, television, and TMDB-mapped anime, augmented by direct MegaPlay
-// embeds for AniList-keyed subbed and dubbed anime streams.
+// Catalog metadata lives on api.bingr.st. Playback for movies, television,
+// and cartoons comes from the sealed stream payload embedded in each
+// https://bingr.one/watch page; anime is resolved through direct MegaPlay
+// embeds keyed by AniList or MAL ID.
 package bingr
 
 import (
@@ -63,23 +63,24 @@ type Client struct {
 	base        *streambase.Base
 	httpClient  *http.Client
 	apiBase     string
+	siteBase    string
 	embedBase   string
 	anilistBase string
 
-	metaCache      sync.Map
 	animeMetaCache sync.Map
 }
 
 // NewClient constructs the Bingr provider over the shared TMDB search base
 // pointing to production endpoints.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
-	return NewClientWithURLs(keyPool, config.BingrAPIBase, megaplayBase, config.AniListAPIBase)
+	return NewClientWithURLs(keyPool, config.BingrAPIBase, config.BingrSiteBase, megaplayBase, config.AniListAPIBase)
 }
 
 // NewClientWithURLs constructs the provider against custom endpoints so tests
-// can mock external backends without live network requests. The embedBase
-// argument is the MegaPlay origin that serves anime embeds and getSources.
-func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, embedBase, anilistBase string) (*Client, error) {
+// can mock external backends without live network requests. The siteBase
+// argument is the web origin whose watch pages carry sealed stream payloads;
+// embedBase is the MegaPlay origin serving anime embeds and getSources.
+func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, siteBase, embedBase, anilistBase string) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
 		return nil, fmt.Errorf("bingr streambase: %w", err)
@@ -87,6 +88,10 @@ func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, embedBase, anilistBase st
 	apiBase = strings.TrimRight(strings.TrimSpace(apiBase), "/")
 	if apiBase == "" {
 		apiBase = config.BingrAPIBase
+	}
+	siteBase = strings.TrimRight(strings.TrimSpace(siteBase), "/")
+	if siteBase == "" {
+		siteBase = config.BingrSiteBase
 	}
 	embedBase = strings.TrimRight(strings.TrimSpace(embedBase), "/")
 	if embedBase == "" {
@@ -100,6 +105,7 @@ func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, embedBase, anilistBase st
 		base:        base,
 		httpClient:  httpclient.New(),
 		apiBase:     apiBase,
+		siteBase:    siteBase,
 		embedBase:   embedBase,
 		anilistBase: anilistBase,
 	}, nil

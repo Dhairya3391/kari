@@ -7,7 +7,6 @@ const (
 	AnikotoBase      = "https://anikototv.se"
 	MovyReferer      = "https://www.movy.sx/"
 	PenguAPIBase     = "https://pengu.uk"
-	TheDaddyBase     = "https://thedaddy.li"
 	TMDBAPIBase      = "https://api.themoviedb.org/3"
 	TMDBBaseURL      = "https://www.themoviedb.org"
 	TMDBImageBase    = "https://image.tmdb.org/t/p/"
@@ -86,6 +85,17 @@ const (
 	// CnoReferer satisfies hotlink and header protection on Cno API and stream requests.
 	CnoReferer = "https://cno.to/"
 
+	// Q62Base is the Q62 web application (https://q62flix.ws).
+	Q62Base = "https://q62flix.ws"
+	// Q62APIBase serves Q62's catalog and signed release descriptors. Content
+	// is keyed by opaque site IDs rather than TMDB IDs, so search and episode
+	// listings go through this API instead of the shared TMDB-backed base.
+	Q62APIBase = "https://api.q62flix.ws"
+	// Q62StreamProxyBase is the media proxy referenced by the site's own
+	// player. Release descriptors carry relative HLS/VTT paths with a signed
+	// token; the proxy is the only host that serves them.
+	Q62StreamProxyBase = "https://proxy.7movie.ws"
+
 	// CinejoyBase is the Cinejoy web application (https://cinejoy.pk). Its
 	// sealed resolution gateway and stream CDNs both key on this origin, so
 	// sources carry it as their Referer and derived Origin header.
@@ -138,9 +148,12 @@ const (
 	AniDreamReferer = "https://anidream.to/"
 
 	// BingrAPIBase is the REST API endpoint for Bingr (https://bingr.st).
+	// It still serves catalog metadata; stream resolution moved off this host.
 	BingrAPIBase = "https://api.bingr.st/api"
-	// BingrOrigin is the Origin header sent to Bingr API endpoints.
-	BingrOrigin = "https://bingr.st"
+	// BingrSiteBase is Bingr's current web application (https://bingr.one).
+	// Its watch pages embed a short-lived sealed payload holding the streams
+	// that replaced the retired shard API on api.bingr.st.
+	BingrSiteBase = "https://bingr.one"
 	// BingrReferer satisfies hotlink and referer requirements on Bingr API requests.
 	BingrReferer = "https://bingr.st/"
 	// DefaultDiscordAppID is the Kari Discord application used for Rich
@@ -164,6 +177,19 @@ const (
 	FamelackTVChannelsURL = FamelackDataBase + "/tv/categories/all.json"
 	// FamelackTVCountriesURL maps ISO country codes to display names.
 	FamelackTVCountriesURL = FamelackDataBase + "/tv/countries_metadata.json"
+)
+
+// Zlive live TV and sports endpoints. The catalog is public; resolution uses
+// the same signed envelope the site's own player sends.
+const (
+	// ZliveSiteBase is the public zlive.st origin used as the player referer.
+	ZliveSiteBase = "https://zlive.st"
+	// ZliveAPIBase serves the channel catalog, session tickets, and signed
+	// stream resolution.
+	ZliveAPIBase = "https://iptv.zlive.st"
+	// ZliveSigningSecret is the fixed client key the site's player derives
+	// from its bundled base64 credential. It is not user data.
+	ZliveSigningSecret = "SfrcOczV4qSNuSMiouJIDtTOVXUYWzbgFnLDdF9DUSf"
 )
 
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var

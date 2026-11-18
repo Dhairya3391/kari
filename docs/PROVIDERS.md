@@ -25,8 +25,8 @@ Declared modes/priorities:
 | mode | providers (priority) | evidence |
 | --- | --- | --- |
 | anime | anicine P1, anikoto P2, anipm P1, anivault P2, anidream P2, miruro P2, pengu P3 | `anicine`, `anikoto`, `anipm`, `anivault`, `anidream`, `miruro`, `pengu` `client.go` `Modes()` |
-| movies/tv/cartoon | movysx P2, pengu P2, solis P2, cinecat P2, cinejoy P2, cno P2, sweetfox P2 | `movysx`, `pengu`, `solis`, `cinecat`, `cinejoy`, `cno`, `sweetfox` `client.go` `Modes()` |
-| live | thedaddy P1 (sports + live TV), famelack P2 (live TV only) | `thedaddy/client.go`, `famelack/client.go` `Modes()` |
+| movies/tv/cartoon | movysx P2, pengu P2, solis P2, cinecat P2, cinejoy P2, cno P2, sweetfox P2, q62 P2 | `movysx`, `pengu`, `solis`, `cinecat`, `cinejoy`, `cno`, `sweetfox`, `q62` `client.go` `Modes()` |
+| live | famelack P2 (live TV only), zlive P3 (sports + live TV) | `famelack/client.go`, `zlive/client.go` `Modes()` |
 | reading (internal mode `manga`) | weebcentral P1, anidream P2, atsu P2 | `weebcentral`, `anidream`, `atsu` `Modes()` |
 | jellyfin | jellyfin P1 only | `jellyfin/client.go:55-59` |
 

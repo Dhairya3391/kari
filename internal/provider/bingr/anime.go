@@ -19,7 +19,6 @@ import (
 	"kari/internal/provider"
 	"kari/internal/provider/anilist"
 	"kari/internal/provider/kit"
-	"kari/internal/timeouts"
 )
 
 type animeSearchResponse struct {
@@ -200,13 +199,14 @@ func (c *Client) resolveAnime(
 
 	meta, err := c.fetchAnimeMeta(ctx, anilistID)
 	if err != nil {
-		return fmt.Errorf("bingr anime meta: %w", err)
+		// The sealed-source branch keys off the handle's AniList ID alone, so
+		// a dead metadata endpoint must not hide streams it does not own.
+		logging.Debug("bingr anime meta unavailable", "anilistID", anilistID, "err", err)
 	}
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	totalSources := 0
-	var lastErr error
 
 	pushSources := func(sources []provider.MediaSource) {
 		if len(sources) == 0 {
@@ -223,7 +223,7 @@ func (c *Client) resolveAnime(
 		}
 	}
 
-	if meta.IDMal > 0 {
+	if meta != nil && meta.IDMal > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -236,55 +236,27 @@ func (c *Client) resolveAnime(
 		}()
 	}
 
-	// Branch 2: Bingr server shards (if TMDB mapping is present).
-	if meta.TMDBID > 0 {
+	// Branch 2: Bingr's own anime backends. These embed different CDN links
+	// from the MegaPlay routes above, so they are worth resolving in parallel.
+	if anilistID != "" {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			mType := meta.TMDBType
-			if mType == "" {
-				mType = provider.MediaTypeTV
+			sources, err := c.fetchAnimeSealedSources(ctx, anilistID, epNum, category)
+			if err != nil {
+				logging.Debug("bingr anime sealed sources failed", "anilistID", anilistID, "ep", epNum, "cat", category, "err", err)
+				return
 			}
-			if meta.Format == "MOVIE" {
-				mType = provider.MediaTypeMovie
+			for i := range sources {
+				sources[i].Audio.Track = animeTrack(category)
 			}
-
-			var subWG sync.WaitGroup
-			for _, srv := range activeServers {
-				subWG.Add(1)
-				go func(srv serverSpec) {
-					defer subWG.Done()
-					reqCtx, cancel := context.WithTimeout(ctx, timeouts.BingrShard)
-					defer cancel()
-
-					sources, err := c.fetchServerStreams(reqCtx, srv, mType, meta.TMDBID, 1, epNum, meta.Title, "")
-					if err != nil {
-						logging.Debug("bingr anime shard failed", "srv", srv.id, "err", err)
-						mu.Lock()
-						lastErr = err
-						mu.Unlock()
-						return
-					}
-					if len(sources) == 0 {
-						return
-					}
-
-					for i := range sources {
-						sources[i].Audio.Track = animeTrack(category)
-					}
-					pushSources(sources)
-				}(srv)
-			}
-			subWG.Wait()
+			pushSources(sources)
 		}()
 	}
 
 	wg.Wait()
 
 	if totalSources == 0 {
-		if lastErr != nil {
-			return fmt.Errorf("bingr anime resolve: %w", lastErr)
-		}
 		return provider.ErrNoSources
 	}
 	return nil

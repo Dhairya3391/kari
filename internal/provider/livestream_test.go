@@ -32,6 +32,12 @@ func TestVerifyLiveStream(t *testing.T) {
 		case "/dead-segment.m3u8":
 			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 			_, _ = w.Write([]byte(deadSegment))
+		case "/image.m3u8":
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			_, _ = w.Write([]byte("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.0,\nimage-seg.ts\n"))
+		case "/image-seg.ts":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("\x89PNG\r\n\x1a\nnot a video segment"))
 		case "/html.m3u8":
 			w.Header().Set("Content-Type", "text/html")
 			_, _ = w.Write([]byte("<html>not a stream</html>"))
@@ -61,6 +67,7 @@ func TestVerifyLiveStream(t *testing.T) {
 		{name: "hls detected by content type", source: MediaSource{URL: server.URL + "/no-type"}},
 		{name: "hls dead variant", source: MediaSource{URL: server.URL + "/dead-variant.m3u8", Type: SourceTypeHLS}, wantErr: true},
 		{name: "hls dead segment", source: MediaSource{URL: server.URL + "/dead-segment.m3u8", Type: SourceTypeHLS}, wantErr: true},
+		{name: "hls image segment", source: MediaSource{URL: server.URL + "/image.m3u8", Type: SourceTypeHLS}, wantErr: true},
 		{name: "hls html error page", source: MediaSource{URL: server.URL + "/html.m3u8", Type: SourceTypeHLS}, wantErr: true},
 		{name: "hls forbidden", source: MediaSource{URL: server.URL + "/bad.m3u8", Type: SourceTypeHLS}, wantErr: true},
 		{name: "empty body", source: MediaSource{URL: server.URL + "/empty.mp4", Type: SourceTypeMP4}, wantErr: true},
@@ -113,6 +120,51 @@ func TestVerifyLiveStream(t *testing.T) {
 	}
 	if got := seenHeaders.Get("Origin"); got != "" {
 		t.Errorf("Origin = %q, want empty", got)
+	}
+}
+
+func TestVerifyLiveStreamWithHeaders(t *testing.T) {
+	var seen http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		_, _ = w.Write([]byte("#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:4,\nseg.ts\n"))
+	}))
+	defer server.Close()
+
+	source := MediaSource{URL: server.URL + "/live.m3u8", Type: SourceTypeHLS}
+	extra := map[string]string{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"}
+	if err := VerifyLiveStreamWithHeaders(context.Background(), server.Client(), source, extra); err != nil {
+		t.Fatalf("VerifyLiveStreamWithHeaders: %v", err)
+	}
+	for name, want := range extra {
+		if got := seen.Get(name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestLooksLikeImage(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+		want bool
+	}{
+		{name: "png", body: []byte("\x89PNG\r\n\x1a\nnot a video segment"), want: true},
+		{name: "jpeg", body: []byte{0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0}, want: true},
+		{name: "gif", body: []byte("GIF89a\x00\x00"), want: true},
+		{name: "webp", body: []byte("RIFF\x00\x00\x00\x00WEBPVP8 "), want: true},
+		// A short RIFF header must not index past the body.
+		{name: "short riff", body: []byte("RIFF\x00\x00\x00\x00"), want: false},
+		{name: "mpeg-ts", body: []byte{0x47, 0x40, 0x00, 0x10, 0, 0, 0, 0}, want: false},
+		{name: "empty", body: nil, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := looksLikeImage(tc.body); got != tc.want {
+				t.Fatalf("looksLikeImage(%q) = %v, want %v", tc.body, got, tc.want)
+			}
+		})
 	}
 }
 

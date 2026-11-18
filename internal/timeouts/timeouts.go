@@ -124,7 +124,6 @@ const (
 
 // Provider-internal fan-out budgets, each measured P95 * 1.75.
 const (
-	BingrMeta          = 2625 * time.Millisecond  // measured 1.5s * 1.75
 	BingrShard         = 5250 * time.Millisecond  // measured 3s * 1.75
 	BingrFanout        = 8750 * time.Millisecond  // measured 5s * 1.75
 	PenguSubtitleCtx   = 3500 * time.Millisecond  // measured 2s * 1.75

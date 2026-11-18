@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 // fixtureEnc is a canned Megaplay getSources token that decrypts to a signed
@@ -70,272 +69,235 @@ func TestBingrCapabilities(t *testing.T) {
 	}
 }
 
+// watchPageResponse embeds a sealed payload the way Bingr's watch pages do.
+func watchPageResponse(t *testing.T, payload sealedSources) http.HandlerFunc {
+	t.Helper()
+	sealed := sealJSONForTest(t, payload)
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprintf(w, `<html><body><script>self.__next_f.push([1,%q])</script></body></html>`, "22:T,"+sealed)
+	}
+}
+
+func watchPageWithToken(t *testing.T, payload sealedSources, token string) http.HandlerFunc {
+	t.Helper()
+	sealed := sealJSONForTest(t, payload)
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprintf(w,
+			`<html><body><script>self.__next_f.push([1,%q])</script><script>\"token\":%q</script></body></html>`,
+			"22:T,"+sealed, token)
+	}
+}
+
+// mockAnimeSealedAPI serves the anime watch page and its source API with one
+// distinct CDN link per backend and audio pair.
+func mockAnimeSealedAPI(t *testing.T, mux *http.ServeMux, anilistID string, ep int, token string, servers []string) {
+	t.Helper()
+	list := make([]sealedServer, len(servers))
+	for i, id := range servers {
+		list[i] = sealedServer{ID: id, Label: id}
+	}
+	mux.HandleFunc(fmt.Sprintf("/watch/anime/%s/%d", anilistID, ep), watchPageWithToken(t, sealedSources{
+		Provider: sealedProvider{ID: servers[0], Label: servers[0]},
+		Servers:  list,
+		Streams: []sealedStream{{
+			URL:     fmt.Sprintf("https://cdn.example.com/anime/%s/sub.m3u8", servers[0]),
+			Quality: "1080p",
+		}},
+	}, token))
+	mux.HandleFunc("/api/sources", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("t") != token {
+			http.Error(w, "bad token", http.StatusBadRequest)
+			return
+		}
+		backend := r.URL.Query().Get("provider")
+		if backend == "" {
+			http.Error(w, "no provider", http.StatusBadRequest)
+			return
+		}
+		audio := r.URL.Query().Get("audio")
+		if audio == "" {
+			audio = "sub"
+		}
+		_, _ = fmt.Fprint(w, sealJSONForTest(t, sealedSources{
+			Provider: sealedProvider{ID: backend, Label: backend},
+			Streams: []sealedStream{{
+				URL:     fmt.Sprintf("https://cdn.example.com/anime/%s/%s.m3u8", backend, audio),
+				Quality: "1080p",
+			}},
+		}))
+	})
+}
+
+func TestBingrCollectsAllServers(t *testing.T) {
+	const token = "test.token_abc123"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/watch/movie/550", watchPageWithToken(t, sealedSources{
+		Provider: sealedProvider{ID: "prism", Label: "Prism"},
+		Servers: []sealedServer{
+			{ID: "prism"}, {ID: "comet"}, {ID: "flux"},
+		},
+		Streams: []sealedStream{{URL: "https://cdn.example.com/prism.m3u8", Quality: "1080p"}},
+	}, token))
+	mux.HandleFunc("/api/sources", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("t") != token {
+			http.Error(w, "bad token", http.StatusBadRequest)
+			return
+		}
+		backend := r.URL.Query().Get("provider")
+		_, _ = fmt.Fprint(w, sealJSONForTest(t, sealedSources{
+			Provider: sealedProvider{ID: backend, Label: backend},
+			Streams: []sealedStream{{
+				URL:     "https://cdn.example.com/" + backend + ".m3u8",
+				Quality: "720p",
+			}},
+		}))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
+	sources, err := c.ResolveSource(context.Background(), "550", provider.Episode{TMDBID: 550})
+	if err != nil {
+		t.Fatalf("ResolveSource: %v", err)
+	}
+	got := make(map[string]bool, len(sources))
+	for _, s := range sources {
+		got[s.URL] = true
+	}
+	for _, backend := range []string{"prism", "comet", "flux"} {
+		want := "https://cdn.example.com/" + backend + ".m3u8"
+		if !got[want] {
+			t.Errorf("missing stream from server %q: %+v", backend, got)
+		}
+	}
+	if len(sources) != 3 {
+		t.Errorf("got %d sources, want 3 (one per server): %+v", len(sources), sources)
+	}
+}
+
 func TestBingrResolveMovieDirect(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/details/movie/550", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(detailsResponse{
-			ID:    550,
-			Type:  "movie",
-			Title: "Fight Club",
-			Year:  1999,
-		})
-	})
-	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
-		var req streamRequestBody
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if req.ID != "550" || req.T != "movie" {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if req.Srv == "s40" {
-			_ = json.NewEncoder(w).Encode(streamResponse{
-				ScraperName: "DarkMatter",
-				Sources: []streamItem{
-					{
-						URL:     "https://cdn.example.com/movie/550/1080p.m3u8",
-						Quality: "1080p",
-						Type:    "application/x-mpegurl",
-					},
-				},
-			})
-			return
-		}
-		if req.Srv == "s70" {
-			_ = json.NewEncoder(w).Encode(streamResponse{
-				ScraperName: "Polaris",
-				Sources: []streamItem{
-					{
-						URL:     "https://cdn.example.com/movie/550/720p.m3u8",
-						Quality: "720p",
-						Name:    "Hindi — 720p",
-					},
-				},
-				Subtitles: []subtitleItem{
-					{
-						URL:  "https://api.example.com/subs/en.vtt",
-						Lang: "en",
-					},
-				},
-			})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(streamResponse{})
-	})
-
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL)
-	if err != nil {
-		t.Fatalf("NewClientWithURLs: %v", err)
-	}
-
-	sources, err := c.ResolveSource(context.Background(), "550", provider.Episode{
-		TMDBID:  550,
-		Title:   "Fight Club",
-		Season:  0,
-		Episode: 0,
-	})
-	if err != nil {
-		t.Fatalf("ResolveSource: %v", err)
-	}
-	if len(sources) < 2 {
-		t.Fatalf("ResolveSource returned %d sources, want at least 2", len(sources))
-	}
-
-	hasDarkMatter := false
-	hasPolaris := false
-	for _, s := range sources {
-		if s.Backend == "DarkMatter" && strings.HasPrefix(s.URL, "https://cdn.example.com") {
-			hasDarkMatter = true
-			if s.Height != 1080 || s.Quality != "1080p" {
-				t.Errorf("DarkMatter height/quality = %d/%q, want 1080/1080p", s.Height, s.Quality)
-			}
-		}
-		if s.Backend == "Polaris" && s.Height == 720 {
-			hasPolaris = true
-			// The "Hindi" name is provider text, not a real audio code.
-			if s.Language != "" || len(s.Audio.Languages) != 0 {
-				t.Errorf("Polaris audio must stay unknown, got %q / %v", s.Language, s.Audio.Languages)
-			}
-			if len(s.Subtitles) == 0 || s.Subtitles[0].Language != "en" {
-				t.Errorf("Polaris stream missing en subtitle: %+v", s.Subtitles)
-			}
-		}
-	}
-	if !hasDarkMatter {
-		t.Errorf("missing DarkMatter 1080p stream: %+v", sources)
-	}
-	if !hasPolaris {
-		t.Errorf("missing Polaris 720p stream: %+v", sources)
-	}
-}
-
-// A stalled details endpoint used to hold every shard behind the service's
-// long deadline. The metadata lookup is now bounded and falls back to the
-// episode title so streams still resolve.
-func TestBingrSlowMetadataFallsBackAndStreams(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/details/movie/550", func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
-	})
-	titles := make(chan string, len(activeServers))
-	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
-		var req streamRequestBody
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		titles <- req.Query.Title
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(streamResponse{
-			Sources: []streamItem{{
-				URL:     "https://cdn.example.com/movie/550/index.m3u8",
-				Quality: "1080p",
-				Type:    "application/x-mpegurl",
-			}},
-		})
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL)
-	if err != nil {
-		t.Fatalf("NewClientWithURLs: %v", err)
-	}
-
-	start := time.Now()
-	sources, err := c.ResolveSource(context.Background(), "550", provider.Episode{
-		TMDBID: 550,
-		Title:  "Fight Club",
-	})
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("ResolveSource: %v", err)
-	}
-	if len(sources) == 0 {
-		t.Fatal("ResolveSource returned no sources")
-	}
-	if limit := metaTimeout + time.Second; elapsed > limit {
-		t.Fatalf("ResolveSource took %v, want under %v", elapsed, limit)
-	}
-	close(titles)
-	for title := range titles {
-		if title != "Fight Club" {
-			t.Errorf("stream query title = %q, want episode title fallback", title)
-		}
-	}
-}
-
-// A stalled shard must not keep the provider spinner alive past the shard
-// budget; the healthy shards still publish their sources.
-func TestBingrStalledShardDoesNotBlockResolve(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/details/movie/550", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(detailsResponse{ID: 550, Type: "movie", Title: "Fight Club", Year: 1999})
-	})
-	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
-		var req streamRequestBody
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if req.Srv == activeServers[0].id {
-			<-r.Context().Done()
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(streamResponse{
-			Sources: []streamItem{{
-				URL:     "https://cdn.example.com/movie/550/index.m3u8",
-				Quality: "1080p",
-				Type:    "application/x-mpegurl",
-			}},
-		})
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL)
-	if err != nil {
-		t.Fatalf("NewClientWithURLs: %v", err)
-	}
-
-	start := time.Now()
-	sources, err := c.ResolveSource(context.Background(), "550", provider.Episode{
-		TMDBID: 550,
-		Title:  "Fight Club",
-	})
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("ResolveSource: %v", err)
-	}
-	if len(sources) == 0 {
-		t.Fatal("ResolveSource returned no sources")
-	}
-	if limit := shardTimeout + time.Second; elapsed > limit {
-		t.Fatalf("ResolveSource took %v, want under %v", elapsed, limit)
-	}
-}
-
-func TestBingrResolveTVAphelion(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/details/tv/1396", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(detailsResponse{
-			ID:    1396,
-			Type:  "tv",
-			Title: "Breaking Bad",
-			Year:  2008,
-		})
-	})
-	mux.HandleFunc("/stream/aphelion-tv/1396/1/1", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(streamResponse{
-			ScraperName: "DarkMatter",
-			Sources: []streamItem{
-				{
-					URL:     "https://cdn.example.com/tv/1396/1/1/index.m3u8",
-					Quality: "1080p",
-					Type:    "application/x-mpegurl",
+	mux.HandleFunc("/watch/movie/550", watchPageResponse(t, sealedSources{
+		Provider: sealedProvider{ID: "prism", Label: "Prism"},
+		Streams: []sealedStream{
+			{URL: "https://cdn.example.com/movie/550/1080.m3u8", Type: "hls", Quality: "1080p", Language: "Original"},
+			{
+				URL:     "https://cdn.example.com/movie/550/720.m3u8",
+				Type:    "hls",
+				Quality: "720p",
+				Subtitles: []sealedSubtitle{
+					{URL: "https://api.example.com/subs/en.vtt", Lang: "en", Label: "English"},
 				},
 			},
-		})
-	})
-	mux.HandleFunc("/stream", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(streamResponse{})
-	})
-
+		},
+	}))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL)
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
+	sources, err := c.ResolveSource(context.Background(), "550", provider.Episode{TMDBID: 550, Title: "Fight Club"})
+	if err != nil {
+		t.Fatalf("ResolveSource: %v", err)
+	}
+	if len(sources) != 2 {
+		t.Fatalf("ResolveSource returned %d sources, want 2", len(sources))
+	}
+	if sources[0].Backend != "Prism" || sources[0].Height != 1080 || sources[0].Quality != "1080p" {
+		t.Errorf("first source = %+v", sources[0])
+	}
+	if len(sources[1].Subtitles) != 1 || sources[1].Subtitles[0].Language != "en" {
+		t.Errorf("second source subtitles = %+v", sources[1].Subtitles)
+	}
+	// "Original" and "Arabic sub" style labels must not become audio identities.
+	for _, s := range sources {
+		if s.Language != "" || len(s.Audio.Languages) != 0 {
+			t.Errorf("source audio must stay unknown, got %q / %v", s.Language, s.Audio.Languages)
+		}
+	}
+}
 
+func TestBingrResolveTVFromWatchPage(t *testing.T) {
+	var requested string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/watch/tv/1396/2/5", func(w http.ResponseWriter, r *http.Request) {
+		requested = r.URL.Path
+		watchPageResponse(t, sealedSources{
+			Provider: sealedProvider{ID: "prism", Label: "Prism"},
+			Streams: []sealedStream{{
+				URL:     "https://cdn.example.com/tv/1396/2/5/index.m3u8",
+				Type:    "hls",
+				Quality: "1080p",
+			}},
+		})(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
 	sources, err := c.ResolveSource(context.Background(), "1396", provider.Episode{
-		TMDBID:  1396,
-		Title:   "Pilot",
-		Season:  1,
-		Episode: 1,
+		TMDBID: 1396, Title: "Pilot", Season: 2, Episode: 5,
 	})
 	if err != nil {
 		t.Fatalf("ResolveSource: %v", err)
 	}
-	if len(sources) == 0 {
-		t.Fatal("ResolveSource returned 0 sources")
+	if requested != "/watch/tv/1396/2/5" {
+		t.Errorf("requested path = %q", requested)
 	}
-	if sources[0].URL != "https://cdn.example.com/tv/1396/1/1/index.m3u8" {
-		t.Errorf("sources[0].URL = %q", sources[0].URL)
+	if len(sources) != 1 || sources[0].URL != "https://cdn.example.com/tv/1396/2/5/index.m3u8" {
+		t.Errorf("sources = %+v", sources)
+	}
+}
+
+func TestBingrWatchPageErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+		wantErr error
+	}{
+		{
+			name: "missing payload",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprint(w, `<html><body>no player here</body></html>`)
+			},
+			wantErr: provider.ErrNoSources,
+		},
+		{
+			name: "upstream error",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "boom", http.StatusInternalServerError)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/watch/movie/550", tt.handler)
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
+
+			c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, srv.URL)
+			if err != nil {
+				t.Fatalf("NewClientWithURLs: %v", err)
+			}
+			_, err = c.ResolveSource(context.Background(), "550", provider.Episode{TMDBID: 550})
+			if err == nil {
+				t.Fatal("ResolveSource succeeded, want error")
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("error = %v, want %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -387,36 +349,13 @@ func TestBingrResolveAnime(t *testing.T) {
 		}
 	})
 
-	// Bingr stream for TMDB mapped anime
-	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
-		var req streamRequestBody
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		w.Header().Set("Content-Type", "application/json")
-		if req.ID == "209867" && req.Srv == "s70" {
-			_ = json.NewEncoder(w).Encode(streamResponse{
-				ScraperName: "Polaris",
-				Sources: []streamItem{
-					{
-						URL:     "https://cdn.example.com/polaris/frieren/original.m3u8",
-						Quality: "1080p",
-						Name:    "Original — 1080p",
-					},
-					{
-						URL:     "https://cdn.example.com/polaris/frieren/hindi.m3u8",
-						Quality: "1080p",
-						Name:    "Hindi — 1080p",
-					},
-				},
-			})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(streamResponse{})
-	})
+	// Bingr's own anime backends carry different CDN links from MegaPlay.
+	mockAnimeSealedAPI(t, mux, "154587", 1, "test.token_anime", []string{"katana-sub", "katana-dub"})
 
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL)
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -436,7 +375,7 @@ func TestBingrResolveAnime(t *testing.T) {
 	}
 
 	hasMegaPlaySub := false
-	hasPolarisOriginal := false
+	hasBingrAnimeSub := false
 	for _, s := range subSources {
 		if s.Backend == "MegaPlay" {
 			hasMegaPlaySub = true
@@ -450,18 +389,18 @@ func TestBingrResolveAnime(t *testing.T) {
 				t.Errorf("unexpected sub subtitles: %+v", s.Subtitles)
 			}
 		}
-		if s.Backend == "Polaris" && strings.HasSuffix(s.URL, "/original.m3u8") {
-			hasPolarisOriginal = true
+		if strings.HasSuffix(s.URL, "/katana-dub/sub.m3u8") {
+			hasBingrAnimeSub = true
 			if s.Audio.Track != provider.TrackSub {
-				t.Errorf("anime shard track = %q, want sub", s.Audio.Track)
+				t.Errorf("anime backend track = %q, want sub", s.Audio.Track)
 			}
 		}
 	}
 	if !hasMegaPlaySub {
 		t.Errorf("missing MegaPlay sub stream: %+v", subSources)
 	}
-	if !hasPolarisOriginal {
-		t.Errorf("missing Polaris Original stream: %+v", subSources)
+	if !hasBingrAnimeSub {
+		t.Errorf("missing bingr anime sub stream: %+v", subSources)
 	}
 
 	// 2. Resolve DUB
@@ -474,13 +413,13 @@ func TestBingrResolveAnime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSource dub: %v", err)
 	}
-	hasHindiDub := false
+	hasBingrAnimeDub := false
 	hasMegaPlayDub := false
 	for _, s := range dubSources {
-		if strings.HasSuffix(s.URL, "/hindi.m3u8") {
-			hasHindiDub = true
+		if strings.HasSuffix(s.URL, "/katana-dub/dub.m3u8") {
+			hasBingrAnimeDub = true
 			if s.Audio.Track != provider.TrackDub || len(s.Audio.Languages) != 0 {
-				t.Errorf("Hindi-named shard audio = %+v, want dub with no guessed language", s.Audio)
+				t.Errorf("bingr anime dub audio = %+v, want dub with no guessed language", s.Audio)
 			}
 		}
 		if s.Backend == "MegaPlay" {
@@ -490,8 +429,8 @@ func TestBingrResolveAnime(t *testing.T) {
 			}
 		}
 	}
-	if !hasHindiDub {
-		t.Errorf("expected Hindi dub source in dubSources: %+v", dubSources)
+	if !hasBingrAnimeDub {
+		t.Errorf("expected bingr anime dub source in dubSources: %+v", dubSources)
 	}
 	if !hasMegaPlayDub {
 		t.Errorf("missing MegaPlay dub stream: %+v", dubSources)
@@ -527,7 +466,7 @@ func TestBingrFetchAnimeEpisodes(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL)
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -573,7 +512,7 @@ func TestBingrSearchAnimeFallback(t *testing.T) {
 	defer srv.Close()
 
 	// Points anilistBase at invalid server to trigger fallback
-	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, "http://127.0.0.1:1")
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, "http://127.0.0.1:1")
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -630,11 +569,6 @@ func TestBingrDirectAnimeFallback(t *testing.T) {
 	mux.HandleFunc("/details/movie/199", func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	})
-	// Stream returns 404/empty
-	mux.HandleFunc("/stream", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(streamResponse{})
-	})
 	// Anime metadata returns valid Spirited Away (AniList 199, MAL 199)
 	mux.HandleFunc("/anime/199", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -662,7 +596,7 @@ func TestBingrDirectAnimeFallback(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL)
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -714,7 +648,7 @@ func TestBingrMegaPlayAniListFallback(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL)
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -730,9 +664,9 @@ func TestBingrMegaPlayAniListFallback(t *testing.T) {
 	}
 }
 
-// A dead MegaPlay embed must not turn a successful shard-only anime resolve
-// into an error: only real shard failures belong in lastErr.
-func TestBingrMegaPlayFailureDoesNotMaskShardSources(t *testing.T) {
+// A dead MegaPlay embed must not mask the streams from Bingr's own anime
+// backends: the two branches resolve independently.
+func TestBingrMegaPlayFailureStillReturnsBingrAnime(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/anime/154587", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -746,28 +680,12 @@ func TestBingrMegaPlayFailureDoesNotMaskShardSources(t *testing.T) {
 	mux.HandleFunc("/stream/ani/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
-	mux.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
-		var req streamRequestBody
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		w.Header().Set("Content-Type", "application/json")
-		if req.ID == "209867" {
-			_ = json.NewEncoder(w).Encode(streamResponse{
-				ScraperName: "Polaris",
-				Sources: []streamItem{{
-					URL:     "https://cdn.example.com/polaris/frieren/original.m3u8",
-					Quality: "1080p",
-					Name:    "Original — 1080p",
-				}},
-			})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(streamResponse{})
-	})
+	mockAnimeSealedAPI(t, mux, "154587", 1, "test.token_anime", []string{"katana-sub"})
 
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL)
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, srv.URL)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -778,27 +696,51 @@ func TestBingrMegaPlayFailureDoesNotMaskShardSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSource: %v", err)
 	}
-	if len(sources) == 0 || sources[0].Backend != "Polaris" {
-		t.Fatalf("expected shard-only sources, got %+v", sources)
+	if len(sources) == 0 || sources[0].Backend != "katana-sub" {
+		t.Fatalf("expected bingr anime sources, got %+v", sources)
+	}
+}
+
+// A dead metadata endpoint must not mask Bingr's own anime backends: the
+// sealed-source branch keys off the handle, not the metadata response.
+func TestBingrMetaFailureStillReturnsBingrAnime(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/anime/154587", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "metadata unavailable", http.StatusInternalServerError)
+	})
+	mockAnimeSealedAPI(t, mux, "154587", 1, "test.token_anime", []string{"katana-sub"})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL, srv.URL, srv.URL, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
+
+	sources, err := c.ResolveSource(context.Background(), "154587", provider.Episode{
+		ID: "watch/bingr/154587/sub/1", Audio: provider.AudioSub, Episode: 1, Season: 1,
+	})
+	if err != nil {
+		t.Fatalf("ResolveSource: %v", err)
+	}
+	if len(sources) == 0 || sources[0].Backend != "katana-sub" {
+		t.Fatalf("expected bingr anime sources, got %+v", sources)
 	}
 }
 
 func TestBingrSubtitleDedupe(t *testing.T) {
-	c := &Client{}
-	sr := streamResponse{
-		Sources: []streamItem{
-			{URL: "https://cdn.example.com/test.m3u8", Quality: "1080p"},
-		},
-		Subtitles: []subtitleItem{
-			{URL: "https://cdn.example.com/subs/en.vtt", Lang: "en"},
-			{URL: "https://cdn.example.com/subs/en.vtt", Lang: "eng"},
-			{URL: "https://cdn.example.com/subs/es.vtt", Lang: "spa"},
-		},
-	}
-	sources, err := c.mapStreamResponse(sr, "Test")
-	if err != nil {
-		t.Fatalf("mapStreamResponse: %v", err)
-	}
+	sources := mapSealedSources(&sealedSources{
+		Streams: []sealedStream{{
+			URL:     "https://cdn.example.com/test.m3u8",
+			Quality: "1080p",
+			Subtitles: []sealedSubtitle{
+				{URL: "https://cdn.example.com/subs/en.vtt", Lang: "en"},
+				{URL: "https://cdn.example.com/subs/en.vtt", Lang: "eng"},
+				{URL: "https://cdn.example.com/subs/es.vtt", Lang: "spa"},
+			},
+		}},
+	})
 	if len(sources) != 1 {
 		t.Fatalf("sources count = %d, want 1", len(sources))
 	}
@@ -811,18 +753,16 @@ func TestBingrSubtitleDedupe(t *testing.T) {
 // TestSubtitleLanguageUsesLabel proves an ambiguous code is resolved through
 // its curated label: upstream "fi" means Filipino, not Finnish.
 func TestSubtitleLanguageUsesLabel(t *testing.T) {
-	c := &Client{}
-	sr := streamResponse{
-		Sources: []streamItem{{URL: "https://cdn.example.com/v.m3u8", Quality: "720p"}},
-		Subtitles: []subtitleItem{
-			{URL: "https://cdn.example.com/fil.vtt", Lang: "fi", Label: "Filipino"},
-			{URL: "https://cdn.example.com/fi.vtt", Lang: "fi", Label: "Finnish"},
-		},
-	}
-	sources, err := c.mapStreamResponse(sr, "Test")
-	if err != nil {
-		t.Fatalf("mapStreamResponse: %v", err)
-	}
+	sources := mapSealedSources(&sealedSources{
+		Streams: []sealedStream{{
+			URL:     "https://cdn.example.com/v.m3u8",
+			Quality: "720p",
+			Subtitles: []sealedSubtitle{
+				{URL: "https://cdn.example.com/fil.vtt", Lang: "fi", Label: "Filipino"},
+				{URL: "https://cdn.example.com/fi.vtt", Lang: "fi", Label: "Finnish"},
+			},
+		}},
+	})
 	if len(sources) != 1 || len(sources[0].Subtitles) != 2 {
 		t.Fatalf("sources/subtitles = %d/%v, want 1/2", len(sources), sources)
 	}

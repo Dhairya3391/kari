@@ -34,6 +34,13 @@ const (
 // definite failure (refused connection, HTTP error, invalid playlist) means
 // the source is not playable right now.
 func VerifyLiveStream(ctx context.Context, hc *http.Client, source MediaSource) error {
+	return VerifyLiveStreamWithHeaders(ctx, hc, source, nil)
+}
+
+// VerifyLiveStreamWithHeaders probes one live source with the same transport
+// headers playback sends, plus any provider-supplied headers. It exists for
+// CDNs that additionally require browser fetch metadata headers.
+func VerifyLiveStreamWithHeaders(ctx context.Context, hc *http.Client, source MediaSource, extra map[string]string) error {
 	rawURL := strings.TrimSpace(source.URL)
 	if rawURL == "" {
 		return fmt.Errorf("verify live stream: empty URL: %w", ErrNoSources)
@@ -42,7 +49,7 @@ func VerifyLiveStream(ctx context.Context, hc *http.Client, source MediaSource) 
 		return fmt.Errorf("verify live stream: nil HTTP client")
 	}
 
-	probe, err := probeLiveURL(ctx, hc, source, rawURL)
+	probe, err := probeLiveURL(ctx, hc, source, rawURL, extra)
 	if err != nil {
 		return err
 	}
@@ -55,7 +62,7 @@ func VerifyLiveStream(ctx context.Context, hc *http.Client, source MediaSource) 
 	if !looksLikeHLSPlaylist(probe.body) {
 		return fmt.Errorf("verify live stream: response is not an HLS playlist")
 	}
-	return verifyHLSPlaylist(ctx, hc, source, rawURL, probe.body)
+	return verifyHLSPlaylist(ctx, hc, source, rawURL, probe.body, extra)
 }
 
 // liveProbe is one response fetched while checking a live URL.
@@ -66,13 +73,13 @@ type liveProbe struct {
 
 // probeLiveURL fetches a live URL with the headers playback would send and
 // reads at most liveProbeBodyBytes.
-func probeLiveURL(ctx context.Context, hc *http.Client, source MediaSource, rawURL string) (liveProbe, error) {
-	probe, ranged, err := doLiveProbe(ctx, hc, source, rawURL)
+func probeLiveURL(ctx context.Context, hc *http.Client, source MediaSource, rawURL string, extra map[string]string) (liveProbe, error) {
+	probe, ranged, err := doLiveProbe(ctx, hc, source, rawURL, extra)
 	if err == nil {
 		return probe, nil
 	}
 	if ranged {
-		if unpaged, _, retryErr := doLiveProbe(ctx, hc, source, rawURL); retryErr == nil {
+		if unpaged, _, retryErr := doLiveProbe(ctx, hc, source, rawURL, extra); retryErr == nil {
 			return unpaged, nil
 		}
 	}
@@ -81,8 +88,8 @@ func probeLiveURL(ctx context.Context, hc *http.Client, source MediaSource, rawU
 
 // doLiveProbe performs one ranged request, reporting whether the range header
 // was actually accepted by the server.
-func doLiveProbe(ctx context.Context, hc *http.Client, source MediaSource, rawURL string) (liveProbe, bool, error) {
-	req, err := newLiveProbeRequest(ctx, source, rawURL)
+func doLiveProbe(ctx context.Context, hc *http.Client, source MediaSource, rawURL string, extra map[string]string) (liveProbe, bool, error) {
+	req, err := newLiveProbeRequest(ctx, source, rawURL, extra)
 	if err != nil {
 		return liveProbe{}, false, err
 	}
@@ -107,7 +114,7 @@ func doLiveProbe(ctx context.Context, hc *http.Client, source MediaSource, rawUR
 
 // newLiveProbeRequest builds a request carrying the same transport headers
 // playback sends for this source.
-func newLiveProbeRequest(ctx context.Context, source MediaSource, rawURL string) (*http.Request, error) {
+func newLiveProbeRequest(ctx context.Context, source MediaSource, rawURL string, extra map[string]string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("verify live stream: create request: %w", err)
@@ -129,12 +136,17 @@ func newLiveProbeRequest(ctx context.Context, source MediaSource, rawURL string)
 	if cookie := strings.TrimSpace(source.CookieHeader); cookie != "" {
 		req.Header.Set("Cookie", cookie)
 	}
+	for name, value := range extra {
+		if name != "" && value != "" {
+			req.Header.Set(name, value)
+		}
+	}
 	return req, nil
 }
 
 // verifyHLSPlaylist follows a master manifest into one working variant and
 // then probes the first media segment.
-func verifyHLSPlaylist(ctx context.Context, hc *http.Client, source MediaSource, playlistURL string, body []byte) error {
+func verifyHLSPlaylist(ctx context.Context, hc *http.Client, source MediaSource, playlistURL string, body []byte, extra map[string]string) error {
 	mediaURL := playlistURL
 	mediaBody := body
 	if variants := hlsVariantURLs(playlistURL, body); len(variants) > 0 {
@@ -144,7 +156,7 @@ func verifyHLSPlaylist(ctx context.Context, hc *http.Client, source MediaSource,
 			if i >= maxHLSVariantProbes {
 				break
 			}
-			probe, err := probeLiveURL(ctx, hc, source, variantURL)
+			probe, err := probeLiveURL(ctx, hc, source, variantURL, extra)
 			if err != nil {
 				lastErr = err
 				continue
@@ -168,7 +180,7 @@ func verifyHLSPlaylist(ctx context.Context, hc *http.Client, source MediaSource,
 	if segmentURL == "" {
 		return nil
 	}
-	if err := probeLiveSegment(ctx, hc, source, segmentURL); err != nil {
+	if err := probeLiveSegment(ctx, hc, source, segmentURL, extra); err != nil {
 		return fmt.Errorf("verify live stream: first segment: %w", err)
 	}
 	return nil
@@ -177,18 +189,45 @@ func verifyHLSPlaylist(ctx context.Context, hc *http.Client, source MediaSource,
 // probeLiveSegment checks that the first media segment can actually be
 // fetched. A playlist pointing at blocked or expired segment paths passes a
 // manifest-only probe but fails immediately in the player.
-func probeLiveSegment(ctx context.Context, hc *http.Client, source MediaSource, segmentURL string) error {
-	probe, _, err := doLiveProbe(ctx, hc, source, segmentURL)
+func probeLiveSegment(ctx context.Context, hc *http.Client, source MediaSource, segmentURL string, extra map[string]string) error {
+	probe, _, err := doLiveProbe(ctx, hc, source, segmentURL, extra)
 	if err != nil {
 		return err
 	}
 	if len(probe.body) == 0 {
 		return fmt.Errorf("empty segment body")
 	}
-	if strings.Contains(strings.ToLower(probe.contentType), "text/html") {
+	lowerType := strings.ToLower(probe.contentType)
+	if strings.Contains(lowerType, "text/html") {
 		return fmt.Errorf("segment returned an HTML error page")
 	}
+	// Some broken upstreams hand out a still image in place of a media
+	// segment. A video player cannot decode it, so it must not count as a
+	// playable live lane.
+	if strings.HasPrefix(lowerType, "image/") || looksLikeImage(probe.body) {
+		return fmt.Errorf("segment is an image, not a media segment")
+	}
 	return nil
+}
+
+// looksLikeImage recognizes image payloads whose host returns a generic
+// content type, so a disguised still still cannot pass verification.
+func looksLikeImage(body []byte) bool {
+	if len(body) < 8 {
+		return false
+	}
+	switch {
+	case body[0] == 0x89 && string(body[1:4]) == "PNG":
+		return true
+	case body[0] == 0xff && body[1] == 0xd8 && body[2] == 0xff:
+		return true
+	case string(body[:4]) == "GIF8":
+		return true
+	case len(body) >= 12 && string(body[:4]) == "RIFF" && string(body[8:12]) == "WEBP":
+		return true
+	default:
+		return false
+	}
 }
 
 // hlsVariantURLs returns absolute child-playlist URLs declared by a master

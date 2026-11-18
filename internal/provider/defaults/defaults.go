@@ -22,13 +22,14 @@ import (
 	"kari/internal/provider/miruro"
 	"kari/internal/provider/movysx"
 	"kari/internal/provider/pengu"
+	"kari/internal/provider/q62"
 	"kari/internal/provider/solis"
 	"kari/internal/provider/stremioaddon"
 	"kari/internal/provider/sweetfox"
-	"kari/internal/provider/thedaddy"
 	"kari/internal/provider/vidrift"
 	"kari/internal/provider/vyla"
 	"kari/internal/provider/weebcentral"
+	"kari/internal/provider/zlive"
 	"kari/internal/tmdb"
 )
 
@@ -86,6 +87,12 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
+		ID: "q62",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return q62.NewClient()
+		},
+	},
+	{
 		ID: "cinejoy",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return cinejoy.NewClient(d.KeyPool)
@@ -140,12 +147,6 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
-		ID: "thedaddy",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return thedaddy.NewClient(config.TheDaddyBase)
-		},
-	},
-	{
 		ID: "famelack",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return famelack.NewClient()
@@ -176,6 +177,12 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "atsu",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return atsu.NewClient()
+		},
+	},
+	{
+		ID: "zlive",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return zlive.NewClient()
 		},
 	},
 }
