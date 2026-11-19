@@ -563,10 +563,8 @@ func TestResolveSkipsRedundantBatches(t *testing.T) {
 	}
 }
 
-// TestResolveRetryNeverUsesDisabledProviders proves a retry cannot fall back
-// to providers the user disabled. An excluded winner's rows live in the
-// caller's aggregate, so this call's empty aggregator is not a genuine
-// "every enabled provider failed" signal.
+// TestResolveRetryNeverUsesDisabledProviders proves a disabled provider is
+// never queried, on a full resolve, an excluded retry, or a Retry-only call.
 func TestResolveRetryNeverUsesDisabledProviders(t *testing.T) {
 	series := provider.SearchResult{Title: "T", ID: "21", Provider: "miruro", Type: provider.ModeAnime}
 	episode := provider.Episode{ID: "watch/miruro/21/sub/1180", Episode: 1180, Audio: provider.AudioSub}
@@ -618,23 +616,22 @@ func TestResolveRetryNeverUsesDisabledProviders(t *testing.T) {
 		svc := NewMediaService(newTestRegistry(failing, disabled))
 		svc.SetDisabledProviders([]string{"anime:anicine"})
 
-		// A full resolve still uses the disabled last-resort fallback.
-		resolved, err := svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil, ResolveOptions{})
-		if err != nil {
-			t.Fatalf("seed resolve: %v", err)
+		// A full resolve must not revive a disabled provider either.
+		_, err := svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil, ResolveOptions{})
+		if err == nil {
+			t.Fatal("seed resolve unexpectedly succeeded with only a disabled provider")
 		}
-		if len(resolved.Playback) != 1 || resolved.Playback[0].Resolver != "anicine" {
-			t.Fatalf("full-resolve fallback = %+v, want anicine", resolved.Playback)
-		}
-		if disabledCalls != 1 {
-			t.Fatalf("full resolve queried disabled provider %d times, want 1", disabledCalls)
+		if disabledCalls != 0 {
+			t.Fatalf("full resolve queried disabled provider %d times, want 0", disabledCalls)
 		}
 
-		// A Retry-only call is still a retry and must not fall back either.
-		_, _ = svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil,
-			ResolveOptions{Retry: []string{"failing"}})
-		if disabledCalls != 1 {
-			t.Errorf("retry queried disabled provider %d times, want 1 (unchanged)", disabledCalls)
+		// A Retry-only call must not fall back either.
+		if _, err := svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil,
+			ResolveOptions{Retry: []string{"failing"}}); err == nil {
+			t.Fatal("retry unexpectedly succeeded with only a disabled provider")
+		}
+		if disabledCalls != 0 {
+			t.Errorf("retry queried disabled provider %d times, want 0", disabledCalls)
 		}
 	})
 }

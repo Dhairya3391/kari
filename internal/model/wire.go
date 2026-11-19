@@ -65,14 +65,17 @@ type Source struct {
 	Cookie    string
 	Language  string
 	ExtraArgs []string
+	// ExtraHeaders carries upstream headers that have no dedicated field.
+	ExtraHeaders map[string]string
 	// SuppressOrigin stops Headers from deriving Origin from Referer for
 	// CDNs that reject any Origin header.
 	SuppressOrigin bool
 }
 
-// Headers derives the HTTP request headers for the source. It is the
-// single place Referer, Origin, User-Agent and Cookie are derived: Origin
-// is scheme://host parsed from Referer unless SuppressOrigin is set.
+// Headers derives the HTTP request headers for the source. It is the single
+// place Referer, Origin, User-Agent and Cookie are derived: Origin is
+// scheme://host parsed from Referer unless SuppressOrigin is set or an explicit
+// Origin is supplied in ExtraHeaders.
 func (s Source) Headers() http.Header {
 	h := make(http.Header)
 	if ua := strings.TrimSpace(s.UserAgent); ua != "" {
@@ -80,14 +83,23 @@ func (s Source) Headers() http.Header {
 	}
 	if ref := strings.TrimSpace(s.Referer); ref != "" {
 		h.Set("Referer", ref)
-		if !s.SuppressOrigin {
-			if origin := originFromReferer(ref); origin != "" {
-				h.Set("Origin", origin)
-			}
-		}
 	}
 	if cookie := strings.TrimSpace(s.Cookie); cookie != "" {
 		h.Set("Cookie", cookie)
+	}
+	// Apply explicit headers before deriving Origin so a declared Origin wins
+	// over the one inferred from Referer.
+	for key, value := range s.ExtraHeaders {
+		name := http.CanonicalHeaderKey(strings.TrimSpace(key))
+		if name == "" || h.Get(name) != "" {
+			continue
+		}
+		h.Set(name, value)
+	}
+	if h.Get("Origin") == "" && !s.SuppressOrigin {
+		if origin := originFromReferer(strings.TrimSpace(s.Referer)); origin != "" {
+			h.Set("Origin", origin)
+		}
 	}
 	return h
 }

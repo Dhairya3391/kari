@@ -53,6 +53,29 @@ func TestSourceHeadersEmpty(t *testing.T) {
 	}
 }
 
+func TestSourceHeadersExtraHeaders(t *testing.T) {
+	got := sourceHeaders(provider.MediaSource{
+		Referer: "https://provider.example/",
+		ExtraHeaders: map[string]string{
+			"X-Cnc":  "1",
+			"Origin": "https://explicit.example",
+		},
+	})
+	want := []string{
+		"Referer: https://provider.example/",
+		"Origin: https://explicit.example",
+		"X-Cnc: 1",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("sourceHeaders = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("sourceHeaders[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestFindOutputPathAndSize(t *testing.T) {
 	dir := t.TempDir()
 	dl := NewYTDLPDownloader()

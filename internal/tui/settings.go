@@ -63,9 +63,11 @@ type ModeRow struct {
 
 // AddonRow is one configured Stremio addon shown in Settings > Add-ons.
 type AddonRow struct {
-	Name   string // addon alias when loaded, else the manifest URL host
-	Host   string
-	Loaded bool
+	Name           string // addon alias when loaded, else the manifest URL host
+	Host           string
+	Loaded         bool
+	Capabilities   string
+	ConfigRequired bool
 }
 
 // SettingsData carries all state needed to render the Settings screen.
@@ -278,15 +280,23 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 			if addon.Loaded {
 				state = st.Ok.Render("● active")
 			}
-			rows = append(rows, renderSettingRow(addon.Name, state+"  "+addon.Host, data.FocusedRowIndex == i+1, width, st))
+			details := state + "  " + addon.Host
+			if addon.Capabilities != "" {
+				details += "  · " + addon.Capabilities
+			}
+			if addon.ConfigRequired {
+				details += "  · needs config"
+			}
+			rows = append(rows, renderSettingRow(addon.Name, details, data.FocusedRowIndex == i+1, width, st))
 		}
 		if data.AddonInputOpen {
-			rows = append(rows, "", "    "+st.Bold.Render("Manifest URL:"), "    "+data.AddonInputView, "    "+st.Dim.Render("Enter add · Esc cancel · direct HTTP streams only"))
+			rows = append(rows, "", "    "+st.Bold.Render("Manifest URL:"), "    "+data.AddonInputView,
+				"    "+st.Dim.Render("Enter add · Esc cancel · paste the full configured URL for addons needing setup"))
 			if data.AddonTesting {
 				rows = append(rows, "    "+st.Dim.Render("Fetching addon manifest…"))
 			}
 		}
-		desc = "Enter adds a Stremio addon manifest; d removes the selected addon."
+		desc = "Enter adds a Stremio addon manifest · r refreshes · e rebinds URL · d removes the selected addon."
 	case CategoryProviders:
 		var lastSection string
 		focusedLine := -1

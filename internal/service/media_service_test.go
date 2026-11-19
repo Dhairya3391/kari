@@ -936,7 +936,7 @@ func TestMediaServiceSearchAndEpisodesCaching(t *testing.T) {
 	}
 }
 
-func TestMediaServiceSearchFallsBackToDisabledProviders(t *testing.T) {
+func TestMediaServiceSearchNeverUsesDisabledProviders(t *testing.T) {
 	enabled := &stubProvider{name: "enabled_prov", mode: provider.ModeAnime, err: provider.ErrNoResults}
 	disabled := &stubProvider{name: "disabled_prov", mode: provider.ModeAnime, results: []provider.SearchResult{
 		{Title: "Fallback Anime", ID: "100", MediaType: provider.MediaTypeAnime},
@@ -953,11 +953,11 @@ func TestMediaServiceSearchFallsBackToDisabledProviders(t *testing.T) {
 	}
 
 	results, _, _, err := svc.Search(context.Background(), provider.ModeAnime, "query")
-	if err != nil {
-		t.Fatalf("search failed: %v", err)
+	if !errors.Is(err, provider.ErrNoResults) {
+		t.Fatalf("search error = %v, want ErrNoResults", err)
 	}
-	if len(results) != 1 || results[0].Provider != "disabled_prov" {
-		t.Fatalf("expected 1 result from disabled fallback, got %+v", results)
+	if len(results) != 0 {
+		t.Fatalf("disabled provider still returned results: %+v", results)
 	}
 }
 
@@ -1007,7 +1007,7 @@ func TestMediaServiceSearchMangaQueriesEveryEnabledProvider(t *testing.T) {
 	}
 }
 
-func TestMediaServiceResolveFallsBackToDisabledProviders(t *testing.T) {
+func TestMediaServiceResolveNeverUsesDisabledProviders(t *testing.T) {
 	enabled := &stubProvider{name: "enabled_prov", mode: provider.ModeAnime, err: provider.ErrNoSources}
 	disabled := &stubProvider{
 		name: "disabled_prov", mode: provider.ModeAnime,
@@ -1022,12 +1022,9 @@ func TestMediaServiceResolveFallsBackToDisabledProviders(t *testing.T) {
 	series := provider.SearchResult{Title: "Anime", ID: "100", Provider: "enabled_prov"}
 	episode := provider.Episode{Episode: 1, Title: "Ep 1"}
 
-	resolved, err := svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil, ResolveOptions{})
-	if err != nil {
-		t.Fatalf("resolve failed: %v", err)
-	}
-	if len(resolved.Playback) != 1 || resolved.Playback[0].Resolver != "disabled_prov" {
-		t.Fatalf("expected playback from disabled fallback, got %+v", resolved.Playback)
+	_, err := svc.Resolve(context.Background(), provider.ModeAnime, series, episode, nil, ResolveOptions{})
+	if err == nil {
+		t.Fatal("resolve unexpectedly succeeded using a disabled provider")
 	}
 }
 

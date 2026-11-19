@@ -208,7 +208,7 @@ func NewDefaultRegistry(keyPool *tmdb.KeyPool, cfg *config.Config) (*provider.Re
 	return registry, nil
 }
 
-// LoadConfiguredStremioAddon loads a previously configured addon from its
+// LoadConfiguredStremioAddon rebuilds a previously configured addon from its
 // manifest URL.
 func LoadConfiguredStremioAddon(ctx context.Context, manifestURL string, keyPool *tmdb.KeyPool) (provider.Provider, error) {
 	return stremioaddon.NewClient(ctx, manifestURL, keyPool)

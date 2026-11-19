@@ -199,14 +199,21 @@ type downloadDoneMsg struct {
 }
 
 type addonTestDoneMsg struct {
+	// opID identifies the check that produced this message. It is the only
+	// reliable guard: a cancelled check can still emit a late message whose
+	// manifestURL matches a newer check of the same URL.
+	opID        uint64
 	manifestURL string
-	addon       provider.Provider
-	err         error
+	// replacing is non-empty when this check refreshes or rebinds an addon.
+	replacing string
+	addon     provider.Provider
+	err       error
 }
 
 type startupAddonLoadedMsg struct {
-	addon provider.Provider
-	err   error
+	manifestURL string
+	addon       provider.Provider
+	err         error
 }
 
 type downloadProgressMsg struct {
@@ -547,7 +554,12 @@ type modelImpl struct {
 	addonTestCancel       context.CancelFunc
 	addonTesting          bool
 	addonPendingURL       string
-	searchCache           *util.BoundedCache[searchCacheEntry]
+	// addonTestOpID tags the most recent check so a late result from a
+	// cancelled check cannot be applied to a newer one.
+	addonTestOpID uint64
+	// addonRebindingURL is set while editing an existing addon's URL.
+	addonRebindingURL string
+	searchCache       *util.BoundedCache[searchCacheEntry]
 	// filterScope is the single source of truth for per-mode ranking policy.
 	// The legacy scalar fields below mirror it for downloads and older
 	// settings files; only this scope feeds PlaybackOptions.Preferences.

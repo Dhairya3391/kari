@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -747,8 +748,8 @@ func (d *YTDLPDownloader) cleanupDir(dir, title string) {
 }
 
 // toMediaSource converts provider fields once so header derivation stays in
-// Source.Headers, the single place Referer/Origin/User-Agent/Cookie
-// are derived.
+// Source.Headers, the single place Referer/Origin/User-Agent/Cookie and
+// addon-supplied extra headers are merged.
 func toMediaSource(source provider.MediaSource) model.Source {
 	return model.Source{
 		URL:            source.URL,
@@ -758,6 +759,7 @@ func toMediaSource(source provider.MediaSource) model.Source {
 		UserAgent:      source.UserAgent,
 		Cookie:         source.CookieHeader,
 		Language:       source.Language,
+		ExtraHeaders:   source.ExtraHeaders,
 		SuppressOrigin: source.SuppressOrigin,
 	}
 }
@@ -771,7 +773,18 @@ func sourceHeaders(source provider.MediaSource) []string {
 			headers = append(headers, name+": "+value)
 		}
 	}
-	return headers
+	var extra []string
+	for name, values := range h {
+		switch name {
+		case "User-Agent", "Referer", "Origin", "Cookie":
+			continue
+		}
+		for _, value := range values {
+			extra = append(extra, name+": "+value)
+		}
+	}
+	sort.Strings(extra)
+	return append(headers, extra...)
 }
 
 func isHLSSource(source provider.MediaSource) bool {

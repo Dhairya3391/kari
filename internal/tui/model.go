@@ -41,7 +41,7 @@ type ModelOptions struct {
 	// AddonManifestTester validates a user-entered addon before it is saved.
 	AddonManifestTester func(context.Context, string) (provider.Provider, error)
 	// StartupAddonLoader rebuilds a previously validated addon without probing
-	// playback endpoints during startup.
+	// playback endpoints.
 	StartupAddonLoader func(context.Context, string) (provider.Provider, error)
 }
 

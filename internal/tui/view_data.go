@@ -537,9 +537,34 @@ func (m *modelImpl) addonRows() []AddonRow {
 		if name == "" {
 			name = host
 		}
-		rows = append(rows, AddonRow{Name: name, Host: host, Loaded: loaded})
+		row := AddonRow{Name: name, Host: host, Loaded: loaded}
+		if m.registry != nil {
+			if info, ok := m.registry.ConfiguredInfo(manifestURL); ok {
+				row.Capabilities = addonCapabilityBadges(info)
+				row.ConfigRequired = info.ConfigRequired
+			}
+		}
+		rows = append(rows, row)
 	}
 	return rows
+}
+
+// addonCapabilityBadges renders a compact summary of what an addon provides.
+func addonCapabilityBadges(info provider.AddonInfo) string {
+	var parts []string
+	if info.Catalogs {
+		parts = append(parts, "catalogs")
+	}
+	if info.Streams {
+		parts = append(parts, "streams")
+	}
+	if info.Subtitles {
+		parts = append(parts, "subs")
+	}
+	for _, mode := range info.Modes {
+		parts = append(parts, strings.ToLower(string(mode)))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (m *modelImpl) collectSettingsData(width, height int) SettingsData {

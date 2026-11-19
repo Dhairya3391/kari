@@ -262,7 +262,7 @@ func (m *modelImpl) loadStartupAddonCmd(manifestURL string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 		defer cancel()
 		addon, err := loader(ctx, manifestURL)
-		return startupAddonLoadedMsg{addon: addon, err: err}
+		return startupAddonLoadedMsg{manifestURL: manifestURL, addon: addon, err: err}
 	}
 }
 

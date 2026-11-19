@@ -493,6 +493,10 @@ func (m *modelImpl) exitInputMode() bool {
 			m.addonPendingURL = ""
 			m.addonTestCancel = nil
 			m.addonInputOpen = false
+			// Esc is handled globally, so this is the only path that cancels
+			// an addon edit. Without clearing the rebind target here a later
+			// "add" would silently replace that addon instead.
+			m.addonRebindingURL = ""
 			m.addonInput.Blur()
 			m.clearStatus()
 			return true

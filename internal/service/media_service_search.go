@@ -59,31 +59,19 @@ func (s *MediaService) Search(ctx context.Context, mode provider.ContentType, qu
 		return nil, query, nil, fmt.Errorf("no providers available for mode %q", mode)
 	}
 
-	var enabledRoutes, disabledRoutes []provider.Route
+	// A user-disabled provider stays disabled: no "last resort" pass may
+	// resurrect it when every provider is off or enabled ones return nothing.
+	enabledRoutes := make([]provider.Route, 0, len(allRoutes))
 	for _, route := range allRoutes {
 		if s.IsProviderDisabled(mode, route.Provider.Name()) {
-			disabledRoutes = append(disabledRoutes, route)
-		} else {
-			enabledRoutes = append(enabledRoutes, route)
+			continue
 		}
+		enabledRoutes = append(enabledRoutes, route)
 	}
-
-	primaryRoutes := enabledRoutes
-	if len(primaryRoutes) == 0 {
-		primaryRoutes = allRoutes
-		disabledRoutes = nil
+	if len(enabledRoutes) == 0 {
+		return nil, query, nil, provider.ErrNoResults
 	}
-	allResults, warnings, err := s.searchProviders(searchCtx, mode, query, primaryRoutes, cacheKey, providerGeneration)
-	if len(allResults) == 0 && len(disabledRoutes) > 0 && searchCtx.Err() == nil {
-		mediaLog.Debug("search: enabled providers returned no results, attempting fallback to disabled providers",
-			"mode", mode, "query", query, "disabled", len(disabledRoutes))
-		fallbackResults, fallbackWarnings, fallbackErr := s.searchProviders(searchCtx, mode, query, disabledRoutes, cacheKey, providerGeneration)
-		if len(fallbackResults) > 0 {
-			allResults = fallbackResults
-			warnings = append(warnings, fallbackWarnings...)
-			err = fallbackErr
-		}
-	}
+	allResults, warnings, err := s.searchProviders(searchCtx, mode, query, enabledRoutes, cacheKey, providerGeneration)
 
 	if len(allResults) > 0 {
 		if mode == provider.ModeLive {

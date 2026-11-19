@@ -57,8 +57,8 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 	defer cancel()
 
 	p, ok := s.registry.ProviderByNameForMode(strings.TrimSpace(series.Provider), mode)
-	if !ok {
-		mediaLog.Warn("episodes requested from unavailable provider",
+	if !ok || s.IsProviderDisabled(mode, p.Name()) {
+		mediaLog.Warn("episodes requested from unavailable or disabled provider",
 			"provider", series.Provider, "mode", mode)
 		return nil, fmt.Errorf("the source for this title is unavailable in %s mode right now", mode)
 	}
@@ -107,24 +107,14 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 		// Episode title metadata belongs to the selected source order.
 		// Racing providers can attach a different season's titles to
 		// otherwise interchangeable episode-number handles.
-		var enabledAvail, disabledAvail []provider.EpisodeAvailabilitySource
+		probeList := make([]provider.EpisodeAvailabilitySource, 0, len(availabilitySources))
 		for _, as := range availabilitySources {
 			if prov, ok := as.(provider.Provider); ok && s.IsProviderDisabled(mode, prov.Name()) {
-				disabledAvail = append(disabledAvail, as)
-			} else {
-				enabledAvail = append(enabledAvail, as)
+				continue
 			}
-		}
-		probeList := enabledAvail
-		if len(probeList) == 0 {
-			probeList = availabilitySources
-			disabledAvail = nil
+			probeList = append(probeList, as)
 		}
 		eps, ok, lastErr := s.firstAvailableEpisodes(ctx, probeList, series)
-		if !ok && len(disabledAvail) > 0 && ctx.Err() == nil {
-			mediaLog.Debug("episodes: enabled availability sources returned no episodes, attempting fallback to disabled sources")
-			eps, ok, lastErr = s.firstAvailableEpisodes(ctx, disabledAvail, series)
-		}
 		if ok {
 			eps = applyTitles(eps)
 			return filterAvailableEpisodesByAudio(eps, requestedAudio), nil
@@ -265,6 +255,9 @@ func (s *MediaService) episodeTitleSources(mode provider.ContentType, series pro
 			continue
 		}
 		seen[p.Name()] = struct{}{}
+		if s.IsProviderDisabled(mode, p.Name()) {
+			continue
+		}
 		if src, ok := p.(provider.EpisodeTitlesSource); ok {
 			out = append(out, src)
 		}

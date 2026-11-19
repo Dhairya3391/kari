@@ -63,6 +63,47 @@ func (r *Registry) ConfiguredAlias(value string) (string, bool) {
 	return "", false
 }
 
+// IsConfiguredAddon reports whether name identifies a user-configured addon:
+// a configured provider that declares the Stremio browsing mode. Such addons
+// appear under several modes, so disabling one must disable them everywhere.
+func (r *Registry) IsConfiguredAddon(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.providers {
+		if !strings.EqualFold(p.Name(), name) {
+			continue
+		}
+		if _, ok := p.(ConfiguredProvider); !ok {
+			return false
+		}
+		for _, mode := range p.Modes() {
+			if mode.Name == ModeStremio {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// ConfiguredInfo returns the manifest capabilities of the configured provider
+// whose configuration value is value. The second result reports whether the
+// provider is registered and declares that information.
+func (r *Registry) ConfiguredInfo(value string) (AddonInfo, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.providers {
+		configured, ok := p.(ConfiguredProvider)
+		if !ok || !configured.MatchesConfiguration(value) {
+			continue
+		}
+		if source, ok := p.(AddonInfoSource); ok {
+			return source.AddonInfo(), true
+		}
+	}
+	return AddonInfo{}, false
+}
+
 // ProvidersForMode returns providers supporting the given mode, ordered by priority.
 func (r *Registry) ProvidersForMode(mode ContentType) []Provider {
 	type rankedProvider struct {

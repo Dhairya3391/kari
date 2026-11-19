@@ -92,7 +92,7 @@ func buildMXPlayerAndroidIntent(
 	var headers []string
 	if source.Referer != "" {
 		headers = append(headers, "Referer", strings.ReplaceAll(source.Referer, ",", "\\,"))
-		if !source.SuppressOrigin {
+		if !source.SuppressOrigin && explicitOrigin(source) == "" {
 			origin := originFromReferer(source.Referer)
 			if origin != "" {
 				headers = append(headers, "Origin", strings.ReplaceAll(origin, ",", "\\,"))
@@ -104,6 +104,12 @@ func buildMXPlayerAndroidIntent(
 	}
 	if source.UserAgent != "" {
 		headers = append(headers, "User-Agent", strings.ReplaceAll(source.UserAgent, ",", "\\,"))
+	}
+	for _, field := range mpvExtraHeaderFields(source) {
+		parts := strings.SplitN(field, ": ", 2)
+		if len(parts) == 2 {
+			headers = append(headers, parts[0], parts[1])
+		}
 	}
 	if len(headers) > 0 {
 		args = append(args, "--esa", "headers", strings.Join(headers, ","))

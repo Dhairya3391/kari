@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -232,6 +233,10 @@ type MediaSource struct {
 	Subtitles    []SubtitleOption
 	UserAgent    string
 	CookieHeader string
+	// ExtraHeaders carries additional request headers declared by the
+	// upstream (for example Stremio behaviorHints). Referer, UserAgent
+	// and CookieHeader remain authoritative for their well-known keys.
+	ExtraHeaders map[string]string
 	Language     string
 	// Height is the declared peak vertical resolution in pixels, zero when
 	// the provider has none. Quality is the human-readable label derived from
@@ -290,10 +295,29 @@ func (s MediaSource) TransportIdentity() string {
 		strings.TrimSpace(s.Referer),
 		strings.TrimSpace(s.UserAgent),
 		strings.TrimSpace(s.CookieHeader),
+		extraHeaderIdentity(s.ExtraHeaders),
 		strings.TrimSpace(s.Language),
 		strconv.FormatBool(s.SuppressOrigin),
 		strings.Join(s.ExtraArgs, "\x00"),
 	}, "\x00")
+}
+
+// extraHeaderIdentity renders a source's extra headers in a stable order so
+// two sources with the same URL but different transport needs stay distinct.
+func extraHeaderIdentity(headers map[string]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+headers[key])
+	}
+	return strings.Join(parts, "\x00")
 }
 
 // IsDirectURL reports whether raw is a direct remote stream address: an
@@ -529,6 +553,23 @@ type Presenter interface {
 type ConfiguredProvider interface {
 	// MatchesConfiguration reports whether value identifies this provider.
 	MatchesConfiguration(value string) bool
+}
+
+// AddonInfo summarizes what a configured addon declared in its manifest. The
+// settings UI uses it to describe addons without importing provider packages.
+type AddonInfo struct {
+	Catalogs       bool
+	Streams        bool
+	Subtitles      bool
+	ConfigRequired bool
+	Modes          []ContentType
+}
+
+// AddonInfoSource is implemented by configured providers that can describe
+// their manifest capabilities. Optional: providers without it show only their
+// alias in the settings screen.
+type AddonInfoSource interface {
+	AddonInfo() AddonInfo
 }
 
 // Descriptor declares a provider for registration. Descriptors live only in

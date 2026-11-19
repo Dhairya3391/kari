@@ -1,5 +1,3 @@
-<div align="center">
-
 # 狩り Kari
 
 **Stream anime, movies, TV, cartoons and manga from your terminal. No browser tabs.**
@@ -10,10 +8,10 @@
 ![Go](https://img.shields.io/github/go-mod/go-version/Dhairya3391/kari?style=flat-square)
 ![CI](https://img.shields.io/github/actions/workflow/status/Dhairya3391/kari/ci.yml?branch=main&style=flat-square)
 [![The Terminal Index](https://cli.masoko.net/badge/kari.svg)](https://cli.masoko.net/tools/kari/)
+[![Kari on FMHY](https://cdn.jsdelivr.net/gh/JMcrafter26/badges@main/src/assets/available/fmhy/cozy-minimal.svg)](https://fmhy.net/video#anime-streaming-apps)
+[![Kari on the AUR](https://cdn.jsdelivr.net/gh/JMcrafter26/badges@main/src/assets/available/arch-user-repository/cozy-minimal.svg)](https://aur.archlinux.org/packages/kari-bin)
 
-<img src="assets/demo.gif" width="800" alt="kari demo">
-
-</div>
+![kari demo](assets/demo.gif)
 
 ## Install
 
@@ -28,6 +26,14 @@ irm https://raw.githubusercontent.com/Dhairya3391/kari/main/install.ps1 | iex
 ```
 
 Or download a binary from [Releases](https://github.com/Dhairya3391/kari/releases/latest) (linux, macOS, windows, android; amd64/arm64).
+
+### Arch Linux (AUR)
+
+```bash
+yay -S kari-bin   # or: paru -S kari-bin
+```
+
+Package: [kari-bin on the AUR](https://aur.archlinux.org/packages/kari-bin).
 
 **Requires a media player:** [mpv](https://mpv.io) (recommended), IINA (macOS) or VLC.
 Kari is a terminal frontend, not a player. Android: see [Termux setup](#android-termux).
@@ -62,7 +68,9 @@ Type a query, press `Space`, pick a result, press `Enter` to play. `Tab` switche
 Players: mpv, IINA, VLC, MPV Android, MX Player. Capability matrix in [docs/PLAYERS.md](docs/PLAYERS.md).
 Providers per mode: [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
-To add an add-on, open Settings with `s`, choose **Add-ons**, then **Add Stremio addon manifest**. Kari fetches the HTTP(S) manifest and accepts any reachable HTTP addon; no playback probe is required. Addons that only expose YouTube, torrent, or external-app links are saved but produce no playable streams — Kari needs a direct HTTP stream URL.
+To add an add-on, open Settings with `s`, choose **Add-ons**, then **Add Stremio addon manifest**. You can paste a bare addon URL (Kari appends `/manifest.json`) or the full manifest URL including its configuration query string. Kari fetches the HTTP(S) manifest and accepts any reachable HTTP addon; no playback probe is required. Addons that only expose YouTube, torrent, or external-app links are saved but produce no playable streams — Kari needs a direct HTTP stream URL.
+
+In the Add-ons list, `Enter`/`r` refreshes an add-on's manifest, `e` rebinds its URL, and `d` removes it. Disabling an add-on in any mode disables it everywhere, including Stremio browsing and playback.
 
 ## Essential keys
 

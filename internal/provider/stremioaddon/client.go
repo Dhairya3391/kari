@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -30,6 +31,8 @@ var (
 	_ provider.EpisodeSource      = (*Client)(nil)
 	_ provider.FeatureSource      = (*Client)(nil)
 	_ provider.ConfiguredProvider = (*Client)(nil)
+	_ provider.AddonInfoSource    = (*Client)(nil)
+	_ provider.StreamingProvider  = (*Client)(nil)
 )
 
 type manifest struct {
@@ -76,7 +79,8 @@ type addonCatalog struct {
 }
 
 type catalogExtra struct {
-	Name string `json:"name"`
+	Name       string `json:"name"`
+	IsRequired bool   `json:"isRequired"`
 }
 
 type catalogResponse struct {
@@ -88,6 +92,7 @@ type addonMeta struct {
 	Type        string       `json:"type"`
 	Name        string       `json:"name"`
 	ReleaseInfo string       `json:"releaseInfo"`
+	Year        string       `json:"year"`
 	Poster      string       `json:"poster"`
 	Description string       `json:"description"`
 	Genres      []string     `json:"genres"`
@@ -129,6 +134,7 @@ type streamItem struct {
 	Description string           `json:"description"`
 	Thumbnail   string           `json:"thumbnail"`
 	Behavior    streamBehavior   `json:"behaviorHints"`
+	ClearKey    string           `json:"clearkey"`
 }
 
 type streamSubtitle struct {
@@ -164,6 +170,7 @@ type Client struct {
 	digest       [32]byte
 	modes        []provider.Mode
 	hasSubtitles bool
+	info         provider.AddonInfo
 }
 
 // NewClient fetches and validates an addon manifest before exposing its stream capabilities.
@@ -171,11 +178,11 @@ func NewClient(ctx context.Context, manifestURL string, keyPool *tmdb.KeyPool) (
 	return NewClientWithHTTP(ctx, manifestURL, keyPool, httpclient.New())
 }
 
-// NewClientWithHTTP constructs a client with an injected HTTP client for offline testing.
+// NewClientWithHTTP constructs a client with an injected HTTP client for testing.
 func NewClientWithHTTP(ctx context.Context, manifestURL string, keyPool *tmdb.KeyPool, hc *http.Client) (*Client, error) {
-	u, err := url.Parse(strings.TrimSpace(manifestURL))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("invalid addon manifest URL")
+	normalized, err := normalizeManifestURL(manifestURL)
+	if err != nil {
+		return nil, err
 	}
 	if hc == nil {
 		return nil, fmt.Errorf("http client is required")
@@ -184,26 +191,13 @@ func NewClientWithHTTP(ctx context.Context, manifestURL string, keyPool *tmdb.Ke
 	if err != nil {
 		return nil, fmt.Errorf("create addon catalog base: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	info, err := fetchManifest(ctx, hc, normalized)
 	if err != nil {
-		return nil, fmt.Errorf("create manifest request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := hc.Do(req)
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, fmt.Errorf("fetch addon manifest: %w", ctxErr)
-		}
-		return nil, fmt.Errorf("fetch addon manifest: request failed")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch addon manifest: %w", &provider.HTTPError{Code: resp.StatusCode, URL: u.Scheme + "://" + u.Host})
-	}
-	var info manifest
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, fmt.Errorf("decode addon manifest: %w", err)
-	}
+	u, _ := url.Parse(normalized)
+	// Identity intentionally uses the original string: persisted disabled
+	// provider keys and configured aliases are derived from it.
 	sum := sha256.Sum256([]byte(strings.TrimSpace(manifestURL)))
 	identity := "addon-" + hex.EncodeToString(sum[:6])
 	if info.Behavior.ConfigurationRequired {
@@ -221,14 +215,15 @@ func NewClientWithHTTP(ctx context.Context, manifestURL string, keyPool *tmdb.Ke
 	}
 	modes := manifestModes(info)
 	endpoint := strings.TrimSuffix(u.Path, "/")
-	if strings.HasSuffix(strings.ToLower(u.Path), "/manifest.json") {
-		endpoint = strings.TrimSuffix(endpoint, "/manifest.json")
+	if strings.HasSuffix(strings.ToLower(endpoint), "/"+manifestSuffix) {
+		endpoint = endpoint[:len(endpoint)-len(manifestSuffix)-1]
 	}
 	return &Client{
 		base: base, httpClient: hc, manifest: info, keyPool: keyPool,
 		endpoint: strings.TrimSuffix(u.Scheme+"://"+u.Host+endpoint, "/"),
 		query:    u.RawQuery, name: identity, displayName: displayName,
 		digest: sum, modes: modes, hasSubtitles: supportsResource(info, "subtitles"),
+		info: addonInfo(info, modes),
 	}, nil
 }
 
@@ -334,6 +329,9 @@ func (c *Client) Modes() []provider.Mode { return append([]provider.Mode(nil), c
 // Alias returns the addon's display name, falling back to its manifest ID or host.
 func (c *Client) Alias() string { return c.displayName }
 
+// AddonInfo reports manifest capabilities for the settings screen.
+func (c *Client) AddonInfo() provider.AddonInfo { return c.info }
+
 // Features declares empty-query catalog browsing for addons with a Stremio mode.
 func (c *Client) Features(mode provider.ContentType) provider.Features {
 	if mode == provider.ModeStremio {
@@ -384,7 +382,7 @@ func (c *Client) searchCatalogs(ctx context.Context, query string) ([]provider.S
 						Title:     meta.Name,
 						ID:        c.Name() + "/" + kind + "/" + meta.ID,
 						Type:      provider.ModeStremio,
-						Year:      meta.ReleaseInfo,
+						Year:      metaYear(meta),
 						MediaType: catalogMediaType(kind),
 						CoverURL:  meta.Poster,
 						Overview:  meta.Description,
@@ -414,6 +412,15 @@ func (c *Client) searchCatalogs(ctx context.Context, query string) ([]provider.S
 	return nil, provider.ErrNoResults
 }
 
+// metaYear reads the release year from either Stremio spelling. Bridge addons
+// publish "year" while catalog addons tend to use "releaseInfo".
+func metaYear(meta addonMeta) string {
+	if year := strings.TrimSpace(meta.ReleaseInfo); year != "" {
+		return year
+	}
+	return strings.TrimSpace(meta.Year)
+}
+
 // metaTMDBID parses a TMDB id from the "tmdb:<n>" form Stremio metas use.
 func metaTMDBID(id string) int {
 	const prefix = "tmdb:"
@@ -429,19 +436,27 @@ func metaTMDBID(id string) int {
 }
 
 func (c *Client) fetchCatalog(ctx context.Context, catalog addonCatalog, query string) ([]addonMeta, error) {
-	endpoint, err := c.catalogURL("catalog", catalog.Type, catalog.ID)
+	extras := make(map[string]string)
+	if query != "" && catalogSupportsExtra(catalog, "search") {
+		extras["search"] = query
+	}
+	// Required pagination extras cannot be inferred from a text query;
+	// supplying their first page keeps those catalogs browsable. "skip" is a
+	// 0-based offset, while "page" is a 1-based page number.
+	for _, pagination := range []struct{ name, value string }{
+		{name: "skip", value: "0"},
+		{name: "page", value: "1"},
+	} {
+		if requiredCatalogExtra(catalog, pagination.name) {
+			extras[pagination.name] = pagination.value
+		}
+	}
+	endpoint, err := c.catalogURLWithExtras("catalog", catalog.Type, catalog.ID, extras)
 	if err != nil {
 		return nil, fmt.Errorf("build addon catalog URL: %w", err)
 	}
-	parsed, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("parse addon catalog URL: %w", err)
-	}
-	if catalogSupportsSearch(catalog) && query != "" {
-		parsed.Path = strings.TrimSuffix(parsed.Path, ".json") + "/" + url.PathEscape("search="+query) + ".json"
-	}
 	var response catalogResponse
-	if err := c.getJSON(ctx, parsed.String(), &response); err != nil {
+	if err := c.getJSON(ctx, endpoint, &response); err != nil {
 		return nil, err
 	}
 	return response.Metas, nil
@@ -475,12 +490,39 @@ func (c *Client) fetchCatalogEpisodesForType(ctx context.Context, kind, itemID s
 }
 
 func (c *Client) catalogURL(resource, mediaType, id string) (string, error) {
-	endpoint, err := url.Parse(c.endpoint + "/" + resource + "/" + url.PathEscape(mediaType) + "/" + url.PathEscape(id) + ".json")
-	if err != nil {
-		return "", err
+	return c.catalogURLWithExtras(resource, mediaType, id, nil)
+}
+
+// catalogURLWithExtras builds a Stremio resource URL with optional extras
+// encoded as a single path segment in the canonical key=value&key=value form.
+// The path is assembled as text: passing an already-escaped segment through
+// url.URL.String() escapes the percent signs a second time.
+func (c *Client) catalogURLWithExtras(resource, mediaType, id string, extras map[string]string) (string, error) {
+	endpoint := c.endpoint + "/" + url.PathEscape(resource) + "/" +
+		url.PathEscape(mediaType) + "/" + url.PathEscape(id) + ".json"
+	if len(extras) > 0 {
+		keys := make([]string, 0, len(extras))
+		for key := range extras {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, escapeStremioValue(key)+"="+escapeStremioValue(extras[key]))
+		}
+		endpoint = strings.TrimSuffix(endpoint, ".json") + "/" + strings.Join(parts, "&") + ".json"
 	}
-	endpoint.RawQuery = c.query
-	return endpoint.String(), nil
+	if c.query != "" {
+		endpoint += "?" + c.query
+	}
+	return endpoint, nil
+}
+
+// escapeStremioValue percent-encodes a key or value in an extras segment.
+// PathEscape leaves & and = intact, which would break the key=value&key=value
+// framing, so those two characters are encoded explicitly.
+func escapeStremioValue(value string) string {
+	return strings.NewReplacer("&", "%26", "=", "%3D").Replace(url.PathEscape(value))
 }
 
 func (c *Client) getJSON(ctx context.Context, endpoint string, out any) error {
@@ -494,13 +536,17 @@ func (c *Client) getJSON(ctx context.Context, endpoint string, out any) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("request addon resource: %w", ctxErr)
 		}
-		return fmt.Errorf("request addon resource failed")
+		return provider.WrapHint("stremioaddon", "request resource", provider.KindUpstream, "addon request failed", err)
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
 		return fmt.Errorf("request addon resource: %w", &provider.HTTPError{Code: resp.StatusCode, URL: c.endpoint})
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	body, err := httpclient.ReadCapped(resp)
+	if err != nil {
+		return fmt.Errorf("read addon resource: %w", err)
+	}
+	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("decode addon resource: %w", err)
 	}
 	return nil
@@ -536,15 +582,28 @@ func catalogMediaType(catalogType string) string {
 	}
 }
 
-func catalogSupportsSearch(catalog addonCatalog) bool {
+// catalogSupportsExtra reports whether a catalog declares an extra, including
+// the legacy extraSupported form some addons still publish.
+func catalogSupportsExtra(catalog addonCatalog, name string) bool {
 	for _, extra := range catalog.Extra {
-		if extra.Name == "search" {
+		if strings.EqualFold(extra.Name, name) {
 			return true
 		}
 	}
 	for _, extra := range catalog.ExtraSupported {
-		if extra == "search" {
+		if strings.EqualFold(extra, name) {
 			return true
+		}
+	}
+	return false
+}
+
+// requiredCatalogExtra reports whether an extra must be supplied for the
+// catalog to accept a request.
+func requiredCatalogExtra(catalog addonCatalog, name string) bool {
+	for _, extra := range catalog.Extra {
+		if strings.EqualFold(extra.Name, name) {
+			return extra.IsRequired
 		}
 	}
 	return false
@@ -577,7 +636,7 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 		if kind == "movie" || kind == "tv" {
 			return []provider.Episode{{ID: itemID, Title: series.Title}}, nil
 		}
-		if supportsResource(c.manifest, "meta") {
+		if supportsResourceFor(c.manifest, "meta", itemID) {
 			if episodes, err := c.fetchCatalogEpisodesForType(ctx, kind, itemID); err != nil {
 				if ctxErr := ctx.Err(); ctxErr != nil {
 					return nil, ctxErr
@@ -668,7 +727,34 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 	return sources, nil
 }
 
+// ResolveStream implements provider.StreamingProvider. The addon exposes a
+// single stream endpoint per item, so the resolved batch is published as soon
+// as it is available rather than after further enrichment.
+func (c *Client) ResolveStream(
+	ctx context.Context,
+	mediaID string,
+	episode provider.Episode,
+	updates chan<- []provider.MediaSource,
+) error {
+	sources, err := c.ResolveSource(ctx, mediaID, episode)
+	if err != nil {
+		return err
+	}
+	if len(sources) == 0 {
+		return provider.ErrNoSources
+	}
+	select {
+	case updates <- sources:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (c *Client) resolveAddonStreams(ctx context.Context, kind, itemID string) ([]provider.MediaSource, error) {
+	if !supportsResourceFor(c.manifest, "stream", itemID) {
+		return nil, provider.ErrNoSources
+	}
 	endpoint, err := c.catalogURL("stream", kind, itemID)
 	if err != nil {
 		return nil, fmt.Errorf("build addon stream URL: %w", err)
@@ -800,6 +886,54 @@ func appendUniqueSubtitles(existing, extra []provider.SubtitleOption) []provider
 	return existing
 }
 
+// streamQuality derives a short quality label from the fields bridge addons
+// actually populate. Their title is a multi-line advertisement, so the file
+// name, binge group and resolution token are more reliable sources.
+func streamQuality(item streamItem) (string, int) {
+	title := strings.TrimSpace(item.Title)
+	name := strings.TrimSpace(item.Name)
+	// Short single-line titles are genuine quality labels (e.g. "1080p WEB");
+	// bridge addons instead publish multi-line advertising copy.
+	if title != "" && !strings.Contains(title, "\n") && len(title) <= 40 {
+		height, _ := kit.NormalizeQuality(title)
+		return title, height
+	}
+	// Explicit resolution tokens are more reliable than a generic stream name.
+	for _, candidate := range []string{item.Behavior.Filename, item.Behavior.BingeGroup, title, name} {
+		if height := findResolution(candidate); height > 0 {
+			return strconv.Itoa(height) + "p", height
+		}
+	}
+	if name != "" && !strings.Contains(name, "\n") && len(name) <= 40 {
+		height, _ := kit.NormalizeQuality(name)
+		return name, height
+	}
+	return "Auto", 0
+}
+
+// findResolution extracts the first plausible <number>p token in value.
+func findResolution(value string) int {
+	lower := strings.ToLower(value)
+	for index := 0; index < len(lower); index++ {
+		if lower[index] != 'p' {
+			continue
+		}
+		end := index
+		start := index
+		for start > 0 && lower[start-1] >= '0' && lower[start-1] <= '9' {
+			start--
+		}
+		if start == end {
+			continue
+		}
+		height, err := strconv.Atoi(lower[start:end])
+		if err == nil && height >= 240 && height <= 4320 {
+			return height
+		}
+	}
+	return 0
+}
+
 func mediaSources(items []streamItem) []provider.MediaSource {
 	var sources []provider.MediaSource
 	for _, item := range items {
@@ -816,15 +950,11 @@ func mediaSources(items []streamItem) []provider.MediaSource {
 			}
 			continue
 		}
-		title := strings.TrimSpace(item.Title)
-		if title == "" {
-			title = strings.TrimSpace(item.Name)
+		quality, height := streamQuality(item)
+		source := provider.MediaSource{
+			URL: streamURL, Quality: quality, Type: sourceType(streamURL),
+			Height: height, FallbackOnly: strings.TrimSpace(item.ClearKey) != "",
 		}
-		if title == "" {
-			title = "Auto"
-		}
-		height, _ := kit.NormalizeQuality(title)
-		source := provider.MediaSource{URL: streamURL, Quality: title, Type: sourceType(streamURL), Height: height}
 		headers := make(map[string]string, len(item.Behavior.Headers)+len(item.Behavior.ProxyHeaders.Request))
 		for key, value := range item.Behavior.Headers {
 			headers[key] = value
@@ -832,15 +962,23 @@ func mediaSources(items []streamItem) []provider.MediaSource {
 		for key, value := range item.Behavior.ProxyHeaders.Request {
 			headers[key] = value
 		}
+		extraHeaders := make(map[string]string)
 		for key, value := range headers {
-			switch strings.ToLower(key) {
+			switch strings.ToLower(strings.TrimSpace(key)) {
 			case "referer":
 				source.Referer = value
 			case "user-agent":
 				source.UserAgent = value
 			case "cookie":
 				source.CookieHeader = value
+			default:
+				if name := http.CanonicalHeaderKey(strings.TrimSpace(key)); name != "" {
+					extraHeaders[name] = value
+				}
 			}
+		}
+		if len(extraHeaders) > 0 {
+			source.ExtraHeaders = extraHeaders
 		}
 		source.Subtitles = subtitleOptions(item.Subtitles, source.Referer)
 		sources = append(sources, source)
@@ -922,8 +1060,29 @@ func supportsStreams(info manifest) bool {
 }
 
 func supportsResource(info manifest, name string) bool {
+	return supportsResourceFor(info, name, "")
+}
+
+// supportsResourceFor honors the ID-prefix constraint carried by an object-form
+// manifest resource. Resource type lists are advisory: Stremio types are
+// free-form and bridge addons commonly declare standard types while serving
+// custom catalogs, so a type mismatch must not hide an otherwise valid stream.
+func supportsResourceFor(info manifest, name, itemID string) bool {
 	for _, resource := range info.Resources {
-		if resource.Name == name {
+		if resource.Name != name {
+			continue
+		}
+		if itemID != "" && len(resource.IDPrefixes) > 0 && !matchesAnyPrefix(itemID, resource.IDPrefixes) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func matchesAnyPrefix(value string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if prefix != "" && strings.HasPrefix(value, prefix) {
 			return true
 		}
 	}

@@ -64,21 +64,21 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		return model.ResolvedMedia{}, fmt.Errorf("no providers available for mode %q", mode)
 	}
 
-	var enabledRoutes, disabledRoutes []provider.Route
+	// A user-disabled provider is never queried, not even as a last resort:
+	// doing so would silently undo the user's choice to turn it off.
+	enabledRoutes := make([]provider.Route, 0, len(allRoutes))
 	for _, route := range allRoutes {
 		if s.IsProviderDisabled(mode, route.Provider.Name()) {
-			disabledRoutes = append(disabledRoutes, route)
-		} else {
-			enabledRoutes = append(enabledRoutes, route)
+			continue
 		}
+		enabledRoutes = append(enabledRoutes, route)
+	}
+	if len(enabledRoutes) == 0 {
+		return model.ResolvedMedia{}, provider.ErrNoSources
 	}
 
 	primaryRoutes := enabledRoutes
-	if len(primaryRoutes) == 0 {
-		primaryRoutes = allRoutes
-		disabledRoutes = nil
-	}
-	routes := allRoutes
+	routes := primaryRoutes
 	forcedRetry := make(map[string]struct{}, len(opts.Retry))
 	for _, name := range opts.Retry {
 		if name = strings.ToLower(strings.TrimSpace(name)); name != "" {
@@ -316,23 +316,6 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 	if err := runBatch(primaryRoutes); err != nil {
 		s.setLastFailures(failedOrder)
 		return model.ResolvedMedia{}, err
-	}
-
-	mu.Lock()
-	sourcesCount := len(agg.sources)
-	mu.Unlock()
-
-	isFullResolve := len(opts.Exclude) == 0 && len(opts.Retry) == 0
-	if isFullResolve && sourcesCount == 0 && len(disabledRoutes) > 0 && ctx.Err() == nil {
-		mediaLog.Debug("resolve: enabled providers returned no sources, attempting fallback to disabled providers",
-			"mode", mode, "disabled", len(disabledRoutes))
-		mu.Lock()
-		totalTargetResolvers = len(primaryRoutes) + len(disabledRoutes)
-		mu.Unlock()
-		if err := runBatch(disabledRoutes); err != nil {
-			s.setLastFailures(failedOrder)
-			return model.ResolvedMedia{}, err
-		}
 	}
 
 	mu.Lock()

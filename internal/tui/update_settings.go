@@ -17,8 +17,17 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case startupAddonLoadedMsg:
 		if msg.err != nil {
-			tuiLog.Warn("configured addon unavailable", "err", msg.err)
-			return m, nil
+			host := msg.manifestURL
+			if parsed, parseErr := url.Parse(msg.manifestURL); parseErr == nil && parsed.Host != "" {
+				host = parsed.Host
+			}
+			tuiLog.Warn("configured addon unavailable", "host", host, "err", msg.err)
+			// Startup warnings are set before addon loads resolve; don't replace
+			// a more important one (e.g. unavailable watch history) with this.
+			if m.statusText != "" {
+				return m, nil
+			}
+			return m, m.setStatusTimed(statusError, "Configured addon unavailable: "+host)
 		}
 		if msg.addon == nil || m.registry == nil {
 			return m, nil
@@ -28,29 +37,57 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncDisabledProvidersToService()
 		return m, nil
 	case addonTestDoneMsg:
-		if !m.addonTesting || msg.manifestURL != m.addonPendingURL {
+		if !m.addonTesting || msg.opID != m.addonTestOpID || msg.manifestURL != m.addonPendingURL {
 			return m, nil
 		}
 		m.addonTesting = false
 		m.addonTestCancel = nil
 		m.addonPendingURL = ""
+		// Keep the rebind target on failure: the input stays open, so a retry
+		// with Enter must still replace the addon rather than add a duplicate.
 		if msg.err != nil {
-			return m, m.setStatusTimed(statusError, "Addon add failed: "+msg.err.Error())
+			prefix := "Addon add failed: "
+			if msg.replacing != "" {
+				prefix = "Addon update failed: "
+			}
+			return m, m.setStatusTimed(statusError, prefix+msg.err.Error())
 		}
 		if msg.addon == nil || m.registry == nil {
 			return m, m.setStatusTimed(statusError, "Addon add returned no provider")
+		}
+		if msg.replacing != "" {
+			oldName, removed := m.registry.UnregisterConfigured(msg.replacing)
+			if removed {
+				m.rebindDisabledProviderKeys(oldName, msg.addon.Name())
+			}
 		}
 		m.registry.Register(msg.addon)
 		m.modes = m.registry.AllModes()
 		m.updateEffectiveModes()
 		m.syncDisabledProvidersToService()
-		m.stremioAddonManifests = append(m.stremioAddonManifests, msg.manifestURL)
+		status := "Addon added, saved, and enabled"
+		if msg.replacing != "" {
+			oldIndex := slices.Index(m.stremioAddonManifests, msg.replacing)
+			if oldIndex >= 0 {
+				m.stremioAddonManifests = slices.Delete(m.stremioAddonManifests, oldIndex, oldIndex+1)
+			}
+			if oldIndex >= 0 {
+				m.stremioAddonManifests = slices.Insert(m.stremioAddonManifests, min(oldIndex, len(m.stremioAddonManifests)), msg.manifestURL)
+			} else {
+				m.stremioAddonManifests = append(m.stremioAddonManifests, msg.manifestURL)
+			}
+			m.settingsIndex = slices.Index(m.stremioAddonManifests, msg.manifestURL) + 1
+			status = "Addon updated, saved, and enabled"
+		} else {
+			m.stremioAddonManifests = append(m.stremioAddonManifests, msg.manifestURL)
+			m.settingsIndex = len(m.stremioAddonManifests)
+		}
 		m.addonInput.SetValue("")
 		m.addonInputOpen = false
 		m.addonInput.Blur()
-		m.settingsIndex = len(m.stremioAddonManifests)
+		m.addonRebindingURL = ""
 		m.saveSettings()
-		return m, m.setStatusTimed(statusSuccess, "Addon added, saved, and enabled")
+		return m, m.setStatusTimed(statusSuccess, status)
 	case tea.KeyMsg:
 		if m.addonInputOpen {
 			if m.addonTesting {
@@ -60,35 +97,35 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				manifest := strings.TrimSpace(m.addonInput.Value())
 				u, err := url.Parse(manifest)
-				if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				if err != nil || u.Host == "" {
+					return m, m.setStatusTimed(statusError, "Enter a valid http or https manifest URL")
+				}
+				scheme := strings.ToLower(u.Scheme)
+				if scheme != "http" && scheme != "https" {
 					return m, m.setStatusTimed(statusError, "Enter a valid http or https manifest URL")
 				}
 				for _, existing := range m.stremioAddonManifests {
-					if existing == manifest {
+					if existing == m.addonRebindingURL {
+						continue
+					}
+					if canonicalAddonURL(existing) == canonicalAddonURL(manifest) {
 						m.addonInputOpen = false
 						m.addonInput.Blur()
+						m.addonRebindingURL = ""
 						return m, m.setStatusTimed(statusInfo, "Addon already configured")
 					}
 				}
 				if m.addonManifestTester == nil {
 					return m, m.setStatusTimed(statusError, "Addon checks are unavailable")
 				}
-				ctx, cancel := context.WithTimeout(m.appCtx, 25*time.Second)
-				m.addonTesting = true
-				m.addonTestCancel = cancel
-				m.addonPendingURL = manifest
-				tester := m.addonManifestTester
-				return m, func() tea.Msg {
-					addon, err := tester(ctx, manifest)
-					cancel()
-					return addonTestDoneMsg{manifestURL: manifest, addon: addon, err: err}
-				}
+				return m, m.startAddonCheck(manifest, m.addonRebindingURL)
 			case "esc":
 				if m.addonTestCancel != nil {
 					m.addonTestCancel()
 				}
 				m.addonTesting = false
 				m.addonPendingURL = ""
+				m.addonRebindingURL = ""
 				m.addonTestCancel = nil
 				m.addonInputOpen = false
 				m.addonInput.Blur()
@@ -262,8 +299,19 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.settingsCategory = CategoryHistory
 			m.settingsIndex = 0
 			return m, nil
+		case "e":
+			if m.settingsCategory == CategoryAddons && m.settingsIndex > 0 &&
+				m.settingsIndex <= len(m.stremioAddonManifests) && !m.addonTesting {
+				old := m.stremioAddonManifests[m.settingsIndex-1]
+				m.addonRebindingURL = old
+				m.addonInput.SetValue(old)
+				m.addonInputOpen = true
+				m.addonInput.Focus()
+				return m, nil
+			}
 		case "d":
-			if m.settingsCategory == CategoryAddons && m.settingsIndex > 0 {
+			if m.settingsCategory == CategoryAddons && m.settingsIndex > 0 &&
+				m.settingsIndex <= len(m.stremioAddonManifests) && !m.addonTesting {
 				idx := m.settingsIndex - 1
 				manifestURL := m.stremioAddonManifests[idx]
 				m.stremioAddonManifests = append(m.stremioAddonManifests[:idx], m.stremioAddonManifests[idx+1:]...)
@@ -364,9 +412,13 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.settingsCategory == CategoryAddons {
 				if m.settingsIndex == 0 {
+					m.addonRebindingURL = ""
 					m.addonInputOpen = true
 					m.addonInput.Focus()
 					m.addonInput.SetValue("")
+				} else if m.settingsIndex <= len(m.stremioAddonManifests) && !m.addonTesting {
+					old := m.stremioAddonManifests[m.settingsIndex-1]
+					return m, m.startAddonCheck(old, old)
 				}
 				return m, nil
 			}
@@ -414,6 +466,11 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case "r":
+			if m.settingsCategory == CategoryAddons && m.settingsIndex > 0 &&
+				m.settingsIndex <= len(m.stremioAddonManifests) && !m.addonTesting {
+				old := m.stremioAddonManifests[m.settingsIndex-1]
+				return m, m.startAddonCheck(old, old)
+			}
 			if m.settingsCategory == CategoryAccounts {
 				if m.settingsIndex == 0 && m.anilistClient != nil {
 					_ = m.anilistClient.Revoke()
@@ -865,8 +922,75 @@ func (m *modelImpl) isProviderDisabledKey(mode provider.ContentType, id string) 
 	if m.disabledProviders[p] {
 		return true
 	}
-	key := string(mode) + ":" + p
-	return m.disabledProviders[key]
+	if m.isConfiguredAddon(p) {
+		// An addon appears under several modes; disabling it anywhere must
+		// hide it everywhere, including Stremio browsing and playback.
+		for key := range m.disabledProviders {
+			if strings.HasSuffix(key, ":"+p) {
+				return true
+			}
+		}
+		return false
+	}
+	return m.disabledProviders[string(mode)+":"+p]
+}
+
+// isConfiguredAddon reports whether id is a user-configured Stremio addon.
+func (m *modelImpl) isConfiguredAddon(id string) bool {
+	return m.registry != nil && m.registry.IsConfiguredAddon(id)
+}
+
+// deleteModeScopedKeys removes every mode-scoped disable key for one provider.
+func deleteModeScopedKeys(disabled map[string]bool, id string) {
+	if disabled == nil {
+		return
+	}
+	suffix := ":" + strings.ToLower(strings.TrimSpace(id))
+	for key := range disabled {
+		if strings.HasSuffix(key, suffix) {
+			delete(disabled, key)
+		}
+	}
+}
+
+// rebindDisabledProviderKeys carries disable state from an addon's old identity
+// to its new one so rebinding the URL does not silently re-enable a disabled
+// addon. Refresh keeps the same identity and is a no-op.
+func (m *modelImpl) rebindDisabledProviderKeys(oldName, newName string) {
+	if m.disabledProviders == nil {
+		return
+	}
+	oldName = strings.ToLower(strings.TrimSpace(oldName))
+	newName = strings.ToLower(strings.TrimSpace(newName))
+	if oldName == "" || newName == "" || oldName == newName {
+		return
+	}
+	// Collect renames before mutating the map. Adding new keys while ranging
+	// can make them visible to later iterations, which could re-rename a key
+	// whose new identity still matches the old suffix.
+	const sep = ":"
+	var stale []string
+	renamed := make(map[string]bool)
+	for key, disabled := range m.disabledProviders {
+		if !disabled {
+			continue
+		}
+		if key == oldName {
+			stale = append(stale, key)
+			renamed[newName] = true
+			continue
+		}
+		if strings.HasSuffix(key, sep+oldName) {
+			stale = append(stale, key)
+			renamed[strings.TrimSuffix(key, sep+oldName)+sep+newName] = true
+		}
+	}
+	for _, key := range stale {
+		delete(m.disabledProviders, key)
+	}
+	for key := range renamed {
+		m.disabledProviders[key] = true
+	}
 }
 
 func (m *modelImpl) providerRows() []ProviderRow {
@@ -913,9 +1037,15 @@ func (m *modelImpl) toggleProviderAtIndex(index int) (tea.Model, tea.Cmd) {
 	if m.disabledProviders == nil {
 		m.disabledProviders = make(map[string]bool)
 	}
-	if m.isProviderDisabledKey(row.Mode, id) {
+	if m.isConfiguredAddon(id) {
+		deleteModeScopedKeys(m.disabledProviders, id)
+		if m.isProviderDisabledKey(row.Mode, id) {
+			delete(m.disabledProviders, id)
+		} else {
+			m.disabledProviders[id] = true
+		}
+	} else if m.isProviderDisabledKey(row.Mode, id) {
 		delete(m.disabledProviders, key)
-		delete(m.disabledProviders, id)
 	} else {
 		m.disabledProviders[key] = true
 	}
@@ -944,11 +1074,71 @@ func (m *modelImpl) syncDisabledProvidersToService() {
 		return
 	}
 	var list []string
+	seen := make(map[string]struct{})
+	add := func(name string) {
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		list = append(list, name)
+	}
 	for p, disabled := range m.disabledProviders {
-		if disabled {
-			list = append(list, p)
+		if !disabled {
+			continue
+		}
+		add(p)
+		// Addons from older settings files are disabled with mode-scoped keys
+		// (e.g. "stremio:addon-xxxx"). The TUI already treats those as global;
+		// mirror that here so every mode's service routes honor the choice.
+		if mode, name, ok := strings.Cut(p, ":"); ok && mode != "" && m.isConfiguredAddon(name) {
+			add(name)
 		}
 	}
 	slices.Sort(list)
 	m.mediaService.SetDisabledProviders(list)
+}
+
+// startAddonCheck validates a manifest URL asynchronously. When replacing is
+// non-empty, success swaps that addon for the newly tested one.
+func (m *modelImpl) startAddonCheck(manifest, replacing string) tea.Cmd {
+	if m.addonManifestTester == nil {
+		return m.setStatusTimed(statusError, "Addon checks are unavailable")
+	}
+	parent := m.appCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
+	m.addonTestOpID++
+	m.addonTesting = true
+	m.addonTestCancel = cancel
+	m.addonPendingURL = manifest
+	tester := m.addonManifestTester
+	opID := m.addonTestOpID
+	return func() tea.Msg {
+		addon, err := tester(ctx, manifest)
+		cancel()
+		return addonTestDoneMsg{opID: opID, manifestURL: manifest, replacing: replacing, addon: addon, err: err}
+	}
+}
+
+// canonicalAddonURL compares addon links without letting a trailing slash,
+// a missing manifest suffix, or host case create a duplicate entry. Path and
+// query stay verbatim: addon configuration identifiers are case-sensitive.
+func canonicalAddonURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	u.Fragment = ""
+	u.Path = strings.TrimSuffix(u.Path, "/")
+	const suffix = "/manifest.json"
+	if strings.HasSuffix(strings.ToLower(u.Path), suffix) {
+		u.Path = u.Path[:len(u.Path)-len(suffix)]
+	}
+	u.RawPath = ""
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	return u.String()
 }

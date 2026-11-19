@@ -80,9 +80,9 @@ Cartoon search reuses TMDB multi-search + genre-16 filter via streambase
 - Cross-provider ID (`241-263`): other-provider uses `series.TMDBID` if
   `>0`, else anime reuses `series.ID`, else skips provider silently.
   `tmdbID = series.TMDBID || episode.TMDBID || Atoi(series.ID)`.
-- No provider implements `StreamingProvider` yet
-  (`provider.go:284-289`); the branch (`284-305`) is dead until a provider
-  does. All go through `ResolveSource` wrapped as 1-item chan.
+- Streaming providers implement `StreamingProvider` and publish incremental
+  source batches through `ResolveStream`; other providers go through
+  `ResolveSource` wrapped as a 1-item chan.
 - Aggregator (`350-447`): stamps `Resolver`; dedupes playback by
   `TrimSpace+TrimSuffix("/")` URL (query significant, `427-447`); subs
   dedupe by `sub.URL`, label `LangName(DisplayName)` (`383-396`).

@@ -83,3 +83,13 @@ func TestSourceHeaders(t *testing.T) {
 		t.Errorf("empty source must yield no headers, got %v", empty.Headers())
 	}
 }
+
+func TestSourceHeadersExplicitOriginWins(t *testing.T) {
+	s := Source{
+		Referer:      "https://derived.example/",
+		ExtraHeaders: map[string]string{"Origin": "https://explicit.example"},
+	}
+	if got := s.Headers().Get("Origin"); got != "https://explicit.example" {
+		t.Fatalf("Origin = %q, want the explicit addon value", got)
+	}
+}

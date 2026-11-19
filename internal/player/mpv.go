@@ -254,6 +254,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	if strings.TrimSpace(source.CookieHeader) != "" {
 		headers = append(headers, "Cookie: "+source.CookieHeader)
 	}
+	headers = append(headers, extraHeaderFields(source)...)
 
 	pipeMpvArgs := []string{
 		"--no-ytdl",
@@ -276,11 +277,14 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	}
 	if strings.TrimSpace(source.Referer) != "" {
 		pipeMpvArgs = append(pipeMpvArgs, "--referrer="+source.Referer)
-		if !source.SuppressOrigin {
+		if !source.SuppressOrigin && explicitOrigin(source) == "" {
 			if origin := originFromReferer(strings.TrimSpace(source.Referer)); origin != "" {
 				pipeMpvArgs = append(pipeMpvArgs, "--http-header-fields=Origin: "+origin)
 			}
 		}
+	}
+	for _, field := range mpvExtraHeaderFields(source) {
+		pipeMpvArgs = append(pipeMpvArgs, "--http-header-fields="+field)
 	}
 
 	if media.StartTime > 5 {
@@ -384,7 +388,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 	// block and make strict CDNs answer 400. Only add what mpv has no native
 	// option for: Origin and the provider's Cookie.
 	var headers []string
-	if strings.TrimSpace(source.Referer) != "" {
+	if strings.TrimSpace(source.Referer) != "" && explicitOrigin(source) == "" {
 		if !source.SuppressOrigin {
 			if origin := originFromReferer(strings.TrimSpace(source.Referer)); origin != "" {
 				headers = append(headers, "Origin: "+origin)
@@ -394,6 +398,7 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 	if strings.TrimSpace(source.CookieHeader) != "" {
 		headers = append(headers, "Cookie: "+source.CookieHeader)
 	}
+	headers = append(headers, mpvExtraHeaderFields(source)...)
 	if len(headers) > 0 {
 		// mpv's list-typed options split list values on commas; joining with
 		// anything else (like CR/LF) corrupts the header block. Plain

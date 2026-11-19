@@ -130,7 +130,7 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	// header entries that strict CDNs answer with 400. Only Origin and Cookie
 	// have no native mpv option and belong here.
 	var headers []string
-	if strings.TrimSpace(source.Referer) != "" {
+	if strings.TrimSpace(source.Referer) != "" && explicitOrigin(source) == "" {
 		if !source.SuppressOrigin {
 			if origin := originFromReferer(strings.TrimSpace(source.Referer)); origin != "" {
 				headers = append(headers, "Origin: "+origin)
@@ -140,6 +140,7 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	if strings.TrimSpace(source.CookieHeader) != "" {
 		headers = append(headers, "Cookie: "+source.CookieHeader)
 	}
+	headers = append(headers, mpvExtraHeaderFields(source)...)
 	if len(headers) > 0 {
 		for _, h := range headers {
 			confBuilder.WriteString("http-header-fields=")

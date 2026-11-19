@@ -99,6 +99,9 @@ func buildVLCArgs(source provider.MediaSource, media model.ResolvedMedia) []stri
 	if strings.TrimSpace(source.CookieHeader) != "" {
 		args = append(args, "--http-set-cookie="+strings.TrimSpace(source.CookieHeader))
 	}
+	// VLC exposes only referer/UA/cookie item options; it has no CLI flag for
+	// arbitrary request headers, so addon-specific ExtraHeaders cannot be
+	// forwarded here the way mpv and IINA forward them.
 	if media.StartTime > 5 {
 		args = append(args, fmt.Sprintf("--start-time=%d", int(media.StartTime)))
 	}
@@ -259,7 +262,7 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 
 	// Same header rules as buildMPVArgs: UA/Referer via native options only.
 	var headers []string
-	if strings.TrimSpace(source.Referer) != "" && !source.SuppressOrigin {
+	if strings.TrimSpace(source.Referer) != "" && !source.SuppressOrigin && explicitOrigin(source) == "" {
 		if origin := originFromReferer(strings.TrimSpace(source.Referer)); origin != "" {
 			headers = append(headers, "Origin: "+origin)
 		}
@@ -267,6 +270,7 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 	if strings.TrimSpace(source.CookieHeader) != "" {
 		headers = append(headers, "Cookie: "+source.CookieHeader)
 	}
+	headers = append(headers, mpvExtraHeaderFields(source)...)
 	if len(headers) > 0 {
 		args = append(args, "--http-header-fields="+strings.Join(headers, ","))
 	}
