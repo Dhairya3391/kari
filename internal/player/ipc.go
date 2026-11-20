@@ -2,6 +2,7 @@ package player
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -132,23 +133,46 @@ func (c *IPCClient) AddSubtitle(path string) error {
 // the given subtitle file so that late-arriving subtitles appear without
 // interrupting playback.
 func HotAddSubtitle(path string) error {
+	return HotAddSubtitleContext(context.Background(), "", path)
+}
+
+// HotAddSubtitleContext side-loads a subtitle through the given IPC endpoint
+// (or the default one when empty). The context is checked before each connect
+// attempt and again after connecting, so a hot-add scheduled for a playback
+// session that has since ended cannot attach to a player that rebound the
+// socket in the meantime.
+func HotAddSubtitleContext(ctx context.Context, socketPath, path string) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil
 	}
-	socketPath := DefaultMPVSocketPath()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(socketPath) == "" {
+		socketPath = DefaultMPVSocketPath()
+	}
 	client := NewIPCClient(socketPath)
 
 	deadline := time.Now().Add(5 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		err := client.Connect(500 * time.Millisecond)
 		if err == nil {
 			defer client.Close()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return client.AddSubtitle(path)
 		}
 		lastErr = err
 		time.Sleep(200 * time.Millisecond)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return lastErr
 }

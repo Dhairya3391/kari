@@ -2,9 +2,12 @@ package player
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -38,6 +41,22 @@ func TestAddSubtitleDisconnectedClient(t *testing.T) {
 	c := NewIPCClient("/tmp/fake.sock")
 	if err := c.AddSubtitle("/path/to/sub.vtt"); err == nil {
 		t.Fatal("expected error on disconnected client")
+	}
+}
+
+func TestCleanupStaleSocketsRemovesDeadOwnerFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket cleanup is platform-specific")
+	}
+	stale := "/tmp/kari-mpv-99999999.sock"
+	if err := os.WriteFile(stale, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(stale)
+
+	cleanupStaleSockets()
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale socket still present after cleanup: %v", err)
 	}
 }
 
@@ -89,5 +108,73 @@ func TestAddSubtitleMockSocket(t *testing.T) {
 	t.Setenv("MPV_SOCKET", sockPath)
 	if err := HotAddSubtitle("/tmp/subs/eng.vtt"); err != nil {
 		t.Fatalf("HotAddSubtitle failed: %v", err)
+	}
+}
+
+// A hot-add scheduled for a playback that has since ended must not attach to
+// a player that binds the same socket afterwards (the next episode). Before
+// the session-scoped API existed this test failed: the add reached the new
+// player. Verified against the old code with a diagnostic variant.
+func TestHotAddSubtitleContextStopsWhenCanceled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping unix socket test on windows")
+	}
+	sockPath := fmt.Sprintf("/tmp/kari-ipc-test-%d.sock", os.Getpid())
+	_ = os.Remove(sockPath)
+	defer os.Remove(sockPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- HotAddSubtitleContext(ctx, sockPath, "/tmp/subs/episodeN.srt")
+	}()
+
+	// No listener yet; the side-load sits in its connect retry loop. End the
+	// playback session before the replacement player appears.
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	got := make(chan string, 1)
+	go func() {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		sc := bufio.NewScanner(conn)
+		for sc.Scan() {
+			var req struct {
+				Command   []any `json:"command"`
+				RequestID int   `json:"request_id"`
+			}
+			if err := json.Unmarshal(sc.Bytes(), &req); err != nil {
+				continue
+			}
+			if len(req.Command) > 0 && req.Command[0] == "sub-add" {
+				got <- fmt.Sprint(req.Command[1])
+			}
+			resp := fmt.Sprintf(`{"request_id":%d,"error":"success","data":null}`+"\n", req.RequestID)
+			_, _ = conn.Write([]byte(resp))
+		}
+	}()
+
+	select {
+	case path := <-got:
+		t.Fatalf("cancelled hot-add still reached the new player: %q", path)
+	case <-time.After(500 * time.Millisecond):
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled hot-add did not return")
 	}
 }

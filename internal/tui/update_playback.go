@@ -118,15 +118,60 @@ func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.finalizeResolved()
 	}
-	if m.playOpID != 0 && msg.err == nil && strings.TrimSpace(msg.track.Path) != "" {
-		path := msg.track.Path
-		go func() {
-			if err := player.HotAddSubtitle(path); err != nil {
-				tuiLog.Debug("failed to hot-add subtitle to active player", "err", err)
-			}
-		}()
+	var hotAddCmd tea.Cmd
+	if m.playOpID != 0 && msg.err == nil && canHotAddSubtitle(m.loadedSubtitlePaths, m.hotAddPendingPath, msg.track.Path) {
+		path := strings.TrimSpace(msg.track.Path)
+		m.hotAddPendingPath = path
+		hotAddCmd = m.hotAddSubtitleCmd(m.playOpID, 1, path)
 	}
-	return m, retryCmd
+	return m, tea.Batch(retryCmd, hotAddCmd)
+}
+
+const maxSubtitleHotAddAttempts = 3
+
+// canHotAddSubtitle rejects paths already loaded in the player and the path
+// whose side-load is still in flight (including its retries).
+func canHotAddSubtitle(loaded map[string]struct{}, pending, incoming string) bool {
+	incoming = strings.TrimSpace(incoming)
+	if incoming == "" || incoming == strings.TrimSpace(pending) {
+		return false
+	}
+	_, seen := loaded[incoming]
+	return !seen
+}
+
+// onSubtitleHotAddResult records a confirmed side-load and retries a failed
+// one. Results from a replaced playback session are dropped.
+func (m *modelImpl) onSubtitleHotAddResult(msg subtitleHotAddResultMsg) (tea.Model, tea.Cmd) {
+	if m.playOpID == 0 || msg.session != m.playOpID || msg.path != m.hotAddPendingPath {
+		return m, nil
+	}
+	if msg.err != nil {
+		if msg.attempt >= maxSubtitleHotAddAttempts {
+			m.hotAddPendingPath = ""
+			tuiLog.Debug("gave up hot-adding subtitle", "path", msg.path, "err", msg.err)
+			return m, nil
+		}
+		attempt := msg.attempt + 1
+		return m, tea.Tick(time.Second, func(time.Time) tea.Msg {
+			return retrySubtitleHotAddMsg{session: msg.session, path: msg.path, attempt: attempt}
+		})
+	}
+	if m.loadedSubtitlePaths == nil {
+		m.loadedSubtitlePaths = make(map[string]struct{})
+	}
+	m.loadedSubtitlePaths[msg.path] = struct{}{}
+	m.hotAddPendingPath = ""
+	return m, nil
+}
+
+// onRetrySubtitleHotAdd re-issues a failed side-load while its session is
+// still active and its path is still the pending one.
+func (m *modelImpl) onRetrySubtitleHotAdd(msg retrySubtitleHotAddMsg) (tea.Model, tea.Cmd) {
+	if m.playOpID == 0 || msg.session != m.playOpID || msg.path != m.hotAddPendingPath {
+		return m, nil
+	}
+	return m, m.hotAddSubtitleCmd(msg.session, msg.attempt, msg.path)
 }
 
 func (m *modelImpl) playStartedTimeoutCmd(opID int) tea.Cmd {
@@ -355,6 +400,9 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.playOpID = 0
+	m.cancelSubtitleAdds()
+	m.loadedSubtitlePaths = nil
+	m.hotAddPendingPath = ""
 	m.loading = false
 	m.loadingText = ""
 	m.autoPlayAfterResolve = false

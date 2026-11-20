@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -596,5 +597,192 @@ func TestAutoPlayAfterResolveLaunchesOnSubtitleError(t *testing.T) {
 	}
 	if m.resolved.SelectedSubtitle != nil {
 		t.Fatalf("expected nil SelectedSubtitle on error, got %+v", m.resolved.SelectedSubtitle)
+	}
+}
+
+func TestCanHotAddSubtitle(t *testing.T) {
+	tests := []struct {
+		name     string
+		loaded   map[string]struct{}
+		pending  string
+		incoming string
+		want     bool
+	}{
+		{"already loaded is skipped", map[string]struct{}{"/tmp/en.srt": {}}, "", "/tmp/en.srt", false},
+		{"loaded path with whitespace is skipped", map[string]struct{}{"/tmp/en.srt": {}}, "", "  /tmp/en.srt\n", false},
+		{"in-flight path is skipped", nil, "/tmp/en.srt", "/tmp/en.srt", false},
+		{"different path is loaded", map[string]struct{}{"/tmp/en.srt": {}}, "", "/tmp/en2.srt", true},
+		{"no prior subtitle loads", nil, "", "/tmp/en.srt", true},
+		{"empty incoming is skipped", nil, "", "   ", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := canHotAddSubtitle(tc.loaded, tc.pending, tc.incoming); got != tc.want {
+				t.Fatalf("canHotAddSubtitle() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func hotAddTestModel() *modelImpl {
+	m := readySourceModel()
+	m.playOpID = 9
+	m.loadedSubtitlePaths = map[string]struct{}{"/tmp/subs/en.srt": {}}
+	m.hotAddSubtitle = func(context.Context, string) error { return nil }
+	return m
+}
+
+func assertLoaded(t *testing.T, m *modelImpl, paths ...string) {
+	t.Helper()
+	if len(m.loadedSubtitlePaths) != len(paths) {
+		t.Fatalf("loaded paths = %v, want %v", m.loadedSubtitlePaths, paths)
+	}
+	for _, path := range paths {
+		if _, ok := m.loadedSubtitlePaths[path]; !ok {
+			t.Fatalf("loaded paths = %v, missing %q", m.loadedSubtitlePaths, path)
+		}
+	}
+}
+
+// A later resolve snapshot can re-fetch the subtitle already passed to the
+// player at launch. It must not register a second external track.
+func TestOnSubtitleDoneSkipsDuplicateHotAdd(t *testing.T) {
+	m := hotAddTestModel()
+
+	// Same path as the one loaded at launch: no command at all.
+	m.subtitleOpID = 4
+	mdl, cmd := m.onSubtitleDone(subtitleDoneMsg{opID: 4, track: model.SubtitleTrack{Path: "/tmp/subs/en.srt"}})
+	m = mdl.(*modelImpl)
+	if cmd != nil {
+		t.Fatalf("already-loaded subtitle scheduled a side-load: cmd = %v", cmd)
+	}
+	assertLoaded(t, m, "/tmp/subs/en.srt")
+
+	// A genuinely different track is side-loaded, then confirmed loaded.
+	m.subtitleOpID = 5
+	mdl, cmd = m.onSubtitleDone(subtitleDoneMsg{opID: 5, track: model.SubtitleTrack{Path: "/tmp/subs/en2.srt"}})
+	m = mdl.(*modelImpl)
+	if cmd == nil {
+		t.Fatal("distinct subtitle must schedule a side-load")
+	}
+	if m.hotAddPendingPath != "/tmp/subs/en2.srt" {
+		t.Fatalf("pending path = %q, want en2", m.hotAddPendingPath)
+	}
+	result, ok := cmd().(subtitleHotAddResultMsg)
+	if !ok || result.path != "/tmp/subs/en2.srt" || result.session != 9 || result.err != nil {
+		t.Fatalf("side-load result = %+v", result)
+	}
+	mdl, _ = m.onSubtitleHotAddResult(result)
+	m = mdl.(*modelImpl)
+	if m.hotAddPendingPath != "" {
+		t.Fatalf("pending path = %q, want empty", m.hotAddPendingPath)
+	}
+	assertLoaded(t, m, "/tmp/subs/en.srt", "/tmp/subs/en2.srt")
+
+	// Switching back to the original source must not re-add its subtitle.
+	m.subtitleOpID = 6
+	_, cmd = m.onSubtitleDone(subtitleDoneMsg{opID: 6, track: model.SubtitleTrack{Path: "/tmp/subs/en.srt"}})
+	if cmd != nil {
+		t.Fatalf("previously loaded subtitle was side-loaded again: cmd = %v", cmd)
+	}
+}
+
+func TestHotAddRetriesAfterFailure(t *testing.T) {
+	m := hotAddTestModel()
+	m.hotAddSubtitle = func(context.Context, string) error { return errors.New("socket unavailable") }
+
+	m.subtitleOpID = 4
+	mdl, cmd := m.onSubtitleDone(subtitleDoneMsg{opID: 4, track: model.SubtitleTrack{Path: "/tmp/subs/en2.srt"}})
+	m = mdl.(*modelImpl)
+	result := cmd().(subtitleHotAddResultMsg)
+
+	mdl, retryCmd := m.onSubtitleHotAddResult(result)
+	m = mdl.(*modelImpl)
+	if retryCmd == nil {
+		t.Fatal("failed side-load must be retried")
+	}
+	if m.hotAddPendingPath != "/tmp/subs/en2.srt" {
+		t.Fatalf("failed side-load cleared its pending path: %q", m.hotAddPendingPath)
+	}
+	assertLoaded(t, m, "/tmp/subs/en.srt")
+
+	retryMsg, ok := retryCmd().(retrySubtitleHotAddMsg)
+	if !ok || retryMsg.attempt != 2 {
+		t.Fatalf("retry message = %+v", retryMsg)
+	}
+	mdl, cmd = m.onRetrySubtitleHotAdd(retryMsg)
+	m = mdl.(*modelImpl)
+	if cmd == nil {
+		t.Fatal("retry must schedule another side-load")
+	}
+
+	// A successful retry moves the path from pending to loaded.
+	mdl, _ = m.onSubtitleHotAddResult(subtitleHotAddResultMsg{session: 9, path: "/tmp/subs/en2.srt", attempt: 2})
+	m = mdl.(*modelImpl)
+	assertLoaded(t, m, "/tmp/subs/en.srt", "/tmp/subs/en2.srt")
+	if m.hotAddPendingPath != "" {
+		t.Fatalf("pending path = %q, want empty", m.hotAddPendingPath)
+	}
+}
+
+func TestHotAddGivesUpAfterMaxAttempts(t *testing.T) {
+	m := hotAddTestModel()
+	m.hotAddPendingPath = "/tmp/subs/en2.srt"
+	mdl, cmd := m.onSubtitleHotAddResult(subtitleHotAddResultMsg{
+		session: 9, path: "/tmp/subs/en2.srt", attempt: maxSubtitleHotAddAttempts, err: errors.New("still down"),
+	})
+	m = mdl.(*modelImpl)
+	if cmd != nil {
+		t.Fatalf("exhausted side-load scheduled another attempt: %v", cmd)
+	}
+	if m.hotAddPendingPath != "" {
+		t.Fatalf("pending path = %q, want empty", m.hotAddPendingPath)
+	}
+}
+
+func TestHotAddResultFromStaleSessionIsIgnored(t *testing.T) {
+	m := hotAddTestModel()
+	m.hotAddPendingPath = "/tmp/subs/en2.srt"
+	mdl, _ := m.onSubtitleHotAddResult(subtitleHotAddResultMsg{session: 8, path: "/tmp/subs/en2.srt"})
+	m = mdl.(*modelImpl)
+	if m.hotAddPendingPath != "/tmp/subs/en2.srt" {
+		t.Fatalf("stale session cleared the pending path: %q", m.hotAddPendingPath)
+	}
+	assertLoaded(t, m, "/tmp/subs/en.srt")
+}
+
+func TestPlayCmdSeedsLoadedSubtitlePaths(t *testing.T) {
+	m := readySourceModel()
+	m.resolved.SelectedSubtitle = &model.SubtitleTrack{Path: "/tmp/subs/en.srt"}
+	_ = m.playCmdWithStartTime(7, 0)
+	assertLoaded(t, m, "/tmp/subs/en.srt")
+	if m.hotAddPendingPath != "" {
+		t.Fatalf("pending path = %q, want empty", m.hotAddPendingPath)
+	}
+}
+
+func TestHotAddUsesPlaybackScopedContext(t *testing.T) {
+	m := readySourceModel()
+	m.resolved.SelectedSubtitle = &model.SubtitleTrack{Path: "/tmp/subs/en.srt"}
+	_ = m.playCmdWithStartTime(7, 0)
+
+	var gotCtx context.Context
+	m.hotAddSubtitle = func(ctx context.Context, path string) error {
+		gotCtx = ctx
+		return nil
+	}
+	cmd := m.hotAddSubtitleCmd(7, 1, "/tmp/subs/en2.srt")
+	_ = cmd()
+
+	if gotCtx != m.subtitleAddCtx || gotCtx == nil {
+		t.Fatal("side-load did not receive the playback-scoped context")
+	}
+
+	m.cancelSubtitleAdds()
+	if err := gotCtx.Err(); err == nil {
+		t.Fatal("playback transition did not cancel in-flight side-loads")
+	}
+	if m.subtitleAddCancel != nil {
+		t.Fatal("cancel function was not cleared")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"kari/internal/history"
 	"kari/internal/logging"
 	"kari/internal/model"
+	"kari/internal/player"
 	"kari/internal/provider"
 	"kari/internal/service"
 	"strings"
@@ -215,6 +216,46 @@ func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia, pre
 	}
 }
 
+// cancelSubtitleAdds stops any side-load belonging to the current playback
+// session. Results from the cancelled commands are dropped by their session
+// tag, so it is safe to call on every playback transition.
+func (m *modelImpl) cancelSubtitleAdds() {
+	if m.subtitleAddCancel != nil {
+		m.subtitleAddCancel()
+		m.subtitleAddCancel = nil
+	}
+	m.subtitleAddCtx = nil
+}
+
+// newSubtitleAddContext binds side-loads to one playback session.
+func (m *modelImpl) newSubtitleAddContext() {
+	m.cancelSubtitleAdds()
+	parent := m.appCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	m.subtitleAddCtx, m.subtitleAddCancel = context.WithCancel(parent)
+}
+
+// hotAddSubtitleCmd side-loads a subtitle on Bubbletea's command runner. The
+// side-loader and context are captured here so the command never reads model
+// state from the goroutine it runs on.
+func (m *modelImpl) hotAddSubtitleCmd(session, attempt int, path string) tea.Cmd {
+	add := m.hotAddSubtitle
+	if add == nil {
+		add = func(ctx context.Context, path string) error {
+			return player.HotAddSubtitleContext(ctx, "", path)
+		}
+	}
+	ctx := m.subtitleAddCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg {
+		return subtitleHotAddResultMsg{session: session, path: path, attempt: attempt, err: add(ctx, path)}
+	}
+}
+
 func (m *modelImpl) playCmd(opID int) tea.Cmd {
 	if m.resolved == nil {
 		return m.playCmdWithStartTime(opID, 0)
@@ -232,6 +273,14 @@ func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 	resolved := *m.resolved
 	resolved.StartTime = startTime
 	resolved.SubtitleLanguage = m.subtitleLanguage
+	// The launch subtitle is already loaded; seed the set so a later resolve
+	// snapshot cannot hot-add the same cached track a second time.
+	m.newSubtitleAddContext()
+	m.loadedSubtitlePaths = nil
+	m.hotAddPendingPath = ""
+	if path := strings.TrimSpace(resolved.SubtitlePath()); path != "" {
+		m.loadedSubtitlePaths = map[string]struct{}{path: {}}
+	}
 	playerName := m.selectedPlayerName()
 	providerName := ""
 	if src, ok := m.selectedPlaybackSource(); ok {
@@ -382,6 +431,9 @@ func (m *modelImpl) resumePendingDownloadCmd(opID int, job service.DownloadJob) 
 
 func (m *modelImpl) playDownloadedFileCmd(opID int, filePath, title string) tea.Cmd {
 	playerName := m.selectedPlayerName()
+	m.cancelSubtitleAdds()
+	m.loadedSubtitlePaths = nil
+	m.hotAddPendingPath = ""
 	return func() tea.Msg {
 		sources := []provider.MediaSource{{URL: filePath}}
 		resolved := model.ResolvedMedia{

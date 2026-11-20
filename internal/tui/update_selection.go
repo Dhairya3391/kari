@@ -266,6 +266,9 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 	m.resolved = nil
 	m.resetPreviewSkipInfo()
 	m.rawSubtitles = nil
+	m.cancelSubtitleAdds()
+	m.loadedSubtitlePaths = nil
+	m.hotAddPendingPath = ""
 	m.manualPlaybackSelected = false
 	m.resolveAttempts = 0
 	m.preferredRepairAttempts = 0

@@ -41,11 +41,19 @@ The full standard — structure, naming, comments, patterns — is
 
 Improvements are encouraged when they standardize inconsistency, remove
 redundancy, or improve cross-platform reliability — but verify the build
-after every change:
+after every change. Formatting/import checks must produce no output, then
+vet, build, both linters, and tests must all pass:
 
 ```sh
-go vet ./... && go build ./... && staticcheck ./... && go test ./...
+test -z "$(gofmt -l .)" && \
+test -z "$(goimports -l .)" && \
+go vet ./... && go build ./... && staticcheck ./... && golangci-lint run ./... && go test ./...
 ```
+
+`gofmt` and `goimports` are formatting gates (the `test -z` assertions fail
+when any file needs formatting, including import grouping); `staticcheck`
+and `golangci-lint` are the two linters. Run the whole chain, not just the
+subset that touches the files you edited.
 
 ## 3. Communication Patterns
 

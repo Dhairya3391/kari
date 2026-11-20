@@ -16,18 +16,22 @@ The full design and code standard is documented in [docs/CODEBASE.md](docs/CODEB
 
 ## Build & Test Workflow
 
-Always run verification before submitting a pull request:
+Always run verification before submitting a pull request. The canonical chain
+is the one in `AGENTS.md`; run it in full, not just the parts touching files
+you edited:
 
 ```bash
-# 1. Run unit tests with race detection
+test -z "$(gofmt -l .)" && \
+test -z "$(goimports -l .)" && \
+go vet ./... && go build ./... && staticcheck ./... && golangci-lint run ./... && go test ./...
+```
+
+CI additionally runs the tests with the race detector and builds the Android
+target:
+
+```bash
 go test -race ./...
-
-# 2. Static analysis and formatting
-go vet ./...
-staticcheck ./...
-
-# 3. Build local binary
-./build.sh
+CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -buildmode=pie ./cmd/kari
 ```
 
 ---

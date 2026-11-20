@@ -175,6 +175,9 @@ func (m *modelImpl) goBackOne() bool {
 	m.activeView = prev
 	if m.activeView == viewSearch {
 		m.playOpID = 0
+		m.cancelSubtitleAdds()
+		m.loadedSubtitlePaths = nil
+		m.hotAddPendingPath = ""
 		m.resolveOpID = 0
 		m.cancelResolve()
 		m.subtitleOpID = 0
@@ -231,6 +234,9 @@ func (m *modelImpl) toggleAnimeAudio() (tea.Model, tea.Cmd) {
 		m.loadingText = "Reloading streams (" + m.audioMode + ")..."
 		m.resolved = nil
 		m.rawSubtitles = nil
+		m.cancelSubtitleAdds()
+		m.loadedSubtitlePaths = nil
+		m.hotAddPendingPath = ""
 		m.manualPlaybackSelected = false
 		m.resolveAttempts = 0
 		m.preferredRepairAttempts = 0

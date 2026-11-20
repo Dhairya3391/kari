@@ -638,6 +638,9 @@ func ipcPoller(
 // loaded media. Shared by mpv and IINA.
 func startPlayerWithStartupCheck(check startupCheck) launchResult {
 	_ = os.Remove(check.socketPath)
+	// The process has exited by the time this returns; unlink its endpoint so
+	// a killed/crashed player does not leave a stale socket in /tmp.
+	defer func() { _ = os.Remove(check.socketPath) }()
 
 	cmd := exec.Command(check.binary, check.args...)
 	cmd.Stdout = io.Discard
@@ -735,6 +738,7 @@ func waitForPlaybackReadiness(
 
 func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err error) {
 	_ = os.Remove(check.socketPath)
+	defer func() { _ = os.Remove(check.socketPath) }()
 
 	bin, prefix := mpvCommand()
 	if bin == "" {

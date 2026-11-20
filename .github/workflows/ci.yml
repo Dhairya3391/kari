@@ -62,6 +62,12 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - name: Check formatting
+        run: |
+          go install golang.org/x/tools/cmd/goimports@latest
+          test -z "$(gofmt -l .)"
+          test -z "$(goimports -l .)"
+
       - name: Go Vet
         run: go vet ./...
 
@@ -73,6 +79,11 @@ jobs:
         with:
           version: "latest"
           install-go: false
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15
 
   test:
     name: Tests

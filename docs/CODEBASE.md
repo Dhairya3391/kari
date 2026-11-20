@@ -422,7 +422,9 @@ var (
 - Verify after every change (AGENTS.md mandate):
 
 ```bash
-go vet ./... && go build ./... && staticcheck ./... && go test ./...
+test -z "$(gofmt -l .)" && \
+test -z "$(goimports -l .)" && \
+go vet ./... && go build ./... && staticcheck ./... && golangci-lint run ./... && go test ./...
 ```
 
 - Tests live beside the subject (`foo_test.go`), use table-driven cases for

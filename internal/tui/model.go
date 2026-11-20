@@ -516,6 +516,12 @@ func (m *modelImpl) updateMessage(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case subtitleDoneMsg:
 		mdl, cmd := m.onSubtitleDone(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)
+	case subtitleHotAddResultMsg:
+		mdl, cmd := m.onSubtitleHotAddResult(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
+	case retrySubtitleHotAddMsg:
+		mdl, cmd := m.onRetrySubtitleHotAdd(msg)
+		return mdl, tea.Batch(spinnerCmd, cmd)
 	case resolveProgressMsg:
 		mdl, cmd := m.onResolveProgress(msg)
 		return mdl, tea.Batch(spinnerCmd, cmd)

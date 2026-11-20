@@ -172,6 +172,23 @@ type subtitleDoneMsg struct {
 	err   error
 }
 
+// subtitleHotAddResultMsg reports the outcome of side-loading a subtitle into
+// the running player. session binds the result to the playback that asked for
+// it so a late answer from a replaced episode cannot mutate current state.
+type subtitleHotAddResultMsg struct {
+	session int
+	path    string
+	attempt int
+	err     error
+}
+
+// retrySubtitleHotAddMsg re-attempts a failed side-load after a short delay.
+type retrySubtitleHotAddMsg struct {
+	session int
+	path    string
+	attempt int
+}
+
 type resolveProgressMsg struct {
 	resolved model.ResolvedMedia
 	opID     int
@@ -384,11 +401,18 @@ type modelImpl struct {
 	calendarClient  *calendar.Client
 	registry        *provider.Registry
 	players         *player.Registry
-	appCtx          context.Context
-	appVersion      string
-	appCommit       string
-	width           int
-	height          int
+	// hotAddSubtitle is a test seam for side-loading into the running player;
+	// nil means use the real IPC client.
+	hotAddSubtitle func(context.Context, string) error
+	// subtitleAddCtx is scoped to one playback session: cancelling it stops
+	// in-flight side-loads so they cannot attach to a replacement player.
+	subtitleAddCtx    context.Context
+	subtitleAddCancel context.CancelFunc
+	appCtx            context.Context
+	appVersion        string
+	appCommit         string
+	width             int
+	height            int
 
 	activeView viewState
 
@@ -508,13 +532,21 @@ type modelImpl struct {
 	subtitlePoolSize     int
 	subtitlePoolComplete bool
 	rawSubtitles         []model.SubtitleTrack
-	playOpID             int
-	downloadOpID         int
-	downloadProgress     float64
-	downloadTotalSize    string
-	downloadSpeed        string
-	downloadDownloaded   string
-	downloadETA          string
+	// loadedSubtitlePaths holds every subtitle file confirmed loaded in the
+	// active player. Resolve snapshots can re-fetch the same cached file, and
+	// a source/language toggle can bring back an earlier one, so membership
+	// (not just the last path) is needed to avoid duplicate external tracks.
+	loadedSubtitlePaths map[string]struct{}
+	// hotAddPendingPath is a side-load still in flight; a retry keeps it set
+	// so a second fetch of the same path cannot start a competing add.
+	hotAddPendingPath  string
+	playOpID           int
+	downloadOpID       int
+	downloadProgress   float64
+	downloadTotalSize  string
+	downloadSpeed      string
+	downloadDownloaded string
+	downloadETA        string
 	// completedDownloadsCache holds one directory scan for a short window so
 	// the downloads screen can use it in both the body and the footer without
 	// walking the download directory twice per frame.

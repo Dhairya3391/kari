@@ -224,6 +224,9 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.activeView = viewSearch
 		m.backStack = nil
 		m.loading = false
+		m.cancelSubtitleAdds()
+		m.loadedSubtitlePaths = nil
+		m.hotAddPendingPath = ""
 		m.clearStatus()
 		return nil, true
 	case msg.String() == "ctrl+p":
@@ -252,6 +255,9 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 			m.resolveOpID = 0
 			m.cancelResolve()
 			m.playOpID = 0
+			m.cancelSubtitleAdds()
+			m.loadedSubtitlePaths = nil
+			m.hotAddPendingPath = ""
 			m.subtitleOpID = 0
 			m.autoPlayAfterResolve = false
 		}
