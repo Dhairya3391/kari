@@ -576,6 +576,10 @@ type AddonInfoSource interface {
 // internal/provider/defaults — the single place providers are listed.
 type Descriptor struct {
 	ID string
+	// LegacyIDs are retired IDs that referred to this provider before it was
+	// renamed. Settings migration uses them to remap persisted preferences, so
+	// recording a rename here is enough — no migration code needs to change.
+	LegacyIDs []string
 	// When gates registration on configuration; nil means always enabled.
 	When func(*config.Config) bool
 	// Factory constructs the provider from shared dependencies.

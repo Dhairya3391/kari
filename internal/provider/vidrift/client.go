@@ -349,6 +349,9 @@ func (c *Client) fetchEmbed(ctx context.Context, route string) (embedPage, error
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 	req.Header.Set("Referer", config.VidRiftSiteBase+"/")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	// The embed origin rejects the bare three-header request with 403; the
+	// browser's language hint is enough for its Cloudflare rule to pass.
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"kari/internal/filter"
 	"kari/internal/logging"
 	"kari/internal/provider"
+	"kari/internal/provider/defaults"
 	"kari/internal/util"
 )
 
@@ -28,7 +29,8 @@ var DefaultModes = []string{
 var settingsLog = logging.With("component", "settings")
 
 // Data is the persisted user-settings document (settings.json). Fields are
-// additive and zero-value friendly so older files never need migration.
+// additive and zero-value friendly; provider IDs renamed in past releases are
+// remapped on load so older files keep their preferences.
 type Data struct {
 	QualityMode     int `json:"quality_mode"`
 	DownloadQuality int `json:"download_quality"`
@@ -82,7 +84,7 @@ type Data struct {
 	Modes []string `json:"modes"`
 	// ModesDisabled is the list of disabled mode keys.
 	ModesDisabled []string `json:"modes_disabled"`
-	// DisabledProviders is the list of user-disabled provider keys (e.g. "pengu", "anivault").
+	// DisabledProviders is the list of user-disabled provider keys (e.g. "anivault", "cinecat").
 	// When empty/nil, all providers are enabled.
 	DisabledProviders []string `json:"disabled_providers,omitempty"`
 	// StremioAddonManifests stores user-configured Stremio-compatible addon manifest URLs.
@@ -216,6 +218,44 @@ func (d *Data) DisabledProviderSet() map[string]bool {
 	return set
 }
 
+// migrateLegacyProviderIDs remaps retired provider IDs to their current IDs.
+// The rename map comes from provider descriptors, so a renamed provider only
+// needs to declare its old IDs next to its new one — this code stays unchanged.
+func (d *Data) migrateLegacyProviderIDs(renames map[string]string) {
+	if d == nil {
+		return
+	}
+	for i, raw := range d.DisabledProviders {
+		d.DisabledProviders[i] = remapProviderID(raw, renames)
+	}
+	for mode, name := range d.PreferredProviders {
+		d.PreferredProviders[mode] = remapProviderID(name, renames)
+	}
+	if d.FiltersMigrated {
+		d.Filters.Defaults.PreferredProvider = remapProviderID(d.Filters.Defaults.PreferredProvider, renames)
+		for mode, prefs := range d.Filters.ByMode {
+			prefs.PreferredProvider = remapProviderID(prefs.PreferredProvider, renames)
+			d.Filters.ByMode[mode] = prefs
+		}
+	}
+}
+
+// remapProviderID replaces a retired provider ID with its current ID, keeping
+// any mode-scoped prefix (e.g. "anime:oldid") intact. Unknown IDs pass through
+// unchanged.
+func remapProviderID(raw string, renames map[string]string) string {
+	id := strings.TrimSpace(raw)
+	prefix := ""
+	if i := strings.LastIndex(id, ":"); i >= 0 {
+		prefix, id = id[:i+1], strings.TrimSpace(id[i+1:])
+	}
+	current, ok := renames[strings.ToLower(id)]
+	if !ok {
+		return raw
+	}
+	return prefix + current
+}
+
 // TransitionsEnabled returns whether transitions are active (default true).
 func (d *Data) TransitionsEnabled() bool {
 	if d == nil || d.Transitions == nil {
@@ -261,6 +301,7 @@ func Load() *Data {
 		logging.Warn("settings parse failed", "path", path(), "err", err)
 		return nil
 	}
+	s.migrateLegacyProviderIDs(defaults.ProviderIDRenames())
 	return &s
 }
 

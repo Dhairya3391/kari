@@ -907,18 +907,21 @@ func (c *Client) resolveServerStream(ctx context.Context, linkID, watchReferer, 
 		})
 	}
 
+	// Anicine and bingr resolve the same Megaplay file to the same playback
+	// URL. Keep this row reachable but behind their ordinary-ranked sources.
 	source := provider.MediaSource{
-		URL:       signedM3U8,
-		Quality:   quality,
-		Backend:   serverName,
-		Referer:   streamReferer,
-		UserAgent: config.DesktopUserAgent,
-		Type:      provider.SourceTypeHLS,
-		Height:    height,
-		Bitrate:   bitrate,
-		Subtitles: subs,
-		SubType:   subtitleKind(sourcesResp.Tracks),
-		SkipTimes: megaplaySkipTimes(sourcesResp, c.Name()),
+		URL:          signedM3U8,
+		Quality:      quality,
+		Backend:      serverName,
+		Referer:      streamReferer,
+		UserAgent:    config.DesktopUserAgent,
+		Type:         provider.SourceTypeHLS,
+		Height:       height,
+		Bitrate:      bitrate,
+		Subtitles:    subs,
+		SubType:      subtitleKind(sourcesResp.Tracks),
+		SkipTimes:    megaplaySkipTimes(sourcesResp, c.Name()),
+		FallbackOnly: true,
 	}
 	return []provider.MediaSource{source}, subs, nil
 }

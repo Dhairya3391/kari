@@ -28,7 +28,6 @@ func TestLoadUsesBundledCredentials(t *testing.T) {
 		"ANILIST_CLIENT_ID", "ANILIST_ID",
 		"ANILIST_CLIENT_SECRET", "ANILIST_SECRET",
 		"KARI_ANIME_SKIP_CLIENT_ID",
-		"PENGU_AUTH_TOKEN", "PENGU_TOKEN",
 	} {
 		t.Setenv(key, "must-be-ignored")
 	}
@@ -51,9 +50,6 @@ func TestLoadUsesBundledCredentials(t *testing.T) {
 	}
 	if cfg.AnimeSkipClientID != DefaultAnimeSkipClientID {
 		t.Errorf("AnimeSkipClientID = %q, want bundled default", cfg.AnimeSkipClientID)
-	}
-	if cfg.PenguAuthToken != DefaultPenguAuthToken {
-		t.Errorf("PenguAuthToken = %q, want bundled default", cfg.PenguAuthToken)
 	}
 }
 

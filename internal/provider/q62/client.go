@@ -1,12 +1,11 @@
 // Package q62 implements provider.Provider for Q62 (https://q62flix.ws), a
-// catalog of movies and TV shows whose metadata is sourced from TMDB but whose
-// content is keyed by opaque site IDs.
+// catalog of movies and TV shows whose content is keyed by opaque site IDs.
 //
-// Search and episode listings use the site's own JSON API because Q62 offers
-// no TMDB-ID lookup; the resulting site IDs flow through to resolution. A
-// lazily built TMDB-ID index lets resolution also work when another provider
-// supplied the search result. Signed release descriptors point at relative
-// HLS and WebVTT paths served only by Q62's media proxy.
+// Title discovery uses the shared TMDB/noobsearch base like every other movie
+// and TV provider, so search results carry TMDB IDs. A lazily built TMDB-ID
+// index maps those IDs to Q62 site IDs for resolution; TV episode handles still
+// come from Q62's own season/episode API. Signed release descriptors point at
+// relative HLS and WebVTT paths served only by Q62's media proxy.
 package q62
 
 import (
@@ -20,6 +19,8 @@ import (
 	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/provider"
+	"kari/internal/provider/streambase"
+	"kari/internal/tmdb"
 )
 
 var (
@@ -29,36 +30,48 @@ var (
 	_ provider.Presenter         = (*Client)(nil)
 )
 
+// titleSearcher resolves titles through the shared catalog index. It is an
+// interface so offline tests can substitute a fixed set of results.
+type titleSearcher interface {
+	Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error)
+}
+
 // Client implements provider.Provider against Q62's catalog and stream proxy.
 type Client struct {
 	httpClient *http.Client
 	apiBase    string
 	siteBase   string
 	proxyBase  string
+	base       titleSearcher
 
 	indexMu sync.Mutex
 	index   *tmdbIndex
 }
 
 // NewClient constructs the Q62 provider with the production endpoints.
-func NewClient() (*Client, error) {
-	return NewClientWithURLs(config.Q62APIBase, config.Q62Base, config.Q62StreamProxyBase)
+func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
+	return NewClientWithURLs(keyPool, config.Q62APIBase, config.Q62Base, config.Q62StreamProxyBase)
 }
 
 // NewClientWithURLs constructs the Q62 provider with custom upstream endpoints
 // so offline tests can mock the catalog API and media proxy.
-func NewClientWithURLs(apiBase, siteBase, proxyBase string) (*Client, error) {
+func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, siteBase, proxyBase string) (*Client, error) {
 	apiBase = strings.TrimRight(strings.TrimSpace(apiBase), "/")
 	siteBase = strings.TrimRight(strings.TrimSpace(siteBase), "/")
 	proxyBase = strings.TrimRight(strings.TrimSpace(proxyBase), "/")
 	if apiBase == "" || siteBase == "" || proxyBase == "" {
 		return nil, fmt.Errorf("q62 client: api, site, and proxy URLs are required")
 	}
+	base, err := streambase.New(keyPool)
+	if err != nil {
+		return nil, fmt.Errorf("q62 streambase: %w", err)
+	}
 	return &Client{
 		httpClient: httpclient.NewWithUserAgent(config.DesktopUserAgent),
 		apiBase:    apiBase,
 		siteBase:   siteBase,
 		proxyBase:  proxyBase,
+		base:       base,
 	}, nil
 }
 

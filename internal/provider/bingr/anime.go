@@ -421,6 +421,8 @@ func (c *Client) resolveMegaplayEmbed(ctx context.Context, embedURL, category st
 		})
 	}
 
+	// The Megaplay branch converges on anicine's/anikoto's playback URL for
+	// the same file, so rank it below Bingr's own sealed anime sources.
 	return []provider.MediaSource{{
 		URL:            kit.SignCDNURL(rawM3U8, 86400),
 		Quality:        "Auto",
@@ -432,6 +434,7 @@ func (c *Client) resolveMegaplayEmbed(ctx context.Context, embedURL, category st
 		Subtitles:      subs,
 		Audio:          provider.AudioInfo{Track: animeTrack(category)},
 		SubType:        provider.SubTypeSoft,
+		FallbackOnly:   true,
 	}}, nil
 }
 

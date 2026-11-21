@@ -33,6 +33,13 @@ var (
 // aphroditeBackend labels Aphrodite rows in the source list.
 const aphroditeBackend = "Aphrodite"
 
+// errCapRequired marks the upstream cap.js proof-of-work gate on the ZCDN and
+// sources lanes. Those lanes are optional: the ungated Aphrodite edge still
+// provides playable sources, so this error only demotes the gated lanes. It
+// wraps ErrNoSources so a fully gated upstream stays a benign "empty catalog"
+// answer and never trips the provider circuit breaker.
+var errCapRequired = fmt.Errorf("cinecat: upstream cap pass required: %w", provider.ErrNoSources)
+
 type zcdnResponse struct {
 	Ready  bool   `json:"ready"`
 	URL    string `json:"url"`
@@ -389,6 +396,9 @@ func (c *Client) fetchLaneNames(ctx context.Context) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, errCapRequired
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: target}
 	}
@@ -548,6 +558,9 @@ func (c *Client) fetchZCDN(ctx context.Context, tmdbID int, mediaType string, se
 	if resp.StatusCode == http.StatusAccepted {
 		// 202 Accepted signifies stream is currently being transcoded/built upstream.
 		return "", provider.ErrNoSources
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", errCapRequired
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", &provider.HTTPError{Code: resp.StatusCode, URL: target}

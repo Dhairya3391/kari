@@ -10,7 +10,23 @@ import (
 	"testing"
 
 	"kari/internal/provider"
+	"kari/internal/tmdb"
 )
+
+// fakeSearcher stands in for the shared TMDB/noobsearch base so Search can be
+// tested without network access. Results carry TMDB IDs, as the real base does.
+type fakeSearcher struct{}
+
+func (fakeSearcher) Search(_ context.Context, _ string, mode provider.ContentType) ([]provider.SearchResult, error) {
+	switch mode {
+	case provider.ModeMovies:
+		return []provider.SearchResult{{Title: "Inception", ID: "27205", TMDBID: 27205, Type: mode, MediaType: provider.MediaTypeMovie, Year: "2010"}}, nil
+	case provider.ModeTV:
+		return []provider.SearchResult{{Title: "MobLand", ID: "247718", TMDBID: 247718, Type: mode, MediaType: provider.MediaTypeTV}}, nil
+	default:
+		return nil, provider.ErrNoResults
+	}
+}
 
 // The proxy base in tests is HTTP and uses a non-local host so generated
 // sources survive the direct-URL filter while a custom dialer still lands
@@ -53,10 +69,11 @@ func newTestEnv(t *testing.T) *testEnv {
 	env.srv = httptest.NewServer(mux)
 	t.Cleanup(env.srv.Close)
 
-	client, err := NewClientWithURLs(env.srv.URL, "https://q62flix.ws", testProxyBase)
+	client, err := NewClientWithURLs(tmdb.NewKeyPool(nil), env.srv.URL, "https://q62flix.ws", testProxyBase)
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
+	client.base = fakeSearcher{}
 	client.httpClient = cdnClient(env.srv)
 	env.client = client
 	mux.HandleFunc("/", env.serve)
@@ -105,7 +122,7 @@ func (e *testEnv) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestQ62Capabilities(t *testing.T) {
-	client, err := NewClient()
+	client, err := NewClient(tmdb.NewKeyPool(nil))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -126,7 +143,7 @@ func TestQ62Capabilities(t *testing.T) {
 }
 
 func TestQ62NewClientRejectsEmptyURLs(t *testing.T) {
-	if _, err := NewClientWithURLs("", "https://q62flix.ws", testProxyBase); err == nil {
+	if _, err := NewClientWithURLs(tmdb.NewKeyPool(nil), "", "https://q62flix.ws", testProxyBase); err == nil {
 		t.Fatal("empty API base must be rejected")
 	}
 }
@@ -143,20 +160,32 @@ func TestQ62Search(t *testing.T) {
 		t.Fatalf("movie results = %d, want 1", len(movies))
 	}
 	got := movies[0]
-	if got.ID != "MOVIE1" || got.TMDBID != 27205 || got.Title != "Inception" ||
+	if got.ID != "27205" || got.TMDBID != 27205 || got.Title != "Inception" ||
 		got.MediaType != provider.MediaTypeMovie || got.Year != "2010" {
 		t.Errorf("movie result = %+v", got)
-	}
-	if len(got.Genres) != 1 || got.Genres[0] != "Action" {
-		t.Errorf("genres = %v, want [Action]", got.Genres)
 	}
 
 	shows, err := env.client.Search(ctx, "mobland", provider.ModeTV)
 	if err != nil {
 		t.Fatalf("Search tv: %v", err)
 	}
-	if len(shows) != 1 || shows[0].ID != "SHOW1" || shows[0].MediaType != provider.MediaTypeTV {
+	if len(shows) != 1 || shows[0].ID != "247718" || shows[0].MediaType != provider.MediaTypeTV {
 		t.Fatalf("tv results = %+v", shows)
+	}
+}
+
+func TestQ62FetchEpisodesFromSharedSearchID(t *testing.T) {
+	env := newTestEnv(t)
+	// A shared-base result carries a numeric TMDB handle; Q62 maps it through
+	// the lazily built catalog index before calling its own episode API.
+	eps, err := env.client.FetchEpisodes(t.Context(), provider.SearchResult{
+		ID: "247718", TMDBID: 247718, MediaType: provider.MediaTypeTV, Title: "MobLand",
+	})
+	if err != nil {
+		t.Fatalf("FetchEpisodes: %v", err)
+	}
+	if len(eps) != 1 || eps[0].ID != "SEASON1"+episodeHandleSep+"EP1" {
+		t.Fatalf("episodes = %+v", eps)
 	}
 }
 

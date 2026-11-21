@@ -35,7 +35,7 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	m.defaultMode = "movies"
 	m.transitions = false
 	m.startupSearchActive = false
-	m.disabledProviders = map[string]bool{"pengu": true, "anivault": true}
+	m.disabledProviders = map[string]bool{"fakeagg": true, "anivault": true}
 	m.autoUpdate = true
 	m.disableDownloadVerification = true
 
@@ -89,7 +89,7 @@ func TestSaveSettingsPersistsModesAndPreferences(t *testing.T) {
 	if !saved.AutoUpdate {
 		t.Errorf("saved.AutoUpdate = false, want true")
 	}
-	wantDisabledProviders := []string{"anivault", "pengu"}
+	wantDisabledProviders := []string{"anivault", "fakeagg"}
 	if !reflect.DeepEqual(saved.DisabledProviders, wantDisabledProviders) {
 		t.Errorf("saved.DisabledProviders = %v, want %v", saved.DisabledProviders, wantDisabledProviders)
 	}

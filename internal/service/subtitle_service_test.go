@@ -94,13 +94,13 @@ func TestSubtitleServiceKeepsTracksBoundToTheirPlaybackSource(t *testing.T) {
 		EpisodeNumber: 1,
 		MediaType:     provider.MediaTypeAnime,
 		Subtitles: []model.SubtitleTrack{
-			{URL: srv.URL + "/first.vtt", Language: "en", Resolver: "pengu", SourceID: "source-one"},
-			{URL: srv.URL + "/second.vtt", Language: "en", Resolver: "pengu", SourceID: "source-two"},
+			{URL: srv.URL + "/first.vtt", Language: "en", Resolver: "fakeagg", SourceID: "source-one"},
+			{URL: srv.URL + "/second.vtt", Language: "en", Resolver: "fakeagg", SourceID: "source-two"},
 		},
 	}
 
 	for _, sourceID := range []string{"source-one", "source-two"} {
-		track, err := svc.FetchForSource(context.Background(), media, "en", "pengu", sourceID)
+		track, err := svc.FetchForSource(context.Background(), media, "en", "fakeagg", sourceID)
 		if err != nil {
 			t.Fatalf("FetchForSource(%q): %v", sourceID, err)
 		}
@@ -122,12 +122,12 @@ func TestSubtitleServiceDoesNotBorrowOtherProviderSubtitles(t *testing.T) {
 		SeriesTitle:        "Isolation test",
 		EpisodeNumber:      1,
 		TotalResolvers:     2,
-		CompletedResolvers: []string{"pengu", "anikoto"},
+		CompletedResolvers: []string{"fakeagg", "anikoto"},
 		Subtitles: []model.SubtitleTrack{{
 			URL: srv.URL + "/fallback.vtt", Language: "en", Resolver: "anikoto", SourceID: "other-source",
 		}},
 	}
-	_, err := svc.FetchForSource(context.Background(), media, "en", "pengu", "pengu-source")
+	_, err := svc.FetchForSource(context.Background(), media, "en", "fakeagg", "fakeagg-source")
 	if err == nil {
 		t.Fatal("subtitles must not be borrowed from another provider")
 	}
@@ -282,7 +282,7 @@ func TestSubtitleServiceDoesNotUseOpenSubtitlesForAnime(t *testing.T) {
 		SeriesTitle: "Anime movie without provider subtitles",
 		MediaType:   provider.MediaTypeMovie,
 		ContentMode: provider.ModeAnime,
-	}, "en", "pengu")
+	}, "en", "fakeagg")
 	if err == nil {
 		t.Fatal("anime subtitle lookup must not use OpenSubtitles")
 	}
@@ -334,11 +334,11 @@ func TestSubtitleServiceUsesParentSourceHeaders(t *testing.T) {
 			URL:       server.URL + "/subtitle.vtt",
 			SourceURL: "https://cdn.example.com/video.m3u8",
 			Language:  "en",
-			Resolver:  "pengu",
+			Resolver:  "fakeagg",
 		}},
 	}
 
-	track, err := svc.Fetch(context.Background(), media, "en", "pengu")
+	track, err := svc.Fetch(context.Background(), media, "en", "fakeagg")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -387,6 +387,11 @@ func TestSubtitleServiceRejectsHTMLAndTriesNextCandidate(t *testing.T) {
 }
 
 func TestSubtitleServiceRedownloadsStalePath(t *testing.T) {
+	// Downloads are cached on disk by a hash of the URL. A port reused from an
+	// earlier run would otherwise be a cache hit, skipping the request counted
+	// below, so isolate this test in a fresh home directory.
+	t.Setenv("HOME", t.TempDir())
+
 	requests := atomic.Int32{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)

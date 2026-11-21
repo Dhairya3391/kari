@@ -1,17 +1,17 @@
-// Package sweetfox implements provider.Provider for SweetFox
-// (https://sweetfox.app), a TMDB-keyed streaming site for movies, television
+// Package vidgold implements provider.Provider for VidGold
+// (https://vidgold.net), a TMDB-keyed embed player for movies, television
 // series, and animated content.
 //
 // Catalog search and episode listings reuse the shared TMDB-keyed streambase.
-// Playback resolves through the VidQueen player SweetFox embeds
-// (https://player.vidqueen.st). VidQueen exposes seven stream lanes —
-// Bloodstone, Obsidian, Garnet, Ruby, Jet, Amethyst, Nightshade — and
+// Playback resolves through the player's JSON API (https://api.vidgold.net)
+// instead of scraping the embed page. The player cascades over seven stream
+// lanes — Aurum, Sovereign, Bullion, Ingot, Nugget, Doubloon, Gilt — and
 // ResolveStream queries every one of them so the UI sees all servers and
 // qualities, including 4K when a lane provides it.
 //
 // Every returned stream is directly playable by mpv; header-gated CDNs are
 // covered by the Referer/Origin values attached to each source.
-package sweetfox
+package vidgold
 
 import (
 	"context"
@@ -32,8 +32,7 @@ var (
 	_ provider.StreamingProvider = (*Client)(nil)
 )
 
-// Client implements provider.Provider against SweetFox and the VidQueen
-// resolution API.
+// Client implements provider.Provider against VidGold and its resolution API.
 type Client struct {
 	base       *streambase.Base
 	httpClient *http.Client
@@ -41,19 +40,19 @@ type Client struct {
 	playerBase string
 }
 
-// NewClient constructs the SweetFox provider with the shared TMDB search base
-// and the production VidQueen endpoints.
+// NewClient constructs the VidGold provider with the shared TMDB search base
+// and the production VidGold endpoints.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
-	return NewClientWithURLs(keyPool, config.SweetFoxAPIBase, config.SweetFoxPlayerBase)
+	return NewClientWithURLs(keyPool, config.VidGoldAPIBase, config.VidGoldPlayerBase)
 }
 
-// NewClientWithURLs constructs the SweetFox provider with custom upstream
-// endpoints, allowing offline tests to mock the VidQueen API and player without
+// NewClientWithURLs constructs the VidGold provider with custom upstream
+// endpoints, allowing offline tests to mock the VidGold API and player without
 // network access.
 func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, playerBase string) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
-		return nil, fmt.Errorf("sweetfox streambase: %w", err)
+		return nil, fmt.Errorf("vidgold streambase: %w", err)
 	}
 	return &Client{
 		base:       base,
@@ -64,10 +63,10 @@ func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, playerBase string) (*Clie
 }
 
 // Alias implements provider.Presenter with the display name shown in the UI.
-func (c *Client) Alias() string { return "SweetFox" }
+func (c *Client) Alias() string { return "VidGold" }
 
 // Name implements provider.Provider with the canonical provider identifier.
-func (c *Client) Name() string { return "sweetfox" }
+func (c *Client) Name() string { return "vidgold" }
 
 // Modes implements provider.Provider, declaring support for movies, TV series,
 // and cartoon/animation modes.
@@ -124,7 +123,7 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 }
 
 // ResolveStream implements provider.StreamingProvider, pushing playable sources
-// to updates once every VidQueen lane has answered.
+// to updates once every VidGold lane has answered.
 func (c *Client) ResolveStream(
 	ctx context.Context,
 	mediaID string,

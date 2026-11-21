@@ -150,21 +150,21 @@ func TestMergeResolvedDropsPreviousEpisodeRanking(t *testing.T) {
 // Progressive arrivals preserve provider arrival order.
 func TestMergeResolvedArrivalOrderAndLateArrival(t *testing.T) {
 	m := rankingTestModel()
-	penguFHD := provider.MediaSource{URL: "https://cdn.example.com/pengu.m3u8", Quality: "1080p", Resolver: "pengu"}
+	fakeaggFHD := provider.MediaSource{URL: "https://cdn.example.com/fakeagg.m3u8", Quality: "1080p", Resolver: "fakeagg"}
 	movyFHD := provider.MediaSource{URL: "https://cdn.example.com/movy.m3u8", Quality: "1080p", Resolver: "movysx"}
 
-	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: []provider.MediaSource{penguFHD}})
-	if len(m.rankedSources) != 1 || m.rankedSources[0].Source.Resolver != "pengu" {
-		t.Fatalf("single pengu row should lead alone, got %+v", m.rankedSources)
+	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: []provider.MediaSource{fakeaggFHD}})
+	if len(m.rankedSources) != 1 || m.rankedSources[0].Source.Resolver != "fakeagg" {
+		t.Fatalf("single fakeagg row should lead alone, got %+v", m.rankedSources)
 	}
 
-	// Movy arrives later: it appends after pengu in arrival order.
-	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: []provider.MediaSource{penguFHD, movyFHD}})
+	// Movy arrives later: it appends after fakeagg in arrival order.
+	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: []provider.MediaSource{fakeaggFHD, movyFHD}})
 	if len(m.rankedSources) != 2 {
 		t.Fatalf("ranked = %d rows, want 2", len(m.rankedSources))
 	}
-	if got := m.rankedSources[0].Source.URL; got != penguFHD.URL {
-		t.Errorf("top = %s, want pengu first in arrival order", got)
+	if got := m.rankedSources[0].Source.URL; got != fakeaggFHD.URL {
+		t.Errorf("top = %s, want fakeagg first in arrival order", got)
 	}
 	if got := m.rankedSources[1].Source.URL; got != movyFHD.URL {
 		t.Errorf("second = %s, want movy second in arrival order", got)
@@ -172,7 +172,7 @@ func TestMergeResolvedArrivalOrderAndLateArrival(t *testing.T) {
 
 	// A cursor the user moved off the top stays on its source URL.
 	m.previewSelectedIndex = 1
-	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: []provider.MediaSource{penguFHD, movyFHD}})
+	m.mergeResolved(model.ResolvedMedia{SeriesTitle: "The Boys", Playback: []provider.MediaSource{fakeaggFHD, movyFHD}})
 	if m.previewSelectedIndex != 1 {
 		t.Errorf("user cursor should stay on movy row, got %d", m.previewSelectedIndex)
 	}

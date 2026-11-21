@@ -65,7 +65,7 @@ func TestConfiguredAddonDisableIsGlobal(t *testing.T) {
 	const addonName = "addon-abc123"
 	registry := &provider.Registry{}
 	registry.Register(&fakeConfiguredAddon{name: addonName})
-	registry.Register(&fakeProviderForSwitch{name: "pengu", modes: []provider.Mode{{Name: provider.ModeMovies}}})
+	registry.Register(&fakeProviderForSwitch{name: "fakeagg", modes: []provider.Mode{{Name: provider.ModeMovies}}})
 	m := &modelImpl{disabledProviders: map[string]bool{}, registry: registry}
 
 	// Disabling an addon in Stremio mode must hide it in Movies and TV too.
@@ -81,7 +81,7 @@ func TestConfiguredAddonDisableIsGlobal(t *testing.T) {
 	if !m.isProviderDisabledKey(provider.ModeMovies, addonName) {
 		t.Fatal("global addon key did not disable the addon")
 	}
-	if m.isProviderDisabledKey(provider.ModeMovies, "pengu") {
+	if m.isProviderDisabledKey(provider.ModeMovies, "fakeagg") {
 		t.Fatal("ordinary provider was treated as a configured addon")
 	}
 }

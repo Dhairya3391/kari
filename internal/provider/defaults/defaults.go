@@ -2,6 +2,8 @@ package defaults
 
 import (
 	"context"
+	"strings"
+
 	"kari/internal/config"
 	"kari/internal/logging"
 	"kari/internal/provider"
@@ -21,15 +23,13 @@ import (
 	"kari/internal/provider/mapple"
 	"kari/internal/provider/miruro"
 	"kari/internal/provider/movysx"
-	"kari/internal/provider/pengu"
 	"kari/internal/provider/q62"
 	"kari/internal/provider/solis"
 	"kari/internal/provider/stremioaddon"
-	"kari/internal/provider/sweetfox"
+	"kari/internal/provider/vidgold"
 	"kari/internal/provider/vidrift"
 	"kari/internal/provider/vyla"
 	"kari/internal/provider/weebcentral"
-	"kari/internal/provider/zlive"
 	"kari/internal/tmdb"
 )
 
@@ -89,7 +89,7 @@ var DefaultProviders = []provider.Descriptor{
 	{
 		ID: "q62",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return q62.NewClient()
+			return q62.NewClient(d.KeyPool)
 		},
 	},
 	{
@@ -99,9 +99,10 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
-		ID: "sweetfox",
+		ID:        "vidgold",
+		LegacyIDs: []string{"sweetfox"},
 		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return sweetfox.NewClient(d.KeyPool)
+			return vidgold.NewClient(d.KeyPool)
 		},
 	},
 	{
@@ -141,12 +142,6 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
-		ID: "pengu",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return pengu.NewClient(d.KeyPool, d.Config.PenguAuthToken)
-		},
-	},
-	{
 		ID: "famelack",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return famelack.NewClient()
@@ -179,12 +174,22 @@ var DefaultProviders = []provider.Descriptor{
 			return atsu.NewClient()
 		},
 	},
-	{
-		ID: "zlive",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return zlive.NewClient()
-		},
-	},
+}
+
+// ProviderIDRenames maps each retired provider ID to the current ID that
+// replaced it, derived from the descriptors' LegacyIDs. Settings migration
+// reads this map so renaming a provider only requires declaring its old IDs
+// alongside the new one — the migration logic never hard-codes a name.
+func ProviderIDRenames() map[string]string {
+	renames := make(map[string]string)
+	for _, d := range DefaultProviders {
+		for _, legacy := range d.LegacyIDs {
+			if id := strings.ToLower(strings.TrimSpace(legacy)); id != "" {
+				renames[id] = d.ID
+			}
+		}
+	}
+	return renames
 }
 
 // NewDefaultRegistry constructs every enabled default provider and registers

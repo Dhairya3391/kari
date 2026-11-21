@@ -169,10 +169,10 @@ func TestLiveResultsShowProviderAndChannelDetails(t *testing.T) {
 				Live:      true,
 				Type:      provider.ModeLive,
 				MediaType: provider.MediaTypeLive,
-				Provider:  "pengu",
+				Provider:  "fakeagg",
 			},
 		},
-		ProviderNames: map[string]string{"famelack": "Famelack", "pengu": "Pengu"},
+		ProviderNames: map[string]string{"famelack": "Famelack", "fakeagg": "FakeAgg"},
 		SelectedIndex: 0,
 		Width:         100,
 		Height:        20,
@@ -180,7 +180,7 @@ func TestLiveResultsShowProviderAndChannelDetails(t *testing.T) {
 	}
 
 	out := RenderLiveResultsScreen(data)
-	for _, want := range []string{"Cartoon Network HD+", "India", "Famelack", "Pengu"} {
+	for _, want := range []string{"Cartoon Network HD+", "India", "Famelack", "FakeAgg"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("live list must show %q, got:\n%s", want, out)
 		}

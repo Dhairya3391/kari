@@ -135,7 +135,7 @@ func (s *MediaService) episodeAvailabilitySources(mode provider.ContentType, ser
 // LastFailures returns the distinct provider names that failed during
 // the most recent Resolve call, in first-failure order. Partial results
 // are returned together with this list so the UI can toast which
-// providers failed (e.g. "✗ pengu timed out").
+// providers failed (e.g. "✗ provider timed out").
 func (s *MediaService) LastFailures() []string {
 	s.lastMu.Lock()
 	defer s.lastMu.Unlock()
@@ -179,7 +179,7 @@ func (s *MediaService) SetDisabledProviders(names []string) {
 }
 
 // IsProviderDisabled reports whether the named provider is disabled for the given mode.
-// It checks both the mode-scoped key (e.g. "anime:pengu") and the global key ("pengu").
+// It checks both the mode-scoped key (e.g. "anime:anikoto") and the global key ("anikoto").
 func (s *MediaService) IsProviderDisabled(mode provider.ContentType, name string) bool {
 	s.disabledMu.RLock()
 	defer s.disabledMu.RUnlock()

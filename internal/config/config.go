@@ -27,9 +27,6 @@ type Config struct {
 	// AnimeSkipClientID is the bundled X-Client-ID header value for the
 	// Anime-Skip GraphQL API.
 	AnimeSkipClientID string
-	// PenguAuthToken is the bundled access token for PenguPlay
-	// (https://pengu.uk).
-	PenguAuthToken string
 }
 
 // AndroidUA returns the shared Android browser User-Agent constant. It
@@ -58,7 +55,6 @@ func Load() (*Config, error) {
 		PreferredPlayer:     firstEnv("KARI_PLAYER"),
 		JellyfinURL:         strings.TrimSpace(os.Getenv("JELLYFIN_URL")),
 		JellyfinAPIKey:      strings.TrimSpace(os.Getenv("JELLYFIN_API_KEY")),
-		PenguAuthToken:      DefaultPenguAuthToken,
 	}
 
 	if cfg.DownloadDir == "" {

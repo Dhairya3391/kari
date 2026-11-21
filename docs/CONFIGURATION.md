@@ -28,7 +28,7 @@ Kari runs with zero configuration by default. Optional behavior can be customize
 
 ### Integrations & Custom API Keys
 
-*Bundled public keys and client IDs are included out of the box for TMDB, Trakt, AniList, Anime-Skip, and Pengu. The variables below cover the integrations that still accept overrides.*
+*Bundled public keys and client IDs are included out of the box for TMDB, Trakt, AniList, and Anime-Skip. The variables below cover the integrations that still accept overrides.*
 
 | Variable | Description |
 | --- | --- |
@@ -115,7 +115,7 @@ User preferences configured via the in-app Settings screen (`s`) are persisted t
 | `default_mode` | string | Mode to open on startup: `"last"`, `"first"`, or a specific key (`"anime"`, `"movies"`). | `"last"` |
 | `modes` | list | Ordered list of content modes displayed in tab bar. | Canonical list |
 | `modes_disabled` | list | List of disabled mode keys excluded from tab switching. | `[]` |
-| `disabled_providers` | list | List of disabled provider IDs (e.g. `["pengu", "cinecat"]`). | `[]` |
+| `disabled_providers` | list | List of disabled provider IDs (e.g. `["cinecat", "anivault"]`). | `[]` |
 | `stremio_addon_manifests` | list of strings | HTTP(S) Stremio-compatible addon manifest URLs (a bare addon URL is normalized to `manifest.json`). Configure these in Settings → Add-ons. | `[]` |
 | `transitions` | bool | Enable color crossfade transitions between views. | `true` |
 | `startup_search_active` | bool | Focus the search input field immediately on application launch. | `true` |

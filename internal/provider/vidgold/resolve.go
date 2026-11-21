@@ -1,4 +1,4 @@
-package sweetfox
+package vidgold
 
 import (
 	"bufio"
@@ -23,6 +23,9 @@ import (
 )
 
 const (
+	// minDeclaredHeight is the smallest h value treated as a pixel height.
+	// Some lanes send h=1 as a flag, which must not become a "1p" quality.
+	minDeclaredHeight = 240
 	// maxAPIBytes caps one lane's JSON response. The API embeds a full media
 	// playlist for some lanes, so responses can be large but never unbounded.
 	maxAPIBytes = 8 << 20
@@ -38,25 +41,25 @@ var (
 	reSubtitleLabelTrim = regexp.MustCompile(`(?i)\s*(?:hi\d*|\d+)$`)
 )
 
-// server is one VidQueen stream lane. key is the API's sources parameter and
-// label is the name SweetFox's player shows for that lane.
+// server is one VidGold stream lane. key is the API's sources parameter and
+// label is the name VidGold's player shows for that lane.
 type server struct {
 	key   string
 	label string
 }
 
-// servers lists every lane the VidQueen player advertises, in the order the
+// servers lists every lane the VidGold player advertises, in the order the
 // player presents them. A lane returning no stream is skipped without failing
-// the resolution. s1 and s3 share the upstream "Bloodstone" label, so the
-// player's own names are used to keep the two lanes distinguishable.
+// the resolution. s1 and s3 can report the same upstream label, so the
+// player's own names keep the two lanes distinguishable when it is absent.
 var servers = []server{
-	{key: "s1", label: "Bloodstone"},
-	{key: "s4", label: "Obsidian"},
-	{key: "s2", label: "Garnet"},
-	{key: "s3", label: "Ruby"},
-	{key: "s5", label: "Jet"},
-	{key: "s7", label: "Amethyst"},
-	{key: "s6", label: "Nightshade"},
+	{key: "s1", label: "Aurum"},
+	{key: "s4", label: "Sovereign"},
+	{key: "s2", label: "Bullion"},
+	{key: "s3", label: "Ingot"},
+	{key: "s5", label: "Nugget"},
+	{key: "s7", label: "Doubloon"},
+	{key: "s6", label: "Gilt"},
 }
 
 type apiResponse struct {
@@ -65,7 +68,7 @@ type apiResponse struct {
 	Subtitles []apiSubtitle   `json:"subtitles"`
 }
 
-// apiMeta is the media metadata VidQueen embeds in each lane response. Only
+// apiMeta is the media metadata VidGold embeds in each lane response. Only
 // spoken languages carry typed audio identity; the rest is display-only.
 type apiMeta struct {
 	SpokenLanguages []struct {
@@ -181,22 +184,22 @@ func (c *Client) fetchSources(
 	}
 }
 
-// fetchLane asks one VidQueen lane for the requested title. A missing stream is
+// fetchLane asks one VidGold lane for the requested title. A missing stream is
 // a valid answer, not an error.
 func (c *Client) fetchLane(ctx context.Context, srv server, tmdbID int, mediaType string, season, epNum int) laneResult {
-	reqCtx, cancel := context.WithTimeout(ctx, timeouts.SweetfoxLane)
+	reqCtx, cancel := context.WithTimeout(ctx, timeouts.VidgoldLane)
 	defer cancel()
 
 	target := c.apiURL(mediaType, tmdbID, season, epNum, srv.key)
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, target, nil)
 	if err != nil {
-		return laneResult{server: srv, err: fmt.Errorf("sweetfox request: %w", err)}
+		return laneResult{server: srv, err: fmt.Errorf("vidgold request: %w", err)}
 	}
 	c.applyAPIHeaders(req, mediaType, tmdbID, season, epNum)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return laneResult{server: srv, err: fmt.Errorf("sweetfox lane %s: %w", srv.key, err)}
+		return laneResult{server: srv, err: fmt.Errorf("vidgold lane %s: %w", srv.key, err)}
 	}
 	defer resp.Body.Close()
 
@@ -209,7 +212,7 @@ func (c *Client) fetchLane(ctx context.Context, srv server, tmdbID int, mediaTyp
 
 	var data apiResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAPIBytes)).Decode(&data); err != nil {
-		return laneResult{server: srv, err: fmt.Errorf("sweetfox lane %s decode: %w", srv.key, err)}
+		return laneResult{server: srv, err: fmt.Errorf("vidgold lane %s decode: %w", srv.key, err)}
 	}
 	return laneResult{
 		server:         srv,
@@ -254,9 +257,9 @@ func (c *Client) apiURL(mediaType string, tmdbID, season, epNum int, key string)
 	return c.apiBase + path + "?" + params.Encode()
 }
 
-// applyAPIHeaders supplies the browser identity the VidQueen API requires. The
-// API returns null metadata and subtitles when Sec-Ch-Ua is absent, and the
-// stream CDNs reject requests without a player Origin/Referer.
+// applyAPIHeaders supplies the browser identity the VidGold API requires. A
+// request without Sec-Ch-Ua gets an all-null payload, and the stream CDNs
+// reject requests without a player Origin/Referer.
 func (c *Client) applyAPIHeaders(req *http.Request, mediaType string, tmdbID, season, epNum int) {
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 	req.Header.Set("Accept", "application/json, text/plain, */*")
@@ -355,7 +358,7 @@ func (c *Client) laneSources(ctx context.Context, result laneResult, subtitles [
 			sourceType := qualityType(quality, u)
 			if sourceType == provider.SourceTypeHLS {
 				if variants, err := c.fetchVariants(ctx, u); err != nil {
-					logging.Debug("sweetfox variant parsing failed; keeping HLS row", "url", u, "server", result.server.label, "err", err)
+					logging.Debug("vidgold variant parsing failed; keeping HLS row", "url", u, "server", result.server.label, "err", err)
 				} else if len(variants) > 0 {
 					bestHeight, bestBitrate := 0, 0
 					for _, variant := range variants {
@@ -385,7 +388,7 @@ func (c *Client) laneSources(ctx context.Context, result laneResult, subtitles [
 
 	variants, err := c.fetchVariants(ctx, masterURL)
 	if err != nil {
-		logging.Debug("sweetfox variant parsing failed; falling back to master", "url", masterURL, "server", result.server.label, "err", err)
+		logging.Debug("vidgold variant parsing failed; falling back to master", "url", masterURL, "server", result.server.label, "err", err)
 	}
 	bestHeight, bestBitrate := 0, 0
 	for _, variant := range variants {
@@ -403,11 +406,12 @@ func (c *Client) laneSources(ctx context.Context, result laneResult, subtitles [
 }
 
 // qualityLabel renders an API quality row. "Auto" rows use the lane's declared
-// height when present so a 1080p auto stream is not shown as an unknown tier.
+// height when it is plausible so a 1080p auto stream is not shown as an unknown
+// tier; flag-like values below minDeclaredHeight stay "Auto".
 func qualityLabel(quality apiQuality, height int) string {
 	label := strings.TrimSpace(quality.Quality)
 	if label == "" || strings.EqualFold(label, "auto") {
-		if height > 0 {
+		if height >= minDeclaredHeight {
 			return resolutionLabel(height)
 		}
 		if label == "" {
@@ -467,12 +471,12 @@ func resolutionLabel(height int) string {
 // fetchVariants reads an HLS master and returns its individual quality tiers,
 // highest first. Non-master playlists simply yield no variants.
 func (c *Client) fetchVariants(ctx context.Context, masterURL string) ([]variantStream, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, timeouts.SweetfoxMaster)
+	reqCtx, cancel := context.WithTimeout(ctx, timeouts.VidgoldMaster)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, masterURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("sweetfox master request: %w", err)
+		return nil, fmt.Errorf("vidgold master request: %w", err)
 	}
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 	req.Header.Set("Referer", c.playerBase+"/")

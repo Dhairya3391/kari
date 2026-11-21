@@ -4,7 +4,7 @@
 //
 // Catalog search and episode listings reuse the shared TMDB-keyed streambase.
 // Playback resolves through Cinejoy's sealed gateway (https://api2.wing.st),
-// which advertises several stream lanes (Light, Lisbon, Nebula, Sirius). Every
+// which advertises several stream lanes (Light, Nebula, Sirius, Polaris). Every
 // lane is queried so the UI sees all servers, their adaptive HLS masters, and
 // the individual quality tiers including 4K when a lane provides it.
 //

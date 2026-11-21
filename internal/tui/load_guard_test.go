@@ -53,7 +53,7 @@ func (f *repairFake) PreferredForPlayback(mode provider.ContentType) bool {
 func TestPreferredRepairTriggersOnce(t *testing.T) {
 	reg := &provider.Registry{}
 	reg.Register(&repairFake{name: "movysx", mode: provider.ModeMovies, err: provider.ErrTimeout})
-	reg.Register(&repairFake{name: "pengu", mode: provider.ModeMovies,
+	reg.Register(&repairFake{name: "fakeagg", mode: provider.ModeMovies,
 		sources: []provider.MediaSource{{URL: "https://cdn.example.com/b.m3u8", Quality: "1080p"}}})
 
 	m := rankingTestModel()
@@ -100,12 +100,12 @@ func TestRetryExcludeSkipsWinnersOnly(t *testing.T) {
 	m := rankingTestModel()
 	reg := &provider.Registry{}
 	reg.Register(&repairFake{name: "movysx", mode: provider.ModeMovies, err: provider.ErrTimeout})
-	reg.Register(&repairFake{name: "pengu", mode: provider.ModeMovies,
+	reg.Register(&repairFake{name: "fakeagg", mode: provider.ModeMovies,
 		sources: []provider.MediaSource{{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p"}}})
 	m.mediaService = service.NewMediaService(reg)
 	m.appMode = provider.ModeMovies
 	m.resolved = &model.ResolvedMedia{SeriesTitle: "T", Playback: []provider.MediaSource{
-		{URL: "https://cdn.example.com/a.m3u8", Resolver: "pengu"},
+		{URL: "https://cdn.example.com/a.m3u8", Resolver: "fakeagg"},
 	}}
 
 	// Nothing failed: full refresh, no exclusion.
@@ -113,14 +113,14 @@ func TestRetryExcludeSkipsWinnersOnly(t *testing.T) {
 		t.Errorf("no failures must mean full refresh, got %v", got)
 	}
 
-	// movysx failed (never delivered): skip pengu, re-ask movysx.
-	series := provider.SearchResult{Title: "T", ID: "1", Provider: "pengu", TMDBID: 42, MediaType: provider.MediaTypeMovie}
+	// movysx failed (never delivered): skip fakeagg, re-ask movysx.
+	series := provider.SearchResult{Title: "T", ID: "1", Provider: "fakeagg", TMDBID: 42, MediaType: provider.MediaTypeMovie}
 	if _, err := m.mediaService.Resolve(context.Background(), provider.ModeMovies, series, provider.Episode{TMDBID: 42}, nil, service.ResolveOptions{}); err != nil {
 		t.Fatalf("seed resolve: %v", err)
 	}
 	got := m.retryExclude()
-	if len(got) != 1 || got[0] != "pengu" {
-		t.Errorf("retryExclude = %v, want [pengu]", got)
+	if len(got) != 1 || got[0] != "fakeagg" {
+		t.Errorf("retryExclude = %v, want [fakeagg]", got)
 	}
 }
 
@@ -340,7 +340,7 @@ func TestPreviewEnterStartsWithoutSubs(t *testing.T) {
 func TestProviderWaitCountdown(t *testing.T) {
 	m := guardTestModel()
 	m.registry.Register(&fakeProviderForSwitch{name: "movysx", modes: []provider.Mode{{Name: provider.ModeMovies}}})
-	m.registry.Register(&fakeProviderForSwitch{name: "pengu", modes: []provider.Mode{{Name: provider.ModeMovies}}})
+	m.registry.Register(&fakeProviderForSwitch{name: "fakeagg", modes: []provider.Mode{{Name: provider.ModeMovies}}})
 	m.beginProviderWait(provider.ModeMovies)
 	if m.totalProviders == 0 || m.loadingProviders != m.totalProviders {
 		t.Fatalf("wait not opened: total=%d loading=%d", m.totalProviders, m.loadingProviders)
@@ -356,11 +356,11 @@ func TestProviderWaitCountdown(t *testing.T) {
 
 func TestProviderWaitCountdownFiltersByTitleResolvers(t *testing.T) {
 	m := guardTestModel()
-	m.registry.Register(&fakeProviderForSwitch{name: "pengu", modes: []provider.Mode{{Name: provider.ModeLive}}})
+	m.registry.Register(&fakeProviderForSwitch{name: "fakeagg", modes: []provider.Mode{{Name: provider.ModeLive}}})
 	m.registry.Register(&fakeProviderForSwitch{name: "timstreams", modes: []provider.Mode{{Name: provider.ModeLive}}})
 	m.registry.Register(&fakeProviderForSwitch{name: "famelack", modes: []provider.Mode{{Name: provider.ModeLive}}})
 
-	series := provider.SearchResult{Title: "Match", ID: "pp-live:123", Provider: "pengu", Type: provider.ModeLive, MediaType: provider.MediaTypeLive}
+	series := provider.SearchResult{Title: "Match", ID: "pp-live:123", Provider: "fakeagg", Type: provider.ModeLive, MediaType: provider.MediaTypeLive}
 	m.selectedSeries = &series
 	m.beginProviderWait(provider.ModeLive)
 	if m.totalProviders != 1 || m.loadingProviders != 1 {

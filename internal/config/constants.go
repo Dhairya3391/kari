@@ -6,7 +6,6 @@ const (
 	// mirrors of the same ajax/watch endpoints.
 	AnikotoBase      = "https://anikototv.se"
 	MovyReferer      = "https://www.movy.sx/"
-	PenguAPIBase     = "https://pengu.uk"
 	TMDBAPIBase      = "https://api.themoviedb.org/3"
 	TMDBBaseURL      = "https://www.themoviedb.org"
 	TMDBImageBase    = "https://image.tmdb.org/t/p/"
@@ -46,9 +45,6 @@ const (
 	IntroDBAPIBase = "https://api.introdb.app"
 	// DefaultIntroDBAPIKey is the hardcoded API key for IntroDB.
 	DefaultIntroDBAPIKey = "idb_Cbx3JSk4-MLeS8iOXQGFY0hXvM06XdFs"
-
-	// DefaultPenguAuthToken is the bundled fallback token for PenguPlay (https://pengu.uk).
-	DefaultPenguAuthToken = "fJDLLgJTS0ASMne0HsUILe4284c5A_FlRKI9xW8qYpk"
 
 	// WeebCentralBase is the WeebCentral site (HTMX HTML, no API):
 	// series search, full chapter listings, and chapter page images.
@@ -109,9 +105,11 @@ const (
 	CinecatReferer = "https://beta.cinecat.eu/"
 	// CinecatCDNBase is the current ZCDN edge for Cinecat's adaptive HLS lane.
 	// The site's /config.js picks any of zcdn1-3 on this workers.dev deployment;
-	// older zcdn*.iamwatchingyou.site, *.bluevelvet.space, and 2wwlgkfo-31a
-	// workers.dev hosts were retired and now answer 429.
-	CinecatCDNBase = "https://zcdn1.c3204a347-edge.workers.dev"
+	// the former c3204a347 hosts were retired and now answer 429. The new edge
+	// (and the sources API) additionally require an x-cap-pass header obtained
+	// from a cap.js proof-of-work; without it these lanes answer 401. The
+	// Aphrodite lane below is ungated and remains the primary playback source.
+	CinecatCDNBase = "https://zcdn1.e6dd8d160-edge.workers.dev"
 	// CinecatSourcesAPIBase is Cinecat's multi-lane sources API. It lists the
 	// available streaming backends and resolves each one by TMDB coordinates.
 	CinecatSourcesAPIBase = "https://edge.cinecat.eu"
@@ -121,13 +119,13 @@ const (
 	CinecatAphroditeBase = "https://cdn.hls.lol"
 	CinecatSubsBase      = "https://sub.vdrk.site"
 
-	// SweetFoxPlayerBase is the VidQueen player origin SweetFox embeds. The
-	// player exposes seven internal stream lanes (Bloodstone, Obsidian,
-	// Garnet, Ruby, Jet, Amethyst, Nightshade).
-	SweetFoxPlayerBase = "https://player.vidqueen.st"
-	// SweetFoxAPIBase is the VidQueen stream resolution API. Every lane is
+	// VidGoldPlayerBase is the embed player origin VidGold uses. The player
+	// cascades over seven internal stream lanes (Aurum, Sovereign, Bullion,
+	// Ingot, Nugget, Doubloon, Gilt).
+	VidGoldPlayerBase = "https://player.vidgold.net"
+	// VidGoldAPIBase is the embed player's JSON resolution API. Every lane is
 	// addressed through it with the TMDB id plus a sources key (s1–s7).
-	SweetFoxAPIBase = "https://api.vidqueen.st"
+	VidGoldAPIBase = "https://api.vidgold.net"
 
 	// MappleBase is the main web and API base for Mapple (https://mapple.fun).
 	MappleBase = "https://mapple.fun"
@@ -177,19 +175,6 @@ const (
 	FamelackTVChannelsURL = FamelackDataBase + "/tv/categories/all.json"
 	// FamelackTVCountriesURL maps ISO country codes to display names.
 	FamelackTVCountriesURL = FamelackDataBase + "/tv/countries_metadata.json"
-)
-
-// Zlive live TV and sports endpoints. The catalog is public; resolution uses
-// the same signed envelope the site's own player sends.
-const (
-	// ZliveSiteBase is the public zlive.st origin used as the player referer.
-	ZliveSiteBase = "https://zlive.st"
-	// ZliveAPIBase serves the channel catalog, session tickets, and signed
-	// stream resolution.
-	ZliveAPIBase = "https://iptv.zlive.st"
-	// ZliveSigningSecret is the fixed client key the site's player derives
-	// from its bundled base64 credential. It is not user data.
-	ZliveSigningSecret = "SfrcOczV4qSNuSMiouJIDtTOVXUYWzbgFnLDdF9DUSf"
 )
 
 // DefaultTMDBAPIKeys are the bundled fallback keys; TMDB_API_KEY env var

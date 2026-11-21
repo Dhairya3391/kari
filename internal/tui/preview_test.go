@@ -111,8 +111,8 @@ func TestPreviewOmitsPlayingBanner(t *testing.T) {
 func TestPreviewSourcesAudioColumn(t *testing.T) {
 	ranked := func() []filter.RankedSource {
 		return []filter.RankedSource{
-			{Source: provider.MediaSource{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p [MovieBox]", Resolver: "pengu"}},
-			{Source: provider.MediaSource{URL: "https://cdn.example.com/b.m3u8", Quality: "1080p [MovieBox] (Hindi)", Resolver: "pengu", AudioLabel: "Hindi"}},
+			{Source: provider.MediaSource{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p [MovieBox]", Resolver: "fakeagg"}},
+			{Source: provider.MediaSource{URL: "https://cdn.example.com/b.m3u8", Quality: "1080p [MovieBox] (Hindi)", Resolver: "fakeagg", AudioLabel: "Hindi"}},
 		}
 	}
 	t.Run("tv shows audio per row", func(t *testing.T) {

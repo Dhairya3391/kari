@@ -9,9 +9,7 @@ import (
 
 func TestDefaultRegistryIncludesNewProviders(t *testing.T) {
 	keyPool := &tmdb.KeyPool{}
-	cfg := &config.Config{
-		PenguAuthToken: "dummy",
-	}
+	cfg := &config.Config{}
 
 	reg, err := NewDefaultRegistry(keyPool, cfg)
 	if err != nil {
@@ -25,5 +23,17 @@ func TestDefaultRegistryIncludesNewProviders(t *testing.T) {
 	}
 	if _, ok := reg.ProviderByName("ocecomic"); ok {
 		t.Fatal("comic-only provider must not be registered")
+	}
+}
+
+func TestProviderIDRenames(t *testing.T) {
+	renames := ProviderIDRenames()
+	// Derived from descriptor declarations, so adding a LegacyIDs entry is
+	// enough to migrate a renamed provider's persisted preferences.
+	if got := renames["sweetfox"]; got != "vidgold" {
+		t.Errorf("sweetfox -> %q, want vidgold", got)
+	}
+	if got := renames["vidgold"]; got != "" {
+		t.Errorf("current ID must not map to itself, got %q", got)
 	}
 }

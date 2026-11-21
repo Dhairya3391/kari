@@ -2,6 +2,8 @@ package settings
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -60,10 +62,10 @@ func TestDisabledProviderSet(t *testing.T) {
 	}
 
 	d := &Data{
-		DisabledProviders: []string{"  PENGU  ", "AniVault", "", "   ", "anime:anikoto"},
+		DisabledProviders: []string{"  FAKEAGG  ", "AniVault", "", "   ", "anime:anikoto"},
 	}
 	set := d.DisabledProviderSet()
-	if !set["pengu"] || !set["anivault"] || !set["anime:anikoto"] || set[""] {
+	if !set["fakeagg"] || !set["anivault"] || !set["anime:anikoto"] || set[""] {
 		t.Errorf("unexpected disabled provider set: %+v", set)
 	}
 }
@@ -248,7 +250,7 @@ func TestFiltersScopeJSONRoundTrip(t *testing.T) {
 		Audio:             filter.NewLanguagePreference([]string{"Hindi", "ja"}, []string{"English"}),
 		Track:             provider.TrackDual,
 		Subtitles:         filter.SubtitlePreference{Mode: filter.SubtitlePreferred, Language: "hi"},
-		PreferredProvider: "pengu",
+		PreferredProvider: "fakeagg",
 	}
 	in := &Data{FiltersMigrated: true, Filters: filter.Scope{
 		Defaults: prefs,
@@ -271,5 +273,59 @@ func TestFiltersScopeJSONRoundTrip(t *testing.T) {
 	}
 	if !got.Audio.Allows("hi") || got.Audio.Allows("en") {
 		t.Errorf("audio disable set not preserved: %+v", got.Audio)
+	}
+}
+
+func TestLoadMigratesRenamedProviderIDs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	dir := filepath.Join(home, ".config", "kari")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := &Data{
+		DisabledProviders:  []string{"sweetfox", "anime: SweetFox ", "anivault"},
+		PreferredProviders: map[string]string{"movies": "SweetFox", "anime": "anikoto"},
+		FiltersMigrated:    true,
+		Filters: filter.Scope{
+			Defaults: filter.Preferences{PreferredProvider: "sweetfox"},
+			ByMode: map[provider.ContentType]filter.Preferences{
+				provider.ModeMovies: {PreferredProvider: "SweetFox"},
+				provider.ModeTV:     {PreferredProvider: "solis"},
+			},
+		},
+	}
+	body, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), body, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Load()
+	if got == nil {
+		t.Fatal("Load() returned nil")
+	}
+	if want := []string{"vidgold", "anime:vidgold", "anivault"}; !reflect.DeepEqual(got.DisabledProviders, want) {
+		t.Errorf("DisabledProviders = %v, want %v", got.DisabledProviders, want)
+	}
+	if want := map[string]string{"movies": "vidgold", "anime": "anikoto"}; !reflect.DeepEqual(got.PreferredProviders, want) {
+		t.Errorf("PreferredProviders = %v, want %v", got.PreferredProviders, want)
+	}
+	if v := got.Filters.Defaults.PreferredProvider; v != "vidgold" {
+		t.Errorf("Filters.Defaults.PreferredProvider = %q, want vidgold", v)
+	}
+	if v := got.Filters.ByMode[provider.ModeMovies].PreferredProvider; v != "vidgold" {
+		t.Errorf("Filters.ByMode[movies] = %q, want vidgold", v)
+	}
+	if v := got.Filters.ByMode[provider.ModeTV].PreferredProvider; v != "solis" {
+		t.Errorf("Filters.ByMode[tv] = %q, want solis (unrelated value must not change)", v)
+	}
+
+	// The migration is idempotent: a second load must not change the values.
+	if again := Load(); !reflect.DeepEqual(again.DisabledProviders, got.DisabledProviders) {
+		t.Errorf("second load changed DisabledProviders: %v", again.DisabledProviders)
 	}
 }

@@ -365,7 +365,7 @@ func TestSourceAggregatorMergesUserAgentOnlyVariants(t *testing.T) {
 
 func TestSourceAggregatorKeepsDistinctQuerySemantics(t *testing.T) {
 	agg := newSourceAggregator(nil, func(n string) string { return n })
-	agg.add("pengu", []provider.MediaSource{
+	agg.add("fakeagg", []provider.MediaSource{
 		{URL: "https://cdn.example.com/master.m3u8?token=one&quality=1080", Quality: "1080p"},
 		{URL: "https://cdn.example.com/master.m3u8?token=two&quality=720", Quality: "720p"},
 	})
@@ -436,7 +436,7 @@ func TestCanonicalSourceURL(t *testing.T) {
 
 func TestSourceAggregatorPreservesTransportBoundSubtitles(t *testing.T) {
 	agg := newSourceAggregator(nil, func(name string) string { return name })
-	agg.add("pengu", []provider.MediaSource{
+	agg.add("fakeagg", []provider.MediaSource{
 		{
 			URL:       "https://cdn.example.com/video.m3u8",
 			Referer:   "https://one.example/",
@@ -493,10 +493,10 @@ func TestSourceAggregatorPreservesArrivalOrder(t *testing.T) {
 }
 
 func TestSourceAggregatorPreservesSubtitleArrivalOrder(t *testing.T) {
-	pengu := &stubProvider{name: "pengu", mode: provider.ModeAnime}
-	agg := newSourceAggregator([]provider.Provider{pengu}, func(n string) string { return n })
+	fakeagg := &stubProvider{name: "fakeagg", mode: provider.ModeAnime}
+	agg := newSourceAggregator([]provider.Provider{fakeagg}, func(n string) string { return n })
 
-	agg.add("pengu", []provider.MediaSource{
+	agg.add("fakeagg", []provider.MediaSource{
 		{URL: "http://soft", Quality: "1080p", SubType: provider.SubTypeSoft},
 		{URL: "http://hard", Quality: "1080p", SubType: provider.SubTypeHard},
 	})
@@ -843,9 +843,9 @@ func TestResolvedMediaSnapshotIsCopied(t *testing.T) {
 func TestAggregatorPreservesArrivalOrderAcrossProviders(t *testing.T) {
 	agg := &sourceAggregator{
 		sources: []provider.MediaSource{
-			{Resolver: "pengu", Quality: "4K [4KHDHub]"},
+			{Resolver: "fakeagg", Quality: "4K [4KHDHub]"},
 			{Resolver: "movysx", Quality: "1080p"},
-			{Resolver: "pengu", Quality: "1080p [VegaMovies]"},
+			{Resolver: "fakeagg", Quality: "1080p [VegaMovies]"},
 			{Resolver: "movysx", Quality: "2160p"},
 		},
 	}
@@ -857,8 +857,8 @@ func TestAggregatorPreservesArrivalOrderAcrossProviders(t *testing.T) {
 	}
 
 	// Playable sources must stay in their exact arrival order
-	if agg.sources[0].Resolver != "pengu" || agg.sources[0].Quality != "4K [4KHDHub]" {
-		t.Errorf("sources[0] = %+v, want pengu 4K in arrival order", agg.sources[0])
+	if agg.sources[0].Resolver != "fakeagg" || agg.sources[0].Quality != "4K [4KHDHub]" {
+		t.Errorf("sources[0] = %+v, want fakeagg 4K in arrival order", agg.sources[0])
 	}
 	if agg.sources[1].Resolver != "movysx" || agg.sources[1].Quality != "1080p" {
 		t.Errorf("sources[1] = %+v, want movysx 1080p in arrival order", agg.sources[1])

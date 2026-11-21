@@ -325,7 +325,7 @@ func (c *Client) availableSources(ctx context.Context) ([]string, error) {
 // dedicated provider routes.
 func isNativeVylaSource(source string) bool {
 	switch strings.ToLower(strings.TrimSpace(source)) {
-	case "111477", "movy", "pengu":
+	case "111477", "movy":
 		return true
 	default:
 		return false

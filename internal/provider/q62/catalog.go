@@ -126,70 +126,16 @@ func (c *Client) buildIndex(ctx context.Context) (*tmdbIndex, error) {
 	return idx, nil
 }
 
-// Search resolves a title to Q62's catalog IDs using the site's own API. This
-// keeps resolution on Q62 IDs instead of forcing a TMDB lookup the site cannot
-// answer, while TMDBID stays populated for cross-provider fallback.
+// Search delegates title discovery to the shared TMDB/noobsearch base. The
+// returned handle is a TMDB ID; contentID maps it to Q62's site ID at resolve
+// time via the lazily built catalog index.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
-	var tv bool
 	switch mode {
-	case provider.ModeMovies:
-	case provider.ModeTV:
-		tv = true
+	case provider.ModeMovies, provider.ModeTV:
+		return c.base.Search(ctx, query, mode)
 	default:
 		return nil, provider.ErrNoResults
 	}
-
-	page, err := c.fetchCatalog(ctx, strings.TrimSpace(query), tv, 0, 40)
-	if err != nil {
-		return nil, fmt.Errorf("q62 search: %w", err)
-	}
-	results := make([]provider.SearchResult, 0, len(page.Content))
-	for _, item := range page.Content {
-		if item.ID == "" || item.ComingSoon {
-			continue
-		}
-		title := localizedText(item.Translations, "title")
-		if title == "" {
-			continue
-		}
-		mediaType := provider.MediaTypeMovie
-		year := yearFromDate(item.ReleaseDate)
-		if tv {
-			mediaType = provider.MediaTypeTV
-			year = yearFromDate(item.FirstAirDate)
-		}
-		results = append(results, provider.SearchResult{
-			Title:     title,
-			ID:        item.ID,
-			Type:      mode,
-			Year:      year,
-			MediaType: mediaType,
-			TMDBID:    item.TMDBID,
-			Overview:  localizedText(item.Translations, "overview"),
-			Genres:    tagNames(item.Tags),
-		})
-	}
-	if len(results) == 0 {
-		return nil, provider.ErrNoResults
-	}
-	return results, nil
-}
-
-// fetchCatalog queries one page of movies or TV shows. An empty query lists
-// the catalog, which is how the UI lets users browse without a search term.
-func (c *Client) fetchCatalog(ctx context.Context, query string, tv bool, page, size int) (catalogPage[catalogItem], error) {
-	params := url.Values{}
-	if query != "" {
-		params.Set("q", query)
-	}
-	params.Set("page", strconv.Itoa(page))
-	params.Set("size", strconv.Itoa(size))
-	endpoint := "/movie?"
-	if tv {
-		params.Set("isAnime", "false")
-		endpoint = "/tvshow?"
-	}
-	return getJSON[catalogPage[catalogItem]](ctx, c, endpoint+params.Encode())
 }
 
 // FetchEpisodes returns a synthetic movie episode or Q62's season/episode
@@ -322,29 +268,6 @@ func fieldValue(t catalogTranslation, field string) string {
 		return strings.TrimSpace(t.Title)
 	}
 	return strings.TrimSpace(t.Overview)
-}
-
-// tagNames returns the English label for each genre the catalog declares.
-func tagNames(tags []catalogTag) []string {
-	names := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		if name := strings.TrimSpace(tag.Localizations["en"]); name != "" {
-			names = append(names, name)
-			continue
-		}
-		if name := strings.TrimSpace(tag.Name); name != "" {
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
-func yearFromDate(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if len(raw) >= 4 {
-		return raw[:4]
-	}
-	return ""
 }
 
 // isNotFound reports whether err is an upstream 404, which resolution treats

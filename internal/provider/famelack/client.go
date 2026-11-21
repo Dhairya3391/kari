@@ -139,7 +139,7 @@ func (c *Client) Name() string { return "famelack" }
 func (c *Client) Alias() string { return "Famelack" }
 
 // Modes implements provider.Provider. Famelack only serves live TV channels;
-// its priority trails Pengu's live sports catalog so event rows stay first.
+// its priority leaves room ahead of it for a future scheduled-event catalog.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{{Name: provider.ModeLive, Priority: 2}}
 }

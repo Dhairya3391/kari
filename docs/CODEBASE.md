@@ -127,7 +127,7 @@ preferences, keeps the active selection, and renders the prepared rows.
 
 | Kind of type | Lives in | Examples |
 | --- | --- | --- |
-| A provider's private API response/request shapes | that provider's package | `anikoto.linkResp`, `pengu.penguResponse`, `movysx.movySourceItem` |
+| A provider's private API response/request shapes | that provider's package | `anikoto.linkResp`, `movysx.movySourceItem`, `q62.releaseDetail` |
 | Shared wire DTOs crossing layer boundaries | `internal/provider` | `SearchResult`, `Episode`, `MediaSource`, `SubtitleOption` |
 | Cross-layer vocabularies | `internal/provider` constants only | `MediaTypeMovie`, `ModeAnime`, `AudioSub`, `SourceTypeHLS` |
 | Playback aggregates with behavior | `internal/model` | `ResolvedMedia`, `SubtitleTrack` |
@@ -361,6 +361,12 @@ construction. Do not introduce other globals without comparable justification.
 
   `When == nil` means always enabled. Factory errors skip the provider with
   a logged warning — startup must not die because one integration failed.
+
+  When renaming a provider, keep its `ID` current and list the retired IDs in
+  `LegacyIDs` (e.g. `LegacyIDs: []string{"sweetfox"}` on `vidgold`).
+  `defaults.ProviderIDRenames()` derives the settings migration map from these
+  declarations, so persisted disabled/preferred-provider entries keep working
+  without any change in `internal/settings`.
 
 - The TUI receives `*provider.Registry` and asks it questions
   (`Features`, `AudioLanguages`, `RequiresEpisodeListForMovies`); it never

@@ -49,7 +49,7 @@ func TestLiveSubtitleFetch(t *testing.T) {
 	}
 
 	// Test fetching subtitles with preferred language "en"
-	for _, resolver := range []string{"movysx", "pengu"} {
+	for _, resolver := range []string{"movysx", "cno"} {
 		start := time.Now()
 		track, err := subSvc.Fetch(ctx, resolved, "en", resolver)
 		duration := time.Since(start)

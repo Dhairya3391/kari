@@ -126,11 +126,10 @@ const (
 const (
 	BingrShard         = 5250 * time.Millisecond  // measured 3s * 1.75
 	BingrFanout        = 8750 * time.Millisecond  // measured 5s * 1.75
-	PenguSubtitleCtx   = 3500 * time.Millisecond  // measured 2s * 1.75
 	CinejoyServer      = 5250 * time.Millisecond  // measured 3s * 1.75
 	CinejoyLane        = 10500 * time.Millisecond // measured 6s * 1.75
-	SweetfoxLane       = 14 * time.Second         // measured 8s * 1.75
-	SweetfoxMaster     = 7 * time.Second          // measured 4s * 1.75
+	VidgoldLane        = 14 * time.Second         // measured 8s * 1.75
+	VidgoldMaster      = 7 * time.Second          // measured 4s * 1.75
 	SolisCheck         = 3500 * time.Millisecond  // measured 2s * 1.75
 	StreambaseFallback = 10500 * time.Millisecond // measured 6s * 1.75
 	LaneBudget         = 10500 * time.Millisecond // measured 6s * 1.75

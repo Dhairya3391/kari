@@ -24,7 +24,7 @@ func TestProviderErrorUnwrapsToSentinels(t *testing.T) {
 		{KindAuthRequired, ErrAuthRequired},
 	}
 	for _, tc := range cases {
-		err := Wrap("pengu", "sources", tc.kind, errors.New("boom"))
+		err := Wrap("fakeagg", "sources", tc.kind, errors.New("boom"))
 		if !errors.Is(err, tc.sentinel) {
 			t.Errorf("kind %q does not match sentinel %v", tc.kind, tc.sentinel)
 		}
@@ -47,7 +47,7 @@ func TestKindOfPlainErrors(t *testing.T) {
 // TestProviderErrorRedactsSecrets proves the message carries no hint of
 // bodies or tokens: only provider, stage, kind and short hints.
 func TestProviderErrorRedactsSecrets(t *testing.T) {
-	err := WrapHint("pengu", "sources", KindUpstreamChanged, "missing streams array", errors.New("x"))
+	err := WrapHint("fakeagg", "sources", KindUpstreamChanged, "missing streams array", errors.New("x"))
 	msg := err.Error()
 	if len(msg) > 200 {
 		t.Errorf("error message too long (may leak bodies): %q", msg)

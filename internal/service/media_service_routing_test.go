@@ -323,7 +323,7 @@ func TestResolveMergeDedupesAndPreservesSources(t *testing.T) {
 	movysx := &resolveStub{name: "movysx", mode: provider.ModeMovies,
 		delay:   20 * time.Millisecond,
 		sources: []provider.MediaSource{{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p", Backend: "Native"}}}
-	pengu := &resolveStub{name: "pengu", mode: provider.ModeMovies,
+	fakeagg := &resolveStub{name: "fakeagg", mode: provider.ModeMovies,
 		sources: []provider.MediaSource{
 			{URL: "https://cdn.example.com/a.m3u8", Quality: "1080p", Backend: "Mirror"},
 			{URL: "https://cdn.example.com/b.m3u8", Quality: "4K"},
@@ -331,7 +331,7 @@ func TestResolveMergeDedupesAndPreservesSources(t *testing.T) {
 			{URL: "https://cdn.example.com/c.m3u8", Quality: "720p"},
 		}}
 
-	svc := NewMediaService(newTestRegistry(movysx, pengu))
+	svc := NewMediaService(newTestRegistry(movysx, fakeagg))
 	series := provider.SearchResult{Title: "T", ID: "1", Provider: "movysx", TMDBID: 42, MediaType: provider.MediaTypeMovie}
 	resolved, err := svc.Resolve(context.Background(), provider.ModeMovies, series, provider.Episode{TMDBID: 42}, nil, ResolveOptions{})
 	if err != nil {
@@ -374,13 +374,13 @@ func TestResolveLastFailures(t *testing.T) {
 }
 
 func TestResolveOnlyQueriesResolvableProviders(t *testing.T) {
-	pengu := &resolveStub{name: "pengu", mode: provider.ModeLive,
+	fakeagg := &resolveStub{name: "fakeagg", mode: provider.ModeLive,
 		sources: []provider.MediaSource{{URL: "https://example.com/live.m3u8", Quality: "1080p"}}}
 	timstreams := &resolveStub{name: "timstreams", mode: provider.ModeLive,
 		sources: []provider.MediaSource{{URL: "https://example.com/other.m3u8", Quality: "1080p"}}}
 
-	svc := NewMediaService(newTestRegistry(pengu, timstreams))
-	series := provider.SearchResult{Title: "Match", ID: "pp-live:123", Provider: "pengu", Type: provider.ModeLive, MediaType: provider.MediaTypeLive}
+	svc := NewMediaService(newTestRegistry(fakeagg, timstreams))
+	series := provider.SearchResult{Title: "Match", ID: "pp-live:123", Provider: "fakeagg", Type: provider.ModeLive, MediaType: provider.MediaTypeLive}
 	resolved, err := svc.Resolve(context.Background(), provider.ModeLive, series, provider.Episode{ID: "pp-live:123"}, nil, ResolveOptions{})
 	if err != nil {
 		t.Fatalf("resolve error: %v", err)
@@ -388,11 +388,11 @@ func TestResolveOnlyQueriesResolvableProviders(t *testing.T) {
 	if resolved.TotalResolvers != 1 {
 		t.Errorf("TotalResolvers = %d, want 1", resolved.TotalResolvers)
 	}
-	if len(resolved.CompletedResolvers) != 1 || resolved.CompletedResolvers[0] != "pengu" {
-		t.Errorf("CompletedResolvers = %v, want [pengu]", resolved.CompletedResolvers)
+	if len(resolved.CompletedResolvers) != 1 || resolved.CompletedResolvers[0] != "fakeagg" {
+		t.Errorf("CompletedResolvers = %v, want [fakeagg]", resolved.CompletedResolvers)
 	}
 	if len(resolved.Playback) != 1 || resolved.Playback[0].URL != "https://example.com/live.m3u8" {
-		t.Errorf("Playback = %+v, want only pengu source", resolved.Playback)
+		t.Errorf("Playback = %+v, want only fakeagg source", resolved.Playback)
 	}
 }
 
@@ -492,7 +492,7 @@ func TestAggregatorKeepsDistinctMirrors(t *testing.T) {
 	}
 
 	varied := newAgg()
-	varied.add("pengu", []provider.MediaSource{
+	varied.add("fakeagg", []provider.MediaSource{
 		{URL: "https://cdn.example.com/1", Quality: "4K", Backend: "A"},
 		{URL: "https://cdn.example.com/2", Quality: "4K", Backend: "B"},
 		{URL: "https://cdn.example.com/3", Quality: "4K", Backend: "C"},

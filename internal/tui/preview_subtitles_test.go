@@ -248,7 +248,7 @@ func TestTriggerSubtitleSyncRefetchesOnGrownPoolAfterFailure(t *testing.T) {
 	m.rawSubtitles = append(m.rawSubtitles, model.SubtitleTrack{
 		URL:      "https://cdn.example.com/en2.vtt",
 		Language: "en",
-		Resolver: "pengu",
+		Resolver: "fakeagg",
 	})
 	if cmd := m.triggerSubtitleSync(); cmd == nil {
 		t.Fatal("grown pool with no secured track must refetch")
@@ -276,7 +276,7 @@ func TestTriggerSubtitleSyncKeepsSecuredTrackOnPoolGrowth(t *testing.T) {
 	m.rawSubtitles = append(m.rawSubtitles, model.SubtitleTrack{
 		URL:      "https://cdn.example.com/en2.vtt",
 		Language: "en",
-		Resolver: "pengu",
+		Resolver: "fakeagg",
 	})
 	if cmd := m.triggerSubtitleSync(); cmd != nil {
 		t.Fatal("secured track must survive pool growth")
@@ -332,7 +332,7 @@ func TestTriggerSubtitleSyncSkipsWhileFetchInFlight(t *testing.T) {
 	m.rawSubtitles = append(m.rawSubtitles, model.SubtitleTrack{
 		URL:      "https://cdn.example.com/en2.vtt",
 		Language: "en",
-		Resolver: "pengu",
+		Resolver: "fakeagg",
 	})
 	if cmd := m.triggerSubtitleSync(); cmd != nil {
 		t.Fatal("in-flight fetch must not be duplicated")

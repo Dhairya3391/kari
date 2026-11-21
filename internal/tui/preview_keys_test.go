@@ -265,7 +265,7 @@ func TestPreviewRetryPreservesDeliveredSources(t *testing.T) {
 	reg := &provider.Registry{}
 	reg.Register(&repairFake{name: "anikoto", mode: provider.ModeAnime,
 		sources: []provider.MediaSource{{URL: "https://cdn.example.com/anikoto.m3u8", Quality: "1080p"}}})
-	reg.Register(&repairFake{name: "pengu", mode: provider.ModeAnime, err: provider.ErrTimeout})
+	reg.Register(&repairFake{name: "fakeagg", mode: provider.ModeAnime, err: provider.ErrTimeout})
 	m.registry = reg
 	m.mediaService = service.NewMediaService(reg)
 	series := provider.SearchResult{Title: "Frieren", ID: "151807", Provider: "anikoto", Type: provider.ModeAnime}
@@ -273,7 +273,7 @@ func TestPreviewRetryPreservesDeliveredSources(t *testing.T) {
 	m.selectedSeries = &series
 	m.selectedEpisode = &episode
 
-	// Seed resolve: anikoto succeeds, pengu fails.
+	// Seed resolve: anikoto succeeds, fakeagg fails.
 	_, _ = m.mediaService.Resolve(context.Background(), provider.ModeAnime, series, episode, nil, service.ResolveOptions{})
 	m.resolved = &model.ResolvedMedia{
 		SeriesTitle: "Frieren",

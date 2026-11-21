@@ -1,4 +1,4 @@
-package sweetfox
+package vidgold
 
 import (
 	"context"
@@ -32,17 +32,17 @@ func (rt rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-func TestSweetFoxCapabilities(t *testing.T) {
+func TestVidGoldCapabilities(t *testing.T) {
 	c, err := NewClient(tmdb.NewKeyPool([]string{"dummy-key"}))
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	if c.Alias() != "SweetFox" {
-		t.Errorf("Alias() = %q, want SweetFox", c.Alias())
+	if c.Alias() != "VidGold" {
+		t.Errorf("Alias() = %q, want VidGold", c.Alias())
 	}
-	if c.Name() != "sweetfox" {
-		t.Errorf("Name() = %q, want sweetfox", c.Name())
+	if c.Name() != "vidgold" {
+		t.Errorf("Name() = %q, want vidgold", c.Name())
 	}
 
 	for _, expectedMode := range []provider.ContentType{provider.ModeMovies, provider.ModeTV, provider.ModeCartoon} {
@@ -59,8 +59,8 @@ func TestSweetFoxCapabilities(t *testing.T) {
 	}
 }
 
-func TestSweetFoxResolveMovie(t *testing.T) {
-	const playerBase = "https://player.vidqueen.st"
+func TestVidGoldResolveMovie(t *testing.T) {
+	const playerBase = "https://player.vidgold.net"
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/movie", func(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +97,7 @@ func TestSweetFoxResolveMovie(t *testing.T) {
 				},
 				"source": map[string]any{
 					"source": "s1",
-					"label":  "Bloodstone",
+					"label":  "Aurum",
 					"url":    master,
 				},
 				"subtitles": []map[string]string{
@@ -110,7 +110,7 @@ func TestSweetFoxResolveMovie(t *testing.T) {
 			writeJSON(t, w, map[string]any{
 				"source": map[string]any{
 					"source": "s3",
-					"label":  "Bloodstone",
+					"label":  "Aurum",
 					"url":    master,
 				},
 				"subtitles": []map[string]string{
@@ -121,7 +121,7 @@ func TestSweetFoxResolveMovie(t *testing.T) {
 			writeJSON(t, w, map[string]any{
 				"source": map[string]any{
 					"source": "s2",
-					"label":  "Garnet",
+					"label":  "Bullion",
 					"url":    "https://cdn.example.com/s2/master.m3u8",
 					"qualities": []map[string]string{
 						{"quality": "1080p", "codec": "h264", "url": "https://cdn.example.com/s2/1080.mp4", "type": "mp4"},
@@ -138,7 +138,7 @@ func TestSweetFoxResolveMovie(t *testing.T) {
 			writeJSON(t, w, map[string]any{
 				"source": map[string]any{
 					"source": "s4",
-					"label":  "Obsidian",
+					"label":  "Sovereign",
 					"url":    "https://cdn.example.com/s4/master.m3u8",
 					"h":      1080,
 					"qualities": []map[string]string{
@@ -151,7 +151,7 @@ func TestSweetFoxResolveMovie(t *testing.T) {
 			writeJSON(t, w, map[string]any{
 				"source": map[string]any{
 					"source": "s5",
-					"label":  "Jet",
+					"label":  "Nugget",
 					"url":    "https://cdn.example.com/s5/master.m3u8",
 					"qualities": []map[string]string{
 						{"quality": "Auto", "codec": "h264", "url": "https://cdn.example.com/s5/auto.m3u8", "type": "hls"},
@@ -220,14 +220,14 @@ https://cdn.example.com/s5/seg0.ts
 		quality string
 		backend string
 	}{
-		{"4K (2160p)", "Bloodstone"},
-		{"1080p", "Bloodstone"},
-		{"4K (2160p)", "Obsidian"},
-		{"1080p", "Obsidian"},
-		{"Auto", "Obsidian"},
-		{"1080p", "Garnet"},
-		{"480p", "Garnet"},
-		{"Auto", "Jet"},
+		{"4K (2160p)", "Aurum"},
+		{"1080p", "Aurum"},
+		{"4K (2160p)", "Sovereign"},
+		{"1080p", "Sovereign"},
+		{"Auto", "Sovereign"},
+		{"1080p", "Bullion"},
+		{"480p", "Bullion"},
+		{"Auto", "Nugget"},
 	}
 	if len(sources) != len(want) {
 		t.Fatalf("expected %d sources, got %d: %+v", len(want), len(sources), sources)
@@ -286,8 +286,8 @@ https://cdn.example.com/s5/seg0.ts
 	}
 }
 
-func TestSweetFoxResolveTVEpisode(t *testing.T) {
-	const playerBase = "https://player.vidqueen.st"
+func TestVidGoldResolveTVEpisode(t *testing.T) {
+	const playerBase = "https://player.vidgold.net"
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/tv", func(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +307,7 @@ func TestSweetFoxResolveTVEpisode(t *testing.T) {
 		writeJSON(t, w, map[string]any{
 			"source": map[string]any{
 				"source": "s2",
-				"label":  "Garnet",
+				"label":  "Bullion",
 				"url":    "https://cdn.example.com/tv/master.m3u8",
 				"qualities": []map[string]string{
 					{"quality": "1080p", "codec": "h264", "url": "https://cdn.example.com/tv/1080.mp4", "type": "mp4"},
@@ -335,12 +335,12 @@ func TestSweetFoxResolveTVEpisode(t *testing.T) {
 	if len(sources) != 1 {
 		t.Fatalf("expected 1 source, got %d: %+v", len(sources), sources)
 	}
-	if sources[0].Backend != "Garnet" || sources[0].Quality != "1080p" {
-		t.Errorf("source = %+v, want Garnet 1080p", sources[0])
+	if sources[0].Backend != "Bullion" || sources[0].Quality != "1080p" {
+		t.Errorf("source = %+v, want Bullion 1080p", sources[0])
 	}
 }
 
-func TestSweetFoxNoSources(t *testing.T) {
+func TestVidGoldNoSources(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/movie", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, map[string]any{"meta": nil, "source": nil, "subtitles": []any{}})
@@ -349,7 +349,7 @@ func TestSweetFoxNoSources(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, "https://player.vidqueen.st")
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, "https://player.vidgold.net")
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -360,13 +360,13 @@ func TestSweetFoxNoSources(t *testing.T) {
 	}
 }
 
-func TestSweetFoxNonDirectSourcesBecomeErrNoSources(t *testing.T) {
+func TestVidGoldNonDirectSourcesBecomeErrNoSources(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/movie", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, map[string]any{
 			"source": map[string]any{
 				"source": "s1",
-				"label":  "Bloodstone",
+				"label":  "Aurum",
 				"qualities": []map[string]string{
 					// MP4 avoids an HLS probe; localhost is not direct-playable.
 					{"quality": "1080p", "url": "http://localhost/master.mp4", "type": "mp4"},
@@ -379,7 +379,7 @@ func TestSweetFoxNonDirectSourcesBecomeErrNoSources(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, "https://player.vidqueen.st")
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, "https://player.vidgold.net")
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestSweetFoxNonDirectSourcesBecomeErrNoSources(t *testing.T) {
 	}
 }
 
-func TestSweetFoxAPIErrorsSurface(t *testing.T) {
+func TestVidGoldAPIErrorsSurface(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/movie", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "blocked", http.StatusForbidden)
@@ -399,7 +399,7 @@ func TestSweetFoxAPIErrorsSurface(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, "https://player.vidqueen.st")
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, "https://player.vidgold.net")
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestSweetFoxAPIErrorsSurface(t *testing.T) {
 	}
 }
 
-func TestSweetFoxLaneNotFoundIsNoSources(t *testing.T) {
+func TestVidGoldLaneNotFoundIsNoSources(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/movie", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such title", http.StatusNotFound)
@@ -423,7 +423,7 @@ func TestSweetFoxLaneNotFoundIsNoSources(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, "https://player.vidqueen.st")
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, "https://player.vidgold.net")
 	if err != nil {
 		t.Fatalf("NewClientWithURLs: %v", err)
 	}
@@ -443,6 +443,9 @@ func TestQualityLabelAndType(t *testing.T) {
 	}
 	if got := qualityLabel(apiQuality{Quality: "Auto"}, 0); got != "Auto" {
 		t.Errorf("auto unknown label = %q, want Auto", got)
+	}
+	if got := qualityLabel(apiQuality{Quality: "Auto"}, 1); got != "Auto" {
+		t.Errorf("auto flag-like height label = %q, want Auto", got)
 	}
 	if got := qualityLabel(apiQuality{Quality: "1080p"}, 0); got != "1080p" {
 		t.Errorf("explicit label = %q, want 1080p", got)

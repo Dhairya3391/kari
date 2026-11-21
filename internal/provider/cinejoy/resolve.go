@@ -53,9 +53,9 @@ type lane struct {
 func defaultLanes() []lane {
 	return []lane{
 		{name: "Light", fourK: true},
-		{name: "Lisbon", fourK: true},
 		{name: "Sirius", fourK: true},
 		{name: "Nebula"},
+		{name: "Polaris"},
 	}
 }
 
