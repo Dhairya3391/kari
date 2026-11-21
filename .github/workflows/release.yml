@@ -46,11 +46,37 @@ jobs:
           ./build.sh target ${{ matrix.os }} ${{ matrix.arch }}
 
       - name: Upload Artifact
+        id: upload
         uses: actions/upload-artifact@v7.0.2
         with:
           name: kari-${{ matrix.os }}-${{ matrix.arch }}
-          path: kari*
+          path: kari-${{ matrix.os }}-${{ matrix.arch }}*
           if-no-files-found: error
+          # A retry after a failed finalization may find an artifact that was
+          # partially registered; replacing it is safe because each matrix job
+          # owns a distinct artifact name.
+          overwrite: true
+
+      # GitHub's artifact service intermittently answers finalization with an
+      # HTML error page instead of JSON. Re-uploading recovers without a rebuild.
+      - name: Retry Artifact Upload (2)
+        id: upload_retry
+        if: always() && steps.upload.outcome == 'failure'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: kari-${{ matrix.os }}-${{ matrix.arch }}
+          path: kari-${{ matrix.os }}-${{ matrix.arch }}*
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Retry Artifact Upload (3)
+        if: always() && steps.upload.outcome == 'failure' && steps.upload_retry.outcome == 'failure'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: kari-${{ matrix.os }}-${{ matrix.arch }}
+          path: kari-${{ matrix.os }}-${{ matrix.arch }}*
+          if-no-files-found: error
+          overwrite: true
 
   release:
     name: Create Release
