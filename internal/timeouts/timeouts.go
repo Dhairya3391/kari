@@ -54,13 +54,16 @@ const (
 // Search budgets. Measured P95 ~7s (user search across all providers); the
 // per-provider budget is 7s * 1.75 = 12.25s, the fan-out budget 10s * 1.75 =
 // 17.5s (below the 20s ceiling). First-result and grace windows keep the UI
-// responsive while backfill collects stragglers.
+// responsive while backfill collects stragglers. The grace windows are
+// deliberately longer than the old measurement-derived values: with fewer
+// anime providers registered, an early return often showed only a single
+// provider's rows. Both stay well below SearchOverall.
 const (
 	SearchPerProvider = 12250 * time.Millisecond
 	SearchOverall     = 17500 * time.Millisecond
-	SearchFirstResult = 3500 * time.Millisecond // measured 2s * 1.75
-	SearchGrace       = 1750 * time.Millisecond // measured 1s * 1.75
-	SearchGraceFast   = 875 * time.Millisecond  // measured 500ms * 1.75
+	SearchFirstResult = 5000 * time.Millisecond // wait for the first provider before giving up
+	SearchGrace       = 3000 * time.Millisecond // sparse first result: let other providers answer
+	SearchGraceFast   = 1750 * time.Millisecond // full first page: still allow slower providers in
 	SearchBackfill    = 15 * time.Second        // detached collection after an early return
 )
 

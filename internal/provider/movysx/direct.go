@@ -26,11 +26,13 @@ import (
 const defaultStreamBase = "https://api.wecollege.net"
 
 // sourceEndpoints returns the current city shards serving encrypted payloads.
+// vegas (no embed), dallas (route removed) and berlin (upstream Cloudflare
+// block) were probed dead and are excluded so resolution never waits on them.
 func sourceEndpoints() []string {
 	return []string{
-		"miami", "boise", "vegas", "chicago", "reno", "oakland", "seattle",
-		"phoenix", "atlanta", "portland", "austin", "dallas",
-		"munich", "berlin", "paris", "delhi", "cancun",
+		"miami", "boise", "chicago", "reno", "oakland", "seattle",
+		"phoenix", "atlanta", "portland", "austin",
+		"munich", "paris", "delhi", "cancun",
 	}
 }
 

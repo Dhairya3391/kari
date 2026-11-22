@@ -34,9 +34,10 @@ const (
 )
 
 var (
-	reResolution  = regexp.MustCompile(`(?i)\bRESOLUTION=(\d+)x(\d+)\b`)
-	reBandwidth   = regexp.MustCompile(`(?i)\bBANDWIDTH=(\d+)\b`)
-	reHexActionID = regexp.MustCompile(`[0-9a-f]{40,42}`)
+	reResolution        = regexp.MustCompile(`(?i)\bRESOLUTION=(\d+)x(\d+)\b`)
+	reBandwidth         = regexp.MustCompile(`(?i)\bBANDWIDTH=(\d+)\b`)
+	reHexActionID       = regexp.MustCompile(`[0-9a-f]{40,42}`)
+	openPanelClientIDRe = regexp.MustCompile(`clientId[^0-9a-f]{0,24}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
 )
 
 type hlsVariant struct {
@@ -473,7 +474,8 @@ func (c *Client) fetchSources(
 		}
 	}()
 
-	sources, err := c.resolveStreamURL(ctx, &sessionClient, watchURL, tmdbID, mediaType, tvSlug)
+	sources, err := c.resolveStreamURL(ctx, &sessionClient, watchURL, tmdbID, mediaType, tvSlug,
+		extractOpenPanelClientID(watchHTML))
 	wg.Wait()
 
 	if err != nil {
@@ -494,6 +496,17 @@ func (c *Client) fetchSources(
 	return nil
 }
 
+// extractOpenPanelClientID reads the analytics client id the watch page embeds
+// in its OpenPanel init snippet. Mapple's device-binding endpoint rejects the
+// sync call without it, which in turn invalidates the media session token.
+func extractOpenPanelClientID(html string) string {
+	match := openPanelClientIDRe.FindStringSubmatch(html)
+	if len(match) < 2 {
+		return ""
+	}
+	return match[1]
+}
+
 func (c *Client) resolveStreamURL(
 	ctx context.Context,
 	sessionClient *http.Client,
@@ -501,6 +514,7 @@ func (c *Client) resolveStreamURL(
 	tmdbID int,
 	mediaType string,
 	tvSlug string,
+	clientID string,
 ) ([]provider.MediaSource, error) {
 
 	sessReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.siteBase+"/api/ui/session", nil)
@@ -528,7 +542,7 @@ func (c *Client) resolveStreamURL(
 		return nil, fmt.Errorf("mapple invalid session token: %w", err)
 	}
 
-	if err := c.syncSession(ctx, sessionClient, watchURL); err != nil {
+	if err := c.syncSession(ctx, sessionClient, watchURL, clientID); err != nil {
 		logging.Debug("mapple session sync failed; continuing", "err", err)
 	}
 
@@ -610,7 +624,9 @@ func (c *Client) resolveStreamURL(
 		return nil, fmt.Errorf("mapple missing stream token")
 	}
 
-	sourceIDs := []string{"s2", "s25"}
+	// The player's lane list also carries s10 and s28. A title absent from
+	// s2/s25 can still resolve from one of those, so all four are probed.
+	sourceIDs := []string{"s25", "s10", "s28", "s2"}
 	type laneResult struct {
 		sources []provider.MediaSource
 		err     error
@@ -722,7 +738,7 @@ func (c *Client) fetchMasterSources(ctx context.Context, sessionClient *http.Cli
 // the request token to a device session. The page fires this immediately
 // after obtaining the token; media-session rejects tokens that were never
 // bound to a device.
-func (c *Client) syncSession(ctx context.Context, sessionClient *http.Client, watchURL string) error {
+func (c *Client) syncSession(ctx context.Context, sessionClient *http.Client, watchURL, clientID string) error {
 	payload, _ := json.Marshal(map[string]any{
 		"type": "track",
 		"payload": map[string]any{
@@ -741,6 +757,11 @@ func (c *Client) syncSession(ctx context.Context, sessionClient *http.Client, wa
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 	req.Header.Set("Referer", watchURL)
 	req.Header.Set("Content-Type", "application/json")
+	if clientID != "" {
+		req.Header.Set("openpanel-client-id", clientID)
+		req.Header.Set("openpanel-sdk-name", "nextjs")
+		req.Header.Set("openpanel-sdk-version", "1.5.1")
+	}
 	setBrowserFetchHeaders(req, c.siteBase)
 
 	resp, err := sessionClient.Do(req)
@@ -757,7 +778,7 @@ func (c *Client) syncSession(ctx context.Context, sessionClient *http.Client, wa
 
 // resolveEncryptedSource asks the gateway to encrypt one lane's parameters,
 // then resolves that lane to its master HLS URL. The upstream labels lanes
-// with short source IDs (s2, s25, …); callers try them in order.
+// with short source IDs (s25, s10, s28, s2); callers try them in order.
 func (c *Client) resolveEncryptedSource(
 	ctx context.Context,
 	sessionClient *http.Client,
@@ -835,7 +856,11 @@ func (c *Client) resolveEncryptedSource(
 	if err := json.Unmarshal(streamBody, &sResp); err != nil || sResp.Data.StreamURL == "" {
 		return "", "", fmt.Errorf("mapple stream (%s) status %d missing URL: %s", sourceID, streamResp.StatusCode, snippet(streamBody))
 	}
-	return strings.TrimSpace(sResp.Data.StreamURL), strings.TrimSpace(sResp.Data.Source), nil
+	masterURL = strings.TrimSpace(sResp.Data.StreamURL)
+	if strings.Contains(masterURL, "/playback-unavailable/") {
+		return "", "", nil
+	}
+	return masterURL, strings.TrimSpace(sResp.Data.Source), nil
 }
 
 // snippet trims an upstream response for a redacted error message.

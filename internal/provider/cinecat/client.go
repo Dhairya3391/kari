@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
@@ -38,6 +40,27 @@ type Client struct {
 	subsBase      string
 	siteBase      string
 	sourcesBase   string
+
+	// capGate caches the upstream cap.js block. The ZCDN and sources lanes
+	// answer 401 until a browser solves their challenge; retrying them for
+	// every title only adds latency, so both lanes are skipped for a while
+	// after the first 401. Aphrodite and subtitles remain ungated.
+	capMu         sync.Mutex
+	capBlockedTil time.Time
+}
+
+// capGateOpen reports whether the gated lanes are worth trying.
+func (c *Client) capGateOpen() bool {
+	c.capMu.Lock()
+	defer c.capMu.Unlock()
+	return time.Now().After(c.capBlockedTil)
+}
+
+// markCapRequired records a cap.js 401 so gated lanes are skipped briefly.
+func (c *Client) markCapRequired() {
+	c.capMu.Lock()
+	c.capBlockedTil = time.Now().Add(30 * time.Minute)
+	c.capMu.Unlock()
 }
 
 // NewClient constructs the Cinecat provider using the shared TMDB search base

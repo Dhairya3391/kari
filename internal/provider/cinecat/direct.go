@@ -152,10 +152,16 @@ func (c *Client) fetchSources(
 		subtitles      []provider.SubtitleOption
 	)
 
+	capOpen := c.capGateOpen()
+
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		masterURL, zcdnErr = c.fetchZCDN(ctx, tmdbID, mediaType, season, epNum)
+		if capOpen {
+			masterURL, zcdnErr = c.fetchZCDN(ctx, tmdbID, mediaType, season, epNum)
+		} else {
+			zcdnErr = errCapRequired
+		}
 	}()
 
 	go func() {
@@ -168,7 +174,11 @@ func (c *Client) fetchSources(
 
 	go func() {
 		defer wg.Done()
-		laneCandidates, lanesErr = c.fetchSourceLanes(ctx, tmdbID, mediaType, season, epNum)
+		if capOpen {
+			laneCandidates, lanesErr = c.fetchSourceLanes(ctx, tmdbID, mediaType, season, epNum)
+		} else {
+			lanesErr = errCapRequired
+		}
 		if lanesErr != nil && !errors.Is(lanesErr, provider.ErrNoSources) {
 			logging.Debug("cinecat source lanes failed", "tmdb", tmdbID, "err", lanesErr)
 		}
@@ -397,6 +407,7 @@ func (c *Client) fetchLaneNames(ctx context.Context) ([]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized {
+		c.markCapRequired()
 		return nil, errCapRequired
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -560,6 +571,7 @@ func (c *Client) fetchZCDN(ctx context.Context, tmdbID int, mediaType string, se
 		return "", provider.ErrNoSources
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
+		c.markCapRequired()
 		return "", errCapRequired
 	}
 	if resp.StatusCode != http.StatusOK {

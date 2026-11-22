@@ -106,7 +106,7 @@ func TestMappleSessionRequestHeaders(t *testing.T) {
 	sessionClient := *client.httpClient
 	sessionClient.Jar = jar
 
-	_, _ = client.resolveStreamURL(context.Background(), &sessionClient, srv.URL+"/watch/movie/550", 550, provider.MediaTypeMovie, "")
+	_, _ = client.resolveStreamURL(context.Background(), &sessionClient, srv.URL+"/watch/movie/550", 550, provider.MediaTypeMovie, "", "")
 
 	select {
 	case got := <-seen:

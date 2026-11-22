@@ -348,10 +348,15 @@ func (c *Client) fetchEmbed(ctx context.Context, route string) (embedPage, error
 	}
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 	req.Header.Set("Referer", config.VidRiftSiteBase+"/")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-	// The embed origin rejects the bare three-header request with 403; the
-	// browser's language hint is enough for its Cloudflare rule to pass.
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	// The embed origin's Cloudflare rule rejects partial browser headers.
+	// All of these together were verified to pass consistently; dropping any
+	// one of them makes the same URL answer 403.
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
