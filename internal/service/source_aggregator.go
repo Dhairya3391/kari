@@ -152,7 +152,7 @@ func hasSubtitleOption(options []provider.SubtitleOption, candidate provider.Sub
 
 // shouldPreferSource reports whether candidate should replace existing as the
 // canonical row for duplicate streams. Lower provider priority index takes
-// precedence, ensuring primary/faster native providers (like anicine) win over fallbacks.
+// precedence, ensuring primary/faster native providers win over fallbacks.
 func (a *sourceAggregator) shouldPreferSource(existing, candidate provider.MediaSource) bool {
 	pCand, hasCand := a.priority[candidate.Resolver]
 	pExist, hasExist := a.priority[existing.Resolver]

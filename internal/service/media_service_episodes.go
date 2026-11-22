@@ -95,6 +95,7 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 		return s.applyEpisodeTitleLookup(series, episodes, titleLookup)
 	}
 
+	var availabilityErr error
 	requestedAudio := audioMode
 	availabilitySources := s.episodeAvailabilitySources(mode, series)
 	audioSelection := s.registry.Features(mode).AudioSelection || len(availabilitySources) > 0
@@ -116,16 +117,34 @@ func (s *MediaService) fetchEpisodesUncached(ctx context.Context, mode provider.
 		}
 		eps, ok, lastErr := s.firstAvailableEpisodes(ctx, probeList, series)
 		if ok {
-			eps = applyTitles(eps)
-			return filterAvailableEpisodesByAudio(eps, requestedAudio), nil
-		} else if requestedAudio == provider.AudioDub {
-			if lastErr != nil {
-				return nil, fmt.Errorf("dub availability: %w", lastErr)
-			}
-			return nil, provider.ErrNoEpisodes
+			// An availability roster is authoritative. An empty dub slice
+			// means the title genuinely has no dub; falling through to an
+			// ordinary roster would resurrect unverified dub rows that some
+			// providers synthesize from the episode count alone.
+			return applyTitles(filterAvailableEpisodesByAudio(eps, requestedAudio)), nil
+		}
+		availabilityErr = lastErr
+		if availabilityErr != nil {
+			mediaLog.Debug("dub availability probe failed; racing ordinary rosters", "err", availabilityErr)
 		}
 	}
-	if requestedAudio == provider.AudioDub && mode == provider.ModeAnime && len(availabilitySources) == 0 {
+
+	// Dub is the only mode where a provider that cannot declare availability
+	// would otherwise be reported as having no dub at all. Race the ordinary
+	// anime rosters — they emit one row per audio track — and take the first
+	// one that actually contains dub episodes.
+	if requestedAudio == provider.AudioDub && mode == provider.ModeAnime {
+		if eps := s.firstDubEpisodes(ctx, mode, series, episodeSource); len(eps) > 0 {
+			return applyTitles(eps), nil
+		}
+		// A timeout is not a definitive "no dub" answer, and a real probe
+		// failure is more actionable than the generic sentinel.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if availabilityErr != nil {
+			return nil, fmt.Errorf("dub availability: %w", availabilityErr)
+		}
 		return nil, provider.ErrNoEpisodes
 	}
 
@@ -385,6 +404,76 @@ func filterAvailableEpisodesByAudio(episodes []provider.Episode, audioMode strin
 	results := make([]provider.Episode, 0, len(episodes))
 	for _, episode := range episodes {
 		if strings.TrimSpace(episode.Audio) != "" && matchesAudioMode(episode.Audio, audioMode) {
+			results = append(results, episode)
+		}
+	}
+	return results
+}
+
+// firstDubEpisodes tries the origin's ordinary roster first so its handles
+// stay authoritative, then races the remaining anime rosters and returns the
+// first one that actually carries dub rows.
+func (s *MediaService) firstDubEpisodes(
+	ctx context.Context,
+	mode provider.ContentType,
+	series provider.SearchResult,
+	origin provider.EpisodeSource,
+) []provider.Episode {
+	// A fan-out would let a faster sibling win and silently replace the
+	// origin's episode numbering, so the origin is always given the first say.
+	if episodes, err := origin.FetchEpisodes(ctx, series); err == nil {
+		if dub := filterDubEpisodes(episodes); len(dub) > 0 {
+			return dub
+		}
+	}
+
+	var sources []provider.EpisodeSource
+	seen := map[string]struct{}{origin.Name(): {}}
+	for _, route := range s.registry.ProvidersForMode(mode) {
+		source, ok := route.(provider.EpisodeSource)
+		if !ok || s.IsProviderDisabled(mode, route.Name()) {
+			continue
+		}
+		if _, dup := seen[route.Name()]; dup {
+			continue
+		}
+		seen[route.Name()] = struct{}{}
+		sources = append(sources, source)
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+
+	type dubResult struct{ episodes []provider.Episode }
+	results := make(chan dubResult, len(sources))
+	for _, source := range sources {
+		go func(source provider.EpisodeSource) {
+			episodes, err := source.FetchEpisodes(ctx, series)
+			if err != nil {
+				results <- dubResult{}
+				return
+			}
+			results <- dubResult{episodes: filterDubEpisodes(episodes)}
+		}(source)
+	}
+	for range sources {
+		select {
+		case <-ctx.Done():
+			return nil
+		case result := <-results:
+			if len(result.episodes) > 0 {
+				return result.episodes
+			}
+		}
+	}
+	return nil
+}
+
+// filterDubEpisodes is deliberately strict: an untagged episode is not dub.
+func filterDubEpisodes(episodes []provider.Episode) []provider.Episode {
+	results := make([]provider.Episode, 0, len(episodes))
+	for _, episode := range episodes {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(episode.Audio)), provider.AudioDub) {
 			results = append(results, episode)
 		}
 	}

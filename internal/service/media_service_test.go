@@ -702,6 +702,61 @@ func TestFetchEpisodesFallsBackWhenAvailabilityFails(t *testing.T) {
 	}
 }
 
+// slowFetchDubStub delays the ordinary roster so a racing sibling would win
+// unless the origin is given the first say.
+type slowFetchDubStub struct {
+	availStub
+	delay time.Duration
+}
+
+func (s *slowFetchDubStub) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
+	select {
+	case <-time.After(s.delay):
+		return s.fetch, s.fetchErr
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// The origin's handles are authoritative even when a sibling would answer
+// faster in a fan-out.
+func TestFetchEpisodesDubPrefersOriginHandles(t *testing.T) {
+	origin := &slowFetchDubStub{
+		availStub: availStub{name: "origin", fetch: []provider.Episode{
+			{Episode: 1, Audio: provider.AudioDub, ID: "origin-dub"},
+		}},
+		delay: 15 * time.Millisecond,
+	}
+	fast := &availStub{name: "fast", fetch: []provider.Episode{
+		{Episode: 1, Audio: provider.AudioDub, ID: "fast-dub"},
+	}}
+
+	svc := NewMediaService(newTestRegistry(origin, fast))
+	eps, err := svc.FetchEpisodes(context.Background(), provider.ModeAnime,
+		provider.SearchResult{Title: "T", ID: "21", Provider: "origin", Type: provider.ModeAnime},
+		provider.AudioDub)
+	if err != nil {
+		t.Fatalf("FetchEpisodes: %v", err)
+	}
+	if len(eps) != 1 || eps[0].ID != "origin-dub" {
+		t.Fatalf("episodes = %+v, want the origin's dub handle", eps)
+	}
+}
+
+// A real availability failure must survive as the cause of a dub miss.
+func TestFetchEpisodesDubWrapsAvailabilityError(t *testing.T) {
+	boom := errors.New("upstream down")
+	origin := &availStub{name: "origin", err: boom}
+	svc := NewMediaService(newTestRegistry(origin))
+
+	_, err := svc.FetchEpisodes(context.Background(), provider.ModeAnime,
+		provider.SearchResult{Title: "T", ID: "21", Provider: "origin", Type: provider.ModeAnime},
+		provider.AudioDub)
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want it to wrap the availability failure", err)
+	}
+}
+
 // Route timeouts: default when unset, explicit when set, never beyond
 // the overall budget.
 func TestProviderSourceTimeout(t *testing.T) {

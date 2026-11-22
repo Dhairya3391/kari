@@ -179,7 +179,7 @@ func (s *MediaService) SetDisabledProviders(names []string) {
 }
 
 // IsProviderDisabled reports whether the named provider is disabled for the given mode.
-// It checks both the mode-scoped key (e.g. "anime:anikoto") and the global key ("anikoto").
+// It checks both the mode-scoped key (e.g. "anime:miruro") and the global key ("miruro").
 func (s *MediaService) IsProviderDisabled(mode provider.ContentType, name string) bool {
 	s.disabledMu.RLock()
 	defer s.disabledMu.RUnlock()
