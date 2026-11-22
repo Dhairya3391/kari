@@ -19,6 +19,7 @@ import (
 	"kari/internal/provider"
 	"kari/internal/provider/anilist"
 	"kari/internal/provider/kit"
+	"kari/internal/timeouts"
 )
 
 // get fetches url with the request context, returning the capped body.
@@ -196,6 +197,11 @@ func (c *Client) searchShowByTitles(ctx context.Context, anilistID string, title
 		}
 		for _, it := range items {
 			if firstExternalID(it.externalIDs, "anilist") == anilistID {
+				c.mu.Lock()
+				if it.episodeCounts.raw > 0 {
+					c.counts[anilistID] = it.episodeCounts
+				}
+				c.mu.Unlock()
 				return it.showID, nil
 			}
 		}
@@ -233,9 +239,33 @@ func (c *Client) anilistTitles(ctx context.Context, anilistID string) ([]string,
 	return titles, nil
 }
 
-// watchSlug returns the canonical watch slug for showID, following the
-// server's redirect from a placeholder slug.
+// watchSlug returns the canonical watch slug for showID. The site redirects
+// /watch/{id}/x to the canonical slug with an HTTP 301, so a HEAD request is
+// enough to learn it — the same trick ani-cli uses. This avoids downloading
+// the first SvelteKit document just to read its redirect chunk.
 func (c *Client) watchSlug(ctx context.Context, showID string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead,
+		fmt.Sprintf("%s/watch/%s/%s?ep=1", c.base, showID, placeholderSlug), nil)
+	if err != nil {
+		return "", fmt.Errorf("miruro resolve: slug probe: %w", err)
+	}
+	resp, err := c.probeHTTP.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("miruro resolve: slug probe: %w", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
+		if location := resp.Header.Get("Location"); location != "" {
+			if parsed, err := url.Parse(location); err == nil {
+				parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+				if len(parts) >= 3 && parts[0] == "watch" && parts[2] != "" && parts[2] != placeholderSlug {
+					return parts[2], nil
+				}
+			}
+		}
+	}
+	// Fall back to the SvelteKit redirect chunk for deployments that do not
+	// issue an HTTP redirect on the plain watch page.
 	body, err := c.getChunk(ctx, c.watchURL(showID, placeholderSlug, 1), "")
 	if err != nil {
 		return "", fmt.Errorf("miruro resolve: slug probe: %w", err)
@@ -289,6 +319,32 @@ func (c *Client) watchEpisodes(ctx context.Context, ref showRef, episode int) ([
 		return nil, fmt.Errorf("miruro episodes: %w", err)
 	}
 	return eps, nil
+}
+
+// loadEpisodes resolves the show and reads its roster once per title. The
+// episode list and canonical-title lookups run concurrently during a cold
+// load; without this guard both would download the same watch payload.
+func (c *Client) loadEpisodes(ctx context.Context, anilistID, titleHint string) (episodeBundle, error) {
+	// The title and availability lookups share this key but carry different
+	// deadlines. Detach from either caller so the first one to cancel cannot
+	// fail the other's joined request; an independent ceiling still bounds it.
+	sharedCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeouts.EpisodesOverall)
+	defer cancel()
+	value, err, _ := c.episodeSF.Do(anilistID, func() (any, error) {
+		ref, err := c.resolveShow(sharedCtx, anilistID, titleHint, "")
+		if err != nil {
+			return nil, err
+		}
+		eps, err := c.cachedEpisodes(sharedCtx, ref)
+		if err != nil {
+			return nil, err
+		}
+		return episodeBundle{ref: ref, eps: eps}, nil
+	})
+	if err != nil {
+		return episodeBundle{}, err
+	}
+	return value.(episodeBundle), nil
 }
 
 // cachedEpisodes returns the show's roster, reusing the watch payload fetched

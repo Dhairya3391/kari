@@ -36,6 +36,12 @@ func newFixture(t *testing.T) *Client {
 	})
 	mux.HandleFunc("/watch/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/x") {
+			// The plain watch page redirects the placeholder slug over HTTP.
+			w.Header().Set("Location", "/watch/SHOWID/naruto?ep=1")
+			w.WriteHeader(http.StatusMovedPermanently)
+			return
+		}
 		if strings.Contains(r.URL.Path, "/x/") {
 			fmt.Fprint(w, `{"type":"redirect","location":"/watch/SHOWID/naruto?ep=1"}`)
 			return
@@ -67,6 +73,12 @@ func TestMiruroReusesFetchedRoster(t *testing.T) {
 	})
 	mux.HandleFunc("/watch/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/x") {
+			// The slug probe carries no payload; a 301 names the canonical slug.
+			w.Header().Set("Location", "/watch/SHOWID/naruto?ep=1")
+			w.WriteHeader(http.StatusMovedPermanently)
+			return
+		}
 		if strings.Contains(r.URL.Path, "/x/") {
 			fmt.Fprint(w, `{"type":"redirect","location":"/watch/SHOWID/naruto?ep=1"}`)
 			return
@@ -182,6 +194,53 @@ func TestMiruroFetchEpisodes(t *testing.T) {
 	}
 	if eps[0].Title != "Enter" {
 		t.Errorf("title = %q, want Enter", eps[0].Title)
+	}
+}
+
+// A catalog that reports only the raw count must still emit both tracks
+// instead of an empty roster.
+func TestMiruroPartialEpisodeCounts(t *testing.T) {
+	search := strings.Replace(searchFixture, `"cover_url":12}`, `"cover_url":12,"episode_counts":19}`, 1)
+	search = strings.Replace(search, `"https://cover.example.com/nogame.jpg"]`, `"https://cover.example.com/nogame.jpg",{"raw":1}]`, 1)
+	if !strings.Contains(search, `"episode_counts":19`) || !strings.Contains(search, `{"raw":1}`) {
+		t.Fatal("fixture rewrite failed")
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/search/__data.json", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, search)
+	})
+	mux.HandleFunc("/watch/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/x") {
+			w.Header().Set("Location", "/watch/SHOWID/naruto?ep=1")
+			w.WriteHeader(http.StatusMovedPermanently)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/x/") {
+			fmt.Fprint(w, `{"type":"redirect","location":"/watch/SHOWID/naruto?ep=1"}`)
+			return
+		}
+		fmt.Fprint(w, `{"type":"data","nodes":[{"type":"data","data":[0]}]}`+"\n"+episodesChunk+"\n"+tracksChunk+"\n")
+	})
+	mux.HandleFunc("/graphql", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":{"Media":{"id":20,"title":{"romaji":"NARUTO","english":"Naruto","userPreferred":"Naruto","native":"NARUTO"},"synonyms":[],"seasonYear":2002,"format":"TV"}}}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c, err := NewClientWithBases(srv.URL, srv.URL+"/graphql")
+	if err != nil {
+		t.Fatalf("NewClientWithBases: %v", err)
+	}
+
+	eps, err := c.FetchEpisodes(context.Background(), provider.SearchResult{ID: "20", Title: "Naruto"})
+	if err != nil {
+		t.Fatalf("FetchEpisodes: %v", err)
+	}
+	if len(eps) != 2 || eps[0].Audio != provider.AudioSub || eps[1].Audio != provider.AudioDub {
+		t.Fatalf("episodes = %+v, want the sub+dub fallback pair", eps)
 	}
 }
 

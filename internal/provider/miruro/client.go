@@ -30,6 +30,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/logging"
@@ -51,9 +53,12 @@ const (
 
 // Client implements provider.Provider for Miruro anime.
 type Client struct {
-	http    *http.Client
-	base    string
-	gqlBase string
+	http *http.Client
+	// probeHTTP leaves redirect responses intact so the slug probe can read
+	// the canonical slug from Location instead of a SvelteKit chunk.
+	probeHTTP *http.Client
+	base      string
+	gqlBase   string
 
 	mu sync.Mutex
 	// byAniList maps AniList ID to its Miruro show coordinates. The canonical
@@ -62,6 +67,18 @@ type Client struct {
 	byAniList map[string]showRef
 	// rosters caches the watch payload's episode list by Miruro show ID.
 	rosters map[string]cachedRoster
+	// counts caches the catalog's sub/dub episode counts by AniList ID so
+	// episode lists can emit only tracks that actually exist.
+	counts map[string]episodeCounts
+	// episodeSF keeps concurrent roster/title lookups for the same title from
+	// re-fetching the same large watch payload.
+	episodeSF singleflight.Group
+}
+
+// episodeBundle is the shared result of resolving a show and reading its roster.
+type episodeBundle struct {
+	ref showRef
+	eps []episodeEntry
 }
 
 // cachedRoster is one show's episode list and when it was fetched.
@@ -132,10 +149,12 @@ func NewClientWithBases(siteBase, gqlBase string) (*Client, error) {
 	}
 	return &Client{
 		http:      httpclient.New(),
+		probeHTTP: httpclient.NewNoRedirect(),
 		base:      siteBase,
 		gqlBase:   strings.TrimRight(strings.TrimSpace(gqlBase), "/"),
 		byAniList: make(map[string]showRef),
 		rosters:   make(map[string]cachedRoster),
+		counts:    make(map[string]episodeCounts),
 	}, nil
 }
 
@@ -165,6 +184,9 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 			c.mu.Lock()
 			if c.byAniList[anilistID].showID == "" {
 				c.byAniList[anilistID] = showRef{showID: it.showID, slug: c.slugFor(it.showID)}
+			}
+			if it.episodeCounts.raw > 0 {
+				c.counts[anilistID] = it.episodeCounts
 			}
 			c.mu.Unlock()
 		}
@@ -198,57 +220,84 @@ func (c *Client) Search(ctx context.Context, query string, mode provider.Content
 }
 
 // FetchEpisodes implements provider.Provider by listing the full episode
-// roster from the watch payload, emitting sub and dub entries per
-// episode. Dub availability is verified per episode at resolve time.
+// roster from the watch payload, emitting a dub entry per episode only when
+// the show actually advertises a dub track.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	anilistID := strings.TrimSpace(series.ID)
 	logging.Debug("fetch episodes", "provider", c.Name(), "mediaID", anilistID)
 	if anilistID == "" {
 		return nil, provider.ErrNoEpisodes
 	}
-	ref, err := c.resolveShow(ctx, anilistID, series.Title, "")
+	bundle, err := c.loadEpisodes(ctx, anilistID, series.Title)
 	if err != nil {
 		return nil, err
 	}
-	eps, err := c.cachedEpisodes(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
+	ref, eps := bundle.ref, bundle.eps
 	seasonNum := kit.ParseSeason(series.Title)
 	if seasonNum <= 0 {
 		seasonNum = 1
 	}
+	c.mu.Lock()
+	counts := c.counts[anilistID]
+	c.mu.Unlock()
+	// counts.raw == 0 means the catalog never supplied counts; only then
+	// assume the whole roster has both tracks. Partial counts (raw present
+	// but both track counts missing) get the same full-roster fallback rather
+	// than an empty list. A single cached zero is a real value (e.g. a
+	// dub-only release) and must stay zero.
+	subCount, dubCount := counts.sub, counts.dub
+	if counts.raw > 0 && (counts.sub > 0 || counts.dub > 0) {
+		// Tracks are the leading slice of the roster.
+		if subCount > len(eps) {
+			subCount = len(eps)
+		}
+		if dubCount > len(eps) {
+			dubCount = len(eps)
+		}
+	} else {
+		subCount, dubCount = len(eps), len(eps)
+	}
+
 	out := make([]provider.Episode, 0, len(eps)*2)
-	for _, ep := range eps {
+	for i, ep := range eps {
 		title := strings.TrimSpace(ep.title)
 		if title == "" {
 			title = fmt.Sprintf("Episode %d", ep.number)
 		}
 		showID := ref.showID
-		out = append(out,
-			provider.Episode{
+		if i < subCount {
+			out = append(out, provider.Episode{
 				Title:   title,
 				ID:      fmt.Sprintf("watch/%s/%s/%s/%d", providerID, showID, provider.AudioSub, ep.number),
 				Episode: ep.number,
 				Season:  seasonNum,
 				Audio:   provider.AudioSub,
 				Filler:  ep.filler,
-			},
-			provider.Episode{
+			})
+		}
+		if i < dubCount {
+			out = append(out, provider.Episode{
 				Title:   title,
 				ID:      fmt.Sprintf("watch/%s/%s/%s/%d", providerID, showID, provider.AudioDub, ep.number),
 				Episode: ep.number,
 				Season:  seasonNum,
 				Audio:   provider.AudioDub,
 				Filler:  ep.filler,
-			},
-		)
+			})
+		}
 	}
 	if len(out) == 0 {
 		return nil, provider.ErrNoEpisodes
 	}
-	logging.Debug("fetch episodes done", "provider", c.Name(), "count", len(out))
+	logging.Debug("fetch episodes done", "provider", c.Name(), "count", len(out), "sub", subCount, "dub", dubCount)
 	return out, nil
+}
+
+// FetchAvailableEpisodes implements provider.EpisodeAvailabilitySource.
+// The roster above is already keyed to the catalog's sub/dub episode counts,
+// so it is the availability listing — no second upstream lookup.
+func (c *Client) FetchAvailableEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
+	return c.FetchEpisodes(ctx, series)
 }
 
 // FetchEpisodeTitles implements provider.EpisodeTitlesSource by reading the
@@ -261,14 +310,11 @@ func (c *Client) FetchEpisodeTitles(ctx context.Context, series provider.SearchR
 	if anilistID == "" {
 		return nil, provider.ErrNoEpisodes
 	}
-	ref, err := c.resolveShow(ctx, anilistID, series.Title, "")
+	bundle, err := c.loadEpisodes(ctx, anilistID, series.Title)
 	if err != nil {
 		return nil, err
 	}
-	eps, err := c.cachedEpisodes(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
+	eps := bundle.eps
 	titles := make(map[int]string, len(eps))
 	for _, ep := range eps {
 		if title := strings.TrimSpace(ep.title); title != "" {
@@ -325,9 +371,10 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 }
 
 var (
-	_ provider.Provider            = (*Client)(nil)
-	_ provider.Presenter           = (*Client)(nil)
-	_ provider.FeatureSource       = (*Client)(nil)
-	_ provider.MovieEpisodeFlow    = (*Client)(nil)
-	_ provider.EpisodeTitlesSource = (*Client)(nil)
+	_ provider.Provider                  = (*Client)(nil)
+	_ provider.Presenter                 = (*Client)(nil)
+	_ provider.FeatureSource             = (*Client)(nil)
+	_ provider.MovieEpisodeFlow          = (*Client)(nil)
+	_ provider.EpisodeTitlesSource       = (*Client)(nil)
+	_ provider.EpisodeAvailabilitySource = (*Client)(nil)
 )

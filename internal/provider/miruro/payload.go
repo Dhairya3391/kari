@@ -9,16 +9,37 @@ import (
 	"kari/internal/provider"
 )
 
+// episodeCounts is the catalog's per-title count of raw, subbed and dubbed
+// episodes. The dub count is the number of leading episodes with a dub track.
+type episodeCounts struct {
+	raw int
+	sub int
+	dub int
+}
+
 // searchItem is one catalog entry from the search payload.
 type searchItem struct {
-	showID      string
-	externalIDs map[string][]string
-	titleRomaji string
-	titleEng    string
-	titleNative string
-	format      string
-	seasonYear  int
-	coverURL    string
+	showID        string
+	externalIDs   map[string][]string
+	titleRomaji   string
+	titleEng      string
+	titleNative   string
+	format        string
+	seasonYear    int
+	coverURL      string
+	episodeCounts episodeCounts
+}
+
+func decodeEpisodeCounts(m map[string]any) episodeCounts {
+	var counts episodeCounts
+	nested, ok := asMap(m["episode_counts"])
+	if !ok {
+		return counts
+	}
+	counts.raw, _ = toInt(nested["raw"])
+	counts.sub, _ = toInt(nested["sub"])
+	counts.dub, _ = toInt(nested["dub"])
+	return counts
 }
 
 // searchItems extracts catalog entries from a search __data.json body. It
@@ -91,6 +112,7 @@ func decodeSearchItem(m map[string]any) searchItem {
 		it.seasonYear = n
 	}
 	it.coverURL, _ = asString(m["cover_url"])
+	it.episodeCounts = decodeEpisodeCounts(m)
 	return it
 }
 

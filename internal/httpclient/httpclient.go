@@ -99,6 +99,30 @@ func NewWithUserAgentAndTimeout(userAgent string, timeout time.Duration) *http.C
 	return client
 }
 
+// NewNoRedirect returns a shared client that leaves 3xx responses for the
+// caller to inspect. The default client follows redirects inside
+// retryablehttp's transport, so a standard client's CheckRedirect hook never
+// sees them; this variant omits that layer and handles the response itself.
+func NewNoRedirect() *http.Client {
+	return &http.Client{
+		Transport: sharedRoundTripper(config.DesktopUserAgent),
+		Timeout:   defaultTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+// sharedRoundTripper builds the shared, wrapped transport used by every
+// client: per-host semaphore, app header, then User-Agent injection.
+func sharedRoundTripper(userAgent string) http.RoundTripper {
+	_, semaphore := sharedBase()
+	var rt http.RoundTripper = semaphore
+	rt = &kariClientRoundTripper{next: rt}
+	rt = &uaRoundTripper{next: rt, ua: userAgent}
+	return rt
+}
+
 func newClient(timeout time.Duration) *http.Client {
 	retryClient := retryablehttp.NewClient()
 	retryClient.RetryMax = defaultRetries
@@ -129,11 +153,7 @@ func newClient(timeout time.Duration) *http.Client {
 	}
 	retryClient.HTTPClient.Timeout = timeout
 
-	_, semaphore := sharedBase()
-	var rt http.RoundTripper = semaphore
-	rt = &kariClientRoundTripper{next: rt}
-	rt = &uaRoundTripper{next: rt, ua: config.DesktopUserAgent}
-	retryClient.HTTPClient.Transport = rt
+	retryClient.HTTPClient.Transport = sharedRoundTripper(config.DesktopUserAgent)
 	retryClient.Logger = &leveledLogger{}
 	return retryClient.StandardClient()
 }
