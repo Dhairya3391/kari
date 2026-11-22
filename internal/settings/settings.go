@@ -15,14 +15,14 @@ import (
 
 // DefaultModes is the canonical default order of content modes.
 var DefaultModes = []string{
-	"anime",
-	"cartoon",
-	"stremio",
-	"live",
-	"manga",
-	"movies",
-	"tv",
-	"jellyfin",
+	string(provider.ModeAnime),
+	string(provider.ModeCartoon),
+	string(provider.ModeStremio),
+	string(provider.ModeLive),
+	string(provider.ModeManga),
+	string(provider.ModeMovies),
+	string(provider.ModeTV),
+	string(provider.ModeJellyfin),
 }
 
 // settingsLog scopes settings persistence logs.
@@ -292,13 +292,13 @@ func Load() *Data {
 	data, err := os.ReadFile(path())
 	if err != nil {
 		if !os.IsNotExist(err) {
-			logging.Warn("settings read failed", "path", path(), "err", err)
+			settingsLog.Warn("settings read failed", "path", path(), "err", err)
 		}
 		return nil
 	}
 	var s Data
 	if err := json.Unmarshal(data, &s); err != nil {
-		logging.Warn("settings parse failed", "path", path(), "err", err)
+		settingsLog.Warn("settings parse failed", "path", path(), "err", err)
 		return nil
 	}
 	s.migrateLegacyProviderIDs(defaults.ProviderIDRenames())
@@ -310,15 +310,15 @@ func Load() *Data {
 func Save(s *Data) {
 	dir := filepath.Dir(path())
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		logging.Warn("settings dir create failed", "dir", dir, "err", err)
+		settingsLog.Warn("settings dir create failed", "dir", dir, "err", err)
 		return
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
-		logging.Warn("settings marshal failed", "err", err)
+		settingsLog.Warn("settings marshal failed", "err", err)
 		return
 	}
 	if err := util.AtomicWriteFile(path(), data, 0600); err != nil {
-		logging.Warn("settings write failed", "path", path(), "err", err)
+		settingsLog.Warn("settings write failed", "path", path(), "err", err)
 	}
 }

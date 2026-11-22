@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/timeouts"
 )
@@ -52,7 +53,7 @@ func verifyLiveSources(ctx context.Context, mode provider.ContentType, verifier 
 				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 					inconclusive.Store(true)
 				}
-				mediaLog.Debug("live source failed verification", "url", sources[i].URL, "err", err)
+				mediaLog.Debug("live source failed verification", "url", logging.Redact(sources[i].URL), "err", err)
 				return
 			}
 			reachable[i] = true

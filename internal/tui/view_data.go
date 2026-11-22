@@ -647,7 +647,7 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		avail := m.isModeAvailable(modeKey)
 		var unavailNote string
 		if !avail {
-			if modeKey == "jellyfin" {
+			if modeKey == string(provider.ModeJellyfin) {
 				unavailNote = "set JELLYFIN_URL"
 			} else {
 				unavailNote = "no provider"

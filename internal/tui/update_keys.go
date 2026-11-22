@@ -89,6 +89,7 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		case "pgdown":
 			m.helpScroll += max(1, m.height-8)
 		}
+		m.clampHelpScroll()
 		return nil, true
 	}
 	if m.resultsFiltering || m.episodeFiltering || m.historyFiltering || m.calendarFiltering {
@@ -313,7 +314,7 @@ func (m *modelImpl) triggerAnimeStatusModal() (tea.Cmd, bool) {
 				break
 			}
 		}
-		if grp == nil || (grp.Mode != "anime" && grp.Mode != string(provider.ModeAnime)) {
+		if grp == nil || grp.Mode != string(provider.ModeAnime) {
 			return nil, false
 		}
 		title = grp.Title
@@ -353,7 +354,7 @@ func (m *modelImpl) findHistoryGroupKeyForAnime(title string) history.GroupKey {
 			}
 		}
 	}
-	return history.GroupKey{Title: title, Mode: "anime", MediaType: "tv"}
+	return history.GroupKey{Title: title, Mode: string(provider.ModeAnime), MediaType: provider.MediaTypeTV}
 }
 
 func (m *modelImpl) executeAnimeStatusAction(index int) (tea.Cmd, bool) {
@@ -458,7 +459,7 @@ func (m *modelImpl) fetchAnimeStatusCmd(opID int, anilistID int, title string) t
 		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
 			return animeStatusLoadedMsg{opID: opID}
 		}
-		ctx, cancel := context.WithTimeout(m.appCtx, 10*time.Second)
+		ctx, cancel := context.WithTimeout(m.appCtx, keyActionTimeout)
 		defer cancel()
 		entry, total, err := m.anilistClient.GetMediaListEntry(ctx, anilistID, title)
 		return animeStatusLoadedMsg{
@@ -477,7 +478,7 @@ func (m *modelImpl) updateAnimeStatusCmd(status scrobble.MediaListStatus, progre
 		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
 			return animeStatusUpdatedMsg{err: fmt.Errorf("anilist not authenticated")}
 		}
-		ctx, cancel := context.WithTimeout(m.appCtx, 10*time.Second)
+		ctx, cancel := context.WithTimeout(m.appCtx, keyActionTimeout)
 		defer cancel()
 		err := m.anilistClient.UpdateMediaListStatus(ctx, mediaID, title, status, progress, repeat)
 		if err != nil {
@@ -492,7 +493,7 @@ func (m *modelImpl) deleteAnimeStatusCmd(entryID int) tea.Cmd {
 		if m.anilistClient == nil || !m.anilistClient.IsAuthenticated() {
 			return animeStatusUpdatedMsg{err: fmt.Errorf("anilist not authenticated")}
 		}
-		ctx, cancel := context.WithTimeout(m.appCtx, 10*time.Second)
+		ctx, cancel := context.WithTimeout(m.appCtx, keyActionTimeout)
 		defer cancel()
 		err := m.anilistClient.DeleteMediaListEntry(ctx, entryID)
 		if err != nil {

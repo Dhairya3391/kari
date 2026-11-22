@@ -148,7 +148,7 @@ func (d *Aria2Downloader) Download(
 		return fmt.Errorf("aria2: addUri: %w", err)
 	}
 
-	ariaLog.Debug("download queued", "gid", gid, "url", source.URL)
+	ariaLog.Debug("download queued", "gid", gid, "url", logging.Redact(source.URL))
 
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()

@@ -65,8 +65,10 @@ func init() {
 }
 
 // Init opens the rotating log file and installs it as the global sink.
-// Safe to call once per process; later calls are no-ops.
-func Init(debug bool) error {
+// Debug logging is controlled solely by KARI_LOG_DEBUG, never forced on by the
+// caller: debug records carry signed stream URLs that must not reach disk by
+// default. Safe to call once per process; later calls are no-ops.
+func Init() error {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -74,7 +76,7 @@ func Init(debug bool) error {
 		return nil
 	}
 
-	isDebug = debug
+	isDebug = envBool("KARI_LOG_DEBUG")
 
 	path, err := resolveLogPath()
 	if err != nil {
@@ -93,7 +95,7 @@ func Init(debug bool) error {
 	}
 
 	level := slog.LevelInfo
-	if debug || envBool("KARI_LOG_DEBUG") {
+	if isDebug {
 		level = slog.LevelDebug
 	}
 

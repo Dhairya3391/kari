@@ -208,8 +208,8 @@ query ($airingAt_greater: Int, $airingAt_lesser: Int, $page: Int, $perPage: Int)
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Origin", "https://anilist.co")
-		req.Header.Set("Referer", "https://anilist.co/")
+		req.Header.Set("Origin", config.AniListAuthBase)
+		req.Header.Set("Referer", config.AniListReferer)
 		req.Header.Set("User-Agent", config.DesktopUserAgent)
 
 		resp, err := c.http.Do(req)

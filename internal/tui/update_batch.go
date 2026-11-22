@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"kari/internal/downloader"
+	"kari/internal/filter"
 	"kari/internal/provider"
-	"kari/internal/provider/kit"
 	"kari/internal/service"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -103,10 +103,10 @@ func downloadSourceQualityLabel(quality string) string {
 	if quality == "" {
 		return ""
 	}
-	if kit.IsAdaptiveQuality(quality) {
+	if filter.IsAdaptiveQuality(quality) {
 		return "Auto"
 	}
-	switch res := kit.QualityHeight(quality); {
+	switch res := filter.QualityHeight(quality); {
 	case res >= 2160:
 		return "4K"
 	case res >= 1080:

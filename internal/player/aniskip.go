@@ -461,9 +461,9 @@ func resolveIMDbID(ctx context.Context, media model.ResolvedMedia, keyPool *tmdb
 	if apiKey == "" {
 		return "", nil
 	}
-	mediaType := "tv"
-	if media.MediaType == "movie" || (media.MediaType != "tv" && media.MediaType != "anime" && media.MediaType != "cartoon" && media.SeasonNumber == 0 && media.EpisodeNumber <= 1) {
-		mediaType = "movie"
+	mediaType := provider.MediaTypeTV
+	if media.MediaType == provider.MediaTypeMovie || (media.MediaType != provider.MediaTypeTV && media.MediaType != provider.MediaTypeAnime && media.MediaType != provider.MediaTypeCartoon && media.SeasonNumber == 0 && media.EpisodeNumber <= 1) {
+		mediaType = provider.MediaTypeMovie
 	}
 	endpoint := fmt.Sprintf("%s/%s/%d/external_ids?api_key=%s",
 		config.TMDBAPIBase, mediaType, media.TMDBID, url.QueryEscape(apiKey))
@@ -648,16 +648,19 @@ func lookupSkipTimes(
 	providerMode, cacheKey string,
 	cache *util.BoundedCache[combinedSkipTimes],
 ) combinedSkipTimes {
-	// 1. Resolve AniList ID from media metadata if available
-	var anilistID int
-	if trimmed := strings.Trim(strings.TrimSpace(media.SeriesURL), "/"); trimmed != "" {
-		if id, err := strconv.Atoi(trimmed); err == nil && id > 0 {
-			anilistID = id
+	// 1. Resolve AniList ID from the typed catalog field; older providers
+	// still stamp a numeric handle in SeriesURL, so keep that as a fallback.
+	anilistID := media.AniListID
+	if anilistID == 0 {
+		if trimmed := strings.Trim(strings.TrimSpace(media.SeriesURL), "/"); trimmed != "" {
+			if id, err := strconv.Atoi(trimmed); err == nil && id > 0 {
+				anilistID = id
+			}
 		}
 	}
 
-	isMovie := media.MediaType == "movie" || (media.SeasonNumber == 0 && media.EpisodeNumber == 0 && media.MediaType != "tv" && media.MediaType != "anime")
-	isAnime := media.MediaType == "anime" || anilistID > 0
+	isMovie := media.MediaType == provider.MediaTypeMovie || (media.SeasonNumber == 0 && media.EpisodeNumber == 0 && media.MediaType != provider.MediaTypeTV && media.MediaType != provider.MediaTypeAnime)
+	isAnime := media.MediaType == provider.MediaTypeAnime || anilistID > 0
 	times := combinedSkipTimes{
 		OpStart: -1, OpEnd: -1,
 		EdStart: -1, EdEnd: -1,

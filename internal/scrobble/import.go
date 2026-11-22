@@ -363,7 +363,9 @@ func (c *TraktClient) fetchHistoryPage(ctx context.Context, page, limit int) (ra
 		return nil, 0, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
+	if auth := c.authorization(); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
 	req.Header.Set("trakt-api-version", "2")
 	req.Header.Set("trakt-api-key", c.clientID)
 

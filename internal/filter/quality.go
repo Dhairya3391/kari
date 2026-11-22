@@ -8,6 +8,13 @@ import (
 	"kari/internal/provider/kit"
 )
 
+// QualityHeight returns the canonical resolution parsed from a source label.
+func QualityHeight(raw string) int { return kit.QualityHeight(raw) }
+
+// IsAdaptiveQuality reports whether a source label leaves its resolution to
+// the adaptive stream manifest.
+func IsAdaptiveQuality(raw string) bool { return kit.IsAdaptiveQuality(raw) }
+
 // QualityMode selects the resolution policy used to hard-filter sources.
 type QualityMode uint8
 

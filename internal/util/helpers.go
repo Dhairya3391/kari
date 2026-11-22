@@ -10,19 +10,35 @@ import (
 	"time"
 )
 
-// AtomicWriteFile writes data to a temp file in the same directory as path
-// and renames it into place, so a crash or power loss mid-write leaves
+// AtomicWriteFile writes data to a unique temp file in the same directory as
+// path and renames it into place, so a crash or power loss mid-write leaves
 // either the old contents or the new ones, never a truncated/corrupt file.
+// A unique temp name lets concurrent writers coexist; the file is synced
+// before the rename so the replacement survives a power loss.
 func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, perm); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(path), ".kari-*.tmp")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
+	tmpPath := f.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
 		return err
 	}
-	return nil
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // NormalizeSpace collapses runs of whitespace into single spaces and trims

@@ -28,6 +28,12 @@ import (
 const (
 	mpvReadinessTimeout = 10 * time.Second
 
+	// mpvPollInterval drives the status ticker while playback is active.
+	mpvPollInterval = 1 * time.Second
+	// mpvShutdownWait is the grace period for a clean mpv exit before it is
+	// killed forcibly.
+	mpvShutdownWait = 500 * time.Millisecond
+
 	// mpvReadinessPollInterval is how often the readiness loop checks IPC
 	// stats for the first playback frame. Halving the default interval
 	// shortens the gap between mpv actually starting and the UI noticing,
@@ -156,7 +162,7 @@ func isFlatpakMPVAvailable() bool {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), mpvPollInterval)
 	defer cancel()
 	return exec.CommandContext(ctx, "flatpak", "info", "io.mpv.Mpv").Run() == nil
 }
@@ -552,21 +558,21 @@ func ipcPoller(
 	defer client.Close()
 
 	poll := func() bool {
-		pos, posErr := client.GetProperty("time-pos")
+		pos, posErr := client.GetProperty(ipcPropTimePos)
 		var posF float64
 		if posErr == nil {
 			if f, ok := pos.(float64); ok {
 				posF = f
 			}
 		}
-		dur, durErr := client.GetProperty("duration")
+		dur, durErr := client.GetProperty(ipcPropDuration)
 		var durF float64
 		if durErr == nil {
 			if f, ok := dur.(float64); ok {
 				durF = f
 			}
 		}
-		idle, idleErr := client.GetProperty("idle-active")
+		idle, idleErr := client.GetProperty(ipcPropIdleActive)
 		var isIdle bool
 		if idleErr == nil {
 			if b, ok := idle.(bool); ok {
@@ -574,7 +580,7 @@ func ipcPoller(
 			}
 		}
 		paused := false
-		if pauseProp, pauseErr := client.GetProperty("pause"); pauseErr == nil {
+		if pauseProp, pauseErr := client.GetProperty(ipcPropPause); pauseErr == nil {
 			if b, ok := pauseProp.(bool); ok {
 				paused = b
 			}
@@ -603,7 +609,7 @@ func ipcPoller(
 			mpvLog.Debug("ipc connect failed", "err", err)
 		} else {
 			if healthy := poll(); healthy {
-				ticker := time.NewTicker(1 * time.Second)
+				ticker := time.NewTicker(mpvPollInterval)
 			sample:
 				for {
 					select {
@@ -628,7 +634,7 @@ func ipcPoller(
 			return
 		case <-done:
 			return
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(mpvShutdownWait):
 			// retry loop: redial
 		}
 	}
@@ -887,7 +893,7 @@ func waitForCurlExit(cmd *exec.Cmd, done <-chan error) error {
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(mpvShutdownWait):
 		_ = cmd.Process.Kill()
 		return <-done
 	}

@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"kari/internal/config"
+	"kari/internal/provider"
 	"kari/internal/provider/kit"
 )
 
@@ -34,9 +35,9 @@ type tmdbDetails struct {
 // collapsed into a single HTTP request via c.sf, so opening a title's
 // preview never costs two identical TMDB round-trips.
 func (c *Client) fetchTMDBMediaDetails(ctx context.Context, tmdbID int, mediaType string) (tmdbDetails, error) {
-	endpoint := "movie"
-	if mediaType == "tv" || mediaType == "anime" {
-		endpoint = "tv"
+	endpoint := provider.MediaTypeMovie
+	if mediaType == provider.MediaTypeTV || mediaType == provider.MediaTypeAnime {
+		endpoint = provider.MediaTypeTV
 	}
 
 	key := fmt.Sprintf("%d-%s", tmdbID, endpoint)

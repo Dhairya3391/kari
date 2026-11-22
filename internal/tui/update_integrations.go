@@ -21,6 +21,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Integration operation budgets: a history import walks years of watch
+// entries, so it gets a much wider window than token refresh or auth polling.
+const (
+	integrationAuthTimeout   = 2 * time.Minute
+	integrationSyncTimeout   = 90 * time.Second
+	integrationImportTimeout = 180 * time.Second
+)
+
 type authDoneMsg struct {
 	service string
 	err     error
@@ -160,7 +168,7 @@ func (m *modelImpl) startHistoryExport() (tea.Model, tea.Cmd) {
 	m.loading = true
 	m.loadingText = "Syncing local history to connected accounts..."
 	return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(parentCtx, 2*time.Minute)
+		ctx, cancel := context.WithTimeout(parentCtx, integrationAuthTimeout)
 		defer cancel()
 		synced, skipped := exportHistory(ctx, entries, anilistClient, traktClient)
 		return historyExportMsg{synced: synced, skipped: skipped}
@@ -370,7 +378,7 @@ func (m *modelImpl) historyImportCmd(opID int, source string) tea.Cmd {
 		if parentCtx == nil {
 			parentCtx = context.Background()
 		}
-		ctx, cancel := context.WithTimeout(parentCtx, 90*time.Second)
+		ctx, cancel := context.WithTimeout(parentCtx, integrationSyncTimeout)
 		defer cancel()
 
 		items, err := m.fetchSourceItems(ctx, source)
@@ -434,7 +442,7 @@ func (m *modelImpl) autoHistoryImportCmd() tea.Cmd {
 		if parentCtx == nil {
 			parentCtx = context.Background()
 		}
-		ctx, cancel := context.WithTimeout(parentCtx, 180*time.Second)
+		ctx, cancel := context.WithTimeout(parentCtx, integrationImportTimeout)
 		defer cancel()
 
 		var (

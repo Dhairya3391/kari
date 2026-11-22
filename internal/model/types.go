@@ -2,6 +2,10 @@ package model
 
 import "kari/internal/provider"
 
+// CompletionThreshold is the watched fraction at which playback counts as
+// finished for history, calendar matching, and autoplay decisions.
+const CompletionThreshold = 0.85
+
 // SubtitleTrack is one subtitle offering attached to resolved media. Tracks
 // arrive from providers as URL references; Path is filled in once a track has
 // been validated and downloaded to disk.

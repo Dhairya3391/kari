@@ -158,9 +158,9 @@ func buttonsFor(media model.ResolvedMedia, anilistID int, isLive bool) []Button 
 	}
 	var buttons []Button
 	if media.TMDBID > 0 {
-		kind := "movie"
+		kind := provider.MediaTypeMovie
 		if model.IsEpisodeBased(media.MediaType) {
-			kind = "tv"
+			kind = provider.MediaTypeTV
 		}
 		buttons = append(buttons, Button{
 			Label: clamp("View on TMDB", maxButtonText),

@@ -9,6 +9,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"kari/internal/model"
+)
+
+// IPC connection and request timings. A redial is bounded by a short window
+// with a brief pause between attempts so a dead socket cannot hang playback.
+const (
+	ipcConnectWindow   = 5 * time.Second
+	ipcConnectRetry    = 500 * time.Millisecond
+	ipcRetryDelay      = 200 * time.Millisecond
+	ipcRequestDeadline = 3 * time.Second
 )
 
 // IPCClient speaks mpv's JSON IPC protocol over a unix socket / named
@@ -46,7 +57,7 @@ func (s *playbackStats) update(pos, dur float64, loaded bool) {
 		s.loaded = true
 	}
 	if s.result.DurationSecs > 0 {
-		s.result.Completed = s.result.FinalPositionSecs/s.result.DurationSecs > 0.85
+		s.result.Completed = s.result.FinalPositionSecs/s.result.DurationSecs > model.CompletionThreshold
 	} else {
 		s.result.Completed = false
 	}
@@ -114,7 +125,7 @@ func (c *IPCClient) Connect(timeout time.Duration) error {
 
 // GetProperty issues a get_property command and decodes its data field.
 func (c *IPCClient) GetProperty(property string) (any, error) {
-	return c.command("get_property", property)
+	return c.command(ipcCmdGetProperty, property)
 }
 
 // AddSubtitle sends a sub-add command over IPC to load and select an external
@@ -125,7 +136,7 @@ func (c *IPCClient) AddSubtitle(path string) error {
 		return nil
 	}
 	path = strings.ReplaceAll(path, `\`, `/`)
-	_, err := c.command("sub-add", path, "select")
+	_, err := c.command(ipcCmdSubAdd, path, ipcSubSelect)
 	return err
 }
 
@@ -154,13 +165,13 @@ func HotAddSubtitleContext(ctx context.Context, socketPath, path string) error {
 	}
 	client := NewIPCClient(socketPath)
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(ipcConnectWindow)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := client.Connect(500 * time.Millisecond)
+		err := client.Connect(ipcConnectRetry)
 		if err == nil {
 			defer client.Close()
 			if err := ctx.Err(); err != nil {
@@ -169,7 +180,7 @@ func HotAddSubtitleContext(ctx context.Context, socketPath, path string) error {
 			return client.AddSubtitle(path)
 		}
 		lastErr = err
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(ipcRetryDelay)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -188,13 +199,13 @@ func (c *IPCClient) command(args ...any) (any, error) {
 	c.reqID++
 	reqID := c.reqID
 	data, err := json.Marshal(map[string]any{
-		"command":    args,
-		"request_id": reqID,
+		ipcFieldCommand:   args,
+		ipcFieldRequestID: reqID,
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := c.conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+	if err := c.conn.SetDeadline(time.Now().Add(ipcRequestDeadline)); err != nil {
 		return nil, err
 	}
 	defer func() { _ = c.conn.SetDeadline(time.Time{}) }()
@@ -207,14 +218,14 @@ func (c *IPCClient) command(args ...any) (any, error) {
 		if err := json.Unmarshal(c.scanner.Bytes(), &response); err != nil {
 			continue
 		}
-		id, ok := response["request_id"].(float64)
+		id, ok := response[ipcFieldRequestID].(float64)
 		if !ok || int(id) != reqID {
 			continue
 		}
-		if errText, ok := response["error"].(string); ok && errText != "success" {
+		if errText, ok := response[ipcFieldError].(string); ok && errText != ipcSuccess {
 			return nil, fmt.Errorf("mpv error: %s", errText)
 		}
-		return response["data"], nil
+		return response[ipcFieldData], nil
 	}
 
 	err = c.scanner.Err()

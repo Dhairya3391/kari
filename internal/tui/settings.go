@@ -25,6 +25,8 @@ const (
 	CategoryHistory
 )
 
+// SettingsCategoryNames are the display labels for settings categories,
+// indexed by the SettingsCategory constants.
 var SettingsCategoryNames = []string{
 	"Playback",
 	"Languages",

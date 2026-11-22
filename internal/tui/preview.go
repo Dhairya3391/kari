@@ -8,7 +8,6 @@ import (
 
 	"kari/internal/filter"
 	"kari/internal/provider"
-	"kari/internal/provider/kit"
 )
 
 const (
@@ -395,10 +394,10 @@ func formatSourceAudio(src provider.MediaSource, width int) string {
 }
 
 func formatSourceQuality(raw string) string {
-	if kit.IsAdaptiveQuality(raw) {
+	if filter.IsAdaptiveQuality(raw) {
 		return "Auto"
 	}
-	res := kit.QualityHeight(raw)
+	res := filter.QualityHeight(raw)
 	switch {
 	case res >= 2160:
 		return "4K"

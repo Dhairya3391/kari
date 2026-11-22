@@ -464,17 +464,24 @@ func (m *modelImpl) renderMainView() string {
 
 	bodyDims := dims
 	bodyDims.BodyHeight = max(5, dims.BodyHeight-len(statusRows))
+	// The downloads projection is O(total completed downloads); collect it
+	// once per frame and share it with the body and footer renderers.
+	var downloads *DownloadsData
+	if m.activeView == viewDownloads && !m.showHelp && !m.animeStatusPickerOpen {
+		data := m.collectDownloadsData(bodyDims.ContentWidth, bodyDims.BodyHeight, accent)
+		downloads = &data
+	}
 	var body string
 	if m.showHelp {
 		body = m.renderHelpOverlayContent(dims.ContentWidth, accent)
 	} else if m.animeStatusPickerOpen {
 		body = m.renderAnimeStatusOverlayContent(dims.ContentWidth, accent)
 	} else {
-		body = m.renderScreenBody(bodyDims, accent)
+		body = m.renderScreenBodyWithDownloads(bodyDims, accent, downloads)
 	}
 
 	// Footer
-	bindings := m.activeKeyBindings()
+	bindings := m.activeKeyBindingsWithDownloads(downloads)
 	status := m.activeIntegrationStatus()
 	footer := RenderFooter(bindings, status, accent, dims.ContentWidth)
 
@@ -557,7 +564,13 @@ func (m *modelImpl) activeCrumbsForView(v viewState) []string {
 	}
 }
 
+// activeKeyBindings is the standalone form used by tests and callers without
+// a prepared frame projection.
 func (m *modelImpl) activeKeyBindings() []KeyBinding {
+	return m.activeKeyBindingsWithDownloads(nil)
+}
+
+func (m *modelImpl) activeKeyBindingsWithDownloads(prepared *DownloadsData) []KeyBinding {
 	if m.showHelp {
 		return []KeyBinding{
 			{Key: "esc", Action: "close help"},
@@ -704,7 +717,11 @@ func (m *modelImpl) activeKeyBindings() []KeyBinding {
 			{Key: "esc", Action: "back"},
 		}
 	case viewDownloads:
-		data := m.collectDownloadsData(m.width, m.height, m.currentAccent())
+		data := prepared
+		if data == nil {
+			collected := m.collectDownloadsData(m.width, m.height, m.currentAccent())
+			data = &collected
+		}
 		onActive := len(data.Active) > 0 && m.downloadsIndex < len(data.Active)
 		pAction := "pause"
 		if m.downloadPaused {
@@ -772,7 +789,9 @@ func (m *modelImpl) activeIntegrationStatus() *IntegrationStatus {
 	}
 }
 
-func (m *modelImpl) renderScreenBody(dims Dims, accent lipgloss.AdaptiveColor) string {
+// renderScreenBodyWithDownloads renders the active screen. A prepared
+// downloads projection is reused from the footer when available.
+func (m *modelImpl) renderScreenBodyWithDownloads(dims Dims, accent lipgloss.AdaptiveColor, prepared *DownloadsData) string {
 	switch m.activeView {
 	case viewSearch:
 		if len(m.seriesResults) > 0 {
@@ -799,7 +818,12 @@ func (m *modelImpl) renderScreenBody(dims Dims, accent lipgloss.AdaptiveColor) s
 		return RenderSettingsScreen(m.collectSettingsData(dims.ContentWidth, dims.BodyHeight))
 
 	case viewDownloads:
-		return RenderDownloadsScreen(m.collectDownloadsData(dims.ContentWidth, dims.BodyHeight, accent))
+		data := prepared
+		if data == nil {
+			collected := m.collectDownloadsData(dims.ContentWidth, dims.BodyHeight, accent)
+			data = &collected
+		}
+		return RenderDownloadsScreen(*data)
 	case viewCalendar:
 		return RenderCalendarScreen(m.collectCalendarData(dims.ContentWidth, dims.BodyHeight, accent))
 
@@ -808,6 +832,13 @@ func (m *modelImpl) renderScreenBody(dims Dims, accent lipgloss.AdaptiveColor) s
 	}
 }
 func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.AdaptiveColor) string {
+	return m.renderHelpOverlayContentAtScroll(width, accent, max(0, m.helpScroll))
+}
+
+// renderHelpOverlayContentAtScroll renders the help box at an explicit scroll
+// offset so callers can measure the unscrolled content independently of the
+// current scroll position.
+func (m *modelImpl) renderHelpOverlayContentAtScroll(width int, accent lipgloss.AdaptiveColor, scroll int) string {
 	screenName := "Global"
 	var contextKeys []KeyBinding
 
@@ -976,7 +1007,7 @@ func (m *modelImpl) renderHelpOverlayContent(width int, accent lipgloss.Adaptive
 		ContextKeys: contextKeys,
 		GlobalKeys:  globalKeys,
 		Width:       width,
-		Scroll:      max(0, m.helpScroll),
+		Scroll:      scroll,
 		Accent:      accent,
 	})
 }

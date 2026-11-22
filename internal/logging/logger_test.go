@@ -93,7 +93,7 @@ func TestInit_KariLogStderr_RedirectedFile(t *testing.T) {
 	t.Setenv("KARI_LOG_FILE", logPath)
 	t.Setenv("KARI_LOG_STDERR", "1")
 
-	if err := Init(false); err != nil {
+	if err := Init(); err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
 	defer func() { _ = Close() }()

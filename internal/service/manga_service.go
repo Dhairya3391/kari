@@ -14,6 +14,17 @@ import (
 // mangaLog scopes every line from this component.
 var mangaLog = logging.With("component", "service.manga")
 
+// Manga operation budgets. The outer fetch window is generous because a
+// provider may traverse several catalog pages; per-stage windows keep a single
+// slow call from consuming the whole budget.
+const (
+	mangaFetchTimeout    = 60 * time.Second
+	mangaSearchTimeout   = 15 * time.Second
+	mangaChaptersTimeout = 20 * time.Second
+	mangaPagesTimeout    = 20 * time.Second
+	mangaImportTimeout   = 30 * time.Second
+)
+
 // MangaService orchestrates manga/comic providers for the TUI: chapter
 // listings and page-image URLs for a selected title. Search itself stays
 // on MediaService, which is already mode-generic.
@@ -49,7 +60,7 @@ func (s *MangaService) FetchChapters(ctx context.Context, series provider.Search
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, mangaFetchTimeout)
 	defer cancel()
 	chapters, err := ms.FetchChapters(ctx, series)
 	if err != nil {
@@ -82,7 +93,7 @@ type ReadableChapter struct {
 func (s *MangaService) ResolveReadableChapter(ctx context.Context, series provider.SearchResult, chapter provider.MangaChapter) (ReadableChapter, error) {
 	const maxFallbackSeries = 3
 
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, mangaFetchTimeout)
 	defer cancel()
 
 	type candidate struct {
@@ -108,7 +119,7 @@ func (s *MangaService) ResolveReadableChapter(ctx context.Context, series provid
 			continue
 		}
 		ms := route.Manga
-		searchCtx, searchCancel := context.WithTimeout(ctx, 15*time.Second)
+		searchCtx, searchCancel := context.WithTimeout(ctx, mangaSearchTimeout)
 		results, err := ms.Search(searchCtx, series.Title, provider.ModeManga)
 		searchCancel()
 		if err != nil || len(results) == 0 {
@@ -116,7 +127,7 @@ func (s *MangaService) ResolveReadableChapter(ctx context.Context, series provid
 		}
 		for _, r := range results[:min(len(results), maxFallbackSeries)] {
 			r.Provider = p.Name()
-			chCtx, chCancel := context.WithTimeout(ctx, 20*time.Second)
+			chCtx, chCancel := context.WithTimeout(ctx, mangaChaptersTimeout)
 			chapters, err := ms.FetchChapters(chCtx, r)
 			chCancel()
 			if err != nil {
@@ -139,7 +150,7 @@ func (s *MangaService) ResolveReadableChapter(ctx context.Context, series provid
 		if err != nil {
 			continue
 		}
-		pgCtx, pgCancel := context.WithTimeout(ctx, 20*time.Second)
+		pgCtx, pgCancel := context.WithTimeout(ctx, mangaPagesTimeout)
 		pages, err := ms.FetchPages(pgCtx, cand.chapters[cand.index])
 		if err == nil && len(pages) > 0 && s.images != nil {
 			if _, err = s.images.FetchImage(pgCtx, pages[0]); err != nil {
@@ -177,7 +188,7 @@ func (s *MangaService) FetchPages(ctx context.Context, chapter provider.MangaCha
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, mangaImportTimeout)
 	defer cancel()
 	pages, err := ms.FetchPages(ctx, chapter)
 	if err != nil {

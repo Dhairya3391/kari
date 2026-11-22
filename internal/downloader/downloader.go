@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,6 @@ import (
 	"time"
 
 	"kari/internal/logging"
-	"kari/internal/model"
 	"kari/internal/provider"
 )
 
@@ -747,25 +747,33 @@ func (d *YTDLPDownloader) cleanupDir(dir, title string) {
 	}
 }
 
-// toMediaSource converts provider fields once so header derivation stays in
-// Source.Headers, the single place Referer/Origin/User-Agent/Cookie and
-// addon-supplied extra headers are merged.
-func toMediaSource(source provider.MediaSource) model.Source {
-	return model.Source{
-		URL:            source.URL,
-		Quality:        source.Quality,
-		Provider:       source.Resolver,
-		Referer:        source.Referer,
-		UserAgent:      source.UserAgent,
-		Cookie:         source.CookieHeader,
-		Language:       source.Language,
-		ExtraHeaders:   source.ExtraHeaders,
-		SuppressOrigin: source.SuppressOrigin,
-	}
-}
-
+// sourceHeaders derives the header list passed to yt-dlp directly from the
+// provider source. Explicit addon headers win over derived ones, and Origin is
+// inferred from Referer only when the provider has not suppressed it.
 func sourceHeaders(source provider.MediaSource) []string {
-	h := toMediaSource(source).Headers()
+	h := make(http.Header)
+	if ua := strings.TrimSpace(source.UserAgent); ua != "" {
+		h.Set("User-Agent", ua)
+	}
+	if ref := strings.TrimSpace(source.Referer); ref != "" {
+		h.Set("Referer", ref)
+	}
+	if cookie := strings.TrimSpace(source.CookieHeader); cookie != "" {
+		h.Set("Cookie", cookie)
+	}
+	for key, value := range source.ExtraHeaders {
+		name := http.CanonicalHeaderKey(strings.TrimSpace(key))
+		if name == "" || h.Get(name) != "" {
+			continue
+		}
+		h.Set(name, value)
+	}
+	if h.Get("Origin") == "" && !source.SuppressOrigin {
+		if origin := originFromReferer(strings.TrimSpace(source.Referer)); origin != "" {
+			h.Set("Origin", origin)
+		}
+	}
+
 	headers := []string{}
 	// Fixed order keeps yt-dlp args deterministic for logs and tests.
 	for _, name := range []string{"User-Agent", "Referer", "Origin", "Cookie"} {
@@ -785,6 +793,21 @@ func sourceHeaders(source provider.MediaSource) []string {
 	}
 	sort.Strings(extra)
 	return append(headers, extra...)
+}
+
+// originFromReferer extracts scheme://host from a Referer URL so Origin is
+// never sent as a full path, which some CDNs reject.
+func originFromReferer(referer string) string {
+	for i := 0; i < len(referer); i++ {
+		if referer[i] == ':' && i+3 <= len(referer) && referer[i+1] == '/' && referer[i+2] == '/' {
+			end := strings.IndexAny(referer[i+3:], "/?#")
+			if end == -1 {
+				return referer
+			}
+			return referer[:i+3+end]
+		}
+	}
+	return ""
 }
 
 func isHLSSource(source provider.MediaSource) bool {

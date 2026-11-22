@@ -38,6 +38,8 @@ var (
 	reBandwidth         = regexp.MustCompile(`(?i)\bBANDWIDTH=(\d+)\b`)
 	reHexActionID       = regexp.MustCompile(`[0-9a-f]{40,42}`)
 	openPanelClientIDRe = regexp.MustCompile(`clientId[^0-9a-f]{0,24}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
+	reChunk             = regexp.MustCompile(`/_next/static/chunks/[A-Za-z0-9_.+\-]+\.js(?:\?[^"'\\<>\s]*)?`)
+	reSrc               = regexp.MustCompile(`(?i)<script\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')`)
 )
 
 type hlsVariant struct {
@@ -342,8 +344,6 @@ func scriptURLs(html, pageURL string) []string {
 		return nil
 	}
 	normalized := strings.ReplaceAll(html, `\/`, `/`)
-	reChunk := regexp.MustCompile(`/_next/static/chunks/[A-Za-z0-9_.+\-]+\.js(?:\?[^"'\\<>\s]*)?`)
-	reSrc := regexp.MustCompile(`(?i)<script\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')`)
 
 	seen := make(map[string]struct{})
 	var out []string

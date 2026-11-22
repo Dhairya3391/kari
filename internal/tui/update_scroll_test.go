@@ -245,18 +245,18 @@ func TestScrollWheelDroppedAtSearchBoundary(t *testing.T) {
 
 func TestScrollDirectionSpecialCases(t *testing.T) {
 	m := &modelImpl{activeView: viewHistory, historyFiltering: true}
-	if got := scrollInputDirection(m, tea.KeyMsg{Type: tea.KeyCtrlU}); got != "" {
+	if got := scrollInputDirection(m, tea.KeyMsg{Type: tea.KeyCtrlU}); got != scrollDirectionNone {
 		t.Fatalf("ctrl+u while history filtering must not scroll, got %q", got)
 	}
 	m = &modelImpl{activeView: viewEpisodes, selectMode: true}
-	if got := scrollInputDirection(m, tea.KeyMsg{Type: tea.KeyCtrlD}); got != "" {
+	if got := scrollInputDirection(m, tea.KeyMsg{Type: tea.KeyCtrlD}); got != scrollDirectionNone {
 		t.Fatalf("ctrl+d in episode select mode must not scroll, got %q", got)
 	}
 	m = &modelImpl{activeView: viewSearch}
-	if got := scrollInputDirection(m, scrollKey("j")); got != "" {
+	if got := scrollInputDirection(m, scrollKey("j")); got != scrollDirectionNone {
 		t.Fatalf("typed j must not be classified as scroll, got %q", got)
 	}
-	if got := scrollInputDirection(m, tea.KeyMsg{Type: tea.KeyPgDown}); got != "down" {
+	if got := scrollInputDirection(m, tea.KeyMsg{Type: tea.KeyPgDown}); got != scrollDirectionDown {
 		t.Fatalf("pgdown must map to down, got %q", got)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"kari/internal/config"
 	"kari/internal/httpclient"
 )
 
@@ -54,7 +55,7 @@ func (r *Release) CommitSHA() (string, error) {
 	}
 
 	client := httpclient.New()
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s", repoOwner, repoName, r.TagName)
+	url := fmt.Sprintf(config.GitHubAPIBase+"/repos/%s/%s/commits/%s", repoOwner, repoName, r.TagName)
 	resp, err := client.Get(url)
 	if err != nil {
 		return "", fmt.Errorf("fetch release commit: %w", err)
@@ -78,7 +79,7 @@ func (r *Release) CommitSHA() (string, error) {
 // GetLatestRelease fetches metadata for the newest published release.
 func GetLatestRelease() (*Release, error) {
 	client := httpclient.New()
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", repoOwner, repoName)
+	url := fmt.Sprintf(config.GitHubAPIBase+"/repos/%s/%s/releases/latest", repoOwner, repoName)
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("fetch latest release: %w", err)

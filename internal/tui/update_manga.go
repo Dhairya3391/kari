@@ -18,7 +18,10 @@ import (
 )
 
 // mangaPageTimeout bounds a single page fetch+render worker.
-const mangaPageTimeout = 45 * time.Second
+const (
+	mangaPageTimeout     = 45 * time.Second
+	mangaPrefetchTimeout = 60 * time.Second
+)
 
 // readerPrefetch counts how many pages ahead of the current one are
 // rendered in the background, so page turns usually hit a ready string.
@@ -87,7 +90,7 @@ func (m *modelImpl) prefetchMangaChaptersCmd(series provider.SearchResult) tea.C
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
+	ctx, cancel := context.WithTimeout(parent, mangaPrefetchTimeout)
 	return func() tea.Msg {
 		defer cancel()
 		if _, err := m.mangaService.FetchChapters(ctx, series); err != nil {

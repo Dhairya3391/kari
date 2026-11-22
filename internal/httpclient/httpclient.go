@@ -253,11 +253,13 @@ func (t *uaRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 // Info/Debug noise is suppressed.
 type leveledLogger struct{}
 
+// retryablehttp's give-up message embeds the full request URL, which may carry
+// API keys or signed CDN tokens.
 func (l *leveledLogger) Error(msg string, keysAndValues ...interface{}) {
-	logging.Warn("http retry gave up", "detail", msg)
+	logging.Warn("http retry gave up", "detail", logging.Redact(msg))
 }
 func (l *leveledLogger) Warn(msg string, keysAndValues ...interface{}) {
-	logging.Warn("http retry gave up", "detail", msg)
+	logging.Warn("http retry gave up", "detail", logging.Redact(msg))
 }
 func (l *leveledLogger) Info(msg string, keysAndValues ...interface{})  {} // suppress retryablehttp chatter
 func (l *leveledLogger) Debug(msg string, keysAndValues ...interface{}) {} // suppress retryablehttp chatter

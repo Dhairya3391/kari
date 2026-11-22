@@ -152,8 +152,11 @@ func Wrap(provider, stage string, kind ProviderErrorKind, err error) error {
 	return &ProviderError{Provider: provider, Stage: stage, Kind: kind, Err: err}
 }
 
-// WrapHint classifies err with a redacted structural hint.
+// WrapHint classifies err with a redacted structural hint. A nil err yields nil.
 func WrapHint(provider, stage string, kind ProviderErrorKind, hint string, err error) error {
+	if err == nil {
+		return nil
+	}
 	return &ProviderError{Provider: provider, Stage: stage, Kind: kind, Hint: hint, Err: err}
 }
 

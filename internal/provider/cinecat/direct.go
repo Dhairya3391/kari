@@ -257,7 +257,7 @@ func (c *Client) buildSources(ctx context.Context, candidates []sourceCandidate,
 			defer wg.Done()
 			variants, err := c.fetchVariants(ctx, cand.URL)
 			if err != nil {
-				logging.Debug("cinecat variant parsing failed; falling back to master", "url", cand.URL, "backend", cand.Backend, "err", err)
+				logging.Debug("cinecat variant parsing failed; falling back to master", "url", logging.Redact(cand.URL), "backend", cand.Backend, "err", err)
 			}
 			groups[i] = c.candidateSources(cand, variants, subtitles)
 		}(i, cand)

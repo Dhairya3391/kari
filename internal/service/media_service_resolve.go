@@ -122,6 +122,7 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 			ContentMode:        mode,
 			Year:               series.Year,
 			TMDBID:             series.TMDBID,
+			AniListID:          series.AniListID,
 			SeasonNumber:       episode.Season,
 			EpisodeNumber:      episode.Episode,
 			Resolver:           "Aggregated",

@@ -199,6 +199,13 @@ func (m *modelImpl) triggerSubtitleSync() tea.Cmd {
 	return m.subtitleFetchCmd(opID, mediaForFetch, src.Resolver, src.TransportIdentity())
 }
 
+// UI action budgets. They bound detached work started from an update handler
+// so a quit can never wait on a stuck integration.
+const (
+	subtitleFetchTimeout = 15 * time.Second
+	keyActionTimeout     = 10 * time.Second
+)
+
 func subtitleResolutionComplete(media model.ResolvedMedia) bool {
 	return media.TotalResolvers <= 0 || len(media.CompletedResolvers) >= media.TotalResolvers
 }
@@ -206,12 +213,9 @@ func subtitleResolutionComplete(media model.ResolvedMedia) bool {
 func (m *modelImpl) subtitleFetchCmd(opID int, resolved model.ResolvedMedia, preferredResolver, preferredSourceID string) tea.Cmd {
 	preferredLang := m.subtitleLanguage
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.appCtx, 15*time.Second)
+		ctx, cancel := context.WithTimeout(m.appCtx, subtitleFetchTimeout)
 		defer cancel()
 		track, err := m.subtitleService.FetchForSource(ctx, resolved, preferredLang, preferredResolver, preferredSourceID)
-		if err != nil {
-			tuiLog.Warn("subtitle fetch failed", "err", err)
-		}
 		return subtitleDoneMsg{track: track, opID: opID, err: err}
 	}
 }
@@ -308,7 +312,7 @@ func (m *modelImpl) loadStartupAddonCmd(manifestURL string) tea.Cmd {
 		parent = context.Background()
 	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+		ctx, cancel := context.WithTimeout(parent, keyActionTimeout)
 		defer cancel()
 		addon, err := loader(ctx, manifestURL)
 		return startupAddonLoadedMsg{manifestURL: manifestURL, addon: addon, err: err}

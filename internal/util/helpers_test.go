@@ -1,11 +1,82 @@
 package util
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestAtomicWriteFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	if err := AtomicWriteFile(path, []byte("first"), 0o600); err != nil {
+		t.Fatalf("initial write: %v", err)
+	}
+	if err := AtomicWriteFile(path, []byte("second"), 0o600); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "second" {
+		t.Fatalf("content = %q, %v; want second", data, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("perm = %o, want 600", info.Mode().Perm())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("left %d files in dir, want 1 (no temp residue)", len(entries))
+	}
+}
+
+func TestAtomicWriteFileConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	const writers = 16
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			data := bytes.Repeat([]byte(fmt.Sprintf("%02d", n)), 256)
+			errs <- AtomicWriteFile(path, data, 0o600)
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent write: %v", err)
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 512 {
+		t.Fatalf("content length = %d, want 512 (one complete write)", len(data))
+	}
+}
+
+func TestAtomicWriteFileMissingDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "absent", "state.json")
+	if err := AtomicWriteFile(path, []byte("x"), 0o600); err == nil {
+		t.Fatal("writing into a missing directory must fail")
+	}
+}
 
 func TestPruneDirToSize(t *testing.T) {
 	dir := t.TempDir()

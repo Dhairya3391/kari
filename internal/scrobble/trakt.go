@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"kari/internal/httpclient"
@@ -34,12 +35,38 @@ type TraktToken struct {
 type TraktClient struct {
 	clientID     string
 	clientSecret string
+	tokenMu      sync.RWMutex
 	token        *TraktToken
 	tokenPath    string
 	httpClient   *http.Client
 	// apiBase overrides the REST endpoint (tests point it at an httptest
 	// server); empty selects config.TraktAPIBase.
 	apiBase string
+}
+
+// currentToken returns the active token under a read lock. Tokens are only
+// ever replaced wholesale, so the returned pointer is a stable snapshot.
+func (c *TraktClient) currentToken() *TraktToken {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return c.token
+}
+
+// setToken replaces the active token under a write lock.
+func (c *TraktClient) setToken(token *TraktToken) {
+	c.tokenMu.Lock()
+	c.token = token
+	c.tokenMu.Unlock()
+}
+
+// authorization returns the Bearer header for the current token, or an empty
+// string when no token is installed.
+func (c *TraktClient) authorization() string {
+	token := c.currentToken()
+	if token == nil {
+		return ""
+	}
+	return "Bearer " + token.AccessToken
 }
 
 // NewTraktClient constructs a client, loading any persisted token from disk.
@@ -63,17 +90,18 @@ func (c *TraktClient) loadToken() {
 		if err == nil {
 			var token TraktToken
 			if err := json.Unmarshal(data, &token); err == nil {
-				c.token = &token
+				c.setToken(&token)
 			}
 		}
 	}
 }
 
 func (c *TraktClient) saveToken() error {
-	if c.token == nil {
+	token := c.currentToken()
+	if token == nil {
 		return nil
 	}
-	data, err := json.MarshalIndent(c.token, "", "  ")
+	data, err := json.MarshalIndent(token, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -84,7 +112,7 @@ func (c *TraktClient) saveToken() error {
 // Revoke revokes the stored token server-side (best effort) and deletes it
 // from disk.
 func (c *TraktClient) Revoke() error {
-	c.token = nil
+	c.setToken(nil)
 	if err := os.Remove(c.tokenPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -93,7 +121,8 @@ func (c *TraktClient) Revoke() error {
 
 // IsAuthenticated reports whether a usable token is stored.
 func (c *TraktClient) IsAuthenticated() bool {
-	return c.token != nil && c.token.ExpiresAt.After(time.Now())
+	token := c.currentToken()
+	return token != nil && token.ExpiresAt.After(time.Now())
 }
 
 // StartDeviceAuth begins the device-code flow, returning the code the user
@@ -176,11 +205,11 @@ func (c *TraktClient) PollDeviceAuth(ctx context.Context, deviceCode string, int
 				}
 				if err := json.NewDecoder(resp.Body).Decode(&res); err == nil {
 					resp.Body.Close()
-					c.token = &TraktToken{
+					c.setToken(&TraktToken{
 						AccessToken:  res.AccessToken,
 						RefreshToken: res.RefreshToken,
 						ExpiresAt:    time.Now().Add(time.Duration(res.ExpiresIn) * time.Second),
-					}
+					})
 					return c.saveToken()
 				}
 				resp.Body.Close()
@@ -205,15 +234,16 @@ func (c *TraktClient) PollDeviceAuth(ctx context.Context, deviceCode string, int
 // RefreshIfNeeded exchanges a soon-to-expire refresh token for a new access
 // token; it is a no-op when the current token is still fresh.
 func (c *TraktClient) RefreshIfNeeded(ctx context.Context) error {
-	if c.token == nil || c.token.RefreshToken == "" {
+	token := c.currentToken()
+	if token == nil || token.RefreshToken == "" {
 		return nil
 	}
-	if c.token.ExpiresAt.After(time.Now().Add(7 * 24 * time.Hour)) {
+	if token.ExpiresAt.After(time.Now().Add(7 * 24 * time.Hour)) {
 		return nil
 	}
 
 	body := map[string]string{
-		"refresh_token": c.token.RefreshToken,
+		"refresh_token": token.RefreshToken,
 		"client_id":     c.clientID,
 		"client_secret": c.clientSecret,
 		"grant_type":    "refresh_token",
@@ -242,11 +272,11 @@ func (c *TraktClient) RefreshIfNeeded(ctx context.Context) error {
 		return err
 	}
 
-	c.token = &TraktToken{
+	c.setToken(&TraktToken{
 		AccessToken:  res.AccessToken,
 		RefreshToken: res.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(res.ExpiresIn) * time.Second),
-	}
+	})
 	return c.saveToken()
 }
 
@@ -443,7 +473,9 @@ func (c *TraktClient) postHistoryBatch(ctx context.Context, payload traktHistory
 			return fmt.Errorf("create trakt history request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
+		if auth := c.authorization(); auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
 		req.Header.Set("trakt-api-version", "2")
 		req.Header.Set("trakt-api-key", c.clientID)
 		resp, err := c.httpClient.Do(req)
@@ -506,13 +538,14 @@ func (c *TraktClient) doScrobble(ctx context.Context, payload interface{}) error
 	data, _ := json.Marshal(payload)
 	req, _ := http.NewRequestWithContext(ctx, "POST", c.endpoint()+"/scrobble/stop", bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
+	if auth := c.authorization(); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
 	req.Header.Set("trakt-api-version", "2")
 	req.Header.Set("trakt-api-key", c.clientID)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		traktLog.Error("scrobble request failed", "err", err)
 		return err
 	}
 	defer resp.Body.Close()

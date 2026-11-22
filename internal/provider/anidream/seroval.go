@@ -13,35 +13,41 @@ type serovalEncoder struct {
 	next int
 }
 
-// encode converts a Go value into a Seroval node.
-func (e *serovalEncoder) encode(value any) any {
+// encode converts a Go value into a Seroval node. Unsupported types are
+// reported as errors: upstream data can contain values Kari did not create,
+// and a process-killing panic is never an acceptable parse failure.
+func (e *serovalEncoder) encode(value any) (any, error) {
 	switch v := value.(type) {
 	case nil:
-		return map[string]any{"t": 2, "s": 0}
+		return map[string]any{"t": 2, "s": 0}, nil
 	case bool:
 		special := 3
 		if v {
 			special = 2
 		}
-		return map[string]any{"t": 2, "s": special}
+		return map[string]any{"t": 2, "s": special}, nil
 	case int:
-		return map[string]any{"t": 0, "s": v}
+		return map[string]any{"t": 0, "s": v}, nil
 	case int64:
-		return map[string]any{"t": 0, "s": v}
+		return map[string]any{"t": 0, "s": v}, nil
 	case float64:
-		return map[string]any{"t": 0, "s": v}
+		return map[string]any{"t": 0, "s": v}, nil
 	case float32:
-		return map[string]any{"t": 0, "s": v}
+		return map[string]any{"t": 0, "s": v}, nil
 	case string:
-		return map[string]any{"t": 1, "s": v}
+		return map[string]any{"t": 1, "s": v}, nil
 	case []any:
 		id := e.next
 		e.next++
 		items := make([]any, len(v))
 		for i, item := range v {
-			items[i] = e.encode(item)
+			encoded, err := e.encode(item)
+			if err != nil {
+				return nil, err
+			}
+			items[i] = encoded
 		}
-		return map[string]any{"t": 9, "i": id, "a": items, "o": 0}
+		return map[string]any{"t": 9, "i": id, "a": items, "o": 0}, nil
 	case map[string]any:
 		id := e.next
 		e.next++
@@ -52,16 +58,20 @@ func (e *serovalEncoder) encode(value any) any {
 		sort.Strings(keys)
 		values := make([]any, len(keys))
 		for i, key := range keys {
-			values[i] = e.encode(v[key])
+			encoded, err := e.encode(v[key])
+			if err != nil {
+				return nil, err
+			}
+			values[i] = encoded
 		}
 		return map[string]any{
 			"t": 10,
 			"i": id,
 			"p": map[string]any{"k": keys, "v": values},
 			"o": 0,
-		}
+		}, nil
 	default:
-		panic(fmt.Sprintf("anidream: unsupported Seroval value %T", value))
+		return nil, fmt.Errorf("encode Seroval value: unsupported type %T", value)
 	}
 }
 
@@ -70,8 +80,12 @@ func (e *serovalEncoder) encode(value any) any {
 // with "Seroval Error (step: 3)".
 func marshalServerFnPayload(argument map[string]any) ([]byte, error) {
 	encoder := &serovalEncoder{}
+	node, err := encoder.encode(argument)
+	if err != nil {
+		return nil, err
+	}
 	return json.Marshal(map[string]any{
-		"t": encoder.encode(argument),
+		"t": node,
 		"f": 0,
 		"m": []any{},
 	})
@@ -238,10 +252,13 @@ func decodeResult(result any, out any) error {
 // tests to serve canned payloads without hand-writing Seroval JSON.
 func encodeServerFnResponse(result any) ([]byte, error) {
 	encoder := &serovalEncoder{}
-	node := encoder.encode(map[string]any{
+	node, err := encoder.encode(map[string]any{
 		"result":  result,
 		"error":   nil,
 		"context": map[string]any{},
 	})
+	if err != nil {
+		return nil, err
+	}
 	return json.Marshal(node)
 }

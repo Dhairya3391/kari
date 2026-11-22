@@ -1,7 +1,7 @@
 package downloader
 
-// Pins header derivation for downloads: fields come from
-// media.Source.Headers via toMediaSource, emitted in deterministic order.
+// Pins header derivation for downloads: fields come from provider.MediaSource
+// and are emitted in deterministic order.
 
 import (
 	"context"

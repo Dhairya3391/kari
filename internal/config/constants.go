@@ -29,6 +29,10 @@ const (
 
 	// AnimeSkipAPIBase is the Anime-Skip GraphQL endpoint.
 	AnimeSkipAPIBase = "https://api.anime-skip.com/graphql"
+	// AnimeSkipRESTBase is the legacy Anime-Skip REST root used for OP/ED times.
+	AnimeSkipRESTBase = "https://api.aniskip.com/v1"
+	// GitHubAPIBase is the GitHub REST root used by the self-updater.
+	GitHubAPIBase = "https://api.github.com"
 	// DefaultAnimeSkipClientID is the bundled X-Client-ID for the Anime-Skip API.
 	DefaultAnimeSkipClientID = "q5ZuG3MoJxy3c4dKJvpOjFIh1HFGTsrm"
 

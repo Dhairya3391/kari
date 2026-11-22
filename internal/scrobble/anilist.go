@@ -68,6 +68,7 @@ type MangaProgress struct {
 type AniListClient struct {
 	clientID     string
 	clientSecret string
+	tokenMu      sync.RWMutex
 	token        *AniListToken
 	tokenPath    string
 	httpClient   *http.Client
@@ -79,6 +80,21 @@ type AniListClient struct {
 	// chapter completions cannot race a stale progress check into a
 	// backwards update.
 	mangaMu sync.Mutex
+}
+
+// currentToken returns the active token under a read lock. Tokens are only
+// ever replaced wholesale, so the returned pointer is a stable snapshot.
+func (c *AniListClient) currentToken() *AniListToken {
+	c.tokenMu.RLock()
+	defer c.tokenMu.RUnlock()
+	return c.token
+}
+
+// setToken replaces the active token under a write lock.
+func (c *AniListClient) setToken(token *AniListToken) {
+	c.tokenMu.Lock()
+	c.token = token
+	c.tokenMu.Unlock()
 }
 
 // resolveTokenPath resolves the token path under ~/.config/kari/tokens/<name>,
@@ -127,17 +143,18 @@ func (c *AniListClient) loadToken() {
 		if err == nil {
 			var token AniListToken
 			if err := json.Unmarshal(data, &token); err == nil {
-				c.token = &token
+				c.setToken(&token)
 			}
 		}
 	}
 }
 
 func (c *AniListClient) saveToken() error {
-	if c.token == nil {
+	token := c.currentToken()
+	if token == nil {
 		return nil
 	}
-	data, err := json.MarshalIndent(c.token, "", "  ")
+	data, err := json.MarshalIndent(token, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -149,7 +166,7 @@ func (c *AniListClient) saveToken() error {
 // OAuth spec has no programmatic revoke endpoint, so tokens are simply
 // discarded locally.
 func (c *AniListClient) Revoke() error {
-	c.token = nil
+	c.setToken(nil)
 	if err := os.Remove(c.tokenPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -158,7 +175,8 @@ func (c *AniListClient) Revoke() error {
 
 // IsAuthenticated reports whether an unexpired token is stored.
 func (c *AniListClient) IsAuthenticated() bool {
-	return c.token != nil && (c.token.ExpiresAt.IsZero() || c.token.ExpiresAt.After(time.Now()))
+	token := c.currentToken()
+	return token != nil && (token.ExpiresAt.IsZero() || token.ExpiresAt.After(time.Now()))
 }
 
 // AuthURL returns the browser URL the user visits to obtain an auth code.
@@ -183,10 +201,10 @@ func (c *AniListClient) ExchangeCode(ctx context.Context, token string) error {
 		return fmt.Errorf("token cannot be empty")
 	}
 
-	c.token = &AniListToken{
+	c.setToken(&AniListToken{
 		AccessToken: token,
 		ExpiresAt:   time.Time{}, // Tokens from implicit grant are long-lived
-	}
+	})
 	return c.saveToken()
 }
 
@@ -491,11 +509,11 @@ func (c *AniListClient) doGraphQL(ctx context.Context, query string, vars map[st
 	req, _ := http.NewRequestWithContext(ctx, "POST", c.endpoint(), bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Origin", "https://anilist.co")
-	req.Header.Set("Referer", "https://anilist.co/")
+	req.Header.Set("Origin", config.AniListAuthBase)
+	req.Header.Set("Referer", config.AniListReferer)
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
-	if c.token != nil && c.token.AccessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token.AccessToken)
+	if token := c.currentToken(); token != nil && token.AccessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+token.AccessToken)
 	}
 
 	resp, err := c.httpClient.Do(req)

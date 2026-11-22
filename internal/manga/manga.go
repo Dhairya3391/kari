@@ -42,6 +42,10 @@ const maxCachedPages = 12
 // fetchTimeout bounds a single page-image download.
 const fetchTimeout = 20 * time.Second
 
+// maxPageImageBytes bounds one chapter page download so a hostile CDN
+// cannot force an unbounded allocation.
+const maxPageImageBytes = 25 << 20
+
 // maxDiskCacheBytes caps the on-disk page cache: about a hundred
 // full-quality pages. Beyond that the oldest are evicted at startup.
 const maxDiskCacheBytes = 256 << 20
@@ -169,7 +173,14 @@ func (c *Client) download(ctx context.Context, page provider.MangaPage, rawURL s
 	if resp.StatusCode != http.StatusOK {
 		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: rawURL}
 	}
-	return io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPageImageBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("manga: read page: %w", err)
+	}
+	if len(body) > maxPageImageBytes {
+		return nil, fmt.Errorf("manga: page image exceeds %d bytes", maxPageImageBytes)
+	}
+	return body, nil
 }
 
 // cacheKey hashes the URL so hostile file names (query strings,

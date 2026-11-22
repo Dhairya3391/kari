@@ -74,8 +74,8 @@ func (c *Client) fetchAnilistMedia(ctx context.Context, title string) (anilistMe
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Origin", "https://anilist.co")
-	req.Header.Set("Referer", "https://anilist.co/")
+	req.Header.Set("Origin", config.AniListAuthBase)
+	req.Header.Set("Referer", config.AniListReferer)
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 
 	resp, err := c.http.Do(req)
@@ -168,8 +168,8 @@ func (c *Client) FetchEpisodeTitles(ctx context.Context, anilistID int) (map[int
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Origin", "https://anilist.co")
-	req.Header.Set("Referer", "https://anilist.co/")
+	req.Header.Set("Origin", config.AniListAuthBase)
+	req.Header.Set("Referer", config.AniListReferer)
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 
 	resp, err := c.http.Do(req)

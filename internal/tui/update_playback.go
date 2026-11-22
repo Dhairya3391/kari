@@ -106,7 +106,7 @@ func (m *modelImpl) onSubtitleDone(msg subtitleDoneMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if msg.err != nil {
-		tuiLog.Debug("subtitle unavailable; playing without", "err", msg.err)
+		tuiLog.Warn("subtitle unavailable; playing without", "err", msg.err)
 	}
 	var retryCmd tea.Cmd
 	if m.resolved == nil || m.resolved.SelectedSubtitle == nil {
@@ -394,6 +394,10 @@ func subtitleCandidateIdentity(track model.SubtitleTrack) string {
 	return strings.TrimSpace(track.Path)
 }
 
+// autoplayCompletionThreshold is intentionally slightly lower than the
+// history completion mark so autoplay advances before the row flips to done.
+const autoplayCompletionThreshold = 0.80
+
 func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.opID != m.playOpID {
 		tuiLog.Warn("play result opID mismatch", "got", msg.opID, "want", m.playOpID)
@@ -489,10 +493,10 @@ func (m *modelImpl) onPlayDone(msg playDoneMsg) (tea.Model, tea.Cmd) {
 
 	m.activeView = viewPreview
 
-	isFinished := msg.result.Completed || (msg.result.DurationSecs > 0 && (msg.result.FinalPositionSecs/msg.result.DurationSecs) >= 0.80)
+	isFinished := msg.result.Completed || (msg.result.DurationSecs > 0 && (msg.result.FinalPositionSecs/msg.result.DurationSecs) >= autoplayCompletionThreshold)
 	if m.autoplay && m.resolved != nil && model.IsEpisodeBased(m.resolved.MediaType) && isFinished {
 		if idx, ok := m.nextEpisodeIndex(); ok {
-			logging.Info("autoplay: starting next episode", "index", idx)
+			tuiLog.Info("starting next episode", "index", idx)
 			return m.startEpisodeResolution(idx, true)
 		}
 		m.autoplay = false

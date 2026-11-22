@@ -18,6 +18,7 @@ type HelpData struct {
 	Accent lipgloss.AdaptiveColor
 }
 
+// RenderHelpOverlay draws the scrollable keybinding help box for data.ScreenName.
 func RenderHelpOverlay(data HelpData) string {
 	st := NewStyles(data.Accent)
 	data.ContextKeys = formattedKeyBindings(data.ContextKeys)
@@ -146,6 +147,21 @@ func RenderHelpOverlay(data HelpData) string {
 		boxW = data.Width
 	}
 	return RenderOverlay(scrollHelpContent(content, data.Scroll), boxW, data.Accent)
+}
+
+// helpOverlayFrameLines is what RenderOverlay wraps around the help content:
+// a top and bottom border plus a top and bottom padding line.
+const helpOverlayFrameLines = 4
+
+// clampHelpScroll keeps the help overlay from scrolling past its last line,
+// where it would otherwise show a nearly empty box.
+func (m *modelImpl) clampHelpScroll() {
+	// Measure the unscrolled box. A bound taken from the current scroll shrinks
+	// as the scroll grows, which would cap it near half the content and make
+	// the lower keybindings unreachable.
+	body := m.renderHelpOverlayContentAtScroll(m.width, m.currentAccent(), 0)
+	contentLines := max(0, strings.Count(body, "\n")+1-helpOverlayFrameLines)
+	m.helpScroll = min(max(0, m.helpScroll), contentLines)
 }
 
 // scrollHelpContent drops the first scroll lines of the help body so the

@@ -31,6 +31,10 @@ import (
 // log scopes every line from this package with its identity.
 var posterLog = logging.With("component", "poster")
 
+// maxPosterBytes bounds a single downloaded image so a misbehaving CDN
+// cannot force an unbounded allocation.
+const maxPosterBytes = 10 << 20
+
 // tmdbPosterSize is the full-resolution original for every TMDB poster.
 // Anything smaller risks a silent downgrade through a media-type mismatch
 // upstream of here; the disk/memory caches make the bigger download once,
@@ -249,7 +253,7 @@ func (c *Client) ArtworkURL(ctx context.Context, tmdbID int, mediaType, title st
 }
 
 func (c *Client) download(ctx context.Context, target string) ([]byte, error) {
-	return c.downloadReferer(ctx, target, "https://anilist.co/")
+	return c.downloadReferer(ctx, target, config.AniListReferer)
 }
 
 // downloadReferer fetches raw bytes with a caller-chosen Referer. The
@@ -272,7 +276,14 @@ func (c *Client) downloadReferer(ctx context.Context, target, referer string) ([
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("poster: download status %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPosterBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("poster: read image: %w", err)
+	}
+	if len(body) > maxPosterBytes {
+		return nil, fmt.Errorf("poster: image exceeds %d bytes", maxPosterBytes)
+	}
+	return body, nil
 }
 
 func cacheKey(tmdbID int, title, size string) string {

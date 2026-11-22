@@ -14,6 +14,7 @@ import (
 // need nil-guards at call sites.
 const keyFailureCooldown = 30 * time.Second
 
+// KeyPool rotates TMDB API keys and temporarily skips ones that have failed.
 type KeyPool struct {
 	mu     sync.Mutex
 	keys   []string

@@ -5,9 +5,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"kari/internal/filter"
 	"kari/internal/history"
 	"kari/internal/provider"
-	"kari/internal/provider/kit"
 	"kari/internal/service"
 )
 
@@ -260,7 +260,7 @@ func (m *modelImpl) startEpisodeResolution(idx int, autoPlay bool) (tea.Model, t
 		m.prevSourceLanguage = src.Language
 		m.prevSourceQuality = src.Height
 		if m.prevSourceQuality == 0 {
-			m.prevSourceQuality = kit.QualityHeight(src.Quality)
+			m.prevSourceQuality = filter.QualityHeight(src.Quality)
 		}
 	}
 	m.resolved = nil

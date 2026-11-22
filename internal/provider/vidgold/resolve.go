@@ -358,7 +358,7 @@ func (c *Client) laneSources(ctx context.Context, result laneResult, subtitles [
 			sourceType := qualityType(quality, u)
 			if sourceType == provider.SourceTypeHLS {
 				if variants, err := c.fetchVariants(ctx, u); err != nil {
-					logging.Debug("vidgold variant parsing failed; keeping HLS row", "url", u, "server", result.server.label, "err", err)
+					logging.Debug("vidgold variant parsing failed; keeping HLS row", "url", logging.Redact(u), "server", result.server.label, "err", err)
 				} else if len(variants) > 0 {
 					bestHeight, bestBitrate := 0, 0
 					for _, variant := range variants {
@@ -388,7 +388,7 @@ func (c *Client) laneSources(ctx context.Context, result laneResult, subtitles [
 
 	variants, err := c.fetchVariants(ctx, masterURL)
 	if err != nil {
-		logging.Debug("vidgold variant parsing failed; falling back to master", "url", masterURL, "server", result.server.label, "err", err)
+		logging.Debug("vidgold variant parsing failed; falling back to master", "url", logging.Redact(masterURL), "server", result.server.label, "err", err)
 	}
 	bestHeight, bestBitrate := 0, 0
 	for _, variant := range variants {

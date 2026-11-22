@@ -310,6 +310,11 @@ func anilistIDFor(mode provider.ContentType, series *provider.SearchResult) int 
 	if mode != provider.ModeAnime || series == nil {
 		return 0
 	}
+	if series.AniListID > 0 {
+		return series.AniListID
+	}
+	// Providers that do not populate AniListID key anime catalogs by the
+	// numeric id in ID, so keep that path for backward compatibility.
 	id, err := strconv.Atoi(strings.TrimSpace(series.ID))
 	if err != nil || id <= 0 {
 		return 0

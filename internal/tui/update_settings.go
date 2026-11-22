@@ -11,6 +11,7 @@ import (
 
 	"kari/internal/model"
 	"kari/internal/provider"
+	"kari/internal/settings"
 )
 
 func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -866,26 +867,9 @@ func (m *modelImpl) toggleModeAtIndex(idx int) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// isModeAvailable reports whether any provider currently serves the mode.
 func (m *modelImpl) isModeAvailable(modeKey string) bool {
-	// Live needs live provider; jellyfin needs configured jellyfin
-	switch modeKey {
-	case "jellyfin":
-		for _, p := range m.registry.ProvidersForMode(provider.ModeJellyfin) {
-			if p != nil {
-				return true
-			}
-		}
-		return false
-	case "live":
-		for _, p := range m.registry.ProvidersForMode(provider.ModeLive) {
-			if p != nil {
-				return true
-			}
-		}
-		return false
-	default:
-		return len(m.registry.ProvidersForMode(provider.ContentType(modeKey))) > 0
-	}
+	return len(m.registry.ProvidersForMode(provider.ContentType(modeKey))) > 0
 }
 
 func (m *modelImpl) effectiveModesList() []provider.ContentType {
@@ -902,16 +886,44 @@ func (m *modelImpl) updateEffectiveModes() {
 	m.modes = m.effectiveModesList()
 }
 
-var providerSections = []struct {
+// providerSection is one Settings > Providers group.
+type providerSection struct {
 	Section string
 	Mode    provider.ContentType
-}{
-	{Section: "Anime", Mode: provider.ModeAnime},
-	{Section: "Movies", Mode: provider.ModeMovies},
-	{Section: "TV Shows", Mode: provider.ModeTV},
-	{Section: "Stremio Add-ons", Mode: provider.ModeStremio},
-	{Section: "Live", Mode: provider.ModeLive},
-	{Section: "Reading", Mode: provider.ModeManga},
+}
+
+// settingsSectionLabel returns the longer label Settings uses for modes whose
+// KindSpec label is abbreviated, or "" when the canonical label applies.
+func settingsSectionLabel(mode provider.ContentType) string {
+	switch mode {
+	case provider.ModeTV:
+		return "TV Shows"
+	case provider.ModeStremio:
+		return "Stremio Add-ons"
+	default:
+		return ""
+	}
+}
+
+// providerSections derives the Settings > Providers sections from the
+// configured mode order so newly added modes cannot be omitted here.
+func (m *modelImpl) providerSections() []providerSection {
+	modes := m.configuredModes
+	if len(modes) == 0 {
+		modes = settings.DefaultModes
+	}
+	sections := make([]providerSection, 0, len(modes))
+	for _, key := range modes {
+		mode := provider.ContentType(key)
+		label := settingsSectionLabel(mode)
+		if label == "" {
+			if spec := model.FromKey(key).Spec(); spec != nil && spec.Label != "" {
+				label = spec.Label
+			}
+		}
+		sections = append(sections, providerSection{Section: label, Mode: mode})
+	}
+	return sections
 }
 
 func (m *modelImpl) isProviderDisabledKey(mode provider.ContentType, id string) bool {
@@ -998,16 +1010,13 @@ func (m *modelImpl) providerRows() []ProviderRow {
 		return nil
 	}
 	var rows []ProviderRow
-	for _, sec := range providerSections {
+	for _, sec := range m.providerSections() {
 		providers := m.registry.ProvidersForMode(sec.Mode)
 		for _, p := range providers {
 			id := p.Name()
 			name := m.registry.DisplayName(id)
 			key := string(sec.Mode) + ":" + strings.ToLower(id)
-			avail := true
-			if id == "jellyfin" && !m.isModeAvailable("jellyfin") {
-				avail = false
-			}
+			avail := m.isModeAvailable(string(sec.Mode))
 			rows = append(rows, ProviderRow{
 				Section:   sec.Section,
 				Mode:      sec.Mode,
@@ -1098,6 +1107,10 @@ func (m *modelImpl) syncDisabledProvidersToService() {
 	m.mediaService.SetDisabledProviders(list)
 }
 
+// addonTestTimeout bounds a manifest probe so a dead addon cannot hang the
+// settings screen.
+const addonTestTimeout = 25 * time.Second
+
 // startAddonCheck validates a manifest URL asynchronously. When replacing is
 // non-empty, success swaps that addon for the newly tested one.
 func (m *modelImpl) startAddonCheck(manifest, replacing string) tea.Cmd {
@@ -1108,7 +1121,7 @@ func (m *modelImpl) startAddonCheck(manifest, replacing string) tea.Cmd {
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
+	ctx, cancel := context.WithTimeout(parent, addonTestTimeout)
 	m.addonTestOpID++
 	m.addonTesting = true
 	m.addonTestCancel = cancel

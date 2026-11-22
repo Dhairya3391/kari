@@ -13,6 +13,7 @@ type KeyBinding struct {
 	Action string
 }
 
+// IntegrationStatus is the playback and tracker summary shown in the footer.
 type IntegrationStatus struct {
 	PlayerName       string
 	Playing          bool

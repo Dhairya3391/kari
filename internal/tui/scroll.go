@@ -213,7 +213,7 @@ func wrapText(text string, width, maxLines int) string {
 			curLine.Reset()
 			curLine.WriteString(word)
 			if maxLines > 0 && len(lines) >= maxLines {
-				lines[len(lines)-1] = truncate(lines[len(lines)-1], width-1) + "…"
+				lines[len(lines)-1] = truncate(lines[len(lines)-1], width)
 				return strings.Join(lines, "\n")
 			}
 		}
@@ -223,7 +223,7 @@ func wrapText(text string, width, maxLines int) string {
 	}
 	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[:maxLines]
-		lines[len(lines)-1] = truncate(lines[len(lines)-1], width-1) + "…"
+		lines[len(lines)-1] = truncate(lines[len(lines)-1], width)
 	}
 
 	return strings.Join(lines, "\n")

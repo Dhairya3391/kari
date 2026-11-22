@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"kari/internal/logging"
+	"kari/internal/model"
 	"kari/internal/provider"
 	"kari/internal/util"
 )
@@ -328,7 +329,7 @@ func (s *Store) Upsert(e Entry) error {
 	if e.DurationSecs > 0 {
 		e.PercentComplete = e.PositionSecs / e.DurationSecs
 	}
-	if e.PercentComplete > 0.85 {
+	if e.PercentComplete > model.CompletionThreshold {
 		e.Complete = true
 	} else if e.PercentComplete > 0 {
 		// If they didn't manually set it to true and it's < 85%, ensure it's false

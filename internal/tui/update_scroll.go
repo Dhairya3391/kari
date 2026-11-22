@@ -1,10 +1,5 @@
+// Package tui owns the terminal interface and its interaction state.
 package tui
-
-// Package input owns the app-wide navigation filter. Wheel events arrive
-// either natively (mouse reporting is enabled) or as translated arrow keys from
-// a terminal in alt-screen mode. A plain min-interval throttle accepts at most
-// one scroll event per 16ms: dropped events never re-arm the gate, so a second
-// flick always registers and held keys keep moving.
 
 import (
 	"time"
@@ -15,6 +10,14 @@ import (
 // scrollMinInterval is the production port of DEMO 3's MinInterval interval:
 // one accepted scroll per 60fps frame.
 const scrollMinInterval = 16 * time.Millisecond
+
+type scrollDirection uint8
+
+const (
+	scrollDirectionNone scrollDirection = iota
+	scrollDirectionUp
+	scrollDirectionDown
+)
 
 // scrollGate holds the time of the last ACCEPTED scroll. Dropped events leave
 // it untouched — advancing it on drops would self-latch after the first row
@@ -57,7 +60,7 @@ func FilterScrollInput(model tea.Model, msg tea.Msg) tea.Msg {
 // It mirrors DEMO 3's MinInterval.OnScroll: accept when there is no prior
 // accept or the interval has elapsed; otherwise drop without touching state.
 func (m *modelImpl) filterScrollInputAt(msg tea.Msg, now time.Time) tea.Msg {
-	if scrollInputDirection(m, msg) == "" {
+	if scrollInputDirection(m, msg) == scrollDirectionNone {
 		return msg
 	}
 	if m.scroll.lastAcceptedAt.IsZero() || now.Sub(m.scroll.lastAcceptedAt) >= scrollMinInterval {
@@ -96,30 +99,31 @@ func (m *modelImpl) scrollInputActive() bool {
 	}
 }
 
-// scrollInputDirection maps a message to its navigation direction, or "" when
+// scrollInputDirection maps a message to its navigation direction, or
+// scrollDirectionNone when
 // the message is not a scroll key. j/k and g/G are deliberately excluded: they
 // are text while a filter input is active, and single presses never carry
 // momentum. Wheel events are translated into up/down keys by FilterScrollInput.
-func scrollInputDirection(m *modelImpl, msg tea.Msg) string {
+func scrollInputDirection(m *modelImpl, msg tea.Msg) scrollDirection {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
-		return ""
+		return scrollDirectionNone
 	}
 	switch keyMsg.String() {
 	case "up", "pgup":
-		return "up"
+		return scrollDirectionUp
 	case "down", "pgdown":
-		return "down"
+		return scrollDirectionDown
 	case "ctrl+u":
 		if m.activeView == viewHistory && m.historyFiltering {
-			return ""
+			return scrollDirectionNone
 		}
-		return "up"
+		return scrollDirectionUp
 	case "ctrl+d":
 		if m.activeView == viewEpisodes && m.selectMode {
-			return ""
+			return scrollDirectionNone
 		}
-		return "down"
+		return scrollDirectionDown
 	}
-	return ""
+	return scrollDirectionNone
 }

@@ -248,9 +248,13 @@ func (m *modelImpl) maybeFetchEpisodeTitles() tea.Cmd {
 	if m.appMode != provider.ModeAnime || m.posterClient == nil || m.selectedSeries == nil {
 		return nil
 	}
-	anilistID, err := strconv.Atoi(strings.TrimSpace(m.selectedSeries.ID))
-	if err != nil || anilistID <= 0 {
-		return nil
+	anilistID := m.selectedSeries.AniListID
+	if anilistID <= 0 {
+		id, err := strconv.Atoi(strings.TrimSpace(m.selectedSeries.ID))
+		if err != nil || id <= 0 {
+			return nil
+		}
+		anilistID = id
 	}
 	needed := make(map[int]struct{})
 	for i, ep := range m.episodeResults {

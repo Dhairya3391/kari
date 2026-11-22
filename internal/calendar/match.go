@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"kari/internal/history"
+	"kari/internal/model"
 	"kari/internal/provider"
 )
 
@@ -93,7 +94,7 @@ func buildAnimeReleaseItem(rel Release, matched []history.Entry, now time.Time) 
 		if e.Episode <= maxWatched {
 			continue
 		}
-		if e.Complete || e.PercentComplete >= 0.85 {
+		if e.Complete || e.PercentComplete >= model.CompletionThreshold {
 			maxWatched = e.Episode
 		} else if e.PositionSecs > 5 || e.PercentComplete > 0 {
 			maxWatched = max(0, e.Episode-1)
@@ -127,11 +128,11 @@ func buildSeriesReleaseItem(rel Release, matched []history.Entry, now time.Time)
 	for _, e := range matched {
 		if e.Season == rel.Season {
 			hasSeasonMatch = true
-			if e.Episode > maxWatchedEpInSeason && (e.Complete || e.PercentComplete >= 0.85) {
+			if e.Episode > maxWatchedEpInSeason && (e.Complete || e.PercentComplete >= model.CompletionThreshold) {
 				maxWatchedEpInSeason = e.Episode
 			}
 		}
-		if e.Season > maxWatchedSeason && (e.Complete || e.PercentComplete >= 0.85) {
+		if e.Season > maxWatchedSeason && (e.Complete || e.PercentComplete >= model.CompletionThreshold) {
 			maxWatchedSeason = e.Season
 		}
 	}

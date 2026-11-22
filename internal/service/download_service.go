@@ -18,7 +18,10 @@ import (
 )
 
 // log scopes every line from this package/component.
-var batchLog = logging.With("component", "service.download.batch")
+var (
+	batchLog    = logging.With("component", "service.download.batch")
+	downloadLog = logging.With("component", "service.download")
+)
 
 // DownloadService resolves media through MediaService and hands the chosen
 // sources to the downloader engine with organized output paths.
@@ -314,7 +317,7 @@ func (s *DownloadService) downloadMedia(ctx context.Context, resolved model.Reso
 		Verify:    s.VerifyDownloads(),
 	}
 
-	logging.Debug("download service: start", "title", title, "outputDir", outputDir, "tempDir", tempDir)
+	downloadLog.Debug("start", "title", title, "outputDir", outputDir, "tempDir", tempDir)
 	if err := s.dl.Download(ctx, req); err != nil {
 		return err
 	}
@@ -375,7 +378,7 @@ func (s *DownloadService) saveSidecarSubtitle(ctx context.Context, resolved mode
 
 	source := resolved.Playback[0]
 	if isAnimeHardSub(resolved, source) {
-		logging.Debug("download service: skipping sidecar subtitles for hardsub anime", "title", title, "quality", source.Quality)
+		downloadLog.Debug("skipping sidecar subtitles for hardsub anime", "title", title, "quality", source.Quality)
 		return
 	}
 
@@ -392,7 +395,7 @@ func (s *DownloadService) saveSidecarSubtitle(ctx context.Context, resolved mode
 	if track.Path == "" {
 		track, err = s.subtitleService.FetchForSource(ctx, resolved, subLang, source.Resolver, source.TransportIdentity())
 		if err != nil {
-			logging.Warn("download service: fetch sidecar subtitle failed", "title", title, "err", err)
+			downloadLog.Warn("fetch sidecar subtitle failed", "title", title, "err", err)
 			return
 		}
 	}
@@ -416,20 +419,20 @@ func (s *DownloadService) saveSidecarSubtitle(ctx context.Context, resolved mode
 	baseTitle, _ := downloader.SplitTitleExt(title)
 	subFilename := fmt.Sprintf("%s.%s%s", baseTitle, langCode, ext)
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		logging.Warn("download service: create output dir for subtitle failed", "dir", outputDir, "err", err)
+		downloadLog.Warn("create output dir for subtitle failed", "dir", outputDir, "err", err)
 		return
 	}
 	destPath := filepath.Join(outputDir, subFilename)
 	data, err := os.ReadFile(track.Path)
 	if err != nil {
-		logging.Warn("download service: read cached subtitle failed", "path", track.Path, "err", err)
+		downloadLog.Warn("read cached subtitle failed", "path", track.Path, "err", err)
 		return
 	}
 	if err := util.AtomicWriteFile(destPath, data, 0o644); err != nil {
-		logging.Warn("download service: write sidecar subtitle failed", "dest", destPath, "err", err)
+		downloadLog.Warn("write sidecar subtitle failed", "dest", destPath, "err", err)
 		return
 	}
-	logging.Info("download service: saved sidecar subtitle", "path", destPath)
+	downloadLog.Info("saved sidecar subtitle", "path", destPath)
 }
 
 // isAnimeHardSub reports whether media is anime and the primary playback source
