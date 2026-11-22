@@ -49,6 +49,9 @@ var mpvMatrixCases = []mpvMatrixCase{
 	{provider: "vidgold", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "vidgold", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "vidgold", mode: provider.ModeCartoon, query: "SpongeBob"},
+	{provider: "vidora", mode: provider.ModeMovies, query: "Inception"},
+	{provider: "vidora", mode: provider.ModeTV, query: "Breaking Bad"},
+	{provider: "vidora", mode: provider.ModeCartoon, query: "SpongeBob"},
 	// Remaining TMDB-backed movie/TV/cartoon providers.
 	{provider: "mapple", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "mapple", mode: provider.ModeTV, query: "Breaking Bad"},
@@ -63,13 +66,9 @@ var mpvMatrixCases = []mpvMatrixCase{
 	{provider: "vidrift", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "vidrift", mode: provider.ModeTV, query: "Breaking Bad"},
 	// Anime providers.
-	{provider: "anicine", mode: provider.ModeAnime, query: "Naruto"},
-	{provider: "anikoto", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "anivault", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "miruro", mode: provider.ModeAnime, query: "Naruto"},
-	{provider: "anipm", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "anidream", mode: provider.ModeAnime, query: "Naruto"},
-	{provider: "bingr", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "vidrift", mode: provider.ModeAnime, query: "Naruto"},
 }
 

@@ -1,10 +1,6 @@
 package config
 
 const (
-	// AnikotoBase is the primary Anikoto domain. The site also serves
-	// anikoto.cz (regional), anikoto.me (short TLD), and anikoto.net as
-	// mirrors of the same ajax/watch endpoints.
-	AnikotoBase      = "https://anikototv.se"
 	MovyReferer      = "https://www.movy.sx/"
 	TMDBAPIBase      = "https://api.themoviedb.org/3"
 	TMDBBaseURL      = "https://www.themoviedb.org"
@@ -64,15 +60,6 @@ const (
 	// playback routes without requiring the private scraper's API key.
 	AniVaultAPIBase = "https://www.anivault.co"
 
-	// AniPMBase is the public web application for Ani.pm (https://ani.pm).
-	AniPMBase = "https://ani.pm"
-	// AniPMReferer satisfies hotlink protection on Ani.pm API requests.
-	AniPMReferer = "https://ani.pm/"
-	// AniPMEmbedBase is the Settlar embed host for Ani.pm streams.
-	AniPMEmbedBase = "https://embed.settlar.io"
-	// AniPMMediaReferer satisfies hotlink protection on media.settlar.io stream requests.
-	AniPMMediaReferer = "https://embed.settlar.io/"
-
 	// SolisAPIBase is the hosted streaming resolution API deployed on Vercel.
 	SolisAPIBase = "https://solis-api.vercel.app"
 
@@ -127,6 +114,23 @@ const (
 	// addressed through it with the TMDB id plus a sources key (s1–s7).
 	VidGoldAPIBase = "https://api.vidgold.net"
 
+	// VidoraBase is the embed player origin for Vidora (https://vidora.ac).
+	// It serves no API; the player resolves through the hls.lol lanes below
+	// and only needs this origin as the hotlink Referer.
+	VidoraBase = "https://vidora.ac"
+	// VidoraContentBase is Vidora's Aphrodite content edge, a TMDB-keyed
+	// lookup that returns a signed HLS master on the totallyacdn.cc CDN.
+	VidoraContentBase = "https://cdn.hls.lol"
+	// VidoraStreamBase serves the Vidbox and Prism (mbox) player lanes.
+	VidoraStreamBase = "https://stream.hls.lol"
+	// VidoraSheguBase is Vidora's Shegu resolver, which returns a direct
+	// signed HLS master for a TMDB coordinate.
+	VidoraSheguBase = "https://shegu.hls.lol"
+	// VidoraPalBase serves Bandit's per-server stream listing.
+	VidoraPalBase = "https://pal.hls.lol"
+	// VidoraSubsBase is Vidora's subtitle lookup service.
+	VidoraSubsBase = "https://natsuki.hls.lol"
+
 	// MappleBase is the main web and API base for Mapple (https://mapple.fun).
 	MappleBase = "https://mapple.fun"
 	// MappleReferer satisfies hotlink and header protection on Mapple API and stream requests.
@@ -145,15 +149,10 @@ const (
 	// upstream gateway keys its session on the site origin.
 	AniDreamReferer = "https://anidream.to/"
 
-	// BingrAPIBase is the REST API endpoint for Bingr (https://bingr.st).
-	// It still serves catalog metadata; stream resolution moved off this host.
-	BingrAPIBase = "https://api.bingr.st/api"
 	// BingrSiteBase is Bingr's current web application (https://bingr.one).
 	// Its watch pages embed a short-lived sealed payload holding the streams
 	// that replaced the retired shard API on api.bingr.st.
 	BingrSiteBase = "https://bingr.one"
-	// BingrReferer satisfies hotlink and referer requirements on Bingr API requests.
-	BingrReferer = "https://bingr.st/"
 	// DefaultDiscordAppID is the Kari Discord application used for Rich
 	// Presence. Its registered name is what users see as the activity verb
 	// ("Watching Kari"); the KARI_DISCORD_APP_ID env var overrides it for

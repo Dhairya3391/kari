@@ -95,25 +95,6 @@ func (c *Client) fetchSealedSources(
 	return c.collectSources(ctx, c.watchURL(mediaType, tmdbID, season, epNum), query)
 }
 
-// fetchAnimeSealedSources loads an anime watch page and decodes the streams
-// from Bingr's anime backends. These are distinct from the MegaPlay embeds
-// used elsewhere: they are served from hikari.streamrip.fun and friends.
-func (c *Client) fetchAnimeSealedSources(
-	ctx context.Context,
-	anilistID string,
-	epNum int,
-	audio string,
-) ([]provider.MediaSource, error) {
-	watchURL := fmt.Sprintf("%s/watch/anime/%s/%d", c.siteBase, anilistID, epNum)
-	query := url.Values{
-		"kind":    {string(provider.ModeAnime)},
-		"anilist": {anilistID},
-		"e":       {strconv.Itoa(epNum)},
-		"audio":   {audio},
-	}
-	return c.collectSources(ctx, watchURL, query)
-}
-
 // collectSources loads a watch page, decodes the source payload it embeds for
 // its own player, then gathers every backend's streams using the page's token.
 func (c *Client) collectSources(

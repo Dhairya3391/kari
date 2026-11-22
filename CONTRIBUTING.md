@@ -60,7 +60,7 @@ Kari enforces [Conventional Commits](https://www.conventionalcommits.org/) for a
 ```
 
 - **Types**: `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`, `ci`
-- **Scope** (recommended): `provider/anikoto`, `player/mpv`, `tui`, `service`, `scrobble`
+- **Scope** (recommended): `provider/miruro`, `player/mpv`, `tui`, `service`, `scrobble`
 
 ### Examples
 

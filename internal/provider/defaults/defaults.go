@@ -8,10 +8,7 @@ import (
 	"kari/internal/logging"
 	"kari/internal/provider"
 	"kari/internal/provider/a11"
-	"kari/internal/provider/anicine"
 	"kari/internal/provider/anidream"
-	"kari/internal/provider/anikoto"
-	"kari/internal/provider/anipm"
 	"kari/internal/provider/anivault"
 	"kari/internal/provider/atsu"
 	"kari/internal/provider/bingr"
@@ -27,6 +24,7 @@ import (
 	"kari/internal/provider/solis"
 	"kari/internal/provider/stremioaddon"
 	"kari/internal/provider/vidgold"
+	"kari/internal/provider/vidora"
 	"kari/internal/provider/vidrift"
 	"kari/internal/provider/vyla"
 	"kari/internal/provider/weebcentral"
@@ -39,27 +37,9 @@ import (
 // modes, features, languages, and aliases automatically.
 var DefaultProviders = []provider.Descriptor{
 	{
-		ID: "anicine",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return anicine.NewClient()
-		},
-	},
-	{
 		ID: "movysx",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return movysx.NewClient(d.KeyPool)
-		},
-	},
-	{
-		ID: "anikoto",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return anikoto.NewClient()
-		},
-	},
-	{
-		ID: "anipm",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return anipm.NewClient()
 		},
 	},
 	{
@@ -115,6 +95,12 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "mapple",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return mapple.NewClient(d.KeyPool)
+		},
+	},
+	{
+		ID: "vidora",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return vidora.NewClient(d.KeyPool)
 		},
 	},
 	{

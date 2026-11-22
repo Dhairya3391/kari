@@ -82,7 +82,7 @@ Conventional Commits — the auto-generated changelog depends on it:
 ```
 
 Types: `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`, `ci`.
-Scope encouraged: `provider/anikoto`, `player/mpv`, `tui`.
+Scope encouraged: `provider/miruro`, `player/mpv`, `tui`.
 
 Examples:
 

@@ -1,11 +1,9 @@
 // Package bingr implements provider.Provider for Bingr (https://bingr.st),
-// a multi-format media catalog providing movies, television series,
-// animation/cartoons, and anime.
+// a movie, television and cartoon catalog.
 //
-// Catalog metadata lives on api.bingr.st. Playback for movies, television,
-// and cartoons comes from the sealed stream payload embedded in each
-// https://bingr.one/watch page; anime is resolved through direct MegaPlay
-// embeds keyed by AniList or MAL ID.
+// Playback comes from the sealed stream payload embedded in each
+// https://bingr.one/watch page. Anime is served by Miruro, which already
+// carries the same MegaPlay lanes, so Bingr no longer declares that mode.
 package bingr
 
 import (
@@ -13,13 +11,11 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
 	"kari/internal/logging"
 	"kari/internal/provider"
-	"kari/internal/provider/anilist"
 	"kari/internal/provider/streambase"
 	"kari/internal/tmdb"
 )
@@ -27,19 +23,12 @@ import (
 var (
 	_ provider.Provider             = (*Client)(nil)
 	_ provider.Presenter            = (*Client)(nil)
-	_ provider.FeatureSource        = (*Client)(nil)
 	_ provider.AudioLanguagesSource = (*Client)(nil)
 	_ provider.StreamingProvider    = (*Client)(nil)
 )
 
-const (
-	// providerID is the canonical registry handle for Bingr.
-	providerID = "bingr"
-	// megaplayBase serves the direct anime embeds keyed by MAL or AniList ID.
-	// It mirrors the base used by the anicine provider; the former Filmu
-	// gateway is permanently gone, so embeds are fetched from MegaPlay itself.
-	megaplayBase = "https://megaplay.buzz"
-)
+// providerID is the canonical registry handle for Bingr.
+const providerID = "bingr"
 
 var bingrAudioLanguages = []provider.AudioLanguage{
 	{Code: "en", Display: "English"},
@@ -60,54 +49,32 @@ var bingrAudioLanguages = []provider.AudioLanguage{
 
 // Client implements provider.Provider against the Bingr streaming platform.
 type Client struct {
-	base        *streambase.Base
-	httpClient  *http.Client
-	apiBase     string
-	siteBase    string
-	embedBase   string
-	anilistBase string
-
-	animeMetaCache sync.Map
+	base       *streambase.Base
+	httpClient *http.Client
+	siteBase   string
 }
 
 // NewClient constructs the Bingr provider over the shared TMDB search base
 // pointing to production endpoints.
 func NewClient(keyPool *tmdb.KeyPool) (*Client, error) {
-	return NewClientWithURLs(keyPool, config.BingrAPIBase, config.BingrSiteBase, megaplayBase, config.AniListAPIBase)
+	return NewClientWithURLs(keyPool, config.BingrSiteBase)
 }
 
-// NewClientWithURLs constructs the provider against custom endpoints so tests
-// can mock external backends without live network requests. The siteBase
-// argument is the web origin whose watch pages carry sealed stream payloads;
-// embedBase is the MegaPlay origin serving anime embeds and getSources.
-func NewClientWithURLs(keyPool *tmdb.KeyPool, apiBase, siteBase, embedBase, anilistBase string) (*Client, error) {
+// NewClientWithURLs constructs the provider against a custom site origin so
+// tests can mock watch pages without live network requests.
+func NewClientWithURLs(keyPool *tmdb.KeyPool, siteBase string) (*Client, error) {
 	base, err := streambase.New(keyPool)
 	if err != nil {
 		return nil, fmt.Errorf("bingr streambase: %w", err)
-	}
-	apiBase = strings.TrimRight(strings.TrimSpace(apiBase), "/")
-	if apiBase == "" {
-		apiBase = config.BingrAPIBase
 	}
 	siteBase = strings.TrimRight(strings.TrimSpace(siteBase), "/")
 	if siteBase == "" {
 		siteBase = config.BingrSiteBase
 	}
-	embedBase = strings.TrimRight(strings.TrimSpace(embedBase), "/")
-	if embedBase == "" {
-		embedBase = megaplayBase
-	}
-	anilistBase = strings.TrimRight(strings.TrimSpace(anilistBase), "/")
-	if anilistBase == "" {
-		anilistBase = config.AniListAPIBase
-	}
 	return &Client{
-		base:        base,
-		httpClient:  httpclient.New(),
-		apiBase:     apiBase,
-		siteBase:    siteBase,
-		embedBase:   embedBase,
-		anilistBase: anilistBase,
+		base:       base,
+		httpClient: httpclient.New(),
+		siteBase:   siteBase,
 	}, nil
 }
 
@@ -117,24 +84,14 @@ func (c *Client) Alias() string { return "Bingr" }
 // Name implements provider.Provider with the canonical identifier.
 func (c *Client) Name() string { return providerID }
 
-// Modes implements provider.Provider, declaring support for movies, TV series,
-// cartoons, and anime.
+// Modes implements provider.Provider, declaring support for movies, TV series
+// and cartoons.
 func (c *Client) Modes() []provider.Mode {
 	return []provider.Mode{
 		{Name: provider.ModeMovies, Priority: 2},
 		{Name: provider.ModeTV, Priority: 2},
 		{Name: provider.ModeCartoon, Priority: 2},
-		{Name: provider.ModeAnime, Priority: 2},
 	}
-}
-
-// Features implements provider.FeatureSource. Anime exposes separate sub and
-// dub audio options.
-func (c *Client) Features(mode provider.ContentType) provider.Features {
-	if mode == provider.ModeAnime {
-		return provider.Features{AudioSelection: true}
-	}
-	return provider.Features{}
 }
 
 // AudioLanguages implements provider.AudioLanguagesSource with the catalog's
@@ -143,36 +100,17 @@ func (c *Client) AudioLanguages() []provider.AudioLanguage {
 	return bingrAudioLanguages
 }
 
-// Search resolves anime via AniList index and movies/TV/cartoon through TMDB.
+// Search resolves titles through the shared TMDB index.
 func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
 	logging.Debug("search start", "provider", c.Name(), "query", query, "mode", mode)
 	if strings.TrimSpace(query) == "" {
 		return nil, provider.ErrNoResults
 	}
-	if mode == provider.ModeAnime {
-		results, err := anilist.SearchWithEndpoint(ctx, c.httpClient, query, c.anilistBase)
-		if err == nil && len(results) > 0 {
-			return results, nil
-		}
-		// Fallback to Bingr's internal anime search endpoint if AniList is unreachable.
-		fallback, fErr := c.searchAnimeBingr(ctx, query)
-		if fErr == nil && len(fallback) > 0 {
-			return fallback, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("bingr anime search: %w", err)
-		}
-		return nil, provider.ErrNoResults
-	}
 	return c.base.Search(ctx, query, mode)
 }
 
-// FetchEpisodes returns episode lists: AniList-backed sub/dub pairs for anime,
-// or TMDB season/episode trees for movies, TV, and cartoons.
+// FetchEpisodes returns TMDB season/episode trees for movies, TV and cartoons.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
-	if isAnimeSeries(series) {
-		return c.fetchAnimeEpisodes(ctx, series)
-	}
 	return c.base.FetchEpisodes(ctx, series)
 }
 
@@ -211,38 +149,6 @@ func (c *Client) ResolveStream(
 	episode provider.Episode,
 	updates chan<- []provider.MediaSource,
 ) error {
-	logging.Debug("resolve stream start", "provider", c.Name(), "mediaID", mediaID, "episode", episode.Episode, "audio", episode.Audio)
-	if isAnimeEpisode(mediaID, episode) {
-		return c.resolveAnime(ctx, mediaID, episode, updates)
-	}
-	err := c.resolveDirect(ctx, mediaID, episode, updates)
-	if err != nil {
-		if meta, aErr := c.fetchAnimeMeta(ctx, mediaID); aErr == nil && (meta.IDMal > 0 || meta.TMDBID > 0) {
-			logging.Debug("falling back to anime resolution for AniList ID", "mediaID", mediaID)
-			return c.resolveAnime(ctx, mediaID, episode, updates)
-		}
-	}
-	return err
-}
-
-func isAnimeSeries(series provider.SearchResult) bool {
-	return series.Type == provider.ModeAnime || series.MediaType == provider.MediaTypeAnime || series.AniListID > 0
-}
-
-func isAnimeEpisode(mediaID string, episode provider.Episode) bool {
-	epID := strings.TrimSpace(episode.ID)
-	mID := strings.TrimSpace(mediaID)
-	if strings.HasPrefix(epID, "watch/") || strings.HasPrefix(mID, "watch/") {
-		return true
-	}
-	if episode.Audio == provider.AudioSub || episode.Audio == provider.AudioDub {
-		return true
-	}
-	if strings.HasPrefix(mID, "anilist:") || strings.HasPrefix(epID, "anilist:") {
-		return true
-	}
-	if strings.HasPrefix(mID, "mal:") || strings.HasPrefix(epID, "mal:") {
-		return true
-	}
-	return false
+	logging.Debug("resolve stream start", "provider", c.Name(), "mediaID", mediaID, "episode", episode.Episode)
+	return c.resolveDirect(ctx, mediaID, episode, updates)
 }

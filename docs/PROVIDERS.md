@@ -13,7 +13,7 @@
 ## 0. Registration (single source today)
 
 - `internal/provider/defaults/defaults.go` is the only registration
-  list: `anicine, movysx, anikoto, anipm, anivault, miruro, solis, cinecat, q62, cinejoy, vidgold, cno, mapple, vidrift, bingr, anidream, weebcentral, famelack, a11, vyla, atsu` plus config-gated `jellyfin`.
+  list: `movysx, anivault, miruro, solis, cinecat, q62, cinejoy, vidgold, cno, mapple, vidora, vidrift, bingr, anidream, weebcentral, famelack, a11, vyla, atsu` plus config-gated `jellyfin`.
 - `jellyfin.When` gates on `JellyfinURL && JellyfinAPIKey`
   (`defaults.go:60-62`); factory failure skips with log, never fatal
   (`defaults.go:80-84`).
@@ -24,8 +24,8 @@ Declared modes/priorities:
 
 | mode | providers (priority) | evidence |
 | --- | --- | --- |
-| anime | anicine P1, anikoto P1, anipm P2, anivault P2, anidream P2, miruro P2, vidrift P2, bingr P2 | each provider's `client.go` `Modes()` |
-| movies/tv/cartoon | movysx P2, solis P2, cinecat P2, cinejoy P2, cno P2, vidgold P2, q62 P2, mapple P2, vidrift P2, bingr P2, a11 P10, vyla P15 | each provider's `client.go` `Modes()` |
+| anime | anivault P2, anidream P2, miruro P2, vidrift P2 | each provider's `client.go` `Modes()` |
+| movies/tv/cartoon | movysx P2, solis P2, cinecat P2, cinejoy P2, cno P2, vidgold P2, vidora P2, q62 P2, mapple P2, vidrift P2, bingr P2, a11 P10, vyla P15 | each provider's `client.go` `Modes()` |
 | live | famelack P2 (live TV only) | `famelack/client.go` `Modes()` |
 | reading (internal mode `manga`) | weebcentral P1, anidream P2, atsu P2 | `weebcentral`, `anidream`, `atsu` `Modes()` |
 | jellyfin | jellyfin P1 only | `jellyfin/client.go:55-59` |
@@ -66,10 +66,9 @@ Cartoon search reuses TMDB multi-search + genre-16 filter via streambase
 - Movies/live bypass: `tui/update_selection.go:42` synthesizes
   `Episode{ID: series.ID}` when `MediaType==movie|live` and
   `!RequiresEpisodeListForMovies(provider)`. Default false
-  (`registry.go:154-167`); true only for anikoto/reanime
-  (`anikoto/client.go:42-46`,
-  `reanime/client.go:42-43`). So movysx/jellyfin movies resolve
-  directly.
+  (`registry.go:154-167`); true for the AniList-keyed anime providers
+  (`miruro/client.go`, `anivault/client.go`, `anidream/client.go`).
+  Movie/TV providers resolve directly.
 
 ### Sources: parallel-merge all mode providers + progressive snapshots
 
@@ -80,16 +79,16 @@ Cartoon search reuses TMDB multi-search + genre-16 filter via streambase
 - Cross-provider ID (`241-263`): other-provider uses `series.TMDBID` if
   `>0`, else anime reuses `series.ID`, else skips provider silently.
   `tmdbID = series.TMDBID || episode.TMDBID || Atoi(series.ID)`.
+  No provider-name translation: all anime providers are AniList-keyed.
 - Streaming providers implement `StreamingProvider` and publish incremental
   source batches through `ResolveStream`; other providers go through
   `ResolveSource` wrapped as a 1-item chan.
 - Aggregator (`350-447`): stamps `Resolver`; dedupes playback by
   `TrimSpace+TrimSuffix("/")` URL (query significant, `427-447`); subs
   dedupe by `sub.URL`, label `LangName(DisplayName)` (`383-396`).
-- Sort (`403-425`, provider-specific branching — see §6): anikoto
-  Vidstream-2 top, then movysx top, then `SourceQuality` desc, then
-  registry priority. TUI mirrors it (`playback_helpers.go:63-73`,
-  `update_results.go:572,588`).
+- Sort (`403-425`, provider-specific branching — see §6): movysx top,
+  then `SourceQuality` desc, then registry priority. TUI mirrors it
+  (`playback_helpers.go:63-73`, `update_results.go:572,588`).
 - Failure (`333-347`): zero sources → `ctx.Err()` or joined failure
   strings or `ErrNoSources`. Failures are strings; ranking later reads
   `FailedProviders map[string]time.Time` but resolve does not feed it.
@@ -123,14 +122,21 @@ Cartoon search reuses TMDB multi-search + genre-16 filter via streambase
   `FetchEpisodes` (`media_service.go:152`). No translation.
 - Search→sources cross-provider (`media_service.go:241-263`): TMDB ID when
   present; anime falls back to raw `series.ID` (AniList numeric ID reused
-  across anikoto/anilight/reanime, which are all AniList-keyed); others
-  skip. No title-based resolution; no confidence score; no cache.
+  across miruro/anivault/anidream); others skip. No title-based resolution;
+  no confidence score; no cache.
 - Absolute vs seasonal: anime episode `ID` encodes
   `watch/<server>/<anilistID>/<sub|dub>/<number>`; `kit.ParseHandle`
   (`kit/kit.go:46-74`) parses 5/4/3-part forms. Number is the provider's
   episode number, passed through as `Episode.Episode`. No absolute↔seasonal
   conversion at edges; One Piece-style absolute numbering works only
   because all three anime providers share the AniList numbering.
+- Sub/dub availability: Miruro's catalog carries `episode_counts`
+  (`raw/sub/dub`) per title. Its `FetchEpisodes` emits sub rows for the
+  first `sub` episodes and dub rows for the first `dub` episodes, and it is
+  the `EpisodeAvailabilitySource` the service uses for audio selection.
+  `FetchAvailableEpisodes` in the service falls back to ordinary rosters
+  when no availability source answers, so a dead catalog never produces a
+  false "no dub available".
 - External IDs for skip/scrabble/subtitles/posters — per-package
   re-derivation, no shared `ExternalIDs`:
   - Skip: `aniskip` needs MAL ID (`aniskip/resolver.go:GetMALID`), `animeskip`
@@ -155,16 +161,14 @@ Unified shapes: `provider.SearchResult` (`provider.go:64-97`),
 
 | provider | raw → unified | gaps / inconsistencies |
 | --- | --- | --- |
-| anikoto | `/search?q=` JSON `{id(json.Number),name,format,year}` → `Title/ID/MediaType(movie iff format==MOVIE)/Year`; episodes JSON `{number float64}` → `Episode.Episode`; watch `/watch/<srv>/<id>/<cat>/<n>` via `kit.FetchFirst` servers `l,light,mello,vid`-like list → `MediaSource{URL,Quality:"Auto (…)",Referer: megaplay.buzz, Type hls/mp4 by ext}` | quality strings are server labels (`"Auto (HD1)"`), not heights; audio from handle category sub/dub only; subtitle langs via `kit.Subtitles` + `lang.Normalize`; size absent; headers per-source Referer, no Cookie |
-| anivault | `/api/search?q=` AniList-keyed JSON `{id,title,coverImage,format}` → `Title/ID/MediaType`; `/api/episodes?anilistId=&source=anivault` (AnimeHeaven fallback) → sub/dub handles; `/api/watch/<source>/<anilistId>/<ep>/<sub\|dub>` → `m3u8`/`mp4`, proxy-unwrapped direct CDN URL, proxy `ref` as Referer, external VTT subtitles | sub resolves Anikoto soft-subbed HLS and AnimeHeaven hard-subbed MP4 in parallel; dub availability verified per episode; quality label is `Auto (<server>)`, not a height |
+| anivault | AniList search + Hoshika catalog (`/api/hoshika/*`), `/api/animeheaven_stream.php?hoshikaId=&ep=&audio=` → `m3u8`/`mp4`, proxy-unwrapped direct CDN URL, proxy `ref` as Referer, external VTT subtitles | AnimeHeaven backend only; dub currently returns no sources; quality label is `Auto`, not a height |
 | anidream | TanStack Start `/_serverFn/<hash>` calls carrying a Seroval `payload`; AniList-keyed browse/episodes/playback plus manga/light-novel chapters/pages; sub/dub handles `watch/anidream/<anilistID>/<audio>/<ep>`; signed multi-bitrate HLS, soft subtitles, chapter-derived skip times | search capped at 25; server-function hashes are bundle-specific and must be refreshed after an AniDream deploy; light novels share the manga reader; quality fixed `Auto`; empty episode audio flags fall back to sub |
-| anilight | same shape, base `noob3`, referer `anilight.live`, servers `[l,light,mello,vid]` (`anilight/client.go:237`); `cleanAniLightText`, `pickTitle` | same gaps as anikoto; title cleaning ad-hoc per provider |
-| reanime | same shape, base `noob4`, referer `flixcloud.cc`, servers `[hd1,hd2]` (`reanime/client.go:230`); `ArgPolicy{KeepHeaderFieldArgs,SkipURLArgs,StripQuotes}` (`reanime/client.go:254`) | same gaps; MPV arg filtering differs per provider |
 | movysx | search/items delegate to `streambase.Base` (TMDB); resolve `?tmdb=&type=movie\|tv&s=&e=` JSON `{sources[],audio[],subtitles[]}` → `MediaSource{URL,Quality raw,Referer movy.sx,Type declared-first (hls/mp4/dash/auto)}`; `audio[]` dubbed rows append as `Language`-tagged sources (`Auto (Hindi)`); 504 → `ErrTimeout` | quality raw upstream; main rows untagged, dubbed rows ISO (`hi`, `und` kept); subtitles ISO via `lang.Normalize`; no size; key-pool rotation in streambase (`isAuthError 401/429`); city-mirror copies collapsed by a bounded HLS manifest fingerprint (first 256 EXTINF durations + sequence/target headers, 32 KiB cap) so unreadable manifests stay visible as extra rows |
 | weebcentral | HTMX scrape `weebcentral.com`; search ≤25; chapters from series page + `chapter-select` merge; pages `pageImgSrcRe`; `MangaPage{URL,Referer: site, UserAgent: DesktopUA}` | `FetchEpisodes/ResolveSource` return sentinels (correct for Reader); chapter numbers strings (`"10.5"`); year/genres scraped (`yearRe`, `seriesTitleRe`); throttle 300ms mutex (`client.go:89-103`) |
 | jellyfin | `X-Emby-Token` `authGET`; library cached 5m (`library.go:20`), `maxSearchResults 50`; `rankLibrary/matchScore/hasWordPrefix/containsAllWords/isSubsequence`; resolve synthetic `/Videos/{id}/stream?static=true&api_key=` `Type mp4 Quality "Jellyfin"` (`client.go:237-239`) | quality fixed string; no audio/subtitle langs from server yet; search falls back to `searchHints` when cache misses |
 | solis | TMDB base for search/items + hosted Solis API resolve (`https://solis-api.vercel.app`); multi-tier HLS/DASH streaming + multi-language subtitles | API 1.2.0: stable per-lane `backend` (`"Dexter"`, `"Gumball"`, …) alongside the legacy composite `quality` (`"1080p (Dexter)"`); shard playlists are probed server-side so `quality` reports the real top tier and 404/410 lanes are dropped; DASH lanes ship DASH demuxer args; subtitles normalized to short language codes (deduped by URL+language, per-source and stream-level); 20s fan-out budget; 45s batch result cache (`fresh=1` bypass, `validate=false` opt-out); `meta` reports version/cache/timing; progressive SSE stream resolution; mpv plays directly |
 | cinecat | TMDB base for search/items + ZCDN edge (zcdn1.e6dd8d160-edge.workers.dev) multi-tier HLS (4K, 1080p, 720p, 480p, Auto) + Aphrodite self-hosted content edge (cdn.hls.lol `/content/movie/{tmdb}` and `/content/tv/{tmdb}/{season}/{episode}` → totallyacdn.cc master) + every lane advertised by the sources API (edge.cinecat.eu) + Granite (sub.vdrk.site) subtitles | parallel ZCDN + Aphrodite + per-lane fan-out; Aphrodite and lane tiers are tagged with their `backend` and an `Auto (<Backend>)` master; a single-rendition lane keeps its own declared `label` (canonicalized through the shared height→label mapping) instead of an adaptive row; one failing lane, ZCDN, or Aphrodite never fails resolution; mpv plays directly; Referer hotlink protection; the ZCDN and sources lanes are behind a cap.js proof-of-work and currently answer 401, leaving the ungated Aphrodite edge as the primary playback source |
+| vidora | TMDB base for search/items (via `streambase`) + the Vidora player's own lanes: Aphrodite content edge (`cdn.hls.lol` `/content/movie/{tmdb}` and `/content/tv/{tmdb}/{season}/{episode}` → totallyacdn.cc master), Shegu resolver (`shegu.hls.lol` `/resolve/...`), Vidbox and Prism/mbox (`stream.hls.lol` `/vidbox` and `/mbox`), Bandit's listing (`pal.hls.lol` `/bandit/streams`), and subtitle lookup (`natsuki.hls.lol` `/subs`); movies/TV/cartoon | lanes are queried in parallel under the shared lane budget and tagged with their `backend`; Moscow's `ms_` token, Lightspeed's session-bound source, and the separate resolve/dash/it endpoints are skipped because they cannot yield an address mpv can open on its own; Aphrodite answers `found:true` with a playable master for unknown TMDB ids, so a row is accepted only when the response also carries a display `title`; the edge also gates real masters behind the site's content challenge, so an unauthenticated short stand-in clip (about a minute, no audio renditions) is detected by playlist duration and skipped in favour of another lane; Prism tracks are typed from their declared `kind` (every lane host contains "hls") and DASH rows force the lavf dash demuxer because the lane URL is extensionless; Prism's audio `lang`/`mode` fill `AudioLabel`/`Language` so same-resolution rows stay distinguishable; subtitles deduped per normalized language; every lane and subtitle request carries the site Referer because the hls.lol hosts reject bare requests; one dead lane never fails resolution; mpv plays directly |
 | cinejoy | TMDB base for search/items + sealed gateway (api2.wing.st) over every lane the `/servers` listing advertises (Light, Sirius, Nebula, Polaris), each expanded into HLS quality tiers plus a master row; captions from the lane CDN | resolution is an ECDH P-256 + AES-GCM envelope (`HKDF` directions `c2s`/`s2c`, per-request ephemeral key, AAD binds version/key id/direction), POSTed to `/g` with a path of `/<lane>/<movie\|series>`; `/servers` is a plain JSON listing whose 4K-flagged lanes are queried first; a listing failure falls back to the known lane set; lanes ship results as they answer and one failing lane never fails the resolution; stream `type` selects hls/mp4 rows and unknown containers are dropped; self-contained tier URLs are published directly, while tiers with a separate `AUDIO` rendition are video-only so the master is published instead, labelled with its highest tier's resolution (mpv launches with `--hls-bitrate=max`, so the master really plays that tier with audio); a 4K claim backed by an H.264 level below 5.1 is clamped so fake 4K rows cannot outrank the real HEVC 4K lanes; declared peak bitrate is carried on each source so ranking prefers the higher-bitrate 4K; captions need the site `Origin` (a bare request 404s) so every subtitle option carries the referer; mpv plays directly |
 | cno | TMDB base for search/items + site source listing (`/api/movie/{tmdb}` or `/api/tv/{tmdb}/episode/{season}/{episode}`), which advertises the current direct HLS path; HLS master expanded into quality tiers; OpenSubtitles WebVTT via `/api/subs/list/...` + `/api/subs/file/...` | the retired `/api/s/20/...` tier is no longer requested; the HLS URL and its version query are read from the listing instead of hardcoded, so site-side path changes need no provider edit; embed sources in the listing are ignored (not direct streams); tier `Height`/`Bitrate` come from the parsed manifest and `Backend` from the listing label; subtitles deduped by normalized language and carry the site referer; mpv plays directly |
 | vidgold | TMDB base for search/items + the embed player's JSON API (api.vidgold.net) fan-out over the seven lanes VidGold's player shows: Aurum `s1`, Sovereign `s4`, Bullion `s2`, Ingot `s3`, Nugget `s5`, Doubloon `s7`, Gilt `s6`; HLS masters and HLS `qualities` entries are expanded per tier (including 4K/2160p) plus an `Auto` row; MP4 quality entries pass through; merged subtitles normalized via `lang.Normalize` | the API is the same backend family as the former VidQueen/SweetFox integration, but `Sec-Ch-Ua` is mandatory — without it every lane answers an all-null payload; each lane is probed in parallel with browser headers (`Origin`/`Referer` player embed, `Sec-Ch-Ua`) and its own 14s cap, playlist probes are capped at 64 KiB and 7s; missing lanes are skipped, s1/s3 duplicates deduped by URL; mpv plays directly |
@@ -219,8 +223,8 @@ ErrNoSources, ErrNotFound, ErrAuthRequired, ErrRateLimited`.
 ## 5. HTTP client facts
 
 - One shared client: `internal/httpclient/httpclient.go:22-69`.
-  `New()` everywhere (`anikoto:65`, `anilight:64`, `reanime:62`,
-  `movysx:68`, `weebcentral:81`, `jellyfin:40`, `streambase:45`);
+  `New()` everywhere (`miruro`, `anivault`, `anidream`, `movysx`,
+  `weebcentral`, `jellyfin`, `streambase`);
   `NewWithUserAgent` for most providers (cinecat, cinejoy, vidgold, q62,
   cno, mapple, streambase); the timeout variant for atsu and famelack.
   No `&http.Client{}` in provider tree; sole raw client is aria2 local RPC
@@ -256,8 +260,8 @@ ErrNoSources, ErrNotFound, ErrAuthRequired, ErrRateLimited`.
 
 ## 6. Provider-specific branching (must go)
 
-- `service/media_service.go:406-416`: sort prefers anikoto Vidstream-2,
-  then movysx — name switches in generic service.
+- `service/media_service.go:406-416`: sort prefers movysx — name switches
+  in generic service.
 - `tui/playback_helpers.go:63-73` `movyFirst` re-partitions movysx on top
   (comment admits mirroring service); `update_results.go:572,588` comments.
 - Capability/mode branches that stay (not name branches):
@@ -272,8 +276,8 @@ ErrNoSources, ErrNotFound, ErrAuthRequired, ErrRateLimited`.
   []Route, Merge/Fallback/Race/Single; search ≤8s, sources ≤12s,
   plus the overall deadline). Registry, MediaService and the TUI read
   the table; no provider-name switches in service or tui. Sort
-  preference is data too (`BoostRank`/`PreferredResolvers`): anime
-  prefers Anikoto Vidstream-2, movies/tv/cartoon prefer Movy.sx —
+  preference is data too (`BoostRank`/`PreferredResolvers`):
+  movies/tv/cartoon prefer Movy.sx —
   movy-first is a routing-table fact, not a code branch.
 - Idempotent loads: one media pipeline at a time. `guardLoad`
   (`internal/tui/load_guard.go`) refuses a new user-initiated load
@@ -316,8 +320,7 @@ ErrNoSources, ErrNotFound, ErrAuthRequired, ErrRateLimited`.
   `go test -tags live ./tests/live -run 'TestProviderPipeline/<mode>/<name>'`.
   Offline harness: `internal/provider/providertest` (redacting replay,
   scripted Fake, `Run` contract suite, Chaos transport). Reference
-  rollout: `internal/provider/anikoto/contract_fixture_test.go`
-  (fixtures), `internal/provider/jellyfin/contract_fixture_test.go`
+  rollout: `internal/provider/jellyfin/contract_fixture_test.go`
   (fake API). Playability: 1 KB probes (HLS chain or MP4 range;
   TS 0x47 / ftyp / EBML / EXT-X-KEY accepted), domains only in reports.
 - Add: constants in `config/constants.go`, package under

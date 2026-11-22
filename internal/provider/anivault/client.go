@@ -1,5 +1,5 @@
-// Package anivault resolves anime through AniVault's public catalog and
-// non-Anikoto playback integrations. Catalog IDs are explicitly separated from
+// Package anivault resolves anime through AniVault's public catalog and its
+// AnimeHeaven playback integration. Catalog IDs are explicitly separated from
 // AniList IDs, and signed playback URLs are resolved fresh for each request.
 package anivault
 
