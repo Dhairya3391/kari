@@ -65,6 +65,12 @@ var mpvMatrixCases = []mpvMatrixCase{
 	{provider: "bingr", mode: provider.ModeCartoon, query: "SpongeBob"},
 	{provider: "vidrift", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "vidrift", mode: provider.ModeTV, query: "Breaking Bad"},
+	{provider: "lightflix", mode: provider.ModeMovies, query: "Inception"},
+	{provider: "lightflix", mode: provider.ModeTV, query: "Breaking Bad"},
+	{provider: "lightflix", mode: provider.ModeCartoon, query: "SpongeBob"},
+	{provider: "vumeto", mode: provider.ModeMovies, query: "Inception"},
+	{provider: "vumeto", mode: provider.ModeTV, query: "Breaking Bad"},
+	{provider: "vumeto", mode: provider.ModeCartoon, query: "Family Guy"},
 	// Anime providers.
 	{provider: "anivault", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "miruro", mode: provider.ModeAnime, query: "Naruto"},

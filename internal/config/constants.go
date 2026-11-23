@@ -110,6 +110,15 @@ const (
 	CinecatAphroditeBase = "https://cdn.hls.lol"
 	CinecatSubsBase      = "https://sub.vdrk.site"
 
+	// VumetoBase is the Vumeto web application (https://vumeto.live). Its
+	// /api catalog serves TMDB-keyed search, title, and season payloads for
+	// movies, TV series, and cartoons.
+	VumetoBase = "https://vumeto.live"
+	// VumetoPlayerBase is Vumeto's embed player origin. Its /_player/resolve
+	// endpoint returns the player's direct stream lanes; the site origin is
+	// sent as the session's parentOrigin.
+	VumetoPlayerBase = "https://player.vumeto.live"
+
 	// VidGoldPlayerBase is the embed player origin VidGold uses. The player
 	// cascades over seven internal stream lanes (Aurum, Sovereign, Bullion,
 	// Ingot, Nugget, Doubloon, Gilt).
@@ -144,6 +153,11 @@ const (
 	// serves both the embed document and its /api/source lanes.
 	VidRiftSiteBase  = "https://vidrift.net"
 	VidRiftEmbedBase = "https://embed.vidrift.net"
+
+	// LightflixBase is the Lightflix web application (https://lightflix.app).
+	// Its playback API issues short-lived, IP-bound stream tokens through a
+	// proof-of-work handshake; the site origin is also the API Referer.
+	LightflixBase = "https://lightflix.app"
 
 	// AniDreamBase is the AniDream web application (https://anidream.to).
 	// It is a TanStack Start SPA whose catalog, playback, and reader data

@@ -17,6 +17,7 @@ import (
 	"kari/internal/provider/cno"
 	"kari/internal/provider/famelack"
 	"kari/internal/provider/jellyfin"
+	"kari/internal/provider/lightflix"
 	"kari/internal/provider/mapple"
 	"kari/internal/provider/miruro"
 	"kari/internal/provider/movysx"
@@ -26,6 +27,7 @@ import (
 	"kari/internal/provider/vidgold"
 	"kari/internal/provider/vidora"
 	"kari/internal/provider/vidrift"
+	"kari/internal/provider/vumeto"
 	"kari/internal/provider/vyla"
 	"kari/internal/provider/weebcentral"
 	"kari/internal/tmdb"
@@ -104,9 +106,21 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
+		ID: "lightflix",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return lightflix.NewClient(d.KeyPool)
+		},
+	},
+	{
 		ID: "vidrift",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return vidrift.NewClient(d.KeyPool)
+		},
+	},
+	{
+		ID: "vumeto",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return vumeto.NewClient()
 		},
 	},
 	{
