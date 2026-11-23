@@ -519,3 +519,29 @@ func TestStreamSourcesOrder(t *testing.T) {
 		t.Errorf("primary lane name = %q, want Lumen", sources[0].name)
 	}
 }
+
+func TestStreamEndpointRejectsForeignHost(t *testing.T) {
+	client := newTestClient(t, "https://lightflix.app")
+	for _, raw := range []string{
+		"https://attacker.example/collect?data=ok",
+		"//attacker.example/collect?data=ok",
+	} {
+		target, err := client.streamEndpoint(raw, "request-token", "stream-token")
+		if err == nil {
+			t.Errorf("streamEndpoint(%q) = %q, want error", raw, target)
+		}
+		if strings.Contains(target, "attacker.example") || strings.Contains(target, "token=") {
+			t.Errorf("streamEndpoint(%q) returned credential-bearing target %q", raw, target)
+		}
+	}
+
+	target, err := client.streamEndpoint("/api/stream-encrypted?data=ok", "request-token", "stream-token")
+	if err != nil {
+		t.Fatalf("site-relative sealed URL: %v", err)
+	}
+	if !strings.HasPrefix(target, "https://lightflix.app/api/stream-encrypted?") ||
+		!strings.Contains(target, "requestToken=request-token") ||
+		!strings.Contains(target, "token=stream-token") {
+		t.Errorf("site-relative target = %q", target)
+	}
+}

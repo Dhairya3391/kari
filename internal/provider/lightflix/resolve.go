@@ -367,6 +367,12 @@ func (c *Client) streamEndpoint(rawURL, requestToken, streamToken string) (strin
 	if err != nil {
 		return "", fmt.Errorf("lightflix sealed URL: %w", err)
 	}
+	// The seal response is upstream-controlled. ResolveReference keeps an
+	// absolute or scheme-relative URL's host, which would send both tokens and
+	// the site cookie to that host instead of the Lightflix origin.
+	if ref.Scheme != "" || ref.Host != "" {
+		return "", errors.New("lightflix sealed URL must be site-relative")
+	}
 	base, err := url.Parse(c.siteBase + "/")
 	if err != nil {
 		return "", fmt.Errorf("lightflix base URL: %w", err)
