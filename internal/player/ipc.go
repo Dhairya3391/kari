@@ -40,6 +40,7 @@ type playbackStats struct {
 	mu           sync.Mutex
 	result       PlaybackResult
 	loaded       bool
+	connected    bool
 	shortWarning bool
 	shortDur     float64
 }
@@ -87,10 +88,37 @@ func (s *playbackStats) snapshot() PlaybackResult {
 func (s *playbackStats) playing() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.shortWarning {
-		return false
-	}
+	return !s.shortWarning && s.hasEvidence()
+}
+
+// hasEvidence reports IPC-observed media with the caller holding the lock.
+func (s *playbackStats) hasEvidence() bool {
 	return s.loaded || s.result.DurationSecs > 0 || s.result.FinalPositionSecs > 0
+}
+
+// observedPlayback reports whether IPC ever saw evidence that media loaded.
+// The launch result snapshots it before the poller is torn down so a clean
+// mpv exit alone can never be mistaken for successful playback.
+func (s *playbackStats) observedPlayback() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hasEvidence()
+}
+
+// markConnected records that the poller reached the player's IPC socket.
+func (s *playbackStats) markConnected() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connected = true
+}
+
+// ipcConnected reports whether the poller ever reached the player's socket.
+// It distinguishes "no evidence because IPC was unavailable" from "no
+// evidence because the media never loaded".
+func (s *playbackStats) ipcConnected() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.connected
 }
 
 func newIPCSerializer(conn net.Conn) *bufio.Scanner {

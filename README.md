@@ -36,7 +36,7 @@ yay -S kari-bin   # or: paru -S kari-bin
 Package: [kari-bin on the AUR](https://aur.archlinux.org/packages/kari-bin).
 
 **Requires a media player:** [mpv](https://mpv.io) (recommended), IINA (macOS) or VLC.
-Kari is a terminal frontend, not a player. Android: see [Termux setup](#android-termux).
+Kari is a terminal frontend, not a player. Some movie/TV sources are DASH streams, which mpv can only play when the FFmpeg it was built against includes the `dash` demuxer. `mpv --version` prints that FFmpeg version; `ffmpeg -demuxers | grep dash` is a quick check when the CLI and mpv share a build (as with Homebrew on macOS, where FFmpeg 9.1+ has it). Without it, DASH rows fail to open and Kari falls through to other sources — HLS sources need no extra dependency. Android: see [Termux setup](#android-termux).
 
 ## Usage
 

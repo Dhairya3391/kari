@@ -11,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"kari/internal/lang"
 	"kari/internal/model"
 	"kari/internal/provider"
@@ -40,27 +39,89 @@ const (
 	// without shortening the readiness budget itself.
 	mpvReadinessPollInterval = 50 * time.Millisecond
 
-	// mpvQuickExitThreshold bounds how long into the readiness phase mpv can
-	// exit cleanly (code 0) with no IPC evidence that media ever loaded before
-	// we stop trusting that as "the user quit on purpose" and instead treat it
-	// as a silent playback failure (e.g. a dead URL mpv gives up on without a
-	// nonzero exit code). A real user quitting reacts within a second or two of
-	// seeing the window; a stream failing to open typically takes longer,
-	// bounded by --network-timeout=15 in the mpv args below.
-	mpvQuickExitThreshold = 2 * time.Second
-
 	// ShortWarningVideoMaxDuration is the maximum duration in seconds of a fake
 	// placeholder or warning clip (e.g. 45-second Cloudflare/VPN notice) served by
 	// hostile CDNs. Real episodic and movie media exceeds this threshold.
 	ShortWarningVideoMaxDuration = 60.0
+
+	// playbackMark is printed to stdout by mpv when playback actually starts.
+	// Unlike an exit code it cannot be produced by a URL mpv failed to open,
+	// so it is the signal used when the IPC socket is unreachable.
+	playbackMark = "KARI_PLAYING"
 )
+
+// playbackMarkerWriter watches mpv's stdout for playbackMark. mpv writes a
+// status line throughout playback, so only the tail needed to spot the marker
+// is kept; memory does not grow with the length of the video.
+type playbackMarkerWriter struct {
+	mu   sync.Mutex
+	tail string
+	seen bool
+}
+
+func (w *playbackMarkerWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.seen {
+		return len(p), nil
+	}
+	data := w.tail + string(p)
+	if strings.Contains(data, playbackMark) {
+		w.seen = true
+		w.tail = ""
+		return len(p), nil
+	}
+	keep := len(playbackMark) - 1
+	if len(data) > keep {
+		data = data[len(data)-keep:]
+	}
+	w.tail = data
+	return len(p), nil
+}
+
+func (w *playbackMarkerWriter) found() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.seen
+}
 
 func isShortWarningVideo(dur float64, rawURL string, isLive bool) bool {
 	if isLive || dur <= 0 || dur > ShortWarningVideoMaxDuration {
 		return false
 	}
-	u := strings.TrimSpace(rawURL)
+	return isHTTPURL(rawURL)
+}
+
+// isHTTPURL reports whether rawURL is fetched over HTTP(S). Network streams
+// can fail without a nonzero exit code (a CDN can serve an unplayable body),
+// so their launches need IPC evidence before counting as playback.
+func isHTTPURL(rawURL string) bool {
+	u := strings.ToLower(strings.TrimSpace(rawURL))
 	return strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
+}
+
+// mediaLoaded reports whether IPC property reads prove media is loaded.
+// idle-active is deliberately excluded: mpv reports it false as soon as it
+// is launched with a file, even when opening that file fails.
+func mediaLoaded(posErr, durErr error, dur float64) bool {
+	return posErr == nil || (durErr == nil && dur > 0)
+}
+
+// trustedWithoutIPC reports whether a launch with no IPC evidence can still
+// be trusted. mpv returns 0 both after real playback and after a file it
+// could not play once initialization mostly succeeded, so the exit code alone
+// proves nothing for HTTP URLs. The playback-start marker does: mpv prints it
+// only after it actually begins playing the file.
+func trustedWithoutIPC(connected, marked bool, rawURL string, exitCode int) bool {
+	if !isHTTPURL(rawURL) {
+		// Local files that fail to open exit nonzero. A marker also covers a
+		// signal quit, which mpv reports with a nonzero exit code.
+		return exitCode == 0 || marked
+	}
+	if connected {
+		return false
+	}
+	return marked
 }
 
 type startupCheck struct {
@@ -88,18 +149,39 @@ type launchResult struct {
 	curlStderr   string
 	exitCode     int
 	launched     bool
-	quickExit    bool
+	observed     bool
+	trusted      bool
 	curlFailed   bool
 	playback     PlaybackResult
 	shortWarning bool
 	shortDur     float64
 }
 
+// succeeded reports whether playback actually happened. IPC evidence of
+// loaded media always wins. With a reachable IPC socket, a clean exit alone
+// is not enough: mpv can exit 0 right after failing to open an unplayable
+// URL. A playback-start marker is the fallback for launches where IPC never
+// connected; the exit code alone is never treated as proof for HTTP URLs.
 func (r launchResult) succeeded() bool {
-	if r.shortWarning {
+	if r.shortWarning || r.curlFailed || !r.launched {
 		return false
 	}
-	return !r.curlFailed && attemptSucceeded(r.launched, r.exitCode, r.quickExit, r.playback)
+	return r.observed || r.trusted
+}
+
+// finalizeLaunch copies the poller's final state into the launch result. Both
+// launchers close the IPC channel and join the poller before calling it.
+func finalizeLaunch(result *launchResult, stats *playbackStats, ipcDone chan struct{}, ipcWG *sync.WaitGroup, sourceURL string, marked bool) {
+	close(ipcDone)
+	ipcWG.Wait()
+	result.playback = stats.snapshot()
+	result.observed = stats.observedPlayback()
+	result.trusted = trustedWithoutIPC(stats.ipcConnected(), marked, sourceURL, result.exitCode)
+	if isShort, dur := stats.isShortWarning(); isShort {
+		result.shortWarning = true
+		result.shortDur = dur
+		result.launched = false
+	}
 }
 
 // MPVPlayer plays via a desktop mpv process, using JSON IPC for position
@@ -265,7 +347,8 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 	pipeMpvArgs := []string{
 		"--no-ytdl",
 		"--really-quiet",
-		"--msg-level=all=error",
+		"--msg-level=all=error,term-msg=info",
+		"--term-playing-msg=" + playbackMark,
 		"--vo=gpu-next,gpu",
 		"--gpu-context=auto",
 		"--cache=yes",
@@ -355,7 +438,8 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socketPath string, aniskipArgs []string) []string {
 	args := []string{
 		"--no-ytdl",
-		"--msg-level=all=warn",
+		"--msg-level=all=warn,term-msg=info",
+		"--term-playing-msg=" + playbackMark,
 		"--vo=gpu-next,gpu",
 		"--gpu-context=auto",
 		hwdecOptionArg(),
@@ -442,9 +526,7 @@ func buildCurlArgs(url string, headers []string) []string {
 // optionalCurlFlags adds resilience flags only for real HTTP URLs; other
 // schemes would reject them outright.
 func optionalCurlFlags(finalURL string) []string {
-	isHTTP := strings.HasPrefix(strings.ToLower(strings.TrimSpace(finalURL)), "http://") ||
-		strings.HasPrefix(strings.ToLower(strings.TrimSpace(finalURL)), "https://")
-	if !isHTTP {
+	if !isHTTPURL(finalURL) {
 		return nil
 	}
 	return []string{
@@ -572,18 +654,20 @@ func ipcPoller(
 				durF = f
 			}
 		}
-		idle, idleErr := client.GetProperty(ipcPropIdleActive)
-		var isIdle bool
-		if idleErr == nil {
-			if b, ok := idle.(bool); ok {
-				isIdle = b
-			}
-		}
+		_, idleErr := client.GetProperty(ipcPropIdleActive)
+		pauseProp, pauseErr := client.GetProperty(ipcPropPause)
 		paused := false
-		if pauseProp, pauseErr := client.GetProperty(ipcPropPause); pauseErr == nil {
+		if pauseErr == nil {
 			if b, ok := pauseProp.(bool); ok {
 				paused = b
 			}
+		}
+		// A socket that answers get_property is usable IPC even when the
+		// properties are all "unavailable" (mpv never loaded media). Mark it
+		// here rather than on dial so a connect that dies before its first
+		// response does not suppress the playback-marker fallback.
+		if posErr == nil || durErr == nil || idleErr == nil || pauseErr == nil {
+			stats.markConnected()
 		}
 		if isShortWarningVideo(durF, sourceURL, isLive) {
 			mpvLog.Warn("rejected short placeholder/warning stream", "duration", durF, "url", sourceURL)
@@ -592,7 +676,7 @@ func ipcPoller(
 			return false
 		}
 
-		loaded := (posErr == nil) || (durErr == nil && durF > 0) || (idleErr == nil && !isIdle)
+		loaded := mediaLoaded(posErr, durErr, durF)
 		failed := posErr != nil && durErr != nil && idleErr != nil
 
 		if loaded || posF > 0 || durF > 0 {
@@ -649,7 +733,8 @@ func startPlayerWithStartupCheck(check startupCheck) launchResult {
 	defer func() { _ = os.Remove(check.socketPath) }()
 
 	cmd := exec.Command(check.binary, check.args...)
-	cmd.Stdout = io.Discard
+	marker := &playbackMarkerWriter{}
+	cmd.Stdout = marker
 	stderr := &bytes.Buffer{}
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
@@ -660,7 +745,7 @@ func startPlayerWithStartupCheck(check startupCheck) launchResult {
 	go func() {
 		done <- cmd.Wait()
 	}()
-	return waitForPlaybackReadiness(cmd, done, check, stderr)
+	return waitForPlaybackReadiness(cmd, done, check, stderr, marker)
 }
 
 func waitForPlaybackReadiness(
@@ -668,6 +753,7 @@ func waitForPlaybackReadiness(
 	done <-chan error,
 	check startupCheck,
 	stderr *bytes.Buffer,
+	marker *playbackMarkerWriter,
 ) (result launchResult) {
 	ipcDone := make(chan struct{})
 	var ipcWG sync.WaitGroup
@@ -682,17 +768,9 @@ func waitForPlaybackReadiness(
 		ipcPoller(context.Background(), client, stats, check.sourceURL, check.isLive, check.observer, ipcDone)
 	}()
 	defer func() {
-		close(ipcDone)
-		ipcWG.Wait()
-		result.playback = stats.snapshot()
-		if isShort, dur := stats.isShortWarning(); isShort {
-			result.shortWarning = true
-			result.shortDur = dur
-			result.launched = false
-		}
+		finalizeLaunch(&result, stats, ipcDone, &ipcWG, check.sourceURL, marker.found())
 	}()
 
-	phaseStart := time.Now()
 	readinessTimer := time.NewTimer(mpvReadinessTimeout)
 	defer readinessTimer.Stop()
 	ticker := time.NewTicker(mpvReadinessPollInterval)
@@ -705,7 +783,6 @@ func waitForPlaybackReadiness(
 				mpvStderr: stderr.String(),
 				exitCode:  exitCodeOf(err),
 				launched:  true,
-				quickExit: time.Since(phaseStart) < mpvQuickExitThreshold,
 			}
 		case <-readinessTimer.C:
 			_ = cmd.Process.Kill()
@@ -733,7 +810,6 @@ func waitForPlaybackReadiness(
 					mpvStderr:    stderr.String(),
 					exitCode:     exitCodeOf(err),
 					launched:     !isShort,
-					quickExit:    true,
 					shortWarning: isShort,
 					shortDur:     dur,
 				}
@@ -761,7 +837,8 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 	curlStderr := &bytes.Buffer{}
 	curl.Stderr = curlStderr
 	mpv.Stdin = stdout
-	mpv.Stdout = io.Discard
+	marker := &playbackMarkerWriter{}
+	mpv.Stdout = marker
 	mpvStderr := &bytes.Buffer{}
 	mpv.Stderr = mpvStderr
 
@@ -791,17 +868,9 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 		ipcPoller(context.Background(), client, stats, check.sourceURL, check.isLive, check.observer, ipcDone)
 	}()
 	defer func() {
-		close(ipcDone)
-		ipcWG.Wait()
-		result.playback = stats.snapshot()
-		if isShort, dur := stats.isShortWarning(); isShort {
-			result.shortWarning = true
-			result.shortDur = dur
-			result.launched = false
-		}
+		finalizeLaunch(&result, stats, ipcDone, &ipcWG, check.sourceURL, marker.found())
 	}()
 
-	phaseStart := time.Now()
 	readinessTimer := time.NewTimer(mpvReadinessTimeout)
 	defer readinessTimer.Stop()
 	ticker := time.NewTicker(mpvReadinessPollInterval)
@@ -816,7 +885,6 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 				curlStderr: curlStderr.String(),
 				exitCode:   exitCodeOf(mpvErr),
 				launched:   true,
-				quickExit:  time.Since(phaseStart) < mpvQuickExitThreshold,
 				curlFailed: exitCodeOf(curlErr) != 0 && !stats.playing(),
 			}, nil
 		case curlErr := <-curlDone:
@@ -877,7 +945,6 @@ func startPipeWithStartupCheck(check pipeStartupCheck) (result launchResult, err
 				curlStderr:   curlStderr.String(),
 				exitCode:     exitCodeOf(mpvErr),
 				launched:     !isShort,
-				quickExit:    true,
 				curlFailed:   exitCodeOf(curlErr) != 0 && !stats.playing(),
 				shortWarning: isShort,
 				shortDur:     dur,
@@ -923,23 +990,6 @@ func summarizeErr(label, stderr string) string {
 		return msg
 	}
 	return label + ": " + msg
-}
-
-// attemptSucceeded decides whether a launch attempt counts as playback that
-// actually happened. Evidence that the stream started (position or duration
-// over IPC) always wins, even if mpv crashed or was quit abnormally after.
-func attemptSucceeded(launched bool, exitCode int, quickExit bool, stats PlaybackResult) bool {
-	if stats.DurationSecs > 0 || stats.FinalPositionSecs > 0 {
-		return true
-	}
-	if !launched {
-		return false
-	}
-	// Exit code 4 is mpv's own "quit" signal and unambiguous either way.
-	if exitCode == 4 {
-		return true
-	}
-	return exitCode == 0 && quickExit
 }
 
 // exitCodeOf maps a cmd.Wait() error to an integer exit code.

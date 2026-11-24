@@ -28,6 +28,7 @@ mpv gives you the full Kari experience across Linux, macOS, Windows, and Android
 - **Stream Headers**: Passes required HTTP headers (`Referer`, `Origin`, custom cookies) via `--http-header-fields` so streams play without 403 Forbidden errors.
 - **Pipe Fallback**: If a stream host requires custom TLS handshakes or transport quirks, Kari automatically pipes data via `curl | mpv`.
 - **Flatpak Detection**: Auto-detects Flatpak mpv (`io.mpv.Mpv`) on Linux systems where native mpv isn't installed.
+- **DASH Streams**: Some providers (e.g. Vidora Prism) serve DASH manifests. mpv needs the FFmpeg it was built against to include the `dash` demuxer — check the version it reports with `mpv --version`, or run `ffmpeg -demuxers | grep dash` when the CLI shares that build (Homebrew on macOS: FFmpeg 9.1+). Without it those sources fail to open and Kari tries the next one; HLS sources work regardless.
 - **Warning Video Detection**: Rejects short fake CDN/Cloudflare warning clips (< 60s) and automatically rolls over to the next mirror.
 
 ### IINA (macOS)

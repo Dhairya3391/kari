@@ -430,12 +430,138 @@ func TestBuildCurlArgsRejectsHTTPErrorBody(t *testing.T) {
 func TestLaunchResultRejectsFailedCurlProducer(t *testing.T) {
 	result := launchResult{
 		launched:   true,
-		quickExit:  true,
+		observed:   true,
 		curlFailed: true,
 		playback:   PlaybackResult{FinalPositionSecs: 1},
 	}
 	if result.succeeded() {
 		t.Fatal("curl failure must not be reported as successful playback")
+	}
+}
+
+func TestLaunchResultRequiresObservedPlayback(t *testing.T) {
+	tests := []struct {
+		name   string
+		result launchResult
+		want   bool
+	}{
+		{
+			name: "clean exit without IPC evidence",
+			result: launchResult{
+				launched: true,
+				exitCode: 0,
+			},
+		},
+		{
+			name: "user quit without IPC evidence",
+			result: launchResult{
+				launched: true,
+				exitCode: 4,
+			},
+		},
+		{
+			name: "IPC observed position",
+			result: launchResult{
+				launched: true,
+				observed: true,
+				playback: PlaybackResult{FinalPositionSecs: 1},
+			},
+			want: true,
+		},
+		{
+			name: "IPC observed duration",
+			result: launchResult{
+				launched: true,
+				observed: true,
+				playback: PlaybackResult{DurationSecs: 100},
+			},
+			want: true,
+		},
+		{
+			name: "never launched",
+			result: launchResult{
+				observed: true,
+				playback: PlaybackResult{DurationSecs: 100},
+			},
+		},
+		{
+			name: "IPC unavailable but playback trusted",
+			result: launchResult{
+				launched: true,
+				trusted:  true,
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.result.succeeded(); got != tc.want {
+				t.Fatalf("succeeded() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTrustedWithoutIPC(t *testing.T) {
+	tests := []struct {
+		name      string
+		connected bool
+		marked    bool
+		url       string
+		exitCode  int
+		want      bool
+	}{
+		{"IPC connected, no evidence", true, false, "https://cdn.example.com/v.m3u8", 0, false},
+		{"local file clean exit", false, false, "/tmp/movie.mp4", 0, true},
+		{"local file signal quit with marker", false, true, "/tmp/movie.mp4", 4, true},
+		{"local file failed to open", false, false, "/tmp/movie.mp4", 2, false},
+		{"network playback marker", false, true, "https://cdn.example.com/v.m3u8", 0, true},
+		{"network marker with IPC connected", true, true, "https://cdn.example.com/v.m3u8", 0, false},
+		{"network clean exit without marker", false, false, "https://cdn.example.com/v.m3u8", 0, false},
+		{"network failed open without marker", false, false, "https://cdn.example.com/v.m3u8", 2, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := trustedWithoutIPC(tc.connected, tc.marked, tc.url, tc.exitCode)
+			if got != tc.want {
+				t.Fatalf("trustedWithoutIPC() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPlaybackMarkerWriter(t *testing.T) {
+	w := &playbackMarkerWriter{}
+	status := []byte("V: 00:00:01 / 00:00:02 (50%)\n")
+	for i := 0; i < 100; i++ {
+		if _, err := w.Write(status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w.found() {
+		t.Fatal("status output must not count as a playback marker")
+	}
+	if len(w.tail) > len(playbackMark)-1 {
+		t.Fatalf("tail grew to %d bytes", len(w.tail))
+	}
+
+	// mpv may split the marker across stdout writes.
+	if _, err := w.Write([]byte("KARI_PL")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("AYING\n")); err != nil {
+		t.Fatal(err)
+	}
+	if !w.found() {
+		t.Fatal("split playback marker was not detected")
+	}
+	if _, err := w.Write([]byte("more")); err != nil {
+		t.Fatal(err)
+	}
+	if w.tail != "" {
+		t.Fatal("writer should stop retaining output after the marker")
 	}
 }
 
