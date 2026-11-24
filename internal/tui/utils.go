@@ -188,29 +188,43 @@ func (m *modelImpl) goBackOne() bool {
 	return true
 }
 
-// currentResumePosition returns the saved playback position for the
-// episode currently in Preview, formatted mm:ss; empty when none.
-func (m *modelImpl) currentResumePosition() string {
+// currentHistoryEntry returns the watch-history entry for the media in
+// Preview, if one exists.
+func (m *modelImpl) currentHistoryEntry() (history.Entry, bool) {
 	if m.historyStore == nil || m.resolved == nil {
-		return ""
+		return history.Entry{}, false
 	}
-	entry, ok := m.historyStore.Get(history.EntryKey{
+	return m.historyStore.Get(history.EntryKey{
 		Title:     m.resolved.SeriesTitle,
 		Mode:      string(m.appMode),
 		MediaType: m.resolved.MediaType,
 		Season:    m.resolved.SeasonNumber,
 		Episode:   m.resolved.EpisodeNumber,
 	})
-	if !ok || entry.PositionSecs <= 0 || entry.Complete {
-		return ""
+}
+
+// currentResumeStatus returns the resume position and completion flag for
+// the media in Preview from one history lookup. The position is empty when
+// the media is finished or has no saved playback point.
+func (m *modelImpl) currentResumeStatus() (resume string, complete bool) {
+	entry, ok := m.currentHistoryEntry()
+	if !ok {
+		return "", false
 	}
-	return formatTimeMMSS(entry.PositionSecs)
+	if entry.Complete {
+		return "", true
+	}
+	if entry.PositionSecs <= 0 {
+		return "", false
+	}
+	return formatTimeMMSS(entry.PositionSecs), false
 }
 
 // hasResumePosition reports whether the episode in Preview has a
 // unfinished resume point, which gates the restart key in the footer.
 func (m *modelImpl) hasResumePosition() bool {
-	return m.currentResumePosition() != ""
+	resume, _ := m.currentResumeStatus()
+	return resume != ""
 }
 
 // toggleAnimeAudio flips the preferred anime track (sub/dub) and re-runs

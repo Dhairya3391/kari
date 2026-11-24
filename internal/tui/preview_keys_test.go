@@ -354,6 +354,13 @@ func TestPreviewMarkCompleteToggle(t *testing.T) {
 	if !ok || !entry.Complete {
 		t.Errorf("expected episode to be marked complete in store")
 	}
+	status := m.collectPreviewData(100, 24, m.currentAccent())
+	if !status.Completed {
+		t.Errorf("preview data should be marked complete after marking")
+	}
+	if out := RenderPreviewScreen(status); !strings.Contains(out, "✓ complete") {
+		t.Errorf("preview should show the completion badge, got:\n%s", out)
+	}
 	if m.hasResumePosition() {
 		t.Errorf("hasResumePosition() should be false after marking complete")
 	}
@@ -370,6 +377,13 @@ func TestPreviewMarkCompleteToggle(t *testing.T) {
 
 	if _, ok := store.Get(key); ok {
 		t.Errorf("expected entry to be deleted after unmarking")
+	}
+	status = m.collectPreviewData(100, 24, m.currentAccent())
+	if status.Completed {
+		t.Errorf("preview data should not be marked complete after unmarking")
+	}
+	if out := RenderPreviewScreen(status); strings.Contains(out, "✓ complete") {
+		t.Errorf("preview should not show the completion badge, got:\n%s", out)
 	}
 	if m.activeToast == nil || !strings.Contains(m.activeToast.Message, "unmarked") {
 		t.Errorf("expected toast 'unmarked', got %+v", m.activeToast)

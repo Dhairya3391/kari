@@ -255,6 +255,11 @@ func previewMetaFingerprint(data PreviewData, metaW int) uint64 {
 	} else {
 		h.Write([]byte{0})
 	}
+	if data.Completed {
+		h.Write([]byte{1})
+	} else {
+		h.Write([]byte{0})
+	}
 	return h.Sum64()
 }
 

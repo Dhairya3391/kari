@@ -330,7 +330,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 			}
 		}
 	}
-	resumePos := m.currentResumePosition()
+	resumePos, completed := m.currentResumeStatus()
 	fullBodyHeight := ComputeDims(m.width, m.height).BodyHeight
 
 	poster := insetFixedBlock(
@@ -395,6 +395,7 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 		SubtitleType:     subtitleType,
 		SubtitleProvider: subtitleProvider,
 		ResumePosition:   resumePos,
+		Completed:        completed,
 		PosterBlock:      poster,
 		Sources:          sources,
 		RankedSources:    m.rankedSources,

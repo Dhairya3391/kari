@@ -90,6 +90,42 @@ func TestPreviewSubtitlesAccentColor(t *testing.T) {
 	}
 }
 
+func TestPreviewResumeSlotShowsCompletion(t *testing.T) {
+	base := PreviewData{
+		SeriesTitle: "Frieren",
+		EpisodeInfo: "S01 E01",
+		Width:       100,
+		Height:      24,
+		Accent:      ResolveAccent(model.KindTV, "Auto"),
+	}
+
+	tests := []struct {
+		name      string
+		completed bool
+		resume    string
+		want      string
+		notWant   string
+	}{
+		{name: "complete", completed: true, resume: "13:08", want: "✓ complete", notWant: "—"},
+		{name: "in progress", resume: "13:08", want: "13:08"},
+		{name: "never watched", want: "—"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := base
+			data.Completed = tt.completed
+			data.ResumePosition = tt.resume
+			out := RenderPreviewScreen(data)
+			if !strings.Contains(out, tt.want) {
+				t.Fatalf("preview missing %q:\n%s", tt.want, out)
+			}
+			if tt.notWant != "" && strings.Contains(out, tt.notWant) {
+				t.Fatalf("preview must not show %q:\n%s", tt.notWant, out)
+			}
+		})
+	}
+}
+
 func TestPreviewOmitsPlayingBanner(t *testing.T) {
 	accent := ResolveAccent(model.KindMovie, "Auto")
 	data := PreviewData{

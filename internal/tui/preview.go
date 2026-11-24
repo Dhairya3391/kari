@@ -35,6 +35,7 @@ type PreviewData struct {
 	SubtitleType     string // e.g. "soft subs", "hard subs", or ""
 	SubtitleProvider string // e.g. "Cinecat", "OpenSubtitles", or ""
 	ResumePosition   string // e.g. "13:08"
+	Completed        bool   // finished in history; the resume slot shows a badge
 	PosterBlock      string
 	Sources          []provider.MediaSource
 	RankedSources    []filter.RankedSource
@@ -223,7 +224,9 @@ func renderPreviewMeta(data PreviewData, st Styles, metaW int) string {
 	} else {
 		metaRows = append(metaRows, fit(st.Dim.Render("skip data  ")+st.Current.Render(data.SkipInfo)))
 	}
-	if data.ResumePosition == "" {
+	if data.Completed {
+		metaRows = append(metaRows, fit(st.Dim.Render("resume     ")+st.Ok.Render("✓ complete")))
+	} else if data.ResumePosition == "" {
 		metaRows = append(metaRows, st.Dim.Render("resume     ")+st.Dim.Render("—"))
 	} else {
 		metaRows = append(metaRows, fit(st.Dim.Render("resume     ")+st.Current.Render(data.ResumePosition)))
