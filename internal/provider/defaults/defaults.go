@@ -29,6 +29,7 @@ import (
 	"kari/internal/provider/vidrift"
 	"kari/internal/provider/vumeto"
 	"kari/internal/provider/vyla"
+	"kari/internal/provider/way2movies"
 	"kari/internal/provider/weebcentral"
 	"kari/internal/tmdb"
 )
@@ -172,6 +173,12 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "atsu",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return atsu.NewClient()
+		},
+	},
+	{
+		ID: "way2movies",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return way2movies.NewClient(d.KeyPool)
 		},
 	},
 }

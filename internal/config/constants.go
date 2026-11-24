@@ -167,6 +167,13 @@ const (
 	// upstream gateway keys its session on the site origin.
 	AniDreamReferer = "https://anidream.to/"
 
+	// Way2MoviesScraperBase is Way2Movies' TMDB-keyed source resolver. It only
+	// answers requests carrying the site's own origin, which every call sends
+	// as Origin and Referer.
+	Way2MoviesScraperBase = "https://scraper.way2movies.fun"
+	// Way2MoviesOrigin is the site origin the scraper authorizes.
+	Way2MoviesOrigin = "https://way2movies.vip"
+
 	// BingrSiteBase is Bingr's current web application (https://bingr.one).
 	// Its watch pages embed a short-lived sealed payload holding the streams
 	// that replaced the retired shard API on api.bingr.st.
