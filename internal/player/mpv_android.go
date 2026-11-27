@@ -114,8 +114,13 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	confBuilder.WriteString("demuxer-max-back-bytes=20M\n")
 	confBuilder.WriteString("demuxer-readahead-secs=60\n")
 	confBuilder.WriteString("hls-bitrate=max\n")
-	if langList := formatAudioLangList(source.AudioPreference()); langList != "" {
+	if langList := formatAudioLangList(audioLanguagesFor(source, media), media.DisabledAudioLanguages); langList != "" {
 		confBuilder.WriteString(fmt.Sprintf("alang=%s\n", langList))
+	}
+	for _, track := range source.AudioTracks {
+		if address := strings.TrimSpace(track.URL); address != "" {
+			confBuilder.WriteString(fmt.Sprintf("audio-file=%s\n", address))
+		}
 	}
 	if source.Referer != "" {
 		confBuilder.WriteString(fmt.Sprintf("referrer=%s\n", source.Referer))
@@ -193,6 +198,6 @@ func writeMpvConf(source provider.MediaSource, media model.ResolvedMedia) error 
 	return nil
 }
 
-func formatAudioLangList(language string) string {
-	return strings.Join(lang.AudioLangs(language), ",")
+func formatAudioLangList(languages, disabled []string) string {
+	return strings.Join(lang.AudioLangsForExcept(languages, disabled), ",")
 }

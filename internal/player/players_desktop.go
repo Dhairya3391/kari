@@ -108,8 +108,19 @@ func buildVLCArgs(source provider.MediaSource, media model.ResolvedMedia) []stri
 	if title := media.DisplayTitle(); title != "" {
 		args = append(args, "--meta-title="+sanitizeMediaTitle(title))
 	}
-	if lang := strings.ToLower(strings.TrimSpace(source.AudioPreference())); lang != "" {
-		args = append(args, "--audio-language="+lang)
+	if codes := audioLanguagesFor(source, media); len(codes) > 0 {
+		args = append(args, "--audio-language="+strings.ToLower(strings.Join(codes, ",")))
+	}
+	// VLC takes one slave option with a '#' separated list; repeating the flag
+	// would leave only the last rendition attached.
+	slaves := make([]string, 0, len(source.AudioTracks))
+	for _, track := range source.AudioTracks {
+		if address := strings.TrimSpace(track.URL); address != "" {
+			slaves = append(slaves, address)
+		}
+	}
+	if len(slaves) > 0 {
+		args = append(args, "--input-slave="+strings.Join(slaves, "#"))
 	}
 	if subtitlePath := media.SubtitlePath(); subtitlePath != "" {
 		args = append(args, "--sub-file="+strings.ReplaceAll(subtitlePath, `\`, `/`))
@@ -278,7 +289,8 @@ func buildIINAArgs(source provider.MediaSource, media model.ResolvedMedia, socke
 
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendIINASubtitleArgs(args, media.SubtitlePath(), media.SubtitleLanguage)
-	args = appendAudioLangArgs(args, source.AudioPreference())
+	args = appendAudioLangArgs(args, audioLanguagesFor(source, media), media.DisabledAudioLanguages)
+	args = appendAudioTrackArgs(args, source)
 	args = append(args, aniskipArgs...)
 	return append(args, iinaExtraArgs(source.ExtraArgs, media.SubtitlePath())...)
 }

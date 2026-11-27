@@ -157,6 +157,8 @@ func TestLiveFooterBindings(t *testing.T) {
 }
 
 func TestLiveRefreshAndJumpKeys(t *testing.T) {
+	// Keep the test independent of the user's saved startup-search setting.
+	t.Setenv("HOME", t.TempDir())
 	reg := &provider.Registry{}
 	players := player.NewRegistry("", player.SkipClients{}, player.SkipSettings{})
 	mdl := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0", "")
@@ -164,6 +166,9 @@ func TestLiveRefreshAndJumpKeys(t *testing.T) {
 	m.appMode = provider.ModeLive
 	m.seriesResults = liveGuideFixture().Results
 	m.seriesList.SetItems(seriesToItems(m.seriesResults))
+	// Refresh/jump keys belong to the results screen, not the focused search
+	// input that NewModel starts with.
+	m.queryInput.Blur()
 
 	m.updateSearch(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	if !m.loading || m.searchOpID == 0 || m.loadingText != "Refreshing live guide..." {

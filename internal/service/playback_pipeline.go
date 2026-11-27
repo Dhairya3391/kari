@@ -19,29 +19,36 @@ type PlaybackOptions struct {
 	// TUI. It takes precedence over the legacy fields above so settings are
 	// converted to the domain vocabulary exactly once.
 	Preferences *filter.Preferences
+	// KeepPreferredSubtitleSources hides sources without the preferred anime
+	// subtitle language when a matching source exists. Downloads use the
+	// unfiltered set.
+	KeepPreferredSubtitleSources bool
 }
 
 // PreparePlaybackSources filters and orders the visible rows using the single
 // domain pipeline. Providers keep their first-seen order, the preferred one
 // first, while adaptive rows remain eligible at every quality tier.
 func PreparePlaybackSources(sources []provider.MediaSource, options PlaybackOptions) []filter.RankedSource {
+	var prefs filter.Preferences
 	if options.Preferences != nil {
-		prefs := *options.Preferences
+		prefs = *options.Preferences
 		if prefs.PreferredProvider == "" {
 			prefs.PreferredProvider = options.PreferredProvider
 		}
-		ranked := filter.Prepare(sources, prefs, options.Mode, nil, time.Time{})
-		return filter.GroupByProvider(ranked, prefs.PreferredProvider)
+	} else {
+		prefs = filter.FromLegacy(
+			options.QualityMode,
+			options.QualityMode,
+			options.EnabledAudioLanguages,
+			"",
+			"",
+			false,
+			options.PreferredProvider,
+		).For(options.Mode)
 	}
-	prefs := filter.FromLegacy(
-		options.QualityMode,
-		options.QualityMode,
-		options.EnabledAudioLanguages,
-		"",
-		"",
-		false,
-		options.PreferredProvider,
-	).For(options.Mode)
 	ranked := filter.Prepare(sources, prefs, options.Mode, nil, time.Time{})
-	return filter.GroupByProvider(ranked, options.PreferredProvider)
+	if options.KeepPreferredSubtitleSources {
+		ranked = filter.KeepMatchingSubtitles(ranked, prefs.Subtitles, options.Mode)
+	}
+	return filter.GroupByProvider(ranked, prefs.PreferredProvider)
 }

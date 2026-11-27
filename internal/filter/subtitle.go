@@ -71,6 +71,32 @@ func SubtitleScore(src provider.MediaSource, pref SubtitlePreference, mode provi
 	return 0
 }
 
+// KeepMatchingSubtitles drops sources without the preferred subtitle language
+// when at least one source can supply it. Only anime preferred mode opts in;
+// with no match the full candidate set stays playable.
+func KeepMatchingSubtitles(ranked []RankedSource, pref SubtitlePreference, mode provider.ContentType) []RankedSource {
+	if mode != provider.ModeAnime || pref.Mode != SubtitlePreferred {
+		return ranked
+	}
+	target := kit.SubtitleLanguage(pref.Language)
+	if target == "" || target == "off" {
+		return ranked
+	}
+	matching := make([]RankedSource, 0, len(ranked))
+	for _, row := range ranked {
+		for _, sub := range row.Source.Subtitles {
+			if kit.SubtitleLanguage(sub.Language) == target {
+				matching = append(matching, row)
+				break
+			}
+		}
+	}
+	if len(matching) == 0 {
+		return ranked
+	}
+	return matching
+}
+
 func containsCode(codes []string, target string) bool {
 	for _, code := range codes {
 		if code == target {

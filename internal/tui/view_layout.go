@@ -713,6 +713,13 @@ func (m *modelImpl) activeKeyBindingsWithDownloads(prepared *DownloadsData) []Ke
 				{Key: "esc", Action: "cancel"},
 			}
 		}
+		if m.subtitlePickerOpen {
+			return []KeyBinding{
+				{Key: "↑/↓", Action: "move"},
+				{Key: "enter/space", Action: "select"},
+				{Key: "esc", Action: "cancel"},
+			}
+		}
 		return []KeyBinding{
 			{Key: "↑↓", Action: "move"},
 			{Key: "←→", Action: "change"},

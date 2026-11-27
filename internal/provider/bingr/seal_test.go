@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"kari/internal/config"
 	"kari/internal/provider"
 )
 
@@ -88,7 +89,7 @@ func TestMapSealedSources(t *testing.T) {
 		},
 	}
 
-	sources := mapSealedSources(payload)
+	sources := mapSealedSources(payload, config.BingrSiteBase+"/")
 	if len(sources) != 1 {
 		t.Fatalf("mapSealedSources returned %d sources, want 1", len(sources))
 	}
@@ -104,5 +105,13 @@ func TestMapSealedSources(t *testing.T) {
 	}
 	if s.Language != "" || len(s.Audio.Languages) != 0 {
 		t.Errorf("stream language must stay unknown, got %q / %v", s.Language, s.Audio.Languages)
+	}
+	// The CDN hotlink-protects audio/subtitle sub-playlists, so playback must
+	// carry the site referer and the master URL for rendition discovery.
+	if s.Referer != config.BingrSiteBase+"/" {
+		t.Errorf("referer = %q, want %q", s.Referer, config.BingrSiteBase+"/")
+	}
+	if s.ManifestURL != s.URL {
+		t.Errorf("manifest URL = %q, want the playable master %q", s.ManifestURL, s.URL)
 	}
 }

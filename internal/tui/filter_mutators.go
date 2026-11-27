@@ -257,6 +257,49 @@ func subtitleOptionIndex(code string) int {
 	return 0
 }
 
+// subtitlePickerOptions is the picker's ordered choices: Any, Off, then every
+// curated language. Any has no code, so the picker spells it out.
+func subtitlePickerOptions() []string {
+	return append([]string{"any"}, lang.SubtitleOptions...)
+}
+
+// subtitlePickerIndex returns the picker row matching pref; Any maps to row 0.
+func subtitlePickerIndex(pref filter.SubtitlePreference) int {
+	code := prefsSubtitleCode(pref)
+	if code == "" {
+		return 0
+	}
+	for i, option := range subtitlePickerOptions() {
+		if lang.Normalize(option) == lang.Normalize(code) {
+			return i
+		}
+	}
+	return 0
+}
+
+// openSubtitlePicker opens the single-select subtitle language picker for mode.
+func (m *modelImpl) openSubtitlePicker(mode provider.ContentType) {
+	m.subtitlePickerMode = mode
+	m.subtitlePickerIndex = subtitlePickerIndex(m.modePreferences(mode).Subtitles)
+	m.subtitlePickerOpen = true
+}
+
+// setSubtitlePickerChoice applies one picker row to mode and mirrors the
+// legacy subtitle fields. Any keeps the burned-in-sub boost intact.
+func (m *modelImpl) setSubtitlePickerChoice(mode provider.ContentType, choice string) {
+	if !strings.EqualFold(strings.TrimSpace(choice), "any") {
+		m.setSubtitleLanguage(mode, choice)
+		return
+	}
+	prefs := m.modePreferences(mode)
+	prefs.Subtitles = filter.SubtitlePreference{
+		Mode:       filter.SubtitleAny,
+		PreferHard: prefs.Subtitles.PreferHard,
+	}
+	m.setModePreferences(mode, prefs)
+	m.syncLegacySubtitleFields()
+}
+
 // toggleAnimeSubtitles switches the anime policy between Off and Preferred
 // with burned-in subtitles enabled. The anime subtitle row no longer owns a
 // separate boolean.
@@ -272,9 +315,6 @@ func (m *modelImpl) toggleAnimeSubtitles() {
 	m.setModePreferences(provider.ModeAnime, prefs)
 	m.syncLegacySubtitleFields()
 	m.invalidateSubtitleSync()
-	if m.subtitleService != nil {
-		m.subtitleService.SetDisableAnimeSubtitles(m.disableAnimeSubtitles)
-	}
 }
 
 // setPreferredProvider writes the resolver preference for mode and keeps the
@@ -396,4 +436,12 @@ func (m *modelImpl) syncLegacyLanguageFilter() {
 func (m *modelImpl) syncLegacySubtitleFields() {
 	m.subtitleLanguage = prefsSubtitleCode(m.modePreferences(m.appMode).Subtitles)
 	m.disableAnimeSubtitles = m.filterScope.For(provider.ModeAnime).Subtitles.Mode == filter.SubtitleOff
+	// Every path that changes the anime subtitle mode must reach the live
+	// service, not just the toggle in the settings screen.
+	if m.subtitleService != nil {
+		m.subtitleService.SetDisableAnimeSubtitles(m.disableAnimeSubtitles)
+	}
+	if m.downloadService != nil {
+		m.downloadService.SetSubtitleLanguage(m.subtitleLanguage)
+	}
 }

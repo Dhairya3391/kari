@@ -64,6 +64,12 @@ VLC works across Linux, macOS, and Windows.
 
 ---
 
+## Track Preferences
+
+Kari passes enabled audio languages to every player in preference order. English is appended as the automatic last resort so a missing preference still yields a readable track; turning English off in Settings removes it from that list entirely. HLS audio renditions are attached as extra inputs (`--audio-file` for mpv/IINA, `--input-slave` for VLC, `audio-file=` in the Android bridge config), so every advertised track stays switchable in the player.
+
+---
+
 ## Switching Players
 
 - **In the TUI**: Press `Ctrl+P` anytime to cycle through players detected on your system.

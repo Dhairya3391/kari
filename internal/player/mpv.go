@@ -357,6 +357,7 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 		"--demuxer-max-back-bytes=100M",
 		"--demuxer-readahead-secs=300",
 		"--stream-buffer-size=8M",
+		"--hls-bitrate=max",
 		"--network-timeout=8",
 		"--input-ipc-server=" + socketPath,
 		hwdecOptionArg(),
@@ -382,7 +383,8 @@ func playSingleSource(source provider.MediaSource, media model.ResolvedMedia, an
 
 	pipeMpvArgs = appendTitleArgs(pipeMpvArgs, media.DisplayTitle())
 	pipeMpvArgs = appendSubtitleArgs(pipeMpvArgs, media.SubtitlePath(), media.SubtitleLanguage)
-	pipeMpvArgs = appendAudioLangArgs(pipeMpvArgs, source.AudioPreference())
+	pipeMpvArgs = appendAudioLangArgs(pipeMpvArgs, audioLanguagesFor(source, media), media.DisabledAudioLanguages)
+	pipeMpvArgs = appendAudioTrackArgs(pipeMpvArgs, source)
 	pipeMpvArgs = append(pipeMpvArgs, aniskipArgs...)
 	pipeMpvArgs = appendExtraArgsWithBracket(pipeMpvArgs, source.ExtraArgs, media.SubtitlePath())
 	if runtime.GOOS == "darwin" {
@@ -499,7 +501,8 @@ func buildMPVArgs(source provider.MediaSource, media model.ResolvedMedia, socket
 
 	args = appendTitleArgs(args, media.DisplayTitle())
 	args = appendSubtitleArgs(args, media.SubtitlePath(), media.SubtitleLanguage)
-	args = appendAudioLangArgs(args, source.AudioPreference())
+	args = appendAudioLangArgs(args, audioLanguagesFor(source, media), media.DisabledAudioLanguages)
+	args = appendAudioTrackArgs(args, source)
 	args = append(args, aniskipArgs...)
 	// ExtraArgs may contain --demuxer-lavf-format=hls (miruro). When
 	// a subtitle file is present, that format override bleeds onto the subtitle
@@ -572,14 +575,26 @@ func appendSubtitleArgs(args []string, subtitlePath, subtitleLanguage string) []
 }
 
 // appendAudioLangArgs passes preferred audio-track languages (--alang) to MPV.
-// The code-to-track mapping lives in lang.AudioLangs; this stays a thin
-// flag formatter.
-func appendAudioLangArgs(args []string, language string) []string {
-	alang := lang.AudioLangs(language)
+// The code-to-track mapping and off-list filtering live in lang; this stays a
+// thin flag formatter.
+func appendAudioLangArgs(args []string, languages, disabled []string) []string {
+	alang := lang.AudioLangsForExcept(languages, disabled)
 	if len(alang) == 0 {
 		return args
 	}
 	return append(args, "--alang="+strings.Join(alang, ","))
+}
+
+// appendAudioTrackArgs loads every manifest rendition as an extra audio input
+// so mpv lists all advertised tracks, not just the one muxed into a video
+// variant. Common transport headers are global mpv options and apply here too.
+func appendAudioTrackArgs(args []string, source provider.MediaSource) []string {
+	for _, track := range source.AudioTracks {
+		if address := strings.TrimSpace(track.URL); address != "" {
+			args = append(args, "--audio-file="+address)
+		}
+	}
+	return args
 }
 
 // hasLavfFormatOverride reports whether any of the given ExtraArgs sets

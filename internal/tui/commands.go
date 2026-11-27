@@ -3,9 +3,12 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
+
 	"kari/internal/downloader"
 	"kari/internal/filter"
 	"kari/internal/history"
+	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/model"
 	"kari/internal/player"
@@ -277,6 +280,16 @@ func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 	resolved := *m.resolved
 	resolved.StartTime = startTime
 	resolved.SubtitleLanguage = m.subtitleLanguage
+	audioPref := m.modePreferences(m.appMode).Audio
+	resolved.AudioLanguages = audioPref.Enabled
+	resolved.DisabledAudioLanguages = disabledAudioCodes(audioPref)
+	// Every advertised rendition stays attached so the user can switch tracks
+	// in the player; the preference only decides which one starts playing.
+	for i := range sources {
+		if code := preferredAudioFor(sources[i], audioPref.Enabled); code != "" {
+			sources[i].PreferredAudio = code
+		}
+	}
 	// The launch subtitle is already loaded; seed the set so a later resolve
 	// snapshot cannot hot-add the same cached track a second time.
 	m.newSubtitleAddContext()
@@ -303,6 +316,39 @@ func (m *modelImpl) playCmdWithStartTime(opID int, startTime float64) tea.Cmd {
 		result, err := m.players.PlayWithSources(sources, resolved, playerName)
 		return playDoneMsg{opID: opID, provider: providerName, result: result, err: err}
 	}
+}
+
+// disabledAudioCodes returns the explicit off-list in a stable order so the
+// player fallback cannot prefer a language the user switched off.
+func disabledAudioCodes(pref filter.LanguagePreference) []string {
+	codes := make([]string, 0, len(pref.Disabled))
+	for code := range pref.Disabled {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	return codes
+}
+
+// preferredAudioFor returns the first enabled language the source actually
+// offers, so the player starts on the user's top preference instead of the
+// manifest's first rendition. Empty means none of the preferences are present.
+func preferredAudioFor(src provider.MediaSource, enabled []string) string {
+	if len(enabled) == 0 {
+		return ""
+	}
+	offered := make(map[string]struct{}, len(src.Audio.Languages)+len(src.AudioTracks))
+	for _, code := range src.Audio.Languages {
+		offered[lang.Normalize(code)] = struct{}{}
+	}
+	for _, track := range src.AudioTracks {
+		offered[lang.Normalize(track.Code)] = struct{}{}
+	}
+	for _, code := range enabled {
+		if _, ok := offered[lang.Normalize(code)]; ok {
+			return code
+		}
+	}
+	return ""
 }
 
 func (m *modelImpl) loadStartupAddonCmd(manifestURL string) tea.Cmd {
@@ -440,9 +486,12 @@ func (m *modelImpl) playDownloadedFileCmd(opID int, filePath, title string) tea.
 	m.hotAddPendingPath = ""
 	return func() tea.Msg {
 		sources := []provider.MediaSource{{URL: filePath}}
+		audioPref := m.modePreferences(m.appMode).Audio
 		resolved := model.ResolvedMedia{
-			SeriesTitle: title,
-			Playback:    sources,
+			SeriesTitle:            title,
+			Playback:               sources,
+			AudioLanguages:         audioPref.Enabled,
+			DisabledAudioLanguages: disabledAudioCodes(audioPref),
 		}
 		result, err := m.players.PlayWithSources(sources, resolved, playerName)
 		return playDoneMsg{opID: opID, provider: "local", result: result, err: err}

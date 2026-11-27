@@ -141,53 +141,45 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateProviderPriorityPicker(msg.String())
 			return m, nil
 		}
-		// 1. Audio Language Picker Modal
+		// 1. Audio / Subtitle Language Picker Modals
 		if m.audioPickerOpen {
 			allLangs := m.availableLanguages()
+			if index, ok := movePickerCursor(msg.String(), m.audioPickerIndex, len(allLangs), m.pageStep()); ok {
+				m.audioPickerIndex = index
+				return m, nil
+			}
 			switch msg.String() {
-			case "up", "k":
-				if m.audioPickerIndex > 0 {
-					m.audioPickerIndex--
-				}
-				return m, nil
-			case "down", "j":
-				if m.audioPickerIndex < len(allLangs)-1 {
-					m.audioPickerIndex++
-				}
-				return m, nil
-			case "home", "g":
-				m.audioPickerIndex = 0
-				return m, nil
-			case "end", "G":
-				if len(allLangs) > 0 {
-					m.audioPickerIndex = len(allLangs) - 1
-				}
-				return m, nil
-			case "pgup", "ctrl+u":
-				step := m.pageStep()
-				if m.audioPickerIndex > step {
-					m.audioPickerIndex -= step
-				} else {
-					m.audioPickerIndex = 0
-				}
-				return m, nil
-			case "pgdown", "ctrl+d":
-				step := m.pageStep()
-				if len(allLangs) > 0 {
-					m.audioPickerIndex = min(len(allLangs)-1, m.audioPickerIndex+step)
-				}
-				return m, nil
 			case " ", "space":
 				if m.audioPickerIndex < len(allLangs) {
 					m.toggleAudioLanguage(allLangs[m.audioPickerIndex])
 					m.saveSettings()
 				}
-				return m, nil
 			case "enter", "esc":
 				m.audioPickerOpen = false
 				m.saveSettings()
 				m.clearStatus()
+			}
+			return m, nil
+		}
+		if m.subtitlePickerOpen {
+			options := subtitlePickerOptions()
+			if index, ok := movePickerCursor(msg.String(), m.subtitlePickerIndex, len(options), m.pageStep()); ok {
+				m.subtitlePickerIndex = index
 				return m, nil
+			}
+			switch msg.String() {
+			case "enter", " ", "space":
+				if m.subtitlePickerIndex < len(options) {
+					m.setSubtitlePickerChoice(m.subtitlePickerMode, options[m.subtitlePickerIndex])
+				}
+				m.subtitlePickerOpen = false
+				m.saveSettings()
+				m.clearStatus()
+				m.refreshRanking()
+				return m, m.triggerSubtitleSync()
+			case "esc":
+				m.subtitlePickerOpen = false
+				m.clearStatus()
 			}
 			return m, nil
 		}
@@ -393,6 +385,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.cycleCurrentSetting(-1)
 			m.saveSettings()
+			m.refreshRanking()
 			return m, m.triggerSubtitleSync()
 
 		case "right", "l":
@@ -405,6 +398,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.cycleCurrentSetting(1)
 			m.saveSettings()
+			m.refreshRanking()
 			return m, m.triggerSubtitleSync()
 		case "enter", "space", " ":
 			if m.settingsCategory == CategoryPlayback && m.settingsIndex == 3 {
@@ -439,6 +433,14 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.audioPickerIndex = 0
 				return m, nil
 			}
+			if m.settingsCategory == CategoryLanguages && m.settingsIndex == 1 {
+				m.openSubtitlePicker(m.appMode)
+				return m, nil
+			}
+			if m.settingsCategory == CategoryAnime && m.settingsIndex == 2 {
+				m.openSubtitlePicker(provider.ModeAnime)
+				return m, nil
+			}
 			if m.settingsCategory == CategoryAccounts {
 				if m.settingsIndex == 0 {
 					return m.startAniListAuth()
@@ -455,6 +457,7 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.cycleCurrentSetting(1)
 			m.saveSettings()
+			m.refreshRanking()
 			return m, m.triggerSubtitleSync()
 
 		case "c":
@@ -501,6 +504,26 @@ func (m *modelImpl) updateSettings(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// movePickerCursor applies a list-navigation key to a modal picker cursor.
+// It returns handled=false for keys that are not navigation.
+func movePickerCursor(key string, index, length, pageStep int) (int, bool) {
+	switch key {
+	case "up", "k":
+		return max(0, index-1), true
+	case "down", "j":
+		return min(max(0, length-1), index+1), true
+	case "home", "g":
+		return 0, true
+	case "end", "G":
+		return max(0, length-1), true
+	case "pgup", "ctrl+u":
+		return max(0, index-pageStep), true
+	case "pgdown", "ctrl+d":
+		return min(max(0, length-1), index+pageStep), true
+	}
+	return index, false
+}
+
 func (m *modelImpl) maxRowsForCategory(cat SettingsCategory) int {
 	switch cat {
 	case CategoryPlayback:
@@ -508,7 +531,7 @@ func (m *modelImpl) maxRowsForCategory(cat SettingsCategory) int {
 	case CategoryLanguages:
 		return 2
 	case CategoryAnime:
-		return 7
+		return 8
 	case CategoryModes:
 		return len(m.configuredModes) + 1
 	case CategoryHistory:
@@ -554,9 +577,6 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.audioPickerIndex = 0
 		case 1: // Subtitle language (active mode)
 			m.cycleSubtitleLanguage(m.appMode, delta)
-			if m.downloadService != nil {
-				m.downloadService.SetSubtitleLanguage(m.subtitleLanguage)
-			}
 		}
 
 	case CategoryAnime:
@@ -565,15 +585,17 @@ func (m *modelImpl) cycleCurrentSetting(delta int) {
 			m.cycleAudioTrack(delta)
 		case 1: // Anime subtitles
 			m.toggleAnimeSubtitles()
-		case 2: // Skip source
+		case 2: // Subtitle language
+			m.cycleSubtitleLanguage(provider.ModeAnime, delta)
+		case 3: // Skip source
 			m.skipProvider = cycleSkipProvider(m.skipProvider, delta < 0)
-		case 3: // Intro
+		case 4: // Intro
 			m.autoSkipIntro = !m.autoSkipIntro
-		case 4: // Outro
+		case 5: // Outro
 			m.autoSkipEnding = !m.autoSkipEnding
-		case 5: // Recap
+		case 6: // Recap
 			m.skipRecap = !m.skipRecap
-		case 6: // Preview
+		case 7: // Preview
 			m.skipPreview = !m.skipPreview
 		}
 	case CategoryModes:

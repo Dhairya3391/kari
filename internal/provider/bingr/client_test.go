@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"kari/internal/config"
 	"kari/internal/provider"
 	"kari/internal/tmdb"
 )
@@ -206,6 +207,58 @@ func TestBingrResolveTVFromWatchPage(t *testing.T) {
 	}
 }
 
+// TestBingrExpandsHLSMaster proves a master playlist becomes playable variants.
+// Bingr's Edge lane puts audio in separate renditions, so handing mpv the
+// master makes it buffer every rendition before playback starts and it can
+// miss the startup window. Variants start fast; the master stays on
+// ManifestURL for the service to attach the audio renditions.
+func TestBingrExpandsHLSMaster(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/master.m3u8", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Referer") != config.BingrSiteBase+"/" {
+			http.Error(w, "missing referer", http.StatusForbidden)
+			return
+		}
+		_, _ = fmt.Fprint(w, `#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",LANGUAGE="eng",NAME="English",DEFAULT=YES,URI="audio.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,AUDIO="aac",RESOLUTION=1920x1080
+1080.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=800000,AUDIO="aac",RESOLUTION=854x480
+480.m3u8
+`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	masterURL := srv.URL + "/master.m3u8"
+
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), srv.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
+	sources := c.expandHLSMasters(context.Background(), []provider.MediaSource{{
+		URL:         masterURL,
+		Type:        provider.SourceTypeHLS,
+		Quality:     "1080p",
+		Backend:     "Edge",
+		Referer:     config.BingrSiteBase + "/",
+		UserAgent:   config.DesktopUserAgent,
+		Height:      1080,
+		ManifestURL: masterURL,
+	}})
+	if len(sources) != 2 {
+		t.Fatalf("sources = %d, want one per variant: %+v", len(sources), sources)
+	}
+	want := map[string]int{"1080p": 1080, "480p": 480}
+	for _, s := range sources {
+		if height, ok := want[s.Quality]; !ok || s.Height != height {
+			t.Errorf("source quality/height = %q/%d, want a declared variant", s.Quality, s.Height)
+		}
+		if s.ManifestURL != masterURL || s.URL == masterURL {
+			t.Errorf("playable URL %q must be a variant with master %q on ManifestURL", s.URL, s.ManifestURL)
+		}
+	}
+}
+
 func TestBingrWatchPageErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -259,7 +312,7 @@ func TestBingrSubtitleDedupe(t *testing.T) {
 				{URL: "https://cdn.example.com/subs/es.vtt", Lang: "spa"},
 			},
 		}},
-	})
+	}, config.BingrSiteBase+"/")
 	if len(sources) != 1 {
 		t.Fatalf("sources count = %d, want 1", len(sources))
 	}
@@ -281,7 +334,7 @@ func TestSubtitleLanguageUsesLabel(t *testing.T) {
 				{URL: "https://cdn.example.com/fi.vtt", Lang: "fi", Label: "Finnish"},
 			},
 		}},
-	})
+	}, config.BingrSiteBase+"/")
 	if len(sources) != 1 || len(sources[0].Subtitles) != 2 {
 		t.Fatalf("sources/subtitles = %d/%v, want 1/2", len(sources), sources)
 	}

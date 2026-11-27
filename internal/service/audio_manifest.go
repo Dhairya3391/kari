@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 
@@ -67,8 +68,9 @@ func fetchManifestText(ctx context.Context, client *http.Client, src provider.Me
 
 // discoverManifestAudio adds track languages advertised by an HLS master. It
 // runs after sources are already visible, so slow CDNs never delay the UI. The
-// discovered codes become the source's audio identity so the displayed label,
-// the language filter, and mpv's --alang all agree on one language.
+// discovered codes become the source's audio identity so the displayed label
+// and the language filter agree. A source whose playable URL is a separate
+// variant also gets the rendition addresses so the player can load every track.
 func discoverManifestAudio(ctx context.Context, client *http.Client, sources []provider.MediaSource) []provider.MediaSource {
 	probeCtx, cancel := context.WithTimeout(ctx, manifestBatchProbeTimeout)
 	defer cancel()
@@ -89,8 +91,10 @@ func discoverManifestAudio(ctx context.Context, client *http.Client, sources []p
 				return
 			}
 			probeSrc := sources[index]
+			manifestURL := probeSrc.URL
 			if probeSrc.ManifestURL != "" {
 				probeSrc.URL = probeSrc.ManifestURL
+				manifestURL = probeSrc.ManifestURL
 			}
 			text, ok := fetchManifestText(probeCtx, client, probeSrc)
 			if !ok {
@@ -101,13 +105,23 @@ func discoverManifestAudio(ctx context.Context, client *http.Client, sources []p
 				return
 			}
 			codes := make([]string, 0, len(tracks))
+			seenCodes := make(map[string]struct{}, len(tracks))
 			for _, track := range tracks {
+				if _, ok := seenCodes[track.Code]; ok {
+					continue
+				}
+				seenCodes[track.Code] = struct{}{}
 				codes = append(codes, track.Code)
 			}
 			src := &sources[index]
 			src.Audio.Languages = codes
 			src.AudioLabel = lang.Names(codes)
 			src.PreferredAudio = codes[0]
+			// A master URL already exposes every rendition to mpv. Only a
+			// variant pointed at a different master needs extra audio inputs.
+			if manifestURL != src.URL {
+				src.AudioTracks = audioTrackRefs(manifestURL, tracks)
+			}
 		}(i)
 	}
 	wg.Wait()
@@ -117,9 +131,11 @@ func discoverManifestAudio(ctx context.Context, client *http.Client, sources []p
 // sourceEnrichment is one finished master probe, applied by the collector
 // goroutine so the source slice is only ever written from one place.
 type sourceEnrichment struct {
-	index   int
-	bitrate int
-	quality string
+	index       int
+	bitrate     int
+	quality     string
+	manifestURL string
+	audioTracks []provider.AudioTrackRef
 }
 
 // enrichAdaptiveSources probes only adaptive ("Auto"/"Master") HLS rows,
@@ -150,8 +166,11 @@ func enrichAdaptiveSources(ctx context.Context, client *http.Client, sources []p
 	semaphore := make(chan struct{}, manifestProbeConcurrency)
 	var wg sync.WaitGroup
 	for _, index := range indices {
+		// Snapshot before any goroutine starts: the collector writes source
+		// fields as results arrive, so probing must never read the shared slice.
+		probeSrc := sources[index]
 		wg.Add(1)
-		go func(i int) {
+		go func(i int, probeSrc provider.MediaSource) {
 			defer wg.Done()
 			select {
 			case semaphore <- struct{}{}:
@@ -159,7 +178,6 @@ func enrichAdaptiveSources(ctx context.Context, client *http.Client, sources []p
 			case <-probeCtx.Done():
 				return
 			}
-			probeSrc := sources[i]
 			manifestURL := probeSrc.URL
 			if probeSrc.ManifestURL != "" {
 				probeSrc.URL = probeSrc.ManifestURL
@@ -169,14 +187,20 @@ func enrichAdaptiveSources(ctx context.Context, client *http.Client, sources []p
 			if !ok {
 				return
 			}
-			src := sources[i]
+			src := probeSrc
 			relabeled := false
 			enrichSourceFromVariants(&src, kit.ParseHLSVariantsText(manifestURL, text), &relabeled)
 			if src.Bitrate == 0 && !relabeled {
 				return
 			}
-			results <- sourceEnrichment{index: i, bitrate: src.Bitrate, quality: src.Quality}
-		}(index)
+			results <- sourceEnrichment{
+				index:       i,
+				bitrate:     src.Bitrate,
+				quality:     src.Quality,
+				manifestURL: manifestURL,
+				audioTracks: audioTrackRefs(manifestURL, hlsAudioTracks(text)),
+			}
+		}(index, probeSrc)
 	}
 	go func() {
 		wg.Wait()
@@ -193,6 +217,26 @@ func enrichAdaptiveSources(ctx context.Context, client *http.Client, sources []p
 		if got.quality != "" && got.quality != sources[got.index].Quality {
 			sources[got.index].Quality = got.quality
 			relabeled[got.index] = true
+			changed = true
+		}
+		if len(got.audioTracks) == 0 {
+			return
+		}
+		// Only rows resolved from this exact master inherit its renditions;
+		// another master in the same backend has its own audio inputs.
+		for i := range sources {
+			if len(sources[i].AudioTracks) > 0 {
+				continue
+			}
+			if sources[i].ManifestURL != got.manifestURL {
+				continue
+			}
+			if sources[i].URL == got.manifestURL {
+				// A master already exposes its renditions natively; don't
+				// duplicate the muxed default track as an external input.
+				continue
+			}
+			sources[i].AudioTracks = slices.Clone(got.audioTracks)
 			changed = true
 		}
 	}
@@ -261,6 +305,7 @@ func mergeManifestAudio(verified, enriched []provider.MediaSource) []provider.Me
 		audio     string
 		preferred string
 		langs     []string
+		tracks    []provider.AudioTrackRef
 		quality   string
 		bitrate   int
 	}
@@ -275,6 +320,9 @@ func mergeManifestAudio(verified, enriched []provider.MediaSource) []provider.Me
 		}
 		if len(got.langs) == 0 {
 			got.langs = src.Audio.Languages
+		}
+		if len(got.tracks) == 0 {
+			got.tracks = src.AudioTracks
 		}
 		if src.Bitrate > got.bitrate {
 			got.bitrate = src.Bitrate
@@ -299,6 +347,9 @@ func mergeManifestAudio(verified, enriched []provider.MediaSource) []provider.Me
 		if len(got.langs) > 0 {
 			verified[i].Audio.Languages = got.langs
 		}
+		if len(verified[i].AudioTracks) == 0 {
+			verified[i].AudioTracks = got.tracks
+		}
 		if verified[i].Bitrate == 0 {
 			verified[i].Bitrate = got.bitrate
 		}
@@ -316,11 +367,46 @@ func isHLSURL(raw string) bool {
 
 type hlsAudioTrack struct {
 	Code    string
+	URI     string
 	Default bool
+}
+
+// audioTrackRefs resolves each rendition URI against the master URL. HLS
+// masters commonly use relative paths; skipping an empty URI keeps muxed
+// renditions (which mpv already sees in the video) out of the extra inputs.
+func audioTrackRefs(manifestURL string, tracks []hlsAudioTrack) []provider.AudioTrackRef {
+	base, err := url.Parse(strings.TrimSpace(manifestURL))
+	if err != nil {
+		return nil
+	}
+	var refs []provider.AudioTrackRef
+	seen := make(map[string]struct{}, len(tracks))
+	for _, track := range tracks {
+		raw := strings.TrimSpace(track.URI)
+		if raw == "" {
+			continue
+		}
+		ref, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		resolved := base.ResolveReference(ref).String()
+		if _, ok := seen[resolved]; ok {
+			continue
+		}
+		seen[resolved] = struct{}{}
+		refs = append(refs, provider.AudioTrackRef{
+			URL:  resolved,
+			Code: track.Code,
+		})
+	}
+	return refs
 }
 
 func hlsAudioTracks(manifest string) []hlsAudioTrack {
 	var tracks []hlsAudioTrack
+	// Renditions can share a language (audio description, alternate dubs), so
+	// dedup the playable input rather than the language code.
 	seen := make(map[string]int)
 	scanner := bufio.NewScanner(strings.NewReader(manifest))
 	scanner.Buffer(make([]byte, 1024), 64<<10)
@@ -335,14 +421,16 @@ func hlsAudioTracks(manifest string) []hlsAudioTrack {
 			continue
 		}
 		isDefault := strings.EqualFold(strings.TrimSpace(attrs["DEFAULT"]), "YES")
-		if index, ok := seen[code]; ok {
+		uri := attrs["URI"]
+		key := code + "\x00" + uri
+		if index, ok := seen[key]; ok {
 			if isDefault {
 				tracks[index].Default = true
 			}
 			continue
 		}
-		seen[code] = len(tracks)
-		tracks = append(tracks, hlsAudioTrack{Code: code, Default: isDefault})
+		seen[key] = len(tracks)
+		tracks = append(tracks, hlsAudioTrack{Code: code, URI: uri, Default: isDefault})
 	}
 	ordered := make([]hlsAudioTrack, 0, len(tracks))
 	for _, track := range tracks {

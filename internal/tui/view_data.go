@@ -327,6 +327,10 @@ func (m *modelImpl) collectPreviewData(width, height int, accent lipgloss.Adapti
 				if m.resolved.SelectedSubtitle != nil {
 					subtitleProvider = m.subtitleProviderName(*m.resolved.SelectedSubtitle)
 				}
+			} else if subtitleType == "hard subs" {
+				// Burned-in captions have no switchable language; echoing the
+				// preference here would claim a language the video lacks.
+				subtitlesText, subtitleType = "hard subs", ""
 			}
 		}
 	}
@@ -568,6 +572,19 @@ func addonCapabilityBadges(info provider.AddonInfo) string {
 	return strings.Join(parts, " · ")
 }
 
+// subtitlePreferenceName renders one mode's subtitle policy for settings.
+func subtitlePreferenceName(pref filter.SubtitlePreference) string {
+	switch pref.Mode {
+	case filter.SubtitleOff:
+		return "Off"
+	case filter.SubtitlePreferred:
+		if code := lang.Normalize(pref.Language); code != "" {
+			return lang.Name(code)
+		}
+	}
+	return "Any"
+}
+
 func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 	accent := m.currentAccent()
 
@@ -611,12 +628,27 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 	default:
 		downloadQualityName = "Auto (same as stream)"
 	}
-	activeSubs := m.filterScope.For(m.appMode).Subtitles
-	subtitleName := "Any"
-	if activeSubs.Mode == filter.SubtitleOff {
-		subtitleName = "Off"
-	} else if code := lang.Normalize(activeSubs.Language); code != "" {
-		subtitleName = lang.Name(code)
+	subtitleName := subtitlePreferenceName(m.filterScope.For(m.appMode).Subtitles)
+	animeSubtitleName := subtitlePreferenceName(m.filterScope.For(provider.ModeAnime).Subtitles)
+
+	pickerOptions := allLangNames
+	pickerEnabled := enabledMap
+	pickerIndex := m.audioPickerIndex
+	if m.subtitlePickerOpen {
+		pickerOptions = nil
+		pickerEnabled = make(map[string]bool)
+		current := prefsSubtitleCode(m.modePreferences(m.subtitlePickerMode).Subtitles)
+		for _, choice := range subtitlePickerOptions() {
+			label := "Any"
+			if choice != "any" {
+				label = lang.Name(choice)
+			}
+			pickerOptions = append(pickerOptions, label)
+			if choice == current || (choice == "any" && current == "") {
+				pickerEnabled[label] = true
+			}
+		}
+		pickerIndex = m.subtitlePickerIndex
 	}
 
 	priorityRows := m.providerPriorityRows()
@@ -685,11 +717,13 @@ func (m *modelImpl) collectSettingsData(width, height int) SettingsData {
 		AudioSummary:          audioSummary,
 		SubtitleLanguage:      subtitleName,
 		AudioPickerOpen:       m.audioPickerOpen,
-		AllLanguages:          allLangNames,
-		EnabledLanguages:      enabledMap,
-		PickerIndex:           m.audioPickerIndex,
+		SubtitlePickerOpen:    m.subtitlePickerOpen,
+		AllLanguages:          pickerOptions,
+		EnabledLanguages:      pickerEnabled,
+		PickerIndex:           pickerIndex,
 		AnimeAudioTrack:       animeAudio,
 		AnimeSubtitles:        m.filterScope.For(provider.ModeAnime).Subtitles.Mode != filter.SubtitleOff,
+		AnimeSubtitleLanguage: animeSubtitleName,
 		SkipSource:            m.skipProvider,
 		AutoSkipIntro:         m.autoSkipIntro,
 		AutoSkipEnding:        m.autoSkipEnding,

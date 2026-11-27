@@ -59,7 +59,8 @@ Type a query, press `Space`, pick a result, press `Enter` to play. `Tab` switche
 | **Skip** | Auto-skip intros, outros and recaps, with seekbar chapter markers (mpv) |
 | **Scrobbling** | AniList (anime), Trakt (movies/TV) |
 | **Manga reader** | In-terminal, Kitty / iTerm2 / Sixel / Unicode block graphics |
-| **Sub / Dub** | Toggle with `a`; the track sticks for following episodes, subtitles side-loaded automatically |
+| **Sub / Dub** | Toggle with `a`; the track sticks for following episodes, subtitles side-loaded automatically. Enabled audio languages are ordered in Settings → Languages, with English as the automatic fallback unless turned off |
+| **Subtitle language** | Pick Any / Off / a language in Settings; in Anime mode a preferred language hides sources without a matching soft subtitle when one exists (downloads keep all sources) |
 | **Downloads** | Single or batch via yt-dlp, 16-connection with aria2 |
 | **Stremio add-ons** | Add compatible stream manifests and browse their catalogs in Stremio mode |
 | **Discord presence** | Optional, local only |

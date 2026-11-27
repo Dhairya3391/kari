@@ -97,6 +97,9 @@ func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) b
 	if dst.Audio.Track == provider.TrackUnknown {
 		dst.Audio.Track = src.Audio.Track
 	}
+	if len(dst.AudioTracks) == 0 {
+		dst.AudioTracks = slices.Clone(src.AudioTracks)
+	}
 	var missing []provider.SubtitleOption
 	for _, sub := range src.Subtitles {
 		if !hasSubtitleOption(dst.Subtitles, sub) && !hasSubtitleOption(missing, sub) {
@@ -116,6 +119,7 @@ func mergeDuplicateSource(dst *provider.MediaSource, src provider.MediaSource) b
 		before.PreferredAudio != dst.PreferredAudio ||
 		before.Language != dst.Language || before.AudioLabel != dst.AudioLabel ||
 		!slices.Equal(before.Audio.Languages, dst.Audio.Languages) ||
+		!slices.Equal(before.AudioTracks, dst.AudioTracks) ||
 		before.Quality != dst.Quality || before.Bitrate != dst.Bitrate ||
 		!slices.Equal(before.ExtraArgs, dst.ExtraArgs) ||
 		len(before.Subtitles) != len(dst.Subtitles)
@@ -128,6 +132,7 @@ func cloneMediaSources(sources []provider.MediaSource) []provider.MediaSource {
 	for i := range cloned {
 		cloned[i].Subtitles = slices.Clone(cloned[i].Subtitles)
 		cloned[i].ExtraArgs = slices.Clone(cloned[i].ExtraArgs)
+		cloned[i].AudioTracks = slices.Clone(cloned[i].AudioTracks)
 		if cloned[i].SkipTimes != nil {
 			skipTimes := *cloned[i].SkipTimes
 			cloned[i].SkipTimes = &skipTimes

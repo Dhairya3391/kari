@@ -179,3 +179,17 @@ func TestSubtitleOptionsAllResolvable(t *testing.T) {
 		}
 	}
 }
+
+// TestSubtitleOptionsCoverNames keeps the settings picker in sync with the
+// display-name table: a language Name can render must also be selectable.
+func TestSubtitleOptionsCoverNames(t *testing.T) {
+	options := make(map[string]struct{}, len(SubtitleOptions))
+	for _, code := range SubtitleOptions {
+		options[code] = struct{}{}
+	}
+	for code := range names {
+		if _, ok := options[code]; !ok {
+			t.Errorf("language %q is missing from SubtitleOptions", code)
+		}
+	}
+}

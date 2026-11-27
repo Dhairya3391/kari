@@ -97,8 +97,8 @@ User preferences configured via the in-app Settings screen (`s`) are persisted t
 | `download_quality` | int | Target quality for episode downloads. | `0` |
 | `disable_download_verification` | bool | Skip post-download container and audio stream integrity checks. | `false` |
 | `language_filter` | map | Allowed audio language codes for movies, TV, and cartoons (e.g. `{"en": true}`). | `{}` (all) |
-| `subtitle_language` | string | Preferred ISO 639-1 subtitle language code (e.g. `"en"`, `"es"`, `"fr"`). | `"en"` |
-| `disable_anime_subtitles` | bool | Suppress subtitles specifically for anime (useful when watching English dubs). | `false` |
+| `subtitle_language` | string | Preferred ISO 639-1 subtitle language code (e.g. `"en"`, `"es"`, `"fr"`). Mirrored into the typed per-mode `filters`; the legacy string cannot express "Any". | `"en"` |
+| `disable_anime_subtitles` | bool | Suppress subtitles specifically for anime (useful when watching English dubs). Mirrored into the anime subtitle filter. | `false` |
 | `default_anime_audio` | string | Startup audio mode for anime: `"sub"` or `"dub"`. | `"sub"` |
 | `anime_title_language` | string | Title display language: `"romaji"` or `"english"`. | `"romaji"` |
 | `preferred_player` | string | Target media player binary name (`"mpv"`, `"iina"`, `"vlc"`). | `""` (auto) |
@@ -120,6 +120,16 @@ User preferences configured via the in-app Settings screen (`s`) are persisted t
 | `transitions` | bool | Enable color crossfade transitions between views. | `true` |
 | `startup_search_active` | bool | Focus the search input field immediately on application launch. | `true` |
 | `auto_update` | bool | Check and prompt for background updates when a new release is published. | `false` |
+
+### Subtitles and source selection
+
+Settings → Languages offers **Any**, **Off**, or a specific subtitle language; Settings → Anime has its own **Subtitle language** row. The typed per-mode policy under `filters` is the source of truth — the legacy `subtitle_language` string exists for older settings files.
+
+- **Any** — no language preference; every playable source stays available.
+- **Off** — subtitles are disabled for that mode; anime also stops fetching subtitle sidecars.
+- **A language** — that language is preferred for embedded and side-loaded tracks.
+
+In **Anime** mode a preferred language also narrows the playback candidates: when at least one source supplies a soft subtitle in that language, sources without one are hidden from the stream preview. Burned-in (hard-sub) sources have no switchable language and are hidden in that case. If no source has a match, the full set stays available. **Downloads always use the unfiltered set**, so a preferred language never removes a download candidate.
 
 ---
 

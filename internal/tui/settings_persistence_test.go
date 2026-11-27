@@ -550,3 +550,23 @@ func TestProviderToggleInSettingsPersists(t *testing.T) {
 		t.Fatalf("saved2.DisabledProviders = %v, want empty", saved2.DisabledProviders)
 	}
 }
+
+func TestNewModelRestoresAnySubtitlePreference(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	settings.Save(&settings.Data{
+		Modes:           []string{"movies"},
+		FiltersMigrated: true,
+		Filters: filter.Scope{
+			Defaults: filter.Preferences{Subtitles: filter.SubtitlePreference{Mode: filter.SubtitleAny}},
+		},
+	})
+
+	reg := &provider.Registry{}
+	reg.Register(&fakeProviderForSwitch{name: "movie_p", modes: []provider.Mode{{Name: provider.ModeMovies}}})
+	players := player.NewRegistry("", player.SkipClients{}, player.SkipSettings{})
+	mdl := NewModel(context.Background(), "", reg, players, "", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "1.0.0", "")
+	m := mdl.(*modelImpl)
+	if m.subtitleLanguage != "" {
+		t.Errorf("subtitleLanguage = %q, want empty for Any", m.subtitleLanguage)
+	}
+}

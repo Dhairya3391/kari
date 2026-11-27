@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,15 +39,15 @@ func TestAppendAudioLangArgs(t *testing.T) {
 		lang string
 		want string
 	}{
-		{"hi", "--alang=hi,hin,hindi,en,eng"},
-		{"hindi", "--alang=hi,hin,hindi,en,eng"},
-		{"ja", "--alang=ja,jpn,japanese,en,eng"},
-		{"es", "--alang=es,spa,spanish,esla,es-la,en,eng"},
+		{"hi", "--alang=hi,hin,hindi,en,eng,english"},
+		{"hindi", "--alang=hi,hin,hindi,en,eng,english"},
+		{"ja", "--alang=ja,jpn,japanese,en,eng,english"},
+		{"es", "--alang=es,spa,esla,es-la,spanish,en,eng,english"},
 		{"", ""},
 	}
 
 	for _, tt := range tests {
-		got := appendAudioLangArgs(nil, tt.lang)
+		got := appendAudioLangArgs(nil, []string{tt.lang}, nil)
 		if tt.want == "" {
 			if len(got) != 0 {
 				t.Errorf("appendAudioLangArgs(nil, %q) = %v, want empty", tt.lang, got)
@@ -59,11 +60,55 @@ func TestAppendAudioLangArgs(t *testing.T) {
 	}
 }
 
+func TestAppendAudioLangArgsUsesEveryEnabledLanguageInOrder(t *testing.T) {
+	args := appendAudioLangArgs(nil, []string{"es", "de"}, nil)
+	if len(args) != 1 {
+		t.Fatalf("appendAudioLangArgs = %v, want one flag", args)
+	}
+	want := "--alang=es,spa,esla,es-la,spanish,de,deu,ger,german,en,eng,english"
+	if args[0] != want {
+		t.Errorf("appendAudioLangArgs = %q, want %q", args[0], want)
+	}
+}
+
+func TestAppendAudioLangArgsDropsDisabledLanguages(t *testing.T) {
+	args := appendAudioLangArgs(nil, []string{"ja"}, []string{"en"})
+	want := "--alang=ja,jpn,japanese"
+	if len(args) != 1 || args[0] != want {
+		t.Errorf("appendAudioLangArgs = %v, want %q", args, want)
+	}
+}
+
+func TestBuildMPVArgsAttachesAllAudioRenditions(t *testing.T) {
+	source := provider.MediaSource{
+		URL: "https://example.com/index-v1-a1.m3u8",
+		AudioTracks: []provider.AudioTrackRef{
+			{URL: "https://example.com/index-a2.m3u8", Code: "es"},
+			{URL: "https://example.com/index-a3.m3u8", Code: "de"},
+		},
+	}
+	media := model.ResolvedMedia{AudioLanguages: []string{"de", "en"}}
+
+	args := buildMPVArgs(source, media, "/tmp/sock", nil)
+	if !containsArg(args, "--audio-file=https://example.com/index-a2.m3u8") ||
+		!containsArg(args, "--audio-file=https://example.com/index-a3.m3u8") {
+		t.Fatalf("buildMPVArgs missing audio renditions: %v", args)
+	}
+	wantAlang := "--alang=de,deu,ger,german,en,eng,english"
+	if !containsArg(args, wantAlang) {
+		t.Errorf("buildMPVArgs must prefer the enabled language, want %q in %v", wantAlang, args)
+	}
+	if got := indexOf(args, "--audio-file=https://example.com/index-a2.m3u8"); got < 0 ||
+		got > indexOf(args, source.URL) {
+		t.Errorf("audio inputs must be declared before the video URL: %v", args)
+	}
+}
+
 func TestAppendSubtitleArgsUsesConfiguredLanguage(t *testing.T) {
 	args := appendSubtitleArgs(nil, "/tmp/sub.srt", "ja")
 	want := map[string]bool{
-		"--slang=ja,jpn,japanese,en,eng": false,
-		"--sub-file=/tmp/sub.srt":        false,
+		"--slang=ja,jpn,japanese,en,eng,english": false,
+		"--sub-file=/tmp/sub.srt":                false,
 	}
 	for _, arg := range args {
 		if _, ok := want[arg]; ok {
@@ -136,8 +181,23 @@ func TestBuildMPVArgsUsesPreferredSubtitleLanguage(t *testing.T) {
 	args := buildMPVArgs(provider.MediaSource{URL: "https://example.com/video.m3u8"}, model.ResolvedMedia{
 		SubtitleLanguage: "ja",
 	}, "/tmp/sock", nil)
-	if !containsArg(args, "--slang=ja,jpn,japanese,en,eng") {
+	if !containsArg(args, "--slang=ja,jpn,japanese,en,eng,english") {
 		t.Errorf("buildMPVArgs missing preferred subtitle language: %v", args)
+	}
+}
+
+// The media's own subtitle renditions must stay selectable in mpv. Kari may
+// add an external file or narrow the auto-start via --slang, but never a flag
+// that disables or fixes the embedded track list.
+func TestBuildMPVArgsKeepsEmbeddedSubtitles(t *testing.T) {
+	source := provider.MediaSource{URL: "https://example.com/master.m3u8"}
+	for _, subtitleLanguage := range []string{"", "off", "ja"} {
+		args := buildMPVArgs(source, model.ResolvedMedia{SubtitleLanguage: subtitleLanguage}, "/tmp/sock", nil)
+		for _, arg := range args {
+			if arg == "--no-sub" || strings.HasPrefix(arg, "--sid=") {
+				t.Errorf("subtitle language %q must not disable embedded subs, got %q", subtitleLanguage, arg)
+			}
+		}
 	}
 }
 
@@ -154,8 +214,42 @@ func TestDesktopPlayersUseTheirNativeAudioLanguageOptions(t *testing.T) {
 	}
 
 	iinaArgs := buildIINAArgs(source, media, "/tmp/iina.sock", nil)
-	if !containsArg(iinaArgs, "--alang=hi,hin,hindi,en,eng") {
+	if !containsArg(iinaArgs, "--alang=hi,hin,hindi,en,eng,english") {
 		t.Errorf("IINA args missing mpv --alang: %v", iinaArgs)
+	}
+}
+
+func TestBuildVLCArgsUsesEveryEnabledAudioLanguage(t *testing.T) {
+	media := model.ResolvedMedia{AudioLanguages: []string{"es", "de"}}
+	args := buildVLCArgs(provider.MediaSource{URL: "https://example.com/stream.m3u8"}, media)
+	if !containsArg(args, "--audio-language=es,de") {
+		t.Errorf("VLC args missing every enabled language: %v", args)
+	}
+}
+
+func TestBuildVLCArgsAttachesAllAudioRenditions(t *testing.T) {
+	source := provider.MediaSource{
+		URL: "https://example.com/stream.m3u8",
+		AudioTracks: []provider.AudioTrackRef{
+			{URL: "https://example.com/a1.m3u8", Code: "en"},
+			{URL: "https://example.com/a2.m3u8", Code: "es"},
+		},
+	}
+	args := buildVLCArgs(source, model.ResolvedMedia{})
+	want := "--input-slave=https://example.com/a1.m3u8#https://example.com/a2.m3u8"
+	if !containsArg(args, want) {
+		t.Errorf("VLC args missing audio slaves: %v", args)
+	}
+}
+
+func TestAudioLanguagesForHonorsDisabledPreference(t *testing.T) {
+	source := provider.MediaSource{PreferredAudio: "ja", Language: "ja"}
+	if got := audioLanguagesFor(source, model.ResolvedMedia{DisabledAudioLanguages: []string{"ja"}}); !slices.Equal(got, []string{"en"}) {
+		t.Errorf("disabled source fallback = %v, want [en]", got)
+	}
+	media := model.ResolvedMedia{AudioLanguages: []string{"ja", "de"}, DisabledAudioLanguages: []string{"ja"}}
+	if got := audioLanguagesFor(source, media); !slices.Equal(got, []string{"de"}) {
+		t.Errorf("enabled list = %v, want [de]", got)
 	}
 }
 

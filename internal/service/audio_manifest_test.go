@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -132,6 +133,150 @@ func TestHLSAudioTracksDefaultRenditionComesFirst(t *testing.T) {
 	}
 	if !slices.Equal(codes, []string{"en", "hi"}) {
 		t.Fatalf("hlsAudioTracks() codes = %v, want [en hi] with the default first", codes)
+	}
+}
+
+func TestAudioTrackRefsResolvesRelativeURIs(t *testing.T) {
+	tracks := []hlsAudioTrack{
+		{Code: "en", URI: "audio/en.m3u8", Default: true},
+		{Code: "es", URI: "https://cdn.example/audio/es.m3u8"},
+		{Code: "hi"}, // muxed into the video; no separate input to attach
+	}
+	got := audioTrackRefs("https://cdn.example/lane/master.m3u8?token=x", tracks)
+	want := []provider.AudioTrackRef{
+		{URL: "https://cdn.example/lane/audio/en.m3u8", Code: "en"},
+		{URL: "https://cdn.example/audio/es.m3u8", Code: "es"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("audioTrackRefs = %+v, want %+v", got, want)
+	}
+}
+
+func TestHLSAudioTracksKeepEveryPlayableRendition(t *testing.T) {
+	manifest := "#EXTM3U\n" +
+		"#EXT-X-MEDIA:TYPE=AUDIO,LANGUAGE=\"en\",NAME=\"English\"\n" +
+		"#EXT-X-MEDIA:TYPE=AUDIO,LANGUAGE=\"en\",NAME=\"English\",URI=\"en.m3u8\",DEFAULT=YES\n" +
+		"#EXT-X-MEDIA:TYPE=AUDIO,LANGUAGE=\"en\",NAME=\"English AD\",URI=\"en-ad.m3u8\"\n"
+	refs := audioTrackRefs("https://cdn.example/master.m3u8", hlsAudioTracks(manifest))
+	want := []provider.AudioTrackRef{
+		{URL: "https://cdn.example/en.m3u8", Code: "en"},
+		{URL: "https://cdn.example/en-ad.m3u8", Code: "en"},
+	}
+	if !slices.Equal(refs, want) {
+		t.Errorf("audioTrackRefs = %+v, want %+v", refs, want)
+	}
+}
+
+func TestDiscoverManifestAudioAttachesVariantRenditions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n"+
+			"#EXT-X-MEDIA:TYPE=AUDIO,NAME=\"English\",LANGUAGE=\"en\",URI=\"a1.m3u8\"\n"+
+			"#EXT-X-MEDIA:TYPE=AUDIO,NAME=\"English AD\",LANGUAGE=\"en\",URI=\"a3.m3u8\"\n"+
+			"#EXT-X-MEDIA:TYPE=AUDIO,NAME=\"Spanish\",LANGUAGE=\"es\",URI=\"a2.m3u8\"\n"+
+			"#EXT-X-STREAM-INF:BANDWIDTH=1000,RESOLUTION=1280x720\n"+
+			"v1.m3u8\n")
+	}))
+	defer server.Close()
+
+	sources := []provider.MediaSource{{
+		URL:         server.URL + "/v1.m3u8",
+		ManifestURL: server.URL + "/master.m3u8",
+		Type:        provider.SourceTypeHLS,
+	}}
+	got := discoverManifestAudio(context.Background(), httpclient.NewWithTimeout(manifestProbeTimeout), sources)
+	want := []provider.AudioTrackRef{
+		{URL: server.URL + "/a1.m3u8", Code: "en"},
+		{URL: server.URL + "/a3.m3u8", Code: "en"},
+		{URL: server.URL + "/a2.m3u8", Code: "es"},
+	}
+	if !slices.Equal(got[0].AudioTracks, want) {
+		t.Errorf("variant audio tracks = %+v, want %+v", got[0].AudioTracks, want)
+	}
+	if langs := got[0].Audio.Languages; !slices.Equal(langs, []string{"en", "es"}) {
+		t.Errorf("audio languages = %v, want deduped [en es]", langs)
+	}
+}
+
+func TestEnrichAdaptiveSourcesSharesRenditionsWithTiers(t *testing.T) {
+	master := "#EXTM3U\n" +
+		"#EXT-X-MEDIA:TYPE=AUDIO,NAME=\"English\",LANGUAGE=\"en\",URI=\"a1.m3u8\"\n" +
+		"#EXT-X-MEDIA:TYPE=AUDIO,NAME=\"Spanish\",LANGUAGE=\"es\",URI=\"a2.m3u8\"\n" +
+		"#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS=\"avc1.4d4028,mp4a.40.2\"\n" +
+		"fullhd.m3u8\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "master.m3u8") {
+			fmt.Fprint(w, master)
+			return
+		}
+		fmt.Fprint(w, "#EXTM3U\n#EXTINF:4.0,\nsegment.ts\n")
+	}))
+	defer server.Close()
+
+	sources := []provider.MediaSource{
+		{URL: server.URL + "/master.m3u8", ManifestURL: server.URL + "/master.m3u8", Type: provider.SourceTypeHLS, Quality: "Auto", Backend: "lane"},
+		{URL: server.URL + "/fullhd.m3u8", ManifestURL: server.URL + "/master.m3u8", Type: provider.SourceTypeHLS, Quality: "720p", Backend: "lane"},
+	}
+	got, _ := enrichAdaptiveSources(context.Background(), httpclient.NewWithTimeout(manifestProbeTimeout), sources, provider.ModeMovies, nil)
+	if len(got) != 2 {
+		t.Fatalf("sources = %+v, want master and tier", got)
+	}
+	for i, src := range got {
+		want := 0
+		if src.URL != server.URL+"/master.m3u8" {
+			want = 2
+		}
+		if len(src.AudioTracks) != want {
+			t.Errorf("source %d audio tracks = %+v, want %d", i, src.AudioTracks, want)
+		}
+	}
+}
+
+func TestEnrichAdaptiveSourcesKeepsRenditionsPerManifest(t *testing.T) {
+	// Each master also advertises a genuine 4K tier so the master relabels to
+	// 4K while the probed tier keeps its own label and survives dedupe.
+	master := func(audio, variant string, bandwidth int, resolution string) string {
+		return "#EXTM3U\n" +
+			"#EXT-X-MEDIA:TYPE=AUDIO,NAME=\"" + audio + "\",LANGUAGE=\"" + audio + "\",URI=\"" + audio + ".m3u8\"\n" +
+			"#EXT-X-STREAM-INF:BANDWIDTH=" + fmt.Sprint(bandwidth) + ",RESOLUTION=" + resolution + ",CODECS=\"avc1.4d4028\"\n" + variant + "\n" +
+			"#EXT-X-STREAM-INF:BANDWIDTH=9000,RESOLUTION=3840x2160,CODECS=\"hvc1.1.6.L153.B0\"\n" + "top-" + audio + ".m3u8\n"
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/a.m3u8":
+			fmt.Fprint(w, master("en", "a-v.m3u8", 1000, "3840x2160"))
+		case "/b.m3u8":
+			fmt.Fprint(w, master("fr", "b-v.m3u8", 2000, "1280x720"))
+		default:
+			fmt.Fprint(w, "#EXTM3U\n#EXTINF:4.0,\nsegment.ts\n")
+		}
+	}))
+	defer server.Close()
+
+	sources := []provider.MediaSource{
+		{URL: server.URL + "/a.m3u8", ManifestURL: server.URL + "/a.m3u8", Type: provider.SourceTypeHLS, Quality: "Auto", Backend: "lane", Resolver: "test"},
+		{URL: server.URL + "/a-v.m3u8", ManifestURL: server.URL + "/a.m3u8", Type: provider.SourceTypeHLS, Quality: "720p", Backend: "lane", Resolver: "test"},
+		{URL: server.URL + "/b.m3u8", ManifestURL: server.URL + "/b.m3u8", Type: provider.SourceTypeHLS, Quality: "Auto", Backend: "lane", Resolver: "test"},
+		{URL: server.URL + "/b-v.m3u8", ManifestURL: server.URL + "/b.m3u8", Type: provider.SourceTypeHLS, Quality: "1080p", Backend: "lane", Resolver: "test"},
+	}
+	got, _ := enrichAdaptiveSources(context.Background(), httpclient.NewWithTimeout(manifestProbeTimeout), sources, provider.ModeMovies, nil)
+	if len(got) != 4 {
+		t.Fatalf("sources = %d, want both masters and both tiers: %+v", len(got), got)
+	}
+	wants := map[string]string{
+		"/a-v.m3u8": server.URL + "/en.m3u8",
+		"/b-v.m3u8": server.URL + "/fr.m3u8",
+	}
+	for _, src := range got {
+		want := wants[strings.TrimPrefix(src.URL, server.URL)]
+		if want == "" {
+			if len(src.AudioTracks) != 0 {
+				t.Errorf("%s: master must not carry external audio: %+v", src.URL, src.AudioTracks)
+			}
+			continue
+		}
+		if len(src.AudioTracks) != 1 || src.AudioTracks[0].URL != want {
+			t.Errorf("%s: audio tracks = %+v, want [%s]", src.URL, src.AudioTracks, want)
+		}
 	}
 }
 

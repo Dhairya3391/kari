@@ -23,6 +23,11 @@ func (m *modelImpl) handleGlobalKeys(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.providerPriorityOpen = false
 		return nil, true
 	}
+	// A language picker owns the keyboard; let updateSettings handle every key,
+	// including Esc, so global shortcuts cannot change views behind the modal.
+	if m.activeView == viewSettings && (m.audioPickerOpen || m.subtitlePickerOpen) {
+		return nil, false
+	}
 	if m.activeView == viewMangaSources {
 		switch msg.String() {
 		case "up", "k":

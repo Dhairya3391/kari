@@ -55,7 +55,14 @@ type ResolvedMedia struct {
 	// SubtitleLanguage is the preferred language for embedded subtitle tracks.
 	// Empty or "off" leaves track selection to the player's own configuration.
 	SubtitleLanguage string
-	StartTime        float64
+	// AudioLanguages holds the user's enabled audio languages in priority
+	// order. Players use it to select the preferred track while keeping every
+	// advertised track available.
+	AudioLanguages []string
+	// DisabledAudioLanguages holds codes the user switched off. The player
+	// fallback must never select one of these tracks.
+	DisabledAudioLanguages []string
+	StartTime              float64
 	// Live marks real-time broadcast playback where duration-based
 	// short video filtering and skip timestamps are inapplicable.
 	Live bool

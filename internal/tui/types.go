@@ -727,9 +727,12 @@ type modelImpl struct {
 	failedProviderName   string
 
 	// Settings 5-category state
-	settingsCategory SettingsCategory
-	audioPickerOpen  bool
-	audioPickerIndex int
+	settingsCategory    SettingsCategory
+	audioPickerOpen     bool
+	audioPickerIndex    int
+	subtitlePickerOpen  bool
+	subtitlePickerIndex int
+	subtitlePickerMode  provider.ContentType
 
 	// Anime Status picker modal
 	animeStatusPickerOpen      bool

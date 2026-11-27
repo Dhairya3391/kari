@@ -100,3 +100,24 @@ func TestSubtitleScore(t *testing.T) {
 		})
 	}
 }
+
+func TestKeepMatchingSubtitlesUsesRankingParser(t *testing.T) {
+	hard := RankedSource{Source: provider.MediaSource{URL: "hard", SubType: provider.SubTypeHard}}
+	soft := RankedSource{Source: provider.MediaSource{
+		URL:       "soft",
+		Subtitles: []provider.SubtitleOption{{Language: "English SDH"}},
+	}}
+	ranked := []RankedSource{hard, soft}
+	pref := SubtitlePreference{Mode: SubtitlePreferred, Language: "en"}
+
+	if got := KeepMatchingSubtitles(ranked, pref, provider.ModeAnime); len(got) != 1 || got[0].Source.URL != "soft" {
+		t.Errorf("matching sources = %+v, want only soft", got)
+	}
+	if got := KeepMatchingSubtitles(ranked, pref, provider.ModeMovies); len(got) != 2 {
+		t.Errorf("non-anime sources = %+v, want both", got)
+	}
+	none := SubtitlePreference{Mode: SubtitlePreferred, Language: "ja"}
+	if got := KeepMatchingSubtitles(ranked, none, provider.ModeAnime); len(got) != 2 {
+		t.Errorf("no-match sources = %+v, want both", got)
+	}
+}

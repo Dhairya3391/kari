@@ -510,6 +510,11 @@ func (m *modelImpl) exitInputMode() bool {
 			m.clearStatus()
 			return true
 		}
+		if m.subtitlePickerOpen {
+			m.subtitlePickerOpen = false
+			m.clearStatus()
+			return true
+		}
 		if m.editingAccentHex {
 			m.editingAccentHex = false
 			m.hexInput.Blur()

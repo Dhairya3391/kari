@@ -109,6 +109,8 @@ All keybindings are active inside the Kari TUI. Context-sensitive keys are avail
 | `J` / `K` (or `Shift+↓` / `Shift+↑`) | Reorder content modes (under Modes tab) |
 | `Esc` | Save and exit Settings |
 
+Selecting **Audio languages** or **Subtitle language** opens a full-screen picker. `↑`/`↓` (`j`/`k`) move, `Home`/`End` jump to the first/last row, and `PgUp`/`PgDn` page. In the audio picker `Space` toggles the highlighted language and `Enter`/`Esc` close it. In the subtitle picker `Enter`/`Space` selects the highlighted row (Any / Off / a language) and closes it, while `Esc` cancels. Global shortcuts are ignored while a picker is open.
+
 ---
 
 ## Downloads Screen (`d`)

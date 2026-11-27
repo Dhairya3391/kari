@@ -204,10 +204,14 @@ var aliases = map[string]string{
 	"hau":             "ha",
 }
 
-// SubtitleOptions is the curated, ordered list of languages selectable as
-// the default subtitle language in settings.
+// SubtitleOptions is the ordered list of languages selectable as the default
+// subtitle language in settings. It covers every code Normalize can produce a
+// display name for, so a track tagged in any provider's language list stays
+// pickable; keep it in sync with names (TestSubtitleOptionsCoverNames).
 var SubtitleOptions = []string{
 	"off", "en", "es", "fr", "de", "pt", "it", "ar", "hi", "ja", "ko", "zh", "ru", "tr", "id", "th", "vi", "ms", "fil", "pl", "nl",
+	"sv", "uk", "el", "he", "fa", "ro", "cs", "hu", "fi", "da", "no", "bn", "ta", "te", "ml", "kn", "mr", "gu", "ur", "bs", "bg",
+	"hr", "is", "kk", "mk", "sr", "si", "sl", "pa", "sw", "ha", "et",
 }
 
 // nativeAliases maps the native-script spellings of our curated languages

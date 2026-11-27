@@ -16,14 +16,16 @@ func (m *modelImpl) rankAndSelectSources() {
 	}
 
 	prefs := m.filterScope.For(m.appMode)
-	m.rankedSources = service.PreparePlaybackSources(m.resolved.Playback, service.PlaybackOptions{
-		Mode:              m.appMode,
-		Preferences:       &prefs,
-		PreferredProvider: m.preferredProviderForMode(m.appMode),
+	ranked := service.PreparePlaybackSources(m.resolved.Playback, service.PlaybackOptions{
+		Mode:                         m.appMode,
+		Preferences:                  &prefs,
+		PreferredProvider:            m.preferredProviderForMode(m.appMode),
+		KeepPreferredSubtitleSources: true,
 	})
-	if m.rankedSources == nil {
-		m.rankedSources = []filter.RankedSource{}
+	if ranked == nil {
+		ranked = []filter.RankedSource{}
 	}
+	m.rankedSources = ranked
 	m.previewSelectedIndex = 0
 }
 

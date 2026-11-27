@@ -315,6 +315,7 @@ func (c *Client) buildSources(ctx context.Context, results []laneResult, subtitl
 // sourceMeta carries the typed fields attached to every row of one lane.
 type sourceMeta struct {
 	backend        string
+	manifestURL    string
 	height         int
 	bitrate        int
 	audioLanguages []string
@@ -365,7 +366,7 @@ func (c *Client) laneSources(ctx context.Context, result laneResult, subtitles [
 						bestHeight = max(bestHeight, variant.Height)
 						bestBitrate = max(bestBitrate, variant.Bandwidth)
 						add(variant.URL, variant.Quality, provider.SourceTypeHLS, sourceMeta{
-							backend: backend, height: variant.Height, bitrate: variant.Bandwidth,
+							backend: backend, manifestURL: u, height: variant.Height, bitrate: variant.Bandwidth,
 							audioLanguages: result.audioLanguages, subtitles: subtitles,
 						})
 					}
@@ -395,7 +396,7 @@ func (c *Client) laneSources(ctx context.Context, result laneResult, subtitles [
 		bestHeight = max(bestHeight, variant.Height)
 		bestBitrate = max(bestBitrate, variant.Bandwidth)
 		add(variant.URL, variant.Quality, provider.SourceTypeHLS, sourceMeta{
-			backend: backend, height: variant.Height, bitrate: variant.Bandwidth,
+			backend: backend, manifestURL: masterURL, height: variant.Height, bitrate: variant.Bandwidth,
 			audioLanguages: result.audioLanguages, subtitles: subtitles,
 		})
 	}
@@ -438,14 +439,15 @@ func qualityType(quality apiQuality, rawURL string) string {
 
 func (c *Client) newMediaSource(target, quality, sourceType string, meta sourceMeta) provider.MediaSource {
 	return provider.MediaSource{
-		URL:       target,
-		Quality:   quality,
-		Height:    meta.height,
-		Bitrate:   meta.bitrate,
-		Backend:   meta.backend,
-		Type:      sourceType,
-		Referer:   c.playerBase + "/",
-		UserAgent: config.DesktopUserAgent,
+		URL:         target,
+		ManifestURL: meta.manifestURL,
+		Quality:     quality,
+		Height:      meta.height,
+		Bitrate:     meta.bitrate,
+		Backend:     meta.backend,
+		Type:        sourceType,
+		Referer:     c.playerBase + "/",
+		UserAgent:   config.DesktopUserAgent,
 		Audio: provider.AudioInfo{
 			Languages: meta.audioLanguages,
 		},

@@ -112,7 +112,9 @@ change how the URL must be fetched.
 
 Filtering and ordering that affect the available search, episode, or playback
 choices belong in service/domain pipelines. The TUI supplies the query and
-preferences, keeps the active selection, and renders the prepared rows.
+preferences, keeps the active selection, and renders the prepared rows. A
+preferred anime subtitle language narrows playback candidates through
+`filter.KeepMatchingSubtitles`; downloads use the unfiltered set.
 
 - `provider` imports only leaf/utility packages (`config`, `httpclient`,
   `logging`, `tmdb`, `search`, `model` for aggregates it fills).

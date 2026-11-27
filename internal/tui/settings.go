@@ -90,21 +90,23 @@ type SettingsData struct {
 	Autoplay              bool // on / off
 	VerifyDownloads       bool // on / off
 	// Languages values
-	AudioSummary     string // e.g. "English · Hindi · Japanese"
-	SubtitleLanguage string // e.g. "English"
-	AudioPickerOpen  bool
-	AllLanguages     []string
-	EnabledLanguages map[string]bool
-	PickerIndex      int
+	AudioSummary       string // e.g. "English · Hindi · Japanese"
+	SubtitleLanguage   string // e.g. "English"
+	AudioPickerOpen    bool
+	SubtitlePickerOpen bool
+	AllLanguages       []string
+	EnabledLanguages   map[string]bool
+	PickerIndex        int
 
 	// Anime values
-	AnimeAudioTrack string // "Sub · Japanese", "Dub · English"
-	AnimeSubtitles  bool   // on / off
-	SkipSource      string // "hybrid", "skipdb", "introdb", "anime-skip", "aniskip", "off"
-	AutoSkipIntro   bool   // auto / ask
-	AutoSkipEnding  bool   // auto / ask
-	AutoSkipRecap   bool   // auto / ask
-	AutoSkipPreview bool   // auto / ask
+	AnimeAudioTrack       string // "Sub · Japanese", "Dub · English"
+	AnimeSubtitles        bool   // on / off
+	AnimeSubtitleLanguage string // "English", "Off", "Any"
+	SkipSource            string // "hybrid", "skipdb", "introdb", "anime-skip", "aniskip", "off"
+	AutoSkipIntro         bool   // auto / ask
+	AutoSkipEnding        bool   // auto / ask
+	AutoSkipRecap         bool   // auto / ask
+	AutoSkipPreview       bool   // auto / ask
 
 	// Modes values
 	DefaultModeName string
@@ -158,7 +160,10 @@ func RenderSettingsScreen(data SettingsData) string {
 	st := NewStyles(data.Accent)
 	width := max(20, data.Width)
 
-	// If Audio Picker modal overlay is active, render it directly
+	// Picker modals render as a full-screen overlay.
+	if data.SubtitlePickerOpen {
+		return fitSettingsLines(renderSubtitleLanguagePicker(data, st), width)
+	}
 	if data.AudioPickerOpen {
 		return fitSettingsLines(renderAudioLanguagePicker(data, st), width)
 	}
@@ -225,15 +230,16 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		}
 
 	case CategoryAnime:
-		// 0: Audio track, 1: Anime subtitles, 2: Skip source, 3: Intro, 4: Outro, 5: Recap, 6: Preview
+		// 0: Audio track, 1: Anime subtitles, 2: Subtitle language, 3: Skip source, 4: Intro, 5: Outro, 6: Recap, 7: Preview
 		rows = append(rows, renderSettingRow("Audio track", formatVal(data.AnimeAudioTrack, data.FocusedRowIndex == 0, st), data.FocusedRowIndex == 0, width, st))
 		rows = append(rows, renderSettingRow("Anime subtitles", formatVal(boolOnOff(data.AnimeSubtitles), data.FocusedRowIndex == 1, st), data.FocusedRowIndex == 1, width, st))
-		rows = append(rows, renderSettingRow("Skip source", formatVal(data.SkipSource, data.FocusedRowIndex == 2, st), data.FocusedRowIndex == 2, width, st))
+		rows = append(rows, renderSettingRow("Subtitle language", formatVal(data.AnimeSubtitleLanguage, data.FocusedRowIndex == 2, st), data.FocusedRowIndex == 2, width, st))
+		rows = append(rows, renderSettingRow("Skip source", formatVal(data.SkipSource, data.FocusedRowIndex == 3, st), data.FocusedRowIndex == 3, width, st))
 		rows = append(rows, "", st.Dim.Render("SKIPPING"))
-		rows = append(rows, renderSettingRow("Intro", formatVal(boolAskAuto(data.AutoSkipIntro), data.FocusedRowIndex == 3, st), data.FocusedRowIndex == 3, width, st))
-		rows = append(rows, renderSettingRow("Outro", formatVal(boolAskAuto(data.AutoSkipEnding), data.FocusedRowIndex == 4, st), data.FocusedRowIndex == 4, width, st))
-		rows = append(rows, renderSettingRow("Recap", formatVal(boolAskAuto(data.AutoSkipRecap), data.FocusedRowIndex == 5, st), data.FocusedRowIndex == 5, width, st))
-		rows = append(rows, renderSettingRow("Post-credits", formatVal(boolAskAuto(data.AutoSkipPreview), data.FocusedRowIndex == 6, st), data.FocusedRowIndex == 6, width, st))
+		rows = append(rows, renderSettingRow("Intro", formatVal(boolAskAuto(data.AutoSkipIntro), data.FocusedRowIndex == 4, st), data.FocusedRowIndex == 4, width, st))
+		rows = append(rows, renderSettingRow("Outro", formatVal(boolAskAuto(data.AutoSkipEnding), data.FocusedRowIndex == 5, st), data.FocusedRowIndex == 5, width, st))
+		rows = append(rows, renderSettingRow("Recap", formatVal(boolAskAuto(data.AutoSkipRecap), data.FocusedRowIndex == 6, st), data.FocusedRowIndex == 6, width, st))
+		rows = append(rows, renderSettingRow("Post-credits", formatVal(boolAskAuto(data.AutoSkipPreview), data.FocusedRowIndex == 7, st), data.FocusedRowIndex == 7, width, st))
 
 		switch data.FocusedRowIndex {
 		case 0:
@@ -241,14 +247,16 @@ func renderCategoryContent(data SettingsData, width int, st Styles) string {
 		case 1:
 			desc = "Anime subtitle mode: Off or Preferred (burned-in subs boosted)."
 		case 2:
-			desc = "Service engine used to resolve intro/outro skip chapters."
+			desc = "Preferred subtitle language for anime. Enter opens the picker."
 		case 3:
-			desc = "Skip intro sequence: ask (prompts [Enter]) or auto (jumps automatically)."
+			desc = "Service engine used to resolve intro/outro skip chapters."
 		case 4:
-			desc = "Skip outro sequence: ask (prompts [Enter]) or auto (jumps automatically)."
+			desc = "Skip intro sequence: ask (prompts [Enter]) or auto (jumps automatically)."
 		case 5:
-			desc = "Skip recap sequence: ask (prompts [Enter]) or auto (jumps automatically)."
+			desc = "Skip outro sequence: ask (prompts [Enter]) or auto (jumps automatically)."
 		case 6:
+			desc = "Skip recap sequence: ask (prompts [Enter]) or auto (jumps automatically)."
+		case 7:
 			desc = "Skip post-credits / preview: ask (prompts [Enter]) or auto (jumps automatically)."
 		}
 	case CategoryModes:
@@ -619,9 +627,17 @@ func boolAskAuto(b bool) string {
 }
 
 func renderAudioLanguagePicker(data SettingsData, st Styles) string {
+	return renderLanguagePicker("Select Audio Languages", data, st)
+}
+
+func renderSubtitleLanguagePicker(data SettingsData, st Styles) string {
+	return renderLanguagePicker("Select Subtitle Language", data, st)
+}
+
+func renderLanguagePicker(title string, data SettingsData, st Styles) string {
 	var rows []string
 
-	rows = append(rows, st.Bold.Render("Select Audio Languages"), "")
+	rows = append(rows, st.Bold.Render(title), "")
 
 	start, end, above, below := 0, len(data.AllLanguages), 0, 0
 	if data.Height > 0 {

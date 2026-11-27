@@ -258,7 +258,13 @@ func (c *Client) sourcesFromRelease(ctx context.Context, detail releaseDetail, s
 		if height <= 0 {
 			continue
 		}
-		sources = append(sources, c.newSource(variant.URL, kit.QualityLabelFromHeight(height), backend, height, variant.Bandwidth, languages, subtitles))
+		// A muxed variant already carries its audio; pointing it at the master
+		// would attach the same track again as an external input.
+		manifest := ""
+		if !hasAudioCodec(variant.Codecs) {
+			manifest = master
+		}
+		sources = append(sources, c.newSource(variant.URL, manifest, kit.QualityLabelFromHeight(height), backend, height, variant.Bandwidth, languages, subtitles))
 		if height > bestHeight {
 			bestHeight = height
 		}
@@ -266,7 +272,7 @@ func (c *Client) sourcesFromRelease(ctx context.Context, detail releaseDetail, s
 			bestBitrate = variant.Bandwidth
 		}
 	}
-	sources = append(sources, c.newSource(master, "Auto", backend, bestHeight, bestBitrate, languages, subtitles))
+	sources = append(sources, c.newSource(master, master, "Auto", backend, bestHeight, bestBitrate, languages, subtitles))
 	return provider.FilterDirectSources(sources)
 }
 
@@ -358,18 +364,19 @@ func languageCode(raw string) string {
 
 // newSource builds one playable HLS row. Q62's proxy serves the manifests
 // without origin checks, so only the browser user agent is attached.
-func (c *Client) newSource(target, quality, backend string, height, bitrate int, languages []string, subtitles []provider.SubtitleOption) provider.MediaSource {
+func (c *Client) newSource(target, manifestURL, quality, backend string, height, bitrate int, languages []string, subtitles []provider.SubtitleOption) provider.MediaSource {
 	return provider.MediaSource{
-		URL:       target,
-		Quality:   quality,
-		Backend:   backend,
-		Type:      provider.SourceTypeHLS,
-		Referer:   c.siteBase + "/",
-		UserAgent: config.DesktopUserAgent,
-		Height:    height,
-		Bitrate:   bitrate,
-		Subtitles: subtitles,
-		Audio:     provider.AudioInfo{Languages: languages},
+		URL:         target,
+		ManifestURL: manifestURL,
+		Quality:     quality,
+		Backend:     backend,
+		Type:        provider.SourceTypeHLS,
+		Referer:     c.siteBase + "/",
+		UserAgent:   config.DesktopUserAgent,
+		Height:      height,
+		Bitrate:     bitrate,
+		Subtitles:   subtitles,
+		Audio:       provider.AudioInfo{Languages: languages},
 	}
 }
 

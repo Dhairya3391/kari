@@ -34,6 +34,15 @@ func TestQ62ResolveMovie(t *testing.T) {
 		if source.Type != provider.SourceTypeHLS {
 			t.Errorf("type = %q, want hls", source.Type)
 		}
+		// The adaptive master and the video-only tier need the master URL for
+		// rendition probing; the muxed tier must not attach its own audio again.
+		if source.Quality == "Auto" || source.Quality == "720p" {
+			if source.ManifestURL != master {
+				t.Errorf("%s manifest URL = %q, want %q", source.Quality, source.ManifestURL, master)
+			}
+		} else if source.ManifestURL != "" {
+			t.Errorf("muxed tier manifest URL = %q, want empty", source.ManifestURL)
+		}
 		if len(source.Audio.Languages) != 1 || source.Audio.Languages[0] != "en" {
 			t.Errorf("audio languages = %v, want [en]", source.Audio.Languages)
 		}

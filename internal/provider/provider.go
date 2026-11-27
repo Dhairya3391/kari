@@ -93,6 +93,14 @@ type AudioInfo struct {
 	Track     AudioTrack
 }
 
+// AudioTrackRef is one selectable audio rendition advertised by a manifest.
+// URL is already resolved against the manifest that declared it, so the player
+// can load it directly.
+type AudioTrackRef struct {
+	URL  string
+	Code string
+}
+
 // Stream container/protocol vocabulary for MediaSource.Type. Players and
 // downloaders branch on these; providers emit them.
 const (
@@ -252,6 +260,10 @@ type MediaSource struct {
 	// the single code that does, with Language as the fallback for sources
 	// whose manifest declares no audio tracks.
 	AudioLabel string
+	// AudioTracks holds the manifest's selectable audio renditions. Players
+	// attach them as extra inputs so every advertised language is available,
+	// while PreferredAudio decides which one starts playing.
+	AudioTracks []AudioTrackRef
 	// SubType marks the anime subtitle kind the upstream declares for this
 	// stream: "hard" (burned in), "soft" (toggleable), or "" unknown.
 	// Non-anime sources leave it blank; subtitle delivery is independent.
@@ -272,9 +284,9 @@ type MediaSource struct {
 	Bitrate int
 }
 
-// AudioPreference returns the single language code for the player's --alang
-// selection. A language discovered from the HLS manifest wins; the provider's
-// Language tag is only a fallback for sources the probe could not enrich.
+// AudioPreference returns the source's declared language when no user
+// preference is available. A language discovered from the HLS manifest wins;
+// the provider's Language tag is only a fallback for unprobed sources.
 func (s MediaSource) AudioPreference() string {
 	if code := strings.TrimSpace(s.PreferredAudio); code != "" {
 		return code

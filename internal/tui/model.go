@@ -16,7 +16,6 @@ import (
 	"kari/internal/calendar"
 	"kari/internal/filter"
 	"kari/internal/history"
-	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/manga"
 	"kari/internal/model"
@@ -284,9 +283,6 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 				model.languageFilter = prev
 			}
 		}
-		if code := lang.Normalize(s.SubtitleLanguage); code != "" {
-			model.subtitleLanguage = code
-		}
 		if s.AccentColor != "" && !strings.EqualFold(s.AccentColor, "auto") {
 			if normalized, ok := normalizeHexColor(s.AccentColor); ok {
 				model.accentIndex = len(accentPresets) // default: custom slot
@@ -359,6 +355,9 @@ func NewModel(ctx context.Context, initialQuery string, registry *provider.Regis
 				model.appMode = model.modes[0]
 			}
 		}
+		// Filters are the source of truth: the legacy string cannot express
+		// the "Any" subtitle choice.
+		model.subtitleLanguage = prefsSubtitleCode(model.filterScope.For(model.appMode).Subtitles)
 	}
 	model.syncDisabledProvidersToService()
 	model.updateQueryPlaceholder()

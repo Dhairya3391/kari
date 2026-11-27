@@ -46,13 +46,13 @@ const (
 		`"translations":{"en":{"title":"Pilot"}}},` +
 		`{"id":"EP2","seasonId":"SEASON1","episodeNumber":2,"comingSoon":true}]`
 	releaseList = `[{"id":"REL1","resolution":"FHD_1080P","ripType":"WEB","audioLocales":["en-US"]}]`
-	// Q62's real masters declare an AUDIO group even though every variant is
-	// muxed, so the fixture keeps that attribute to guard the codec check.
+	// The 1080p variant carries muxed audio; the 720p variant is genuinely
+	// video-only, so it needs the master URL for rendition discovery.
 	masterPlaylist = `#EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,URI="audio.m3u8?token=abc&expires=99",GROUP-ID="audio",LANGUAGE="en",NAME="English",DEFAULT=YES
 #EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS="avc1.64002a,mp4a.40.2",AUDIO="audio"
 1080p.m3u8?token=abc&expires=99
-#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=1280x720,CODECS="avc1.4d4020,mp4a.40.2",AUDIO="audio"
+#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=1280x720,CODECS="avc1.4d4020"
 720p.m3u8?token=abc&expires=99
 `
 )

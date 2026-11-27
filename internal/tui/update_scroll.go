@@ -93,7 +93,7 @@ func (m *modelImpl) scrollInputActive() bool {
 	case viewCalendar:
 		return !m.calendarFiltering
 	case viewSettings:
-		return m.audioPickerOpen || !m.authInput.Focused()
+		return m.audioPickerOpen || m.subtitlePickerOpen || !m.authInput.Focused()
 	default:
 		return false
 	}

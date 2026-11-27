@@ -134,7 +134,7 @@ func (c *Client) collectSources(
 	if err != nil {
 		return nil, err
 	}
-	sources := mapSealedSources(payload)
+	sources := mapSealedSources(payload, c.siteBase+"/")
 
 	// The embedded payload only carries one server's streams, and that server
 	// is often stale. The watch page gives its player a token for querying
@@ -145,11 +145,65 @@ func (c *Client) collectSources(
 		sources = append(sources, all...)
 	}
 	sources = dedupeSources(sources)
+	sources = c.expandHLSMasters(ctx, sources)
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources
 	}
 	logging.Debug("bingr sealed sources", "url", watchURL, "backend", payload.Provider.Label, "streams", len(sources))
 	return sources, nil
+}
+
+// expandHLSMasters replaces a master playlist with one playable source per
+// declared variant. Bingr's Edge lane keeps audio in separate renditions; mpv
+// opening the master buffers every rendition before it can start and routinely
+// misses the player's startup window. A variant starts almost immediately,
+// while the preserved ManifestURL lets the service attach the master's audio
+// renditions as selectable inputs.
+func (c *Client) expandHLSMasters(ctx context.Context, sources []provider.MediaSource) []provider.MediaSource {
+	if len(sources) == 0 {
+		return sources
+	}
+	expanded := make([][]provider.MediaSource, len(sources))
+	var wg sync.WaitGroup
+	for i, src := range sources {
+		if src.Type != provider.SourceTypeHLS || strings.TrimSpace(src.URL) == "" {
+			expanded[i] = []provider.MediaSource{src}
+			continue
+		}
+		wg.Add(1)
+		go func(i int, src provider.MediaSource) {
+			defer wg.Done()
+			probeCtx, cancel := context.WithTimeout(ctx, timeouts.BingrShard)
+			defer cancel()
+			variants, err := kit.ParseHLSVariants(probeCtx, c.httpClient, src.URL, map[string]string{
+				"Referer":    src.Referer,
+				"User-Agent": src.UserAgent,
+			})
+			if err != nil || len(variants) == 0 {
+				expanded[i] = []provider.MediaSource{src}
+				return
+			}
+			out := make([]provider.MediaSource, 0, len(variants))
+			for _, variant := range variants {
+				playable := src
+				playable.URL = variant.URL
+				playable.ManifestURL = src.URL
+				playable.Bitrate = variant.Bandwidth
+				if height := kit.CredibleHeight(variant.Height, variant.Codecs); height > 0 {
+					playable.Height = height
+					playable.Quality = kit.QualityLabelFromHeight(height)
+				}
+				out = append(out, playable)
+			}
+			expanded[i] = out
+		}(i, src)
+	}
+	wg.Wait()
+	var out []provider.MediaSource
+	for _, group := range expanded {
+		out = append(out, group...)
+	}
+	return out
 }
 
 // fetchServerSources queries every backend listed on the watch page for its
@@ -214,7 +268,7 @@ func (c *Client) fetchServerSources(
 				logging.Debug("bingr alternate server seal failed", "server", srv.ID, "err", err)
 				return
 			}
-			results <- result{sources: mapSealedSources(payload)}
+			results <- result{sources: mapSealedSources(payload, c.siteBase+"/")}
 		}(srv)
 	}
 
@@ -311,7 +365,7 @@ func unscrambleSeal(ciphertext, nonce []byte) []byte {
 // mapSealedSources converts a decrypted payload into typed media sources. The
 // stream language describes subtitle dubs as well as audio, so it is left
 // unknown rather than guessed as an audio identity.
-func mapSealedSources(payload *sealedSources) []provider.MediaSource {
+func mapSealedSources(payload *sealedSources, referer string) []provider.MediaSource {
 	backend := payload.Provider.Label
 	if backend == "" {
 		backend = payload.Provider.ID
@@ -348,15 +402,23 @@ func mapSealedSources(payload *sealedSources) []provider.MediaSource {
 			subs = append(subs, provider.SubtitleOption{URL: subURL, Language: language})
 		}
 
-		out = append(out, provider.MediaSource{
+		src := provider.MediaSource{
 			URL:       rawURL,
 			Quality:   quality,
 			Backend:   backend,
 			Type:      srcType,
 			Height:    kit.QualityHeight(quality),
 			UserAgent: config.DesktopUserAgent,
+			Referer:   referer,
 			Subtitles: subs,
-		})
+		}
+		// The CDN hotlink-protects the audio and subtitle sub-playlists, so
+		// playback needs the site referer. Pointing ManifestURL at the same
+		// master also lets the service probe attach its audio renditions.
+		if srcType == provider.SourceTypeHLS {
+			src.ManifestURL = rawURL
+		}
+		out = append(out, src)
 	}
 	return out
 }
