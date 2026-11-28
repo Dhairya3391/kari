@@ -3,16 +3,95 @@ package stremioaddon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"kari/internal/provider"
 	"kari/internal/tmdb"
 )
+
+// streamProbeTransport answers ranged stream probes in-process while
+// forwarding addon API calls to the test server, so tests never dial a real
+// CDN. Blocked and stalled paths mimic the failures seen in production.
+type streamProbeTransport struct {
+	base http.RoundTripper
+}
+
+func (t streamProbeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	requestPath := req.URL.Path
+	if strings.Contains(requestPath, "/slow") {
+		return nil, &url.Error{Op: "Get", URL: req.URL.String(), Err: context.DeadlineExceeded}
+	}
+	if strings.Contains(requestPath, "/blocked") {
+		return probeResponse(req, http.StatusForbidden, "application/xml", "<Error><Code>AccessDenied</Code></Error>")
+	}
+	if strings.HasSuffix(requestPath, ".m3u8") {
+		return probeResponse(req, http.StatusOK, "application/vnd.apple.mpegurl", "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2,\nseg.ts\n")
+	}
+	if strings.HasSuffix(requestPath, ".ts") || strings.HasSuffix(requestPath, ".mkv") || strings.HasSuffix(requestPath, ".mp4") {
+		return probeResponse(req, http.StatusOK, "video/mp2t", "\x47\x40\x00\x10")
+	}
+	return t.base.RoundTrip(req)
+}
+
+func probeResponse(req *http.Request, code int, contentType, body string) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: code,
+		Header:     http.Header{"Content-Type": []string{contentType}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}, nil
+}
+
+func testStreamClient(server *httptest.Server) *http.Client {
+	return &http.Client{Transport: streamProbeTransport{base: server.Client().Transport}}
+}
+
+// emptyTitleSearch keeps catalog tests hermetic: they must never dial the
+// public title index or TMDB.
+type emptyTitleSearch struct{}
+
+func (emptyTitleSearch) Search(context.Context, string, provider.ContentType) ([]provider.SearchResult, error) {
+	return nil, provider.ErrNoResults
+}
+
+func (emptyTitleSearch) FetchEpisodes(context.Context, provider.SearchResult) ([]provider.Episode, error) {
+	return nil, provider.ErrNoEpisodes
+}
+
+// stubTitleSearch supplies canned TMDB rows so hybrid search stays hermetic.
+type stubTitleSearch struct {
+	results  []provider.SearchResult
+	episodes []provider.Episode
+}
+
+func (s stubTitleSearch) Search(context.Context, string, provider.ContentType) ([]provider.SearchResult, error) {
+	return s.results, nil
+}
+
+func (s stubTitleSearch) FetchEpisodes(context.Context, provider.SearchResult) ([]provider.Episode, error) {
+	return s.episodes, nil
+}
+
+// noTitleSearch fails a test that unexpectedly consults TMDB.
+type noTitleSearch struct{ t *testing.T }
+
+func (n noTitleSearch) Search(context.Context, string, provider.ContentType) ([]provider.SearchResult, error) {
+	n.t.Error("TMDB search called for an empty Stremio query")
+	return nil, provider.ErrNoResults
+}
+
+func (n noTitleSearch) FetchEpisodes(context.Context, provider.SearchResult) ([]provider.Episode, error) {
+	n.t.Error("TMDB episodes called for an addon catalog row")
+	return nil, provider.ErrNoEpisodes
+}
 
 func TestClientLoadsManifestAndResolvesStream(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,11 +117,12 @@ func TestClientLoadsManifestAndResolvesStream(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json?token=test-token", tmdb.NewKeyPool(nil), server.Client())
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json?token=test-token", tmdb.NewKeyPool(nil), testStreamClient(server))
 	if err != nil {
 		t.Fatalf("NewClientWithHTTP() error = %v", err)
 	}
-	if client.Alias() != "Test Addon" || len(client.Modes()) != 3 {
+	client.base = emptyTitleSearch{}
+	if client.Alias() != "Test Addon" || len(client.Modes()) != 1 {
 		t.Fatalf("manifest metadata = %q, %v", client.Alias(), client.Modes())
 	}
 	results, err := client.Search(context.Background(), "matrix", provider.ModeStremio)
@@ -71,6 +151,182 @@ func TestClientLoadsManifestAndResolvesStream(t *testing.T) {
 	}
 }
 
+func TestSearchAlwaysUsesAddonCatalogs(t *testing.T) {
+	var catalogCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/manifest.json":
+			fmt.Fprint(w, `{"name":"Movie Addon","types":["movie"],"resources":["catalog","stream"],"catalogs":[{"type":"movie","id":"featured"}]}`)
+		case "/catalog/movie/featured.json":
+			catalogCalls.Add(1)
+			fmt.Fprint(w, `{"metas":[{"id":"movie-1","name":"A Movie","type":"movie"}]}`)
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), server.Client())
+	if err != nil {
+		t.Fatalf("NewClientWithHTTP() error = %v", err)
+	}
+	client.base = noTitleSearch{t: t}
+	for _, mode := range []provider.ContentType{provider.ModeStremio, provider.ModeMovies, provider.ModeTV} {
+		results, err := client.Search(context.Background(), "", mode)
+		if err != nil {
+			t.Fatalf("Search(%s) error = %v", mode, err)
+		}
+		if len(results) != 1 || results[0].Type != provider.ModeStremio {
+			t.Fatalf("Search(%s) = %+v, want one addon catalog row", mode, results)
+		}
+	}
+	if got := catalogCalls.Load(); got != 3 {
+		t.Fatalf("catalog requests = %d, want 3", got)
+	}
+}
+
+func TestSearchCombinesAddonCatalogsWithTitleSearch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/manifest.json":
+			fmt.Fprint(w, `{"name":"Catalog Addon","types":["movie"],"resources":["catalog","stream"],"catalogs":[{"type":"movie","id":"featured"}]}`)
+		case "/catalog/movie/featured.json", "/catalog/movie/featured/search=hit.json":
+			fmt.Fprint(w, `{"metas":[{"id":"tmdb:42","type":"movie","name":"Catalog Hit"}]}`)
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), server.Client())
+	if err != nil {
+		t.Fatalf("NewClientWithHTTP() error = %v", err)
+	}
+	client.base = stubTitleSearch{
+		results: []provider.SearchResult{
+			{Title: "Catalog Hit", ID: "42", TMDBID: 42, Type: provider.ModeStremio, MediaType: provider.MediaTypeMovie},
+			{Title: "TMDB Only", ID: "84", TMDBID: 84, Type: provider.ModeStremio, MediaType: provider.MediaTypeMovie},
+		},
+		episodes: []provider.Episode{{ID: "42", Title: "TMDB Only"}},
+	}
+	results, err := client.Search(context.Background(), "hit", provider.ModeStremio)
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("Search() = %+v, want the catalog hit and the TMDB-only title", results)
+	}
+	if results[0].ID != client.Name()+"/movie/tmdb:42" || results[1].Title != "TMDB Only" {
+		t.Fatalf("Search() = %+v, want catalog row kept and TMDB row appended", results)
+	}
+	episodes, err := client.FetchEpisodes(context.Background(), results[1])
+	if err != nil || len(episodes) != 1 || episodes[0].Title != "TMDB Only" {
+		t.Fatalf("FetchEpisodes(TMDB row) = %+v, %v", episodes, err)
+	}
+}
+
+func TestDropDuplicateTitlesKeepsAddonHandle(t *testing.T) {
+	catalogs := []provider.SearchResult{
+		{Title: "Catalog Hit", ID: "addon-a/movie/tt123", Year: "2020", MediaType: provider.MediaTypeMovie},
+		{Title: "Catalog Hit", ID: "addon-b/movie/other", Year: "2020", MediaType: provider.MediaTypeMovie},
+	}
+	titles := []provider.SearchResult{
+		{Title: "Catalog Hit", ID: "123", TMDBID: 123, Year: "2020", MediaType: provider.MediaTypeMovie},
+		{Title: "TMDB Only", ID: "456", TMDBID: 456, Year: "2021", MediaType: provider.MediaTypeMovie},
+	}
+	got := dropDuplicateTitles(catalogs, titles)
+	if len(got) != 1 || got[0].Title != "TMDB Only" {
+		t.Fatalf("dropDuplicateTitles() = %+v, want only the TMDB-only title", got)
+	}
+}
+
+func TestDedupeKeepsDistinctAddonHandles(t *testing.T) {
+	rows := []provider.SearchResult{
+		{Title: "Live Event", ID: "addon-a/tv/evt-1", Type: provider.ModeStremio, MediaType: provider.MediaTypeLive},
+		{Title: "Live Event", ID: "addon-b/tv/evt-2", Type: provider.ModeStremio, MediaType: provider.MediaTypeLive},
+		{Title: "Live Event", ID: "7", TMDBID: 7, Type: provider.ModeStremio, MediaType: provider.MediaTypeLive},
+		{Title: "Live Event", ID: "8", TMDBID: 7, Type: provider.ModeStremio, MediaType: provider.MediaTypeLive},
+	}
+	got := dedupeSearchResults(rows)
+	want := []string{"addon-a/tv/evt-1", "addon-b/tv/evt-2", "7"}
+	if len(got) != len(want) {
+		t.Fatalf("dedupeSearchResults() = %+v, want %v", got, want)
+	}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Fatalf("dedupeSearchResults()[%d].ID = %q, want %q", i, got[i].ID, id)
+		}
+	}
+}
+
+func TestSearchFindsTitlesForDataOnlyAddon(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/manifest.json":
+			fmt.Fprint(w, `{"name":"Stream Only","types":["movie"],"resources":["stream"]}`)
+		case "/stream/movie/99.json":
+			fmt.Fprint(w, `{"streams":[{"name":"1080p","url":"https://cdn.example/dataonly.mkv"}]}`)
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), testStreamClient(server))
+	if err != nil {
+		t.Fatalf("NewClientWithHTTP() error = %v", err)
+	}
+	client.base = stubTitleSearch{results: []provider.SearchResult{{
+		Title: "Data Only Movie", ID: "99", TMDBID: 99,
+		Type: provider.ModeStremio, MediaType: provider.MediaTypeMovie,
+	}}}
+	results, err := client.Search(context.Background(), "data", provider.ModeStremio)
+	if err != nil || len(results) != 1 || results[0].Title != "Data Only Movie" {
+		t.Fatalf("Search() = %+v, %v, want the TMDB title", results, err)
+	}
+	sources, err := client.ResolveSource(context.Background(), results[0].ID, provider.Episode{TMDBID: 99})
+	if err != nil || len(sources) != 1 || sources[0].URL != "https://cdn.example/dataonly.mkv" {
+		t.Fatalf("ResolveSource() = %+v, %v, want the addon stream", sources, err)
+	}
+}
+
+func TestTMDBSeriesSearchKeepsAddonRouteAndEpisodeMetadata(t *testing.T) {
+	client := &Client{name: "addon-series"}
+	client.base = stubTitleSearch{
+		results: []provider.SearchResult{{
+			Title: "Example Series", ID: "42", TMDBID: 42,
+			Type: provider.ModeTV, MediaType: provider.MediaTypeTV,
+		}},
+		episodes: []provider.Episode{{ID: "42:1:1", Season: 1, Episode: 1, Title: "Pilot"}},
+	}
+
+	rows, err := client.Search(context.Background(), "example", provider.ModeStremio)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("Search() = %+v, %v, want one series row", rows, err)
+	}
+	wantID := "addon-series/series/tmdb:42"
+	if rows[0].ID != wantID || rows[0].MediaType != provider.MediaTypeTV || rows[0].TMDBID != 42 {
+		t.Fatalf("series result = %+v, want addon handle %q with TMDB identity", rows[0], wantID)
+	}
+	rows[0].Provider = "addon-series"
+	if got, ok := rows[0].ResolutionID(provider.ModeStremio, "addon-series"); !ok || got != wantID {
+		t.Fatalf("addon ResolutionID() = %q, %v, want its scoped handle", got, ok)
+	}
+	if got, ok := rows[0].ResolutionID(provider.ModeStremio, "another-addon"); !ok || got != "42" {
+		t.Fatalf("fallback ResolutionID() = %q, %v, want canonical TMDB ID", got, ok)
+	}
+	episodes, err := client.FetchEpisodes(context.Background(), rows[0])
+	if err != nil || len(episodes) != 1 || episodes[0].Title != "Pilot" {
+		t.Fatalf("FetchEpisodes() = %+v, %v, want TMDB episode metadata", episodes, err)
+	}
+}
+
 func TestClientBrowsesLiveTVCatalogs(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -87,10 +343,11 @@ func TestClientBrowsesLiveTVCatalogs(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), server.Client())
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), testStreamClient(server))
 	if err != nil {
 		t.Fatalf("NewClientWithHTTP() error = %v", err)
 	}
+	client.base = emptyTitleSearch{}
 	modes := client.Modes()
 	if len(modes) != 1 || modes[0].Name != provider.ModeStremio {
 		t.Fatalf("Modes() = %v, want Stremio catalog mode only", modes)
@@ -171,11 +428,11 @@ func TestManifestModesWithoutStreamResource(t *testing.T) {
 		t.Fatal("manifestModes() is empty without a stream resource")
 	}
 	info = manifest{Types: []string{"movie", "series"}, Resources: []resourceEntry{{Name: "catalog"}}}
-	if got := manifestModes(info); len(got) != 2 || got[0].Name != provider.ModeMovies || got[1].Name != provider.ModeTV {
-		t.Fatalf("manifestModes() = %v, want movie and TV modes", got)
+	if got := manifestModes(info); len(got) != 1 || got[0].Name != provider.ModeStremio {
+		t.Fatalf("manifestModes() = %v, want Stremio only", got)
 	}
 	if got := manifestModes(manifest{}); len(got) != 1 || got[0].Name != provider.ModeStremio {
-		t.Fatalf("manifestModes() = %v, want a fallback Stremio mode", got)
+		t.Fatalf("manifestModes() = %v, want Stremio only", got)
 	}
 }
 
@@ -232,22 +489,16 @@ func TestManifestResourceObjectParsing(t *testing.T) {
 	if stream.Name != "stream" || len(stream.Types) != 2 || stream.Types[0] != "series" || stream.Types[1] != "anime" || len(stream.IDPrefixes) != 1 || stream.IDPrefixes[0] != "tt" {
 		t.Fatalf("stream resource = %+v, want name, types and idPrefixes", stream)
 	}
-	if !supportsStreams(info) || !supportsCatalogs(info) || supportsResource(info, "subtitles") {
+	if !supportsStreams(info) || !supportsResource(info, "catalog") || supportsResource(info, "subtitles") {
 		t.Fatal("supportsResource() misreported parsed resources")
 	}
-	want := []provider.ContentType{provider.ModeMovies, provider.ModeTV, provider.ModeStremio}
 	modes := manifestModes(info)
-	if len(modes) != len(want) {
-		t.Fatalf("manifestModes() = %v, want %v", modes, want)
-	}
-	for index := range want {
-		if modes[index].Name != want[index] {
-			t.Fatalf("manifestModes() = %v, want %v", modes, want)
-		}
+	if len(modes) != 1 || modes[0].Name != provider.ModeStremio {
+		t.Fatalf("manifestModes() = %v, want Stremio only", modes)
 	}
 	onlyResource := manifestModes(manifest{Resources: []resourceEntry{{Name: "stream", Types: []string{"movie"}}}})
-	if len(onlyResource) != 1 || onlyResource[0].Name != provider.ModeMovies {
-		t.Fatalf("manifestModes() from resource types = %v, want movie mode", onlyResource)
+	if len(onlyResource) != 1 || onlyResource[0].Name != provider.ModeStremio {
+		t.Fatalf("manifestModes() from movie resources = %v, want Stremio only", onlyResource)
 	}
 }
 
@@ -258,6 +509,9 @@ func TestCatalogMediaTypeMapping(t *testing.T) {
 	}{
 		{"series", provider.MediaTypeTV},
 		{"tv", provider.MediaTypeLive},
+		{"sport", provider.MediaTypeLive},
+		{"channel", provider.MediaTypeLive},
+		{"LIVE", provider.MediaTypeLive},
 		{"anime", provider.MediaTypeAnime},
 		{"cartoon", provider.MediaTypeMovie},
 		{"", provider.MediaTypeMovie},
@@ -288,7 +542,7 @@ func TestClientBrowsesUnknownCatalogType(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), server.Client())
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), testStreamClient(server))
 	if err != nil {
 		t.Fatalf("NewClientWithHTTP() error = %v", err)
 	}
@@ -379,7 +633,7 @@ func TestResolveSourceMergesSubtitlesResource(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), server.Client())
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), testStreamClient(server))
 	if err != nil {
 		t.Fatalf("NewClientWithHTTP() error = %v", err)
 	}
@@ -431,7 +685,7 @@ func TestSubtitlesFailureDoesNotBreakResolution(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), server.Client())
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), testStreamClient(server))
 	if err != nil {
 		t.Fatalf("NewClientWithHTTP() error = %v", err)
 	}
@@ -533,7 +787,7 @@ func TestCustomCatalogTypeResolvesUsingMetaType(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), server.Client())
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), testStreamClient(server))
 	if err != nil {
 		t.Fatalf("NewClientWithHTTP() error = %v", err)
 	}
@@ -570,6 +824,7 @@ func TestSearchFiltersAddonsThatIgnoreQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClientWithHTTP() error = %v", err)
 	}
+	client.base = emptyTitleSearch{}
 	results, err := client.Search(context.Background(), "heart", provider.ModeStremio)
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
@@ -681,4 +936,196 @@ func TestMediaSourcesAcceptRemoteAddonProxyURLs(t *testing.T) {
 	if sources[0].Referer != "https://addon.example/" || sources[0].UserAgent != "Kari test" || sources[0].CookieHeader != "session=abc" {
 		t.Errorf("standard proxy request headers were not carried onto the stream: %+v", sources[0])
 	}
+}
+
+func TestResolveSourceProbesStreams(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/manifest.json":
+			fmt.Fprint(w, `{"name":"Probe Addon","types":["movie"],"resources":["catalog","stream"],"catalogs":[{"type":"movie","id":"featured"}]}`)
+		case "/catalog/movie/featured.json":
+			fmt.Fprint(w, `{"metas":[{"id":"movie-1","name":"A Movie"}]}`)
+		case "/stream/movie/12.json", "/stream/movie/movie-1.json":
+			fmt.Fprint(w, `{"streams":[{"name":"720p","url":"https://cdn.example/good.m3u8"},{"name":"480p","url":"https://cdn.example/blocked.m3u8"},{"name":"360p","url":"https://cdn.example/slow.m3u8"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json", tmdb.NewKeyPool(nil), testStreamClient(server))
+	if err != nil {
+		t.Fatalf("NewClientWithHTTP() error = %v", err)
+	}
+	handle := client.Name() + "/movie/movie-1"
+	tests := []struct {
+		name    string
+		resolve func(context.Context) ([]provider.MediaSource, error)
+	}{
+		{
+			name: "ResolveSource by TMDB id",
+			resolve: func(ctx context.Context) ([]provider.MediaSource, error) {
+				return client.ResolveSource(ctx, "12", provider.Episode{TMDBID: 12})
+			},
+		},
+		{
+			name: "ResolveSource by addon handle",
+			resolve: func(ctx context.Context) ([]provider.MediaSource, error) {
+				return client.ResolveSource(ctx, handle, provider.Episode{ID: handle})
+			},
+		},
+		{
+			name: "resolveAddonStreams",
+			resolve: func(ctx context.Context) ([]provider.MediaSource, error) {
+				return client.resolveAddonStreams(ctx, "movie", "movie-1")
+			},
+		},
+	}
+	wantURLs := []string{"https://cdn.example/good.m3u8", "https://cdn.example/slow.m3u8"}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sources, err := tt.resolve(context.Background())
+			if err != nil {
+				t.Fatalf("resolve error = %v", err)
+			}
+			if len(sources) != len(wantURLs) {
+				t.Fatalf("resolved %d sources, want %d: %+v", len(sources), len(wantURLs), sources)
+			}
+			for i, want := range wantURLs {
+				if sources[i].URL != want {
+					t.Errorf("source %d URL = %q, want %q", i, sources[i].URL, want)
+				}
+			}
+		})
+	}
+}
+
+// timeoutError mimics a body-read deadline, which http does not wrap in a
+// url.Error. It must stay inconclusive evidence rather than dropping a lane.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "context deadline exceeded while reading body" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+func TestDefiniteProbeFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"403 is definite", &provider.HTTPError{Code: http.StatusForbidden}, true},
+		{"401 is definite", &provider.HTTPError{Code: http.StatusUnauthorized}, true},
+		{"404 is definite", &provider.HTTPError{Code: http.StatusNotFound}, true},
+		{"429 is soft", &provider.HTTPError{Code: http.StatusTooManyRequests}, false},
+		{"503 is soft", &provider.HTTPError{Code: http.StatusServiceUnavailable}, false},
+		{"wrapped deadline is soft", fmt.Errorf("verify live stream: %w", &url.Error{Op: "Get", Err: context.DeadlineExceeded}), false},
+		{"body read timeout is soft", fmt.Errorf("verify live stream: read response: %w", timeoutError{}), false},
+		{"connection reset is soft", &url.Error{Op: "Get", Err: errors.New("connection reset by peer")}, false},
+		{"tls is definite", &url.Error{Op: "Get", Err: errors.New("tls: bad certificate")}, true},
+		{"invalid content is definite", errors.New("verify live stream: response is not an HLS playlist"), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := definiteProbeFailure(tc.err); got != tc.want {
+				t.Fatalf("definiteProbeFailure(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+type countingProbeTransport struct {
+	probes  atomic.Int32
+	vodSeen atomic.Int32
+}
+
+func (t *countingProbeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.probes.Add(1)
+	if strings.Contains(req.URL.Path, ".mkv") {
+		t.vodSeen.Add(1)
+	}
+	return &http.Response{
+		StatusCode: http.StatusForbidden,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader("")),
+		Request:    req,
+	}, nil
+}
+
+func TestProbeSourcesSkipsDirectVOD(t *testing.T) {
+	transport := &countingProbeTransport{}
+	client := &Client{httpClient: &http.Client{Transport: transport}}
+	sources := []provider.MediaSource{
+		{URL: "https://cdn.example/movie.mkv", Type: provider.SourceTypeMP4},
+		{URL: "https://cdn.example/list.m3u8", Type: provider.SourceTypeHLS},
+	}
+	got := client.probeSources(context.Background(), sources)
+	if len(got) != 1 || got[0].URL != sources[0].URL {
+		t.Fatalf("probeSources() = %+v, want only the direct VOD source", got)
+	}
+	if transport.probes.Load() == 0 {
+		t.Fatal("the HLS lane was not probed")
+	}
+	if vod := transport.vodSeen.Load(); vod != 0 {
+		t.Fatalf("direct VOD URL was probed %d times, want 0", vod)
+	}
+}
+
+func TestCatalogAndStreamAuthRequired(t *testing.T) {
+	var openCatalog atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/manifest.json":
+			fmt.Fprint(w, `{"name":"Locked Addon","types":["movie"],"resources":["catalog","stream"],"catalogs":[{"type":"movie","id":"locked"},{"type":"movie","id":"open"}]}`)
+		case "/catalog/movie/locked.json":
+			http.Error(w, "login required", http.StatusUnauthorized)
+		case "/catalog/movie/open.json":
+			if !openCatalog.Load() {
+				http.Error(w, "login required", http.StatusUnauthorized)
+				return
+			}
+			fmt.Fprint(w, `{"metas":[{"id":"movie-1","name":"Open Movie"}]}`)
+		case "/stream/movie/movie-1.json":
+			http.Error(w, "login required", http.StatusUnauthorized)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClientWithHTTP(context.Background(), server.URL+"/manifest.json?token=secret123", tmdb.NewKeyPool(nil), testStreamClient(server))
+	if err != nil {
+		t.Fatalf("NewClientWithHTTP() error = %v", err)
+	}
+
+	t.Run("one locked catalog does not hide the others", func(t *testing.T) {
+		openCatalog.Store(true)
+		results, err := client.Search(context.Background(), "", provider.ModeStremio)
+		if err != nil {
+			t.Fatalf("Search() error = %v", err)
+		}
+		if len(results) != 1 || results[0].Title != "Open Movie" {
+			t.Fatalf("Search() = %+v, want the open catalog result", results)
+		}
+	})
+
+	t.Run("all catalogs locked report auth required", func(t *testing.T) {
+		openCatalog.Store(false)
+		_, err := client.Search(context.Background(), "", provider.ModeStremio)
+		if !errors.Is(err, provider.ErrAuthRequired) {
+			t.Fatalf("Search() error = %v, want ErrAuthRequired", err)
+		}
+		if strings.Contains(err.Error(), "secret123") {
+			t.Fatalf("Search() error leaked the addon token: %v", err)
+		}
+	})
+
+	t.Run("locked stream endpoint reports auth required", func(t *testing.T) {
+		_, err := client.resolveAddonStreams(context.Background(), "movie", "movie-1")
+		if !errors.Is(err, provider.ErrAuthRequired) {
+			t.Fatalf("resolveAddonStreams() error = %v, want ErrAuthRequired", err)
+		}
+	})
 }

@@ -6,13 +6,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"kari/internal/config"
 	"kari/internal/httpclient"
@@ -157,9 +161,16 @@ type proxyHeaders struct {
 	Request map[string]string `json:"request"`
 }
 
+// titleSearcher finds titles through Kari's TMDB catalog. Addons that only
+// serve streams rely on it for discovery and episode metadata.
+type titleSearcher interface {
+	Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error)
+	FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error)
+}
+
 // Client accesses a configured Stremio stream addon using its manifest URL.
 type Client struct {
-	base         *streambase.Base
+	base         titleSearcher
 	httpClient   *http.Client
 	manifest     manifest
 	keyPool      *tmdb.KeyPool
@@ -230,90 +241,64 @@ func NewClientWithHTTP(ctx context.Context, manifestURL string, keyPool *tmdb.Ke
 // Probe checks whether an addon can resolve a catalog item to a playable
 // stream. Adding an addon no longer requires a successful probe.
 func (c *Client) Probe(ctx context.Context) error {
-	if len(c.manifest.Catalogs) > 0 {
-		var firstErr error
-		for _, catalog := range c.manifest.Catalogs {
-			if !supportedCatalogType(catalog.Type) || catalog.ID == "" {
+	var firstErr error
+	for _, catalog := range c.manifest.Catalogs {
+		if !supportedCatalogType(catalog.Type) || catalog.ID == "" {
+			continue
+		}
+		metas, err := c.fetchCatalog(ctx, catalog, "")
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, meta := range metas[:min(len(metas), maxAddonProbeItems)] {
+			if strings.TrimSpace(meta.ID) == "" {
 				continue
 			}
-			metas, err := c.fetchCatalog(ctx, catalog, "")
-			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
-			}
-			for _, meta := range metas[:min(len(metas), maxAddonProbeItems)] {
-				if strings.TrimSpace(meta.ID) == "" {
-					continue
-				}
-				itemIDs := []string{meta.ID}
-				if catalog.Type == "series" {
-					episodes, err := c.fetchCatalogEpisodesForType(ctx, catalog.Type, meta.ID)
-					if err != nil {
-						if firstErr == nil {
-							firstErr = err
-						}
-						continue
-					}
-					itemIDs = make([]string, 0, min(len(episodes), maxAddonProbeItems))
-					for _, episode := range episodes[:min(len(episodes), maxAddonProbeItems)] {
-						itemIDs = append(itemIDs, episode.ID)
-					}
-				}
-				for _, itemID := range itemIDs {
-					if _, err := c.resolveAddonStreams(ctx, catalog.Type, itemID); err == nil {
-						return nil
-					} else if firstErr == nil {
+			itemIDs := []string{meta.ID}
+			if catalog.Type == "series" {
+				episodes, err := c.fetchCatalogEpisodesForType(ctx, catalog.Type, meta.ID)
+				if err != nil {
+					if firstErr == nil {
 						firstErr = err
 					}
+					continue
+				}
+				itemIDs = make([]string, 0, min(len(episodes), maxAddonProbeItems))
+				for _, episode := range episodes[:min(len(episodes), maxAddonProbeItems)] {
+					itemIDs = append(itemIDs, episode.ID)
 				}
 			}
-			if err := ctx.Err(); err != nil {
-				return err
+			for _, itemID := range itemIDs {
+				if _, err := c.resolveAddonStreams(ctx, catalog.Type, itemID); err == nil {
+					return nil
+				} else if firstErr == nil {
+					firstErr = err
+				}
 			}
-		}
-		if firstErr != nil {
-			return fmt.Errorf("addon catalog stream check failed: %w", firstErr)
-		}
-		return fmt.Errorf("addon catalogs returned no playable streams for their first items")
-	}
-	checks := []struct {
-		id      string
-		season  int
-		episode int
-	}{
-		{id: "tt0133093"},
-		{id: "tt0903747", season: 1, episode: 1},
-	}
-	for _, check := range checks {
-		if check.season == 0 && !supportsMode(c.modes, provider.ModeMovies) {
-			continue
-		}
-		if check.season > 0 && !supportsMode(c.modes, provider.ModeTV) {
-			continue
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, err := c.ResolveSource(ctx, check.id, provider.Episode{Season: check.season, Episode: check.episode})
-		if err == nil {
-			return nil
-		}
 	}
-	return fmt.Errorf("addon returned no playable streams for Kari's movie or series checks")
+	if firstErr != nil {
+		return fmt.Errorf("addon catalog stream check failed: %w", firstErr)
+	}
+	return fmt.Errorf("addon catalogs returned no playable streams for their first items")
 }
 
 const maxAddonProbeItems = 3
 
-func supportsMode(modes []provider.Mode, target provider.ContentType) bool {
-	for _, mode := range modes {
-		if mode.Name == target {
-			return true
-		}
-	}
-	return false
-}
+const (
+	// addonStreamProbeParallelism caps concurrent stream probes so an addon
+	// returning dozens of URLs cannot open a socket for every row at once.
+	addonStreamProbeParallelism = 6
+	// addonStreamProbeTimeout bounds one ranged probe. A stalled CDN is
+	// inconclusive evidence, not proof that its stream is dead.
+	addonStreamProbeTimeout = 2 * time.Second
+)
 
 // Name returns a stable identity derived from the configured manifest URL.
 func (c *Client) Name() string { return c.name }
@@ -323,7 +308,8 @@ func (c *Client) MatchesConfiguration(value string) bool {
 	return sha256.Sum256([]byte(strings.TrimSpace(value))) == c.digest
 }
 
-// Modes returns catalog-browsing and movie or series modes declared by the addon.
+// Modes returns the Stremio browsing mode. Addon catalogs never appear in
+// Kari's native movie, series, or live modes.
 func (c *Client) Modes() []provider.Mode { return append([]provider.Mode(nil), c.modes...) }
 
 // Alias returns the addon's display name, falling back to its manifest ID or host.
@@ -332,77 +318,257 @@ func (c *Client) Alias() string { return c.displayName }
 // AddonInfo reports manifest capabilities for the settings screen.
 func (c *Client) AddonInfo() provider.AddonInfo { return c.info }
 
-// Features declares empty-query catalog browsing for addons with a Stremio mode.
+// Features declares uncached empty-query catalog browsing for addons.
 func (c *Client) Features(mode provider.ContentType) provider.Features {
 	if mode == provider.ModeStremio {
-		return provider.Features{AllowEmptyQuery: true, SearchPlaceholder: "Search Stremio addon catalogs…"}
+		return provider.Features{
+			AllowEmptyQuery:   true,
+			NoCachedSearches:  true,
+			SearchPlaceholder: "Search Stremio addon catalogs…",
+		}
 	}
 	return provider.Features{}
 }
 
-// Search uses addon catalogs for Stremio mode and Kari's TMDB catalog otherwise.
-func (c *Client) Search(ctx context.Context, query string, mode provider.ContentType) ([]provider.SearchResult, error) {
-	if mode == provider.ModeStremio {
+// Search combines the addon's catalogs with Kari's TMDB title search. Both
+// sources run at once: an addon with slow or stalling catalogs must never hold
+// back titles found in TMDB. An empty query keeps the addon-only catalog browse.
+func (c *Client) Search(ctx context.Context, query string, _ provider.ContentType) ([]provider.SearchResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
 		return c.searchCatalogs(ctx, query)
 	}
-	return c.base.Search(ctx, query, mode)
+	var (
+		catalogs   []provider.SearchResult
+		catalogErr error
+		titles     []provider.SearchResult
+		titleErr   error
+	)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		catalogs, catalogErr = c.searchCatalogs(groupCtx, query)
+		return nil
+	})
+	group.Go(func() error {
+		titles, titleErr = c.searchTitles(groupCtx, query)
+		return nil
+	})
+	_ = group.Wait()
+	for i := range titles {
+		titles[i] = c.withAddonHandle(titles[i])
+	}
+	results := dedupeSearchResults(append(catalogs, dropDuplicateTitles(catalogs, titles)...))
+	if len(results) > 0 {
+		return results, nil
+	}
+	if catalogErr != nil {
+		return nil, catalogErr
+	}
+	if titleErr != nil {
+		return nil, fmt.Errorf("search TMDB catalog: %w", titleErr)
+	}
+	return nil, provider.ErrNoResults
 }
+
+// searchTitles searches both TMDB media families because Stremio mode itself
+// does not imply whether a title is a movie or a series.
+func (c *Client) searchTitles(ctx context.Context, query string) ([]provider.SearchResult, error) {
+	type titleResult struct {
+		rows []provider.SearchResult
+		err  error
+	}
+	results := make(chan titleResult, 2)
+	for _, mode := range []provider.ContentType{provider.ModeMovies, provider.ModeTV} {
+		go func(mode provider.ContentType) {
+			rows, err := c.base.Search(ctx, query, mode)
+			results <- titleResult{rows: rows, err: err}
+		}(mode)
+	}
+	var rows []provider.SearchResult
+	var firstErr error
+	for range 2 {
+		result := <-results
+		rows = append(rows, result.rows...)
+		if firstErr == nil && result.err != nil && !errors.Is(result.err, provider.ErrNoResults) {
+			firstErr = result.err
+		}
+	}
+	if len(rows) > 0 {
+		return dedupeSearchResults(rows), nil
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return nil, provider.ErrNoResults
+}
+
+// dropDuplicateTitles removes TMDB rows already present in the addon's own
+// catalog. Catalog rows keep their addon handle, which gives playback a better
+// route than the generic TMDB row. Distinct catalog rows are never folded here,
+// so two catalogs carrying the same live event both stay available.
+func dropDuplicateTitles(catalogs, titles []provider.SearchResult) []provider.SearchResult {
+	seen := make(map[string]struct{}, len(catalogs))
+	for _, row := range catalogs {
+		seen[titleIdentity(row)] = struct{}{}
+	}
+	kept := titles[:0]
+	for _, row := range titles {
+		if _, ok := seen[titleIdentity(row)]; ok {
+			continue
+		}
+		kept = append(kept, row)
+	}
+	return kept
+}
+
+// titleIdentity is the display identity used only to hide duplicate TMDB rows.
+func titleIdentity(row provider.SearchResult) string {
+	return strings.ToLower(strings.Join([]string{
+		strings.Join(strings.Fields(row.Title), " "),
+		strings.TrimSpace(row.Year),
+		row.MediaType,
+	}, "\x00"))
+}
+
+// dedupeSearchResults removes repeated handles without collapsing playable
+// variants that share a TMDB identity.
+func dedupeSearchResults(rows []provider.SearchResult) []provider.SearchResult {
+	seen := make(map[string]struct{}, len(rows))
+	out := rows[:0]
+	for _, row := range rows {
+		identity := strings.ToLower(strings.TrimSpace(row.ID)) + "\x00" + row.MediaType
+		if row.TMDBID > 0 && !strings.Contains(row.ID, "/") {
+			identity = "tmdb:" + strconv.Itoa(row.TMDBID) + "\x00" + row.MediaType
+		}
+		if _, ok := seen[identity]; ok {
+			continue
+		}
+		seen[identity] = struct{}{}
+		out = append(out, row)
+	}
+	return out
+}
+
+// withAddonHandle scopes TMDB discoveries to this addon while preserving the
+// canonical ID for episode metadata and cross-addon fallback resolution.
+func (c *Client) withAddonHandle(row provider.SearchResult) provider.SearchResult {
+	if strings.TrimSpace(row.ID) == "" {
+		return row
+	}
+	kind := "movie"
+	if row.MediaType == provider.MediaTypeTV {
+		kind = "series"
+	}
+	id := strings.TrimSpace(row.ID)
+	if row.TMDBID > 0 {
+		id = "tmdb:" + strconv.Itoa(row.TMDBID)
+	}
+	row.ID = c.Name() + "/" + kind + "/" + id
+	row.Type = provider.ModeStremio
+	return row
+}
+
+// A live addon can publish dozens of catalogs. Bounding the collection keeps
+// one stalled catalog from consuming the whole provider search budget, and a
+// higher fan-out keeps the common case fast.
+const (
+	// Live addons publish dozens of catalogs. Start them all at once and take
+	// the rows that arrive inside the UI's first-result window rather than
+	// waiting for a slow catalog to burn the provider's whole deadline.
+	addonCatalogFanout       = 25
+	addonCatalogSearchBudget = 2500 * time.Millisecond
+	catalogCollectionMargin  = 500 * time.Millisecond
+)
 
 func (c *Client) searchCatalogs(ctx context.Context, query string) ([]provider.SearchResult, error) {
 	query = strings.TrimSpace(query)
-	resultsByCatalog := make([][]provider.SearchResult, len(c.manifest.Catalogs))
-	errorsByCatalog := make([]error, len(c.manifest.Catalogs))
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(4)
-	for index, catalog := range c.manifest.Catalogs {
+	type catalogResult struct {
+		rows []provider.SearchResult
+		err  error
+	}
+	// Buffered for every catalog so a goroutine never blocks on a send after
+	// the collector has stopped waiting.
+	collected := make(chan catalogResult, len(c.manifest.Catalogs))
+	groupCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sem := make(chan struct{}, addonCatalogFanout)
+	var workers sync.WaitGroup
+	active := 0
+	for _, catalog := range c.manifest.Catalogs {
 		if !supportedCatalogType(catalog.Type) || strings.TrimSpace(catalog.ID) == "" {
 			continue
 		}
-		group.Go(func() error {
-			metas, fetchErr := c.fetchCatalog(groupCtx, catalog, query)
-			if fetchErr != nil {
-				errorsByCatalog[index] = fetchErr
-			} else {
-				for _, meta := range metas {
-					// Some addons advertise search but ignore the query and
-					// return their whole catalog. Always filter locally so a
-					// non-filtering upstream cannot bury the real matches.
-					if meta.ID == "" || meta.Name == "" || (query != "" && !metaMatchesQuery(meta, query)) {
-						continue
-					}
-					// Addons often group items under a custom catalog type
-					// ("HdHub") while each meta declares the real Stremio
-					// type. Streams are keyed by the meta type, not the
-					// catalog type, so carry that in the resolution handle.
-					kind := strings.TrimSpace(meta.Type)
-					if kind == "" {
-						kind = catalog.Type
-					}
-					resultsByCatalog[index] = append(resultsByCatalog[index], provider.SearchResult{
-						Title:     meta.Name,
-						ID:        c.Name() + "/" + kind + "/" + meta.ID,
-						Type:      provider.ModeStremio,
-						Year:      metaYear(meta),
-						MediaType: catalogMediaType(kind),
-						CoverURL:  meta.Poster,
-						Overview:  meta.Description,
-						Genres:    append([]string(nil), meta.Genres...),
-						TMDBID:    metaTMDBID(meta.ID),
-					})
-				}
+		active++
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			metas, err := c.fetchCatalog(groupCtx, catalog, query)
+			if err != nil {
+				collected <- catalogResult{err: err}
+				return
 			}
-			return nil
-		})
+			var rows []provider.SearchResult
+			for _, meta := range metas {
+				if groupCtx.Err() != nil {
+					break
+				}
+				// Some addons advertise search but ignore the query and
+				// return their whole catalog. Always filter locally so a
+				// non-filtering upstream cannot bury the real matches.
+				if meta.ID == "" || meta.Name == "" || (query != "" && !metaMatchesQuery(meta, query)) {
+					continue
+				}
+				// Addons often group items under a custom catalog type
+				// ("HdHub") while each meta declares the real Stremio
+				// type. Streams are keyed by the meta type, not the
+				// catalog type, so carry that in the resolution handle.
+				kind := strings.TrimSpace(meta.Type)
+				if kind == "" {
+					kind = catalog.Type
+				}
+				rows = append(rows, provider.SearchResult{
+					Title:     meta.Name,
+					ID:        c.Name() + "/" + kind + "/" + meta.ID,
+					Type:      provider.ModeStremio,
+					Year:      metaYear(meta),
+					MediaType: catalogMediaType(kind),
+					CoverURL:  meta.Poster,
+					Overview:  meta.Description,
+					Genres:    append([]string(nil), meta.Genres...),
+					TMDBID:    metaTMDBID(meta.ID),
+				})
+			}
+			collected <- catalogResult{rows: rows}
+		}()
 	}
-	_ = group.Wait()
+	budget := addonCatalogSearchBudget
+	if deadline, ok := ctx.Deadline(); ok {
+		// Keep a floor so a nearly spent context does not cancel every
+		// catalog before a fast addon can answer.
+		budget = min(budget, max(time.Until(deadline)-catalogCollectionMargin, catalogCollectionMargin))
+	}
+	timer := time.NewTimer(max(budget, 0))
+	defer timer.Stop()
 	var results []provider.SearchResult
 	var firstErr error
-	for index, rows := range resultsByCatalog {
-		results = append(results, rows...)
-		if firstErr == nil {
-			firstErr = errorsByCatalog[index]
+	for active > 0 {
+		select {
+		case result := <-collected:
+			active--
+			results = append(results, result.rows...)
+			if firstErr == nil && result.err != nil {
+				firstErr = result.err
+			}
+		case <-timer.C:
+			active = 0
+		case <-ctx.Done():
+			active = 0
 		}
 	}
+	cancel()
+	workers.Wait()
 	if len(results) > 0 {
 		return results, nil
 	}
@@ -538,6 +704,12 @@ func (c *Client) getJSON(ctx context.Context, endpoint string, out any) error {
 		}
 		return provider.WrapHint("stremioaddon", "request resource", provider.KindUpstream, "addon request failed", err)
 	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		_ = resp.Body.Close()
+		return provider.WrapHint("stremioaddon", "request resource", provider.KindAuthRequired,
+			"addon endpoint requires configuration",
+			&provider.HTTPError{Code: resp.StatusCode, URL: c.endpoint})
+	}
 	if resp.StatusCode != http.StatusOK {
 		_ = resp.Body.Close()
 		return fmt.Errorf("request addon resource: %w", &provider.HTTPError{Code: resp.StatusCode, URL: c.endpoint})
@@ -570,10 +742,10 @@ func supportedCatalogType(mediaType string) bool {
 // vocabulary. Live rows resolve straight from the search result instead of
 // opening an episode list, which is the shape live catalogs describe.
 func catalogMediaType(catalogType string) string {
-	switch catalogType {
+	switch strings.ToLower(strings.TrimSpace(catalogType)) {
 	case "series":
 		return provider.MediaTypeTV
-	case "tv":
+	case "tv", "sport", "channel", "live":
 		return provider.MediaTypeLive
 	case "anime":
 		return provider.MediaTypeAnime
@@ -628,9 +800,20 @@ func metaMatchesQuery(meta addonMeta, query string) bool {
 	return true
 }
 
-// FetchEpisodes returns addon metadata episodes or delegates to Kari's TMDB catalog.
+// FetchEpisodes returns addon metadata episodes, falling back to TMDB episode
+// listings for titles discovered through Kari's title search.
 func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult) ([]provider.Episode, error) {
 	if kind, itemID, ok := c.parseStremioHandle(series.ID); ok {
+		if strings.HasPrefix(itemID, "tmdb:") {
+			series.ID = strings.TrimPrefix(itemID, "tmdb:")
+			if series.TMDBID == 0 {
+				series.TMDBID, _ = strconv.Atoi(series.ID)
+			}
+			if kind == "series" {
+				series.MediaType = provider.MediaTypeTV
+			}
+			return c.base.FetchEpisodes(ctx, series)
+		}
 		// Movies and live channels resolve straight from the search result;
 		// every other Stremio type may carry an episodic meta resource.
 		if kind == "movie" || kind == "tv" {
@@ -647,6 +830,13 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 				return episodes, nil
 			}
 		}
+		if series.TMDBID > 0 && kind == "series" {
+			series.ID = strconv.Itoa(series.TMDBID)
+			series.MediaType = provider.MediaTypeTV
+			if episodes, err := c.base.FetchEpisodes(ctx, series); err == nil && len(episodes) > 0 {
+				return episodes, nil
+			}
+		}
 		return []provider.Episode{{ID: itemID, Title: series.Title}}, nil
 	}
 	return c.base.FetchEpisodes(ctx, series)
@@ -655,11 +845,15 @@ func (c *Client) FetchEpisodes(ctx context.Context, series provider.SearchResult
 // ResolveSource requests addon streams using a catalog item or TMDB ID.
 func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode provider.Episode) ([]provider.MediaSource, error) {
 	if kind, itemID, ok := c.parseStremioHandle(mediaID); ok {
-		streamID := strings.TrimSpace(episode.ID)
-		if streamID == "" || streamID == mediaID {
-			streamID = itemID
+		if strings.HasPrefix(itemID, "tmdb:") {
+			mediaID = strings.TrimPrefix(itemID, "tmdb:")
+		} else {
+			streamID := strings.TrimSpace(episode.ID)
+			if streamID == "" || streamID == mediaID {
+				streamID = itemID
+			}
+			return c.resolveAddonStreams(ctx, kind, streamID)
 		}
-		return c.resolveAddonStreams(ctx, kind, streamID)
 	}
 	tmdbID := episode.TMDBID
 	if tmdbID <= 0 {
@@ -708,15 +902,19 @@ func (c *Client) ResolveSource(ctx context.Context, mediaID string, episode prov
 			continue
 		}
 		var payload streamResponse
-		err = json.NewDecoder(resp.Body).Decode(&payload)
-		resp.Body.Close()
+		body, readErr := httpclient.ReadCapped(resp)
+		if readErr == nil {
+			err = json.Unmarshal(body, &payload)
+		} else {
+			err = readErr
+		}
 		if err == nil && len(payload.Streams) > 0 {
 			items = payload.Streams
 			resolvedID = targetID
 			break
 		}
 	}
-	sources := mediaSources(items)
+	sources := c.probeSources(ctx, mediaSources(items))
 	c.mergeSubtitles(ctx, kind, resolvedID, items, sources)
 	if len(sources) == 0 {
 		if err := ctx.Err(); err != nil {
@@ -763,7 +961,7 @@ func (c *Client) resolveAddonStreams(ctx context.Context, kind, itemID string) (
 	if err := c.getJSON(ctx, endpoint, &response); err != nil {
 		return nil, fmt.Errorf("fetch addon streams: %w", err)
 	}
-	sources := mediaSources(response.Streams)
+	sources := c.probeSources(ctx, mediaSources(response.Streams))
 	c.mergeSubtitles(ctx, kind, itemID, response.Streams, sources)
 	if len(sources) == 0 {
 		return nil, provider.ErrNoSources
@@ -986,6 +1184,94 @@ func mediaSources(items []streamItem) []provider.MediaSource {
 	return sources
 }
 
+// probeSources drops addon streams that failed a ranged probe for a definite
+// reason (an auth/gone response, a TLS failure, an invalid playlist). All
+// other failures are inconclusive, so their sources survive for the player to
+// try. Order is preserved and total wait is bounded by the concurrency cap.
+func (c *Client) probeSources(ctx context.Context, sources []provider.MediaSource) []provider.MediaSource {
+	if len(sources) == 0 {
+		return sources
+	}
+	reachable := make([]bool, len(sources))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(addonStreamProbeParallelism)
+	for i := range sources {
+		group.Go(func() error {
+			// Direct VOD URLs are often signed for a single use. Spending that
+			// signature on a probe leaves the player with a dead URL, so only
+			// re-fetchable HLS lanes are probed here.
+			if !isProbeableHLS(sources[i]) {
+				reachable[i] = true
+				return nil
+			}
+			probeCtx, cancel := context.WithTimeout(groupCtx, addonStreamProbeTimeout)
+			defer cancel()
+			err := provider.VerifyLiveStreamWithHeaders(probeCtx, c.httpClient, sources[i], sources[i].ExtraHeaders)
+			if err == nil || !definiteProbeFailure(err) {
+				reachable[i] = true
+				return nil
+			}
+			logging.Debug("stremio addon stream failed probe",
+				"url", logging.Redact(sources[i].URL), "err", logging.Redact(err.Error()))
+			return nil
+		})
+	}
+	_ = group.Wait()
+	verified := make([]provider.MediaSource, 0, len(sources))
+	for i, ok := range reachable {
+		if ok {
+			verified = append(verified, sources[i])
+		}
+	}
+	return verified
+}
+
+// isProbeableHLS reports whether a stream's playlist can be re-fetched after
+// probing. Signed direct files are deliberately left for the player alone.
+func isProbeableHLS(source provider.MediaSource) bool {
+	return source.Type == provider.SourceTypeHLS ||
+		source.Type == provider.SourceTypeM3U8 ||
+		strings.Contains(strings.ToLower(source.URL), ".m3u8")
+}
+
+// definiteProbeFailure reports whether err proves the stream is unusable:
+// an auth/gone response, a TLS failure, or invalid response content. Rate
+// limits, 5xx and transport failures (timeouts, DNS misses, resets) are
+// inconclusive: the probe burst itself can trigger them, so the source stays
+// for the player to try.
+func definiteProbeFailure(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+	var httpErr *provider.HTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.Code {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+			return true
+		default:
+			return false
+		}
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		if urlErr.Err == nil {
+			return false
+		}
+		message := strings.ToLower(urlErr.Err.Error())
+		if strings.Contains(message, "no such host") ||
+			strings.Contains(message, "connection reset") ||
+			strings.Contains(message, "connection refused") {
+			return false
+		}
+		return strings.Contains(message, "tls") || strings.Contains(message, "certificate")
+	}
+	return true
+}
+
 // subtitleOptions keeps only subtitles Kari can fetch itself and carries the
 // stream's referer so hotlink-protected subtitle hosts keep working.
 func subtitleOptions(subs []streamSubtitle, referer string) []provider.SubtitleOption {
@@ -1089,40 +1375,12 @@ func matchesAnyPrefix(value string, prefixes []string) bool {
 	return false
 }
 
-func manifestModes(info manifest) []provider.Mode {
-	hasMovie, hasSeries := false, false
-	for _, raw := range info.Types {
-		hasMovie = hasMovie || raw == "movie"
-		hasSeries = hasSeries || raw == "series"
-	}
-	for _, resource := range info.Resources {
-		for _, mediaType := range resource.Types {
-			hasMovie = hasMovie || mediaType == "movie"
-			hasSeries = hasSeries || mediaType == "series"
-		}
-	}
-	for _, catalog := range info.Catalogs {
-		hasMovie = hasMovie || catalog.Type == "movie"
-		hasSeries = hasSeries || catalog.Type == "series"
-	}
-	var modes []provider.Mode
-	if hasMovie {
-		modes = append(modes, provider.Mode{Name: provider.ModeMovies, Priority: 40})
-	}
-	if hasSeries {
-		modes = append(modes, provider.Mode{Name: provider.ModeTV, Priority: 40})
-	}
-	if len(info.Catalogs) > 0 && supportsCatalogs(info) {
-		modes = append(modes, provider.Mode{Name: provider.ModeStremio, Priority: 10})
-	}
-	if len(modes) == 0 {
-		modes = append(modes, provider.Mode{Name: provider.ModeStremio, Priority: 10})
-	}
-	return modes
-}
-
-func supportsCatalogs(info manifest) bool {
-	return supportsResource(info, "catalog")
+// manifestModes keeps every addon in its own browsing mode regardless of the
+// media types its manifest declares. Manifest types describe catalog rows, not
+// Kari modes: routing an addon into Movies or TV would mix its streams into
+// Kari's native providers.
+func manifestModes(_ manifest) []provider.Mode {
+	return []provider.Mode{{Name: provider.ModeStremio, Priority: 10}}
 }
 
 func sourceType(raw string) string {
