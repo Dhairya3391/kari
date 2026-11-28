@@ -64,8 +64,9 @@ func (r *Registry) ConfiguredAlias(value string) (string, bool) {
 }
 
 // IsConfiguredAddon reports whether name identifies a user-configured addon:
-// a configured provider that declares the Stremio browsing mode. Such addons
-// appear under several modes, so disabling one must disable them everywhere.
+// a configured provider that declares the Stremio browsing mode. Addons now
+// live only in that mode, but legacy settings may carry mode-scoped disable
+// keys, so disabling one must still disable it everywhere.
 func (r *Registry) IsConfiguredAddon(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

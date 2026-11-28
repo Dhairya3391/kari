@@ -60,28 +60,21 @@ const (
 	// SvelteKit deployment while www.miruro.cx hosts the React/API v1 SPA.
 	MiruroBase = "https://miruro.cx"
 
-	// AniVaultAPIBase exposes the current site's public Hoshika catalog and
-	// playback routes without requiring the private scraper's API key.
-	AniVaultAPIBase = "https://www.anivault.co"
-
 	// SolisAPIBase is the hosted streaming resolution API deployed on Vercel.
 	SolisAPIBase = "https://solis-api.vercel.app"
+
+	// PenguBase is PenguPlay's aggregator host. Its stream resource lives under
+	// a path segment carrying the bundled access token.
+	PenguBase = "https://pengu.uk"
+	// PenguToken is the bundled PenguPlay access token. It belongs to this
+	// provider's upstream identity, so it is compiled in rather than exposed
+	// as a user setting; changing it requires a provider update.
+	PenguToken = "KEryOGTSr--crKpZc9l-xr0xd-NMbkVaT7JwlK8N2xc"
 
 	// CnoBase is the main web and API base for Cno (https://cno.to).
 	CnoBase = "https://cno.to"
 	// CnoReferer satisfies hotlink and header protection on Cno API and stream requests.
 	CnoReferer = "https://cno.to/"
-
-	// Q62Base is the Q62 web application (https://q62flix.ws).
-	Q62Base = "https://q62flix.ws"
-	// Q62APIBase serves Q62's catalog and signed release descriptors. Content
-	// is keyed by opaque site IDs rather than TMDB IDs, so search and episode
-	// listings go through this API instead of the shared TMDB-backed base.
-	Q62APIBase = "https://api.q62flix.ws"
-	// Q62StreamProxyBase is the media proxy referenced by the site's own
-	// player. Release descriptors carry relative HLS/VTT paths with a signed
-	// token; the proxy is the only host that serves them.
-	Q62StreamProxyBase = "https://proxy.7movie.ws"
 
 	// CinejoyBase is the Cinejoy web application (https://cinejoy.pk). Its
 	// sealed resolution gateway and stream CDNs both key on this origin, so
@@ -124,8 +117,9 @@ const (
 	// Ingot, Nugget, Doubloon, Gilt).
 	VidGoldPlayerBase = "https://player.vidgold.net"
 	// VidGoldAPIBase is the embed player's JSON resolution API. Every lane is
-	// addressed through it with the TMDB id plus a sources key (s1–s7).
-	VidGoldAPIBase = "https://api.vidgold.net"
+	// addressed through it with the TMDB id plus a sources key (s1–s7). The
+	// embed declares this host as window.__vlApiBase; the old API host 410s.
+	VidGoldAPIBase = "https://g.vidgold.vip"
 
 	// VidoraBase is the embed player origin for Vidora (https://vidora.ac).
 	// It serves no API; the player resolves through the hls.lol lanes below
@@ -144,20 +138,11 @@ const (
 	// VidoraSubsBase is Vidora's subtitle lookup service.
 	VidoraSubsBase = "https://natsuki.hls.lol"
 
-	// MappleBase is the main web and API base for Mapple (https://mapple.fun).
-	MappleBase = "https://mapple.fun"
-	// MappleReferer satisfies hotlink and header protection on Mapple API and stream requests.
-	MappleReferer = "https://mapple.fun/"
 	// VidRiftSiteBase is the VidRift landing site used as the embed request
 	// referer. VidRiftEmbedBase is the TMDB/AniList-keyed player origin that
 	// serves both the embed document and its /api/source lanes.
 	VidRiftSiteBase  = "https://vidrift.net"
 	VidRiftEmbedBase = "https://embed.vidrift.net"
-
-	// LightflixBase is the Lightflix web application (https://lightflix.app).
-	// Its playback API issues short-lived, IP-bound stream tokens through a
-	// proof-of-work handshake; the site origin is also the API Referer.
-	LightflixBase = "https://lightflix.app"
 
 	// AniDreamBase is the AniDream web application (https://anidream.to).
 	// It is a TanStack Start SPA whose catalog, playback, and reader data

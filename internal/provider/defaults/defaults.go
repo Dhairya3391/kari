@@ -9,7 +9,6 @@ import (
 	"kari/internal/provider"
 	"kari/internal/provider/a11"
 	"kari/internal/provider/anidream"
-	"kari/internal/provider/anivault"
 	"kari/internal/provider/atsu"
 	"kari/internal/provider/bingr"
 	"kari/internal/provider/cinecat"
@@ -17,11 +16,9 @@ import (
 	"kari/internal/provider/cno"
 	"kari/internal/provider/famelack"
 	"kari/internal/provider/jellyfin"
-	"kari/internal/provider/lightflix"
-	"kari/internal/provider/mapple"
 	"kari/internal/provider/miruro"
 	"kari/internal/provider/movysx"
-	"kari/internal/provider/q62"
+	"kari/internal/provider/pengu"
 	"kari/internal/provider/solis"
 	"kari/internal/provider/stremioaddon"
 	"kari/internal/provider/vidgold"
@@ -46,15 +43,15 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
-		ID: "anivault",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return anivault.NewClient()
-		},
-	},
-	{
 		ID: "miruro",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return miruro.NewClient()
+		},
+	},
+	{
+		ID: "pengu",
+		Factory: func(d provider.Deps) (provider.Provider, error) {
+			return pengu.NewClient(d.KeyPool)
 		},
 	},
 	{
@@ -67,12 +64,6 @@ var DefaultProviders = []provider.Descriptor{
 		ID: "cinecat",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return cinecat.NewClient(d.KeyPool)
-		},
-	},
-	{
-		ID: "q62",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return q62.NewClient(d.KeyPool)
 		},
 	},
 	{
@@ -95,21 +86,9 @@ var DefaultProviders = []provider.Descriptor{
 		},
 	},
 	{
-		ID: "mapple",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return mapple.NewClient(d.KeyPool)
-		},
-	},
-	{
 		ID: "vidora",
 		Factory: func(d provider.Deps) (provider.Provider, error) {
 			return vidora.NewClient(d.KeyPool)
-		},
-	},
-	{
-		ID: "lightflix",
-		Factory: func(d provider.Deps) (provider.Provider, error) {
-			return lightflix.NewClient(d.KeyPool)
 		},
 	},
 	{
