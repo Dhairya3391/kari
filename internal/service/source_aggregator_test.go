@@ -72,6 +72,23 @@ func TestSourceAggregatorReplacesProviderBatch(t *testing.T) {
 	}
 }
 
+// TestSourceAggregatorKeepsHeaderVariants proves streams with the same URL but
+// different required headers stay distinct transport variants.
+func TestSourceAggregatorKeepsHeaderVariants(t *testing.T) {
+	agg := newSourceAggregator(nil, func(name string) string { return name })
+	agg.add("first", []provider.MediaSource{{
+		URL:          "https://cdn.example/master.m3u8",
+		ExtraHeaders: map[string]string{"Sec-Fetch-Site": "same-origin"},
+	}})
+	agg.add("second", []provider.MediaSource{{
+		URL:          "https://cdn.example/master.m3u8",
+		ExtraHeaders: map[string]string{"X-Cnc": "1"},
+	}})
+	if len(agg.sources) != 2 {
+		t.Fatalf("sources = %+v, want both header variants kept", agg.sources)
+	}
+}
+
 // TestSourceAggregatorReportsChanges distinguishes no-op batches from metadata
 // improvements, preferred-provider replacement, and newly discovered subtitles.
 func TestSourceAggregatorReportsChanges(t *testing.T) {
@@ -106,7 +123,6 @@ func TestSourceAggregatorReportsChanges(t *testing.T) {
 			if changed := agg.add(tc.provider, tc.batch); changed != tc.changed {
 				t.Fatalf("changed = %v, want %v", changed, tc.changed)
 			}
-			agg.sort()
 		})
 	}
 	if len(agg.sources) != 1 || agg.sources[0].Resolver != "primary" || agg.sources[0].Quality != "1080p" {

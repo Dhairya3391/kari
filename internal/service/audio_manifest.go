@@ -45,6 +45,19 @@ func probeRequest(ctx context.Context, src provider.MediaSource) (*http.Request,
 	if src.CookieHeader != "" {
 		req.Header.Set("Cookie", src.CookieHeader)
 	}
+	// Providers whose CDNs gate media requests on headers beyond the
+	// well-known three (e.g. a Sec-Fetch-* check) must see the same headers
+	// here as the player sends, or the probe 403s and the manifest's quality
+	// ladder is never read.
+	for key, value := range src.ExtraHeaders {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "referer", "user-agent", "cookie":
+			continue
+		}
+		if value = strings.TrimSpace(value); value != "" {
+			req.Header.Set(key, value)
+		}
+	}
 	return req, true
 }
 

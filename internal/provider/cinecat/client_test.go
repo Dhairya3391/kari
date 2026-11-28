@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"kari/internal/provider"
 	"kari/internal/tmdb"
@@ -347,6 +349,157 @@ https://cdn.example.com/lane-a/v2/index.m3u8
 		}
 		if sources[i].Backend != "Abyssinia" {
 			t.Errorf("sources[%d].Backend = %q, want Abyssinia", i, sources[i].Backend)
+		}
+	}
+}
+
+// TestGatedStatusCooldowns proves throttling closes the gate only briefly.
+func TestGatedStatusCooldowns(t *testing.T) {
+	c := &Client{}
+	_ = c.gatedStatusError("http://example.com", http.StatusUnauthorized)
+	capUntil := c.capBlockedTil
+	_ = c.gatedStatusError("http://example.com", http.StatusTooManyRequests)
+	rateUntil := c.capBlockedTil
+	if got := time.Until(capUntil); got < 25*time.Minute {
+		t.Errorf("401 cooldown = %v, want about %v", got, capCooldown)
+	}
+	if got := time.Until(rateUntil); got > 3*time.Minute {
+		t.Errorf("429 cooldown = %v, want about %v", got, rateLimitCooldown)
+	}
+}
+
+// TestGatedLaneStatuses proves 401 and 429 responses on every gated lane
+// start the cooldown, while the ungated Aphrodite edge keeps serving sources
+// during it. A fully gated upstream still names the cause in its error.
+func TestGatedLaneStatuses(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		gateLane    bool
+		aphrodite   bool
+		wantMessage string
+	}{
+		{name: "401 on gated lanes closes the gate", status: http.StatusUnauthorized, aphrodite: true},
+		{name: "429 on gated lanes closes the gate", status: http.StatusTooManyRequests, aphrodite: true},
+		{name: "429 on a lane endpoint closes the gate", status: http.StatusTooManyRequests, gateLane: true, aphrodite: true},
+		{name: "all gated lanes throttled", status: http.StatusTooManyRequests, wantMessage: "rate limited"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cdnCalls, sourceCalls, laneCalls atomic.Int32
+			mux := http.NewServeMux()
+			mux.HandleFunc("/cdn", func(w http.ResponseWriter, r *http.Request) {
+				cdnCalls.Add(1)
+				if tt.gateLane {
+					w.WriteHeader(http.StatusAccepted)
+					return
+				}
+				w.WriteHeader(tt.status)
+			})
+			mux.HandleFunc("/sources", func(w http.ResponseWriter, r *http.Request) {
+				sourceCalls.Add(1)
+				if !tt.gateLane {
+					w.WriteHeader(tt.status)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(sourcesListResponse{
+					Sources: []struct {
+						Name string `json:"name"`
+					}{
+						{Name: "alpha"},
+					},
+				})
+			})
+			mux.HandleFunc("/sources/alpha", func(w http.ResponseWriter, r *http.Request) {
+				laneCalls.Add(1)
+				w.WriteHeader(tt.status)
+			})
+			if tt.aphrodite {
+				mux.HandleFunc("/content/movie/550", func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(aphroditeResponse{
+						Found: true,
+						Type:  "hls",
+						URL:   fmt.Sprintf("http://%s/aphrodite/movie.m3u8", r.Host),
+					})
+				})
+				mux.HandleFunc("/aphrodite/movie.m3u8", func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+					_, _ = w.Write([]byte(`#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080
+https://cdn.example.com/aphrodite/v1.m3u8
+`))
+				})
+			}
+			mux.HandleFunc("/v1/movie/550", func(w http.ResponseWriter, r *http.Request) {
+				http.NotFound(w, r)
+			})
+
+			srv := httptest.NewServer(mux)
+			t.Cleanup(srv.Close)
+			client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"key"}), srv.URL, srv.URL, srv.URL, srv.URL, srv.URL)
+			if err != nil {
+				t.Fatalf("NewClientWithURLs: %v", err)
+			}
+			if !client.capGateOpen() {
+				t.Fatal("cap gate should start open")
+			}
+
+			sources, err := client.ResolveSource(context.Background(), "550", provider.Episode{TMDBID: 550})
+			if tt.gateLane {
+				if laneCalls.Load() == 0 {
+					t.Fatal("lane endpoint was not tried")
+				}
+			} else if cdnCalls.Load() == 0 || sourceCalls.Load() == 0 {
+				t.Fatalf("gated lanes were not tried: cdn=%d sources=%d", cdnCalls.Load(), sourceCalls.Load())
+			}
+			if client.capGateOpen() {
+				t.Fatal("gated lanes should be closed after the gate response")
+			}
+			if !tt.aphrodite {
+				if err == nil {
+					t.Fatal("expected an error when no lane can serve the title")
+				}
+				if !errors.Is(err, provider.ErrNoSources) {
+					t.Fatalf("expected benign ErrNoSources, got %v", err)
+				}
+				if !strings.Contains(err.Error(), tt.wantMessage) {
+					t.Fatalf("error %q does not name %q", err, tt.wantMessage)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveSource: %v", err)
+			}
+			assertAphroditeOnly(t, sources)
+
+			cdnCalls.Store(0)
+			sourceCalls.Store(0)
+			laneCalls.Store(0)
+			sources, err = client.ResolveSource(context.Background(), "550", provider.Episode{TMDBID: 550})
+			if err != nil {
+				t.Fatalf("ResolveSource during cooldown: %v", err)
+			}
+			assertAphroditeOnly(t, sources)
+			if cdnCalls.Load() != 0 || sourceCalls.Load() != 0 || laneCalls.Load() != 0 {
+				t.Fatalf("gated lanes ran during cooldown: cdn=%d sources=%d lane=%d",
+					cdnCalls.Load(), sourceCalls.Load(), laneCalls.Load())
+			}
+		})
+	}
+}
+
+func assertAphroditeOnly(t *testing.T, sources []provider.MediaSource) {
+	t.Helper()
+	if len(sources) == 0 {
+		t.Fatal("expected Aphrodite sources")
+	}
+	for _, source := range sources {
+		if source.Backend != aphroditeBackend {
+			t.Fatalf("unexpected backend %q in %+v", source.Backend, sources)
 		}
 	}
 }

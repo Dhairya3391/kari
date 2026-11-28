@@ -559,27 +559,27 @@ func TestSubtitleServiceProviderSubsOverrideCachedOpenSubtitles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Cache OpenSubtitles track under mapple's cache key
-	cacheKey := "550:0:0:Fight Club:en:mapple::movie:movies:1"
+	// Cache OpenSubtitles track under cinejoy's cache key
+	cacheKey := "550:0:0:Fight Club:en:cinejoy::movie:movies:1"
 	svc.cache.Set(cacheKey, model.SubtitleTrack{Path: openSubPath, Resolver: "opensubtitles"})
 
-	// Media now arrives with provider subtitles from mapple
+	// Media now arrives with provider subtitles from cinejoy
 	media := model.ResolvedMedia{
 		SeriesTitle: "Fight Club",
 		TMDBID:      550,
 		MediaType:   provider.MediaTypeMovie,
 		ContentMode: provider.ModeMovies,
 		Subtitles: []model.SubtitleTrack{
-			{URL: srv.URL + "/provider.vtt", Language: "en", Resolver: "mapple"},
+			{URL: srv.URL + "/provider.vtt", Language: "en", Resolver: "cinejoy"},
 		},
 	}
 
 	// Fetch must prefer the newly arrived provider subtitles over the cached OpenSubtitles
-	track, err := svc.Fetch(context.Background(), media, "en", "mapple")
+	track, err := svc.Fetch(context.Background(), media, "en", "cinejoy")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if track.Resolver != "mapple" {
-		t.Errorf("expected mapple provider track, got resolver %q", track.Resolver)
+	if track.Resolver != "cinejoy" {
+		t.Errorf("expected cinejoy provider track, got resolver %q", track.Resolver)
 	}
 }

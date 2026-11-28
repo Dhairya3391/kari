@@ -17,12 +17,15 @@ func SortLiveResults(results []provider.SearchResult, now time.Time) {
 			return leftGroup < rightGroup
 		}
 		left, right := results[i], results[j]
-		if leftGroup == 4 {
-			leftCategory, rightCategory := firstGenre(left.Genres), firstGenre(right.Genres)
-			if leftCategory != rightCategory {
-				return strings.ToLower(leftCategory) < strings.ToLower(rightCategory)
-			}
-		} else {
+		// Keep a category's rows contiguous inside every section. The guide
+		// prints a heading only when the category changes, so sorting purely
+		// by kickoff time would repeat "Soccer · 2" every time another sport
+		// starts in between.
+		leftCategory, rightCategory := LiveCategory(left), LiveCategory(right)
+		if leftCategory != rightCategory {
+			return strings.ToLower(leftCategory) < strings.ToLower(rightCategory)
+		}
+		if leftGroup != 4 {
 			if left.StartsAt.IsZero() != right.StartsAt.IsZero() {
 				return !left.StartsAt.IsZero()
 			}

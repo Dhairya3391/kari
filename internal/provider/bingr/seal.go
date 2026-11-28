@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -179,7 +180,19 @@ func (c *Client) expandHLSMasters(ctx context.Context, sources []provider.MediaS
 				"Referer":    src.Referer,
 				"User-Agent": src.UserAgent,
 			})
-			if err != nil || len(variants) == 0 {
+			if err != nil {
+				// Only a definite 403 means the master itself is blocked; leave
+				// expanded[i] nil so the service never offers it. A 429 is
+				// transient throttling, and timeouts are inconclusive: keeping
+				// the master avoids dropping a working row.
+				var coded provider.StatusCodedError
+				if errors.As(err, &coded) && coded.StatusCode() == http.StatusForbidden {
+					return
+				}
+				expanded[i] = []provider.MediaSource{src}
+				return
+			}
+			if len(variants) == 0 {
 				expanded[i] = []provider.MediaSource{src}
 				return
 			}

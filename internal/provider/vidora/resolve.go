@@ -649,6 +649,8 @@ func (c *Client) getJSON(ctx context.Context, target string, payload any) error 
 	}
 	defer resp.Body.Close()
 
+	// A 404 is an empty lane, but 5xx is a real outage: fetchSources ignores
+	// it while a sibling lane serves the title and returns it when none do.
 	if resp.StatusCode == http.StatusNotFound {
 		return provider.ErrNoSources
 	}

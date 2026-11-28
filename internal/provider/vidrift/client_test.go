@@ -754,3 +754,34 @@ func TestFetchLaneSendsBrowserFetchHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestFetchEmbedSendsCloudflareBrowserHeaders(t *testing.T) {
+	var captured http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = r.Header.Clone()
+		_, _ = fmt.Fprint(w, `<script>var embedMeta = {"tmdbId":"27205","type":"movie","playbackToken":"tok"};</script>`)
+	}))
+	defer srv.Close()
+
+	client, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"k"}), srv.URL, srv.URL)
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
+	if _, err := client.fetchEmbed(context.Background(), "movie/27205"); err != nil {
+		t.Fatalf("fetchEmbed: %v", err)
+	}
+	// Playwright confirmed Accept-Language alone flips the embed Cloudflare
+	// rule from 403 to 200, so losing it reintroduces the hard failure.
+	want := map[string]string{
+		"Accept-Language":           "en-US,en;q=0.9",
+		"Sec-Fetch-Dest":            "document",
+		"Sec-Fetch-Mode":            "navigate",
+		"Sec-Fetch-Site":            "none",
+		"Upgrade-Insecure-Requests": "1",
+	}
+	for header, value := range want {
+		if got := captured.Get(header); got != value {
+			t.Errorf("%s = %q, want %q", header, got, value)
+		}
+	}
+}

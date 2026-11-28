@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"kari/internal/provider"
@@ -57,7 +58,7 @@ https://v.lumenbox.top/v/token/3840x2160/index.m3u8
 https://v.lumenbox.top/v/token/1920x1080/index.m3u8`
 	const subListJSON = `{"files":[{"id":"os-123","lang":"en","label":"English"},{"id":"os-456","lang":"es","label":"Spanish"}]}`
 
-	var sawVersionedHLS, sawDeadServer bool
+	var sawVersionedHLS, sawDeadServer, sawSameOrigin bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/movie/6977":
@@ -68,6 +69,7 @@ https://v.lumenbox.top/v/token/1920x1080/index.m3u8`
 			http.NotFound(w, r)
 		case r.URL.Path == "/api/s/21/movie/6977":
 			sawVersionedHLS = r.URL.Query().Get("v") == "9"
+			sawSameOrigin = r.Header.Get("Sec-Fetch-Site") == "same-origin"
 			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 			_, _ = w.Write([]byte(hlsManifest))
 		case strings.Contains(r.URL.Path, "/api/subs/list/movie/6977"):
@@ -95,6 +97,9 @@ https://v.lumenbox.top/v/token/1920x1080/index.m3u8`
 	if !sawVersionedHLS {
 		t.Error("HLS path from the detail listing was not used verbatim")
 	}
+	if !sawSameOrigin {
+		t.Error("HLS request must carry Sec-Fetch-Site: same-origin; the nodes reject cross-site-looking requests")
+	}
 	if len(sources) != 2 {
 		t.Fatalf("expected 2 HLS sources, got %d", len(sources))
 	}
@@ -113,6 +118,140 @@ https://v.lumenbox.top/v/token/1920x1080/index.m3u8`
 		if len(s.Subtitles) != 2 || s.Subtitles[0].Language != "en" || s.Subtitles[1].Language != "es" {
 			t.Errorf("subtitle mismatch on %s: %v", s.URL, s.Subtitles)
 		}
+	}
+}
+
+func TestCnoResolveHLSFallback(t *testing.T) {
+	const (
+		okManifest = `#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=6125483,RESOLUTION=1920x1080
+https://v.lumenbox.top/v/token/1080p/index.m3u8`
+		notOnServer = `{"error":"Not on this server"}`
+		twoMasters  = `{"sources":[` +
+			`{"kind":"hls","url":"/api/s/21/movie/6977?v=9","label":"Server 21"},` +
+			`{"kind":"hls","url":"/api/s/22/movie/6977?v=9","label":"Server 22"}]}`
+		deadMasters = `{"sources":[` +
+			`{"kind":"hls","url":"/api/s/21/movie/6977?v=9","label":"Server 21"},` +
+			`{"kind":"hls","url":"/api/s/23/movie/6977?v=8","label":"Server 23"}]}`
+		bodyOnlyMaster = `{"sources":[` +
+			`{"kind":"hls","url":"/api/s/24/movie/6977?v=9","label":"Server 24"},` +
+			`{"kind":"hls","url":"/api/s/22/movie/6977?v=9","label":"Server 22"}]}`
+		emptyThenHealthy = `{"sources":[` +
+			`{"kind":"hls","url":"/api/s/25/movie/6977?v=9","label":"Server 25"},` +
+			`{"kind":"hls","url":"/api/s/22/movie/6977?v=9","label":"Server 22"}]}`
+		embedAndMaster = `{"sources":[` +
+			`{"kind":"embed","url":"/api/s/21/movie/6977?v=9","label":"Embed"},` +
+			`{"kind":"hls","url":"/api/s/22/movie/6977?v=9","label":"Server 22"}]}`
+	)
+
+	tests := []struct {
+		name       string
+		detail     string
+		wantErr    error
+		wantCount  int
+		wantHit    []string
+		wantNotHit []string
+	}{
+		{
+			name:      "404 master then healthy master",
+			detail:    twoMasters,
+			wantCount: 1,
+			wantHit:   []string{"/api/s/21/movie/6977", "/api/s/22/movie/6977"},
+		},
+		{
+			name:      "not-on-server body then healthy master",
+			detail:    bodyOnlyMaster,
+			wantCount: 1,
+			wantHit:   []string{"/api/s/24/movie/6977", "/api/s/22/movie/6977"},
+		},
+		{
+			name:      "empty playlist then healthy master",
+			detail:    emptyThenHealthy,
+			wantCount: 1,
+			wantHit:   []string{"/api/s/25/movie/6977", "/api/s/22/movie/6977"},
+		},
+		{
+			name:    "all masters 404",
+			detail:  deadMasters,
+			wantErr: provider.ErrNoSources,
+			wantHit: []string{"/api/s/21/movie/6977", "/api/s/23/movie/6977"},
+		},
+		{
+			name:       "non-HLS sources ignored",
+			detail:     embedAndMaster,
+			wantCount:  1,
+			wantHit:    []string{"/api/s/22/movie/6977"},
+			wantNotHit: []string{"/api/s/21/movie/6977"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var (
+				mu   sync.Mutex
+				hits = make(map[string]int)
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				hits[r.URL.Path]++
+				mu.Unlock()
+				switch {
+				case r.URL.Path == "/api/movie/6977":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(tc.detail))
+				case strings.Contains(r.URL.Path, "/api/s/21/"),
+					strings.Contains(r.URL.Path, "/api/s/23/"):
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusNotFound)
+					_, _ = w.Write([]byte(notOnServer))
+				case strings.Contains(r.URL.Path, "/api/s/24/"):
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(notOnServer))
+				case strings.Contains(r.URL.Path, "/api/s/25/"):
+					w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+					_, _ = w.Write([]byte("#EXTM3U\n"))
+				case strings.Contains(r.URL.Path, "/api/s/22/"):
+					w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+					_, _ = w.Write([]byte(okManifest))
+				case strings.Contains(r.URL.Path, "/api/subs/list/movie/6977"):
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"files":[]}`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+
+			client, err := NewClientWithURL(&tmdb.KeyPool{}, srv.URL)
+			if err != nil {
+				t.Fatalf("NewClientWithURL: %v", err)
+			}
+
+			sources, err := client.ResolveSource(context.Background(), "6977", provider.Episode{TMDBID: 6977})
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("ResolveSource err = %v, want %v", err, tc.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("ResolveSource: %v", err)
+			}
+			if len(sources) != tc.wantCount {
+				t.Fatalf("sources = %d, want %d", len(sources), tc.wantCount)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			for _, path := range tc.wantHit {
+				if hits[path] == 0 {
+					t.Errorf("expected %s to be requested; hits = %v", path, hits)
+				}
+			}
+			for _, path := range tc.wantNotHit {
+				if hits[path] != 0 {
+					t.Errorf("expected %s not to be requested; hits = %v", path, hits)
+				}
+			}
+		})
 	}
 }
 

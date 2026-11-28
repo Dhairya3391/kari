@@ -2,8 +2,10 @@ package cno
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,10 +17,16 @@ import (
 	"sync"
 
 	"kari/internal/config"
+	"kari/internal/httpclient"
 	"kari/internal/lang"
 	"kari/internal/logging"
 	"kari/internal/provider"
 )
+
+// errNotOnServer marks a master playlist that the current Cno node does not
+// host. The same title is usually present on another node listed alongside it,
+// so resolution skips this master instead of surfacing a failure.
+var errNotOnServer = errors.New("not on this server")
 
 var (
 	reResolution = regexp.MustCompile(`(?i)\bRESOLUTION=(\d+)x(\d+)\b`)
@@ -90,6 +98,10 @@ func (c *Client) newRequest(ctx context.Context, target string) (*http.Request, 
 	req.Header.Set("User-Agent", config.DesktopUserAgent)
 	req.Header.Set("Referer", c.siteBase+"/")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
+	// The HLS nodes reject requests that look cross-site from their own
+	// origin: without this header every /api/s/<n> master answers 404 "Not on
+	// this server", even for titles the listing just advertised.
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	return req, nil
 }
 
@@ -122,10 +134,18 @@ func (c *Client) fetchSources(
 	)
 	if detailErr != nil {
 		resolveErr = detailErr
-	} else if hls := c.hlsSource(detail); hls != nil {
-		allSources, resolveErr = c.fetchHLSSources(ctx, hls.url, hls.label)
 	} else {
-		resolveErr = provider.ErrNoSources
+		for _, hls := range c.hlsSources(detail) {
+			sources, err := c.fetchHLSSources(ctx, hls.url, hls.label)
+			if errors.Is(err, errNotOnServer) || errors.Is(err, provider.ErrNoSources) {
+				continue
+			}
+			allSources, resolveErr = sources, err
+			break
+		}
+		if allSources == nil && resolveErr == nil {
+			resolveErr = provider.ErrNoSources
+		}
 	}
 
 	subWg.Wait()
@@ -188,12 +208,15 @@ type discoveredSource struct {
 	label string
 }
 
-// hlsSource picks the direct HLS entry and resolves its site-relative path.
-func (c *Client) hlsSource(detail detailResponse) *discoveredSource {
+// hlsSources collects every direct HLS entry in listing order, resolving each
+// site-relative path against the site base. The listing carries one entry per
+// server, and a given title can be missing from several of them.
+func (c *Client) hlsSources(detail detailResponse) []discoveredSource {
 	base, err := url.Parse(c.siteBase + "/")
 	if err != nil {
 		return nil
 	}
+	var sources []discoveredSource
 	for _, src := range detail.Sources {
 		if src.Kind != "hls" || src.URL == "" {
 			continue
@@ -202,9 +225,9 @@ func (c *Client) hlsSource(detail detailResponse) *discoveredSource {
 		if err != nil {
 			continue
 		}
-		return &discoveredSource{url: base.ResolveReference(ref).String(), label: src.Label}
+		sources = append(sources, discoveredSource{url: base.ResolveReference(ref).String(), label: src.Label})
 	}
-	return nil
+	return sources
 }
 
 func (c *Client) fetchSubtitles(
@@ -284,13 +307,23 @@ func (c *Client) fetchHLSSources(
 	if err != nil {
 		return nil, fmt.Errorf("cno HLS request: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	// Surface transport/5xx failures as before; only 404 and not-on-server
+	// bodies are skippable signals that another listed server may work.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		defer resp.Body.Close()
 		return nil, fmt.Errorf("cno HLS status %d", resp.StatusCode)
 	}
 
-	variants, err := parseHLSVariants(resp.Body, masterURL)
+	body, err := httpclient.ReadCapped(resp)
+	if err != nil {
+		return nil, fmt.Errorf("cno read HLS: %w", err)
+	}
+	if resp.StatusCode == http.StatusNotFound || bytes.Contains(body, []byte("Not on this server")) {
+		return nil, errNotOnServer
+	}
+
+	variants, err := parseHLSVariants(bytes.NewReader(body), masterURL)
 	if err != nil {
 		return nil, fmt.Errorf("cno parse HLS variants: %w", err)
 	}

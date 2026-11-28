@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"sort"
 	"strconv"
@@ -21,7 +22,7 @@ const (
 	ModeMovies  ContentType = "movies"
 	ModeTV      ContentType = "tv"
 	ModeCartoon ContentType = "cartoon"
-	// ModeStremio exposes the catalogs declared by user-added Stremio addons.
+	// ModeStremio browses user-added Stremio addon catalogs in a standalone mode.
 	ModeStremio  ContentType = "stremio"
 	ModeJellyfin ContentType = "jellyfin"
 	// ModeManga is the in-terminal manga/comic reading mode, served by
@@ -307,16 +308,16 @@ func (s MediaSource) TransportIdentity() string {
 		strings.TrimSpace(s.Referer),
 		strings.TrimSpace(s.UserAgent),
 		strings.TrimSpace(s.CookieHeader),
-		extraHeaderIdentity(s.ExtraHeaders),
+		ExtraHeaderIdentity(s.ExtraHeaders),
 		strings.TrimSpace(s.Language),
 		strconv.FormatBool(s.SuppressOrigin),
 		strings.Join(s.ExtraArgs, "\x00"),
 	}, "\x00")
 }
 
-// extraHeaderIdentity renders a source's extra headers in a stable order so
+// ExtraHeaderIdentity renders a source's extra headers in a stable order so
 // two sources with the same URL but different transport needs stay distinct.
-func extraHeaderIdentity(headers map[string]string) string {
+func ExtraHeaderIdentity(headers map[string]string) string {
 	if len(headers) == 0 {
 		return ""
 	}
@@ -333,9 +334,9 @@ func extraHeaderIdentity(headers map[string]string) string {
 }
 
 // IsDirectURL reports whether raw is a direct remote stream address: an
-// http(s) URL with a non-local host and no proxy path. mpv plays sources
-// itself, so anything needing a helper server (localhost, /proxy/ paths)
-// is rejected — providers must return CDN addresses.
+// http(s) URL with a public host and no proxy path. mpv plays sources itself,
+// so anything needing a helper server or reaching a private network is
+// rejected — providers must return CDN addresses.
 func IsDirectURL(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -345,7 +346,13 @@ func IsDirectURL(raw string) bool {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" || strings.HasSuffix(host, ".local") {
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".local") {
+		return false
+	}
+	// Addon-supplied URLs are untrusted; probing an internal address would
+	// reach the user's LAN or a cloud metadata service.
+	if ip := net.ParseIP(host); ip != nil &&
+		(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) {
 		return false
 	}
 	if strings.Contains(strings.ToLower(u.Path), "/proxy/") {
@@ -364,33 +371,6 @@ func FilterDirectSources(sources []MediaSource) []MediaSource {
 		}
 	}
 	return kept
-}
-
-// challengedHosts serve video but persistently challenge non-browser
-// clients: browsers and curl pass while mpv gets HTTP 403 bot challenges
-// on playlists and segments alike (verified across fresh signed URLs;
-// UA/Referer/Origin/Accept variations change nothing — it keys on the
-// TLS fingerprint, which no client flag can alter). Their rows stay
-// listed as fallback and manual picks, but every ranking sorts them
-// below playable-now sources so playback never waits out their failures
-// first.
-var challengedHosts = []string{"uwucdn.top", "owocdn.top"}
-
-// ChallengedHost reports whether rawURL is served by a challenged host.
-// Unparsable URLs fail open (false): an unknown shape must never sink a
-// playable source.
-func ChallengedHost(rawURL string) bool {
-	u, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(u.Hostname())
-	for _, bad := range challengedHosts {
-		if host == bad || strings.HasSuffix(host, "."+bad) {
-			return true
-		}
-	}
-	return false
 }
 
 // MangaChapter is one readable chapter of a manga/comic title. Number

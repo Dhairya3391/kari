@@ -251,4 +251,9 @@ func TestMediaSourcePrefersDirectURL(t *testing.T) {
 	if source.Referer != "https://embed.vidrift.net/" || source.UserAgent != config.DesktopUserAgent || !source.SuppressOrigin {
 		t.Errorf("headers = %+v", source)
 	}
+	// The stream hosts answer 403 without a Sec-Fetch-* header, so the player
+	// must carry one on every row.
+	if source.ExtraHeaders["Sec-Fetch-Site"] != "same-origin" {
+		t.Errorf("ExtraHeaders = %v, want Sec-Fetch-Site: same-origin", source.ExtraHeaders)
+	}
 }

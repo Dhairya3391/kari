@@ -3,7 +3,7 @@
 // series, and animated content.
 //
 // Catalog search and episode listings reuse the shared TMDB-keyed streambase.
-// Playback resolves through the player's JSON API (https://api.vidgold.net)
+// Playback resolves through the player's JSON API (https://g.vidgold.vip)
 // instead of scraping the embed page. The player cascades over seven stream
 // lanes — Aurum, Sovereign, Bullion, Ingot, Nugget, Doubloon, Gilt — and
 // ResolveStream queries every one of them so the UI sees all servers and

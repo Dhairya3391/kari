@@ -40,12 +40,11 @@ type serverResult struct {
 }
 
 // scraperServers returns the server IDs that answer plain HTTP requests with
-// playlists. IDs 58, 63, 69, and 79 are excluded: 58 is disabled upstream and
-// the others require a browser-side resolve gate, so they can only answer 400
-// or 409 and would surface as provider failures during fan-out. Each call
-// allocates so callers own the slice they receive.
+// playlists. 53 and 58 are disabled upstream, 63/69/79 need a browser resolve
+// gate, and 45 has no media for the sampled titles. Each call allocates so
+// callers own the slice they receive.
 func scraperServers() []int {
-	return []int{39, 42, 45, 53, 74}
+	return []int{31, 39, 42, 74}
 }
 
 // firstLanguage returns the primary canonical code used for the player's

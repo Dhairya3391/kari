@@ -18,6 +18,9 @@ func TestIsDirectURL(t *testing.T) {
 		"not-a-url",
 		"http://localhost:8080/proxy/m3u8?url=x",
 		"http://127.0.0.1:3000/master.m3u8",
+		"http://169.254.169.254/latest/meta-data/master.m3u8",
+		"http://192.168.1.1/master.m3u8",
+		"http://10.0.0.5/master.m3u8",
 		"https://example.com/proxy/m3u8?url=x",
 		"https://player.local/stream.m3u8",
 		"ftp://cdn.example.com/movie.mkv",
@@ -38,27 +41,5 @@ func TestFilterDirectSources(t *testing.T) {
 	got := FilterDirectSources(in)
 	if len(got) != 2 || got[0].URL != in[0].URL || got[1].URL != in[2].URL {
 		t.Errorf("FilterDirectSources = %+v, want first and third kept", got)
-	}
-}
-
-func TestChallengedHost(t *testing.T) {
-	if !ChallengedHost("https://vault-01.uwucdn.top/stream/01/uwu.m3u8") {
-		t.Error("uwucdn host must be challenged")
-	}
-	if !ChallengedHost("https://vault-99.owocdn.top/stream/99/uwu.m3u8") {
-		t.Error("owocdn mirror host must be challenged")
-	}
-	if !ChallengedHost("https://uwucdn.top/stream/01/uwu.m3u8") {
-		t.Error("bare challenged domain must match")
-	}
-	for _, u := range []string{
-		"https://fetch.nexabloom.top/anime/a/b/master.m3u8",
-		"https://cdn.example.com/a.m3u8",
-		"",
-		"not a url \x7f",
-	} {
-		if ChallengedHost(u) {
-			t.Errorf("ChallengedHost(%q) = true, want false", u)
-		}
 	}
 }

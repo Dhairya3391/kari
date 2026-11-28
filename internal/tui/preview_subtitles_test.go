@@ -298,16 +298,16 @@ func TestTriggerSubtitleSyncReplacesOpenSubtitlesWhenProviderSubsArrive(t *testi
 		Resolver: "opensubtitles",
 	}
 	m.subtitlePoolSize = 0
-	m.subtitleResolverUsed = "mapple"
+	m.subtitleResolverUsed = "cinejoy"
 	m.subtitleLangUsed = "en"
 	src, _ := m.selectedPlaybackSource()
 	m.subtitleSourceUsed = src.URL
 
 	// Later, provider subtitles arrive on concurrent resolution
 	m.rawSubtitles = append(m.rawSubtitles, model.SubtitleTrack{
-		URL:      "https://cdn.example.com/mapple_sub.vtt",
+		URL:      "https://cdn.example.com/cinejoy_sub.vtt",
 		Language: "en",
-		Resolver: "mapple",
+		Resolver: "cinejoy",
 	})
 
 	// Pool growth with provider subtitles must re-trigger sync to replace OpenSubtitles

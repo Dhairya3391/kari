@@ -2,7 +2,10 @@ package vumeto
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -64,15 +67,6 @@ func (c *Client) resolvePlayer(ctx context.Context, tmdbID int, episode provider
 	}
 
 	embedURL := fmt.Sprintf("%s%s?parentOrigin=%s", c.endpoints.Player, embedPath, url.QueryEscape(c.endpoints.Site))
-	body, err := c.get(ctx, embedURL, map[string]string{"Accept": "text/html"})
-	if err != nil {
-		return nil, fmt.Errorf("vumeto player embed: %w", err)
-	}
-	match := rePlayerSession.FindSubmatch(body)
-	if len(match) < 2 {
-		return nil, fmt.Errorf("vumeto player embed: %w", provider.ErrUpstreamChanged)
-	}
-	session := string(match[1])
 
 	params := url.Values{}
 	params.Set("type", mediaKind)
@@ -84,9 +78,14 @@ func (c *Client) resolvePlayer(ctx context.Context, tmdbID int, episode provider
 	params.Set("provider", "auto")
 	params.Set("mode", "all")
 	target := fmt.Sprintf("%s/_player/resolve?%s", c.endpoints.Player, params.Encode())
-	var payload playerResolveResponse
-	if err := c.getJSON(ctx, target, map[string]string{"X-Vumeto-Session": session}, &payload); err != nil {
-		return nil, fmt.Errorf("vumeto player resolve: %w", err)
+
+	payload, err := c.resolvePlayerOnce(ctx, embedURL, target)
+	if err != nil && ctx.Err() == nil && isPlayerResolveRetryable(err) {
+		logging.Debug("player resolve retrying with fresh session", "provider", c.Name(), "tmdb", tmdbID)
+		payload, err = c.resolvePlayerOnce(ctx, embedURL, target)
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	var sources []provider.MediaSource
@@ -111,6 +110,12 @@ func (c *Client) resolvePlayer(ctx context.Context, tmdbID int, episode provider
 			Backend: playerBackend(lane.Provider),
 			Type:    kit.NormalizeSourceKind(lane.URL),
 			Height:  height,
+		}
+		// The player's HLS lanes address every segment with a .png name even
+		// though the payload is video. mpv's lavf demuxer otherwise refuses
+		// those segments, so playback stalls before the first frame.
+		if source.Type == provider.SourceTypeHLS {
+			source.ExtraArgs = []string{"--demuxer-lavf-o=extension_picky=0,allowed_segment_extensions=ALL"}
 		}
 		if code := lang.Normalize(lane.PreferredAudioLang); code != "" {
 			source.Language = code
@@ -141,6 +146,42 @@ func (c *Client) resolvePlayer(ctx context.Context, tmdbID int, episode provider
 	}
 	logging.Debug("player resolve done", "provider", c.Name(), "tmdb", tmdbID, "sources", len(sources))
 	return sources, nil
+}
+
+// resolvePlayerOnce fetches one embed session and performs a single resolve
+// attempt. Each call mints a fresh session so a stale one can be replaced.
+func (c *Client) resolvePlayerOnce(ctx context.Context, embedURL, target string) (playerResolveResponse, error) {
+	var payload playerResolveResponse
+	body, err := c.get(ctx, embedURL, map[string]string{"Accept": "text/html"})
+	if err != nil {
+		return payload, fmt.Errorf("vumeto player embed: %w", err)
+	}
+	match := rePlayerSession.FindSubmatch(body)
+	if len(match) < 2 {
+		return payload, fmt.Errorf("vumeto player embed: %w", provider.ErrUpstreamChanged)
+	}
+	if err := c.getJSON(ctx, target, map[string]string{"X-Vumeto-Session": string(match[1])}, &payload); err != nil {
+		return payload, fmt.Errorf("vumeto player resolve: %w", err)
+	}
+	return payload, nil
+}
+
+// isPlayerResolveRetryable reports whether a resolve failure is transient:
+// a 503, a 404 from the resolve endpoint, or a transport deadline. Auth
+// failures and upstream shape drift are stable and must not be retried.
+func isPlayerResolveRetryable(err error) bool {
+	if errors.Is(err, provider.ErrNotFound) {
+		return true
+	}
+	var httpErr *provider.HTTPError
+	if errors.As(err, &httpErr) && httpErr.Code == http.StatusServiceUnavailable {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 // playerBackend renders a player lane id as a stable backend label.

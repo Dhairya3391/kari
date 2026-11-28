@@ -148,21 +148,13 @@ func (s *MediaService) Resolve(ctx context.Context, mode provider.ContentType, s
 		onResult(current)
 	}
 	addSources := func(name string, batch []provider.MediaSource) bool {
-		if !agg.add(name, batch) {
-			return false
-		}
-		agg.sort()
-		return true
+		return agg.add(name, batch)
 	}
 	// replaceSources swaps a provider's published batch instead of only adding
 	// to it. Enrichment publishes snapshots progressively; without replacement
 	// a later drop of shadowed tiers could never remove the rows already added.
 	replaceSources := func(name string, batch []provider.MediaSource) bool {
-		if !agg.replaceProviderSources(name, batch) {
-			return false
-		}
-		agg.sort()
-		return true
+		return agg.replaceProviderSources(name, batch)
 	}
 	var failures []string
 	var failedOrder []string

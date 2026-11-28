@@ -279,6 +279,79 @@ func TestResolveSourceSurvivesOneLane(t *testing.T) {
 	}
 }
 
+// TestResolveSourceSoftLaneFailures proves a transient 5xx in one lane cannot
+// mask a healthy lane, while an all-lanes outage reports the real status.
+// Auth failures still abort with their real cause.
+func TestResolveSourceSoftLaneFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		statuses    map[string]int
+		wantBackend string
+		wantErr     error
+		wantHTTP    int
+	}{
+		{
+			name:        "503 in one lane does not hide another",
+			statuses:    map[string]int{"/resolve/movie/786892": http.StatusServiceUnavailable},
+			wantBackend: "Vidbox",
+		},
+		{
+			name: "all lanes 503",
+			statuses: map[string]int{
+				"/content/movie/786892": http.StatusServiceUnavailable,
+				"/resolve/movie/786892": http.StatusServiceUnavailable,
+				"/vidbox":               http.StatusServiceUnavailable,
+				"/mbox":                 http.StatusServiceUnavailable,
+				"/bandit/streams":       http.StatusServiceUnavailable,
+			},
+			wantHTTP: http.StatusServiceUnavailable,
+		},
+		{
+			name:     "403 is a hard failure",
+			statuses: map[string]int{"/vidbox": http.StatusForbidden},
+			wantHTTP: http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if status, ok := tt.statuses[r.URL.Path]; ok {
+					w.WriteHeader(status)
+					return
+				}
+				if r.URL.Path == "/vidbox" {
+					writeJSON(w, `{"sources":{"Vidbox":{"label":"AUTO","server":"Vidbox","type":"hls","url":"https://edge.vidbox.example/master.m3u8","qualities":[{"resolution":"1080p"}]}}}`)
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			t.Cleanup(server.Close)
+			client := newTestClient(t, server)
+
+			sources, err := client.ResolveSource(context.Background(), "786892", provider.Episode{})
+			switch {
+			case tt.wantHTTP != 0:
+				var httpErr *provider.HTTPError
+				if !errors.As(err, &httpErr) || httpErr.Code != tt.wantHTTP {
+					t.Fatalf("expected HTTP %d error, got %v", tt.wantHTTP, err)
+				}
+			case tt.wantErr != nil:
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("expected %v, got %v", tt.wantErr, err)
+				}
+			default:
+				if err != nil {
+					t.Fatalf("ResolveSource: %v", err)
+				}
+				if len(sources) == 0 || sources[0].Backend != tt.wantBackend {
+					t.Fatalf("expected a %s source, got %+v", tt.wantBackend, sources)
+				}
+			}
+		})
+	}
+}
+
 // TestResolveSourceSheguUnknownHeight proves a resolver answer without a
 // height keeps the Auto label instead of being reported as "0p".
 func TestResolveSourceSheguUnknownHeight(t *testing.T) {

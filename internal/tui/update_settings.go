@@ -957,8 +957,8 @@ func (m *modelImpl) isProviderDisabledKey(mode provider.ContentType, id string) 
 		return true
 	}
 	if m.isConfiguredAddon(p) {
-		// An addon appears under several modes; disabling it anywhere must
-		// hide it everywhere, including Stremio browsing and playback.
+		// Legacy settings disable addons under individual modes. Addons are
+		// Stremio-only now, but those keys must still hide them everywhere.
 		for key := range m.disabledProviders {
 			if strings.HasSuffix(key, ":"+p) {
 				return true
@@ -1118,9 +1118,9 @@ func (m *modelImpl) syncDisabledProvidersToService() {
 			continue
 		}
 		add(p)
-		// Addons from older settings files are disabled with mode-scoped keys
-		// (e.g. "stremio:addon-xxxx"). The TUI already treats those as global;
-		// mirror that here so every mode's service routes honor the choice.
+		// Legacy settings files disable addons with mode-scoped keys
+		// (e.g. "stremio:addon-xxxx"). The TUI treats those as global; mirror
+		// that here so Stremio's service routes honor the choice.
 		if mode, name, ok := strings.Cut(p, ":"); ok && mode != "" && m.isConfiguredAddon(name) {
 			add(name)
 		}
@@ -1129,9 +1129,9 @@ func (m *modelImpl) syncDisabledProvidersToService() {
 	m.mediaService.SetDisabledProviders(list)
 }
 
-// addonTestTimeout bounds a manifest probe so a dead addon cannot hang the
-// settings screen.
-const addonTestTimeout = 25 * time.Second
+// addonManifestTimeout bounds a manifest fetch so a slow addon cannot hang
+// startup or the settings screen.
+const addonManifestTimeout = 30 * time.Second
 
 // startAddonCheck validates a manifest URL asynchronously. When replacing is
 // non-empty, success swaps that addon for the newly tested one.
@@ -1143,7 +1143,7 @@ func (m *modelImpl) startAddonCheck(manifest, replacing string) tea.Cmd {
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, addonTestTimeout)
+	ctx, cancel := context.WithTimeout(parent, addonManifestTimeout)
 	m.addonTestOpID++
 	m.addonTesting = true
 	m.addonTestCancel = cancel

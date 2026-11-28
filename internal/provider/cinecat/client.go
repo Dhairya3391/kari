@@ -31,20 +31,33 @@ var (
 	_ provider.StreamingProvider = (*Client)(nil)
 )
 
+const (
+	// capCooldown holds the proof-of-work gate closed; cap.js answers stay
+	// blocked for a long time.
+	capCooldown = 30 * time.Minute
+	// rateLimitCooldown is short: a single 429 from burst fan-out must not
+	// hide both gated lanes for half an hour.
+	rateLimitCooldown = 2 * time.Minute
+)
+
 // Client implements provider.Provider against the Cinecat catalog and CDN.
 type Client struct {
-	base          *streambase.Base
-	httpClient    *http.Client
+	base       *streambase.Base
+	httpClient *http.Client
+	// gatedClient skips retries so a 429 reaches the status check that closes
+	// the cap gate instead of becoming a retry-give-up transport error.
+	gatedClient   *http.Client
 	cdnBase       string
 	aphroditeBase string
 	subsBase      string
 	siteBase      string
 	sourcesBase   string
 
-	// capGate caches the upstream cap.js block. The ZCDN and sources lanes
-	// answer 401 until a browser solves their challenge; retrying them for
-	// every title only adds latency, so both lanes are skipped for a while
-	// after the first 401. Aphrodite and subtitles remain ungated.
+	// capGate caches the upstream cap.js block and Cloudflare rate limit. The
+	// ZCDN and sources lanes answer 401 until a browser solves their challenge
+	// and 429 while throttled; retrying them for every title only adds latency,
+	// so both lanes are skipped for a while after either response. Aphrodite
+	// and subtitles remain ungated.
 	capMu         sync.Mutex
 	capBlockedTil time.Time
 }
@@ -56,10 +69,10 @@ func (c *Client) capGateOpen() bool {
 	return time.Now().After(c.capBlockedTil)
 }
 
-// markCapRequired records a cap.js 401 so gated lanes are skipped briefly.
-func (c *Client) markCapRequired() {
+// markCapRequired skips the gated lanes until cooldown elapses.
+func (c *Client) markCapRequired(cooldown time.Duration) {
 	c.capMu.Lock()
-	c.capBlockedTil = time.Now().Add(30 * time.Minute)
+	c.capBlockedTil = time.Now().Add(cooldown)
 	c.capMu.Unlock()
 }
 
@@ -87,6 +100,7 @@ func NewClientWithURLs(keyPool *tmdb.KeyPool, cdnBase, aphroditeBase, subsBase, 
 	return &Client{
 		base:          base,
 		httpClient:    httpclient.NewWithUserAgent(config.DesktopUserAgent),
+		gatedClient:   httpclient.NewNoRedirect(),
 		cdnBase:       strings.TrimRight(cdnBase, "/"),
 		aphroditeBase: strings.TrimRight(aphroditeBase, "/"),
 		subsBase:      strings.TrimRight(subsBase, "/"),

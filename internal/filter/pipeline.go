@@ -16,8 +16,6 @@ const healthWindow = 10 * time.Minute
 // in declaration order, and a larger value always ranks higher. Using only
 // integers keeps ordering stable and free of floating-point tie surprises.
 type RankKey struct {
-	// Playable separates challenged hosts from sources that play right now.
-	Playable int
 	// Health demotes rows from providers that failed recently.
 	Health int
 	// Demote sinks weak fallback-only lanes below ordinary sources.
@@ -149,15 +147,11 @@ func GroupByProvider(ranked []RankedSource, preferred string) []RankedSource {
 }
 
 func rankSource(src provider.MediaSource, prefs Preferences, mode provider.ContentType, failed map[string]time.Time, now time.Time, index int) RankKey {
-	playable, demote := 0, 0
-	if provider.ChallengedHost(src.URL) {
-		playable = -1
-	}
+	demote := 0
 	if src.FallbackOnly {
 		demote = -1
 	}
 	return RankKey{
-		Playable: playable,
 		Health:   healthRank(src.Resolver, failed, now),
 		Demote:   demote,
 		Audio:    audioMatchRank(src, prefs.Track, mode),
@@ -172,9 +166,6 @@ func rankSource(src provider.MediaSource, prefs Preferences, mode provider.Conte
 // compareRankKeys applies the ranking hierarchy as a cascade of integer
 // differences, returning at the first non-zero field.
 func compareRankKeys(a, b RankKey) int {
-	if a.Playable != b.Playable {
-		return b.Playable - a.Playable
-	}
 	if a.Health != b.Health {
 		return b.Health - a.Health
 	}

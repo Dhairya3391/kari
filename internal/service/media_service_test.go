@@ -374,35 +374,6 @@ func TestSourceAggregatorKeepsDistinctQuerySemantics(t *testing.T) {
 	}
 }
 
-func TestSourceAggregatorReindexesAfterSort(t *testing.T) {
-	agg := newSourceAggregator([]provider.Provider{
-		&stubProvider{name: "anikoto", mode: provider.ModeAnime},
-		&stubProvider{name: "anivault", mode: provider.ModeAnime},
-	}, func(n string) string { return n })
-	const playable = "https://fetch.example/anime/abc/master.m3u8"
-	agg.add("anivault", []provider.MediaSource{
-		{URL: "https://vault-01.uwucdn.top/stream/01/uwu.m3u8", Quality: "1080p", Referer: "https://one.example/"},
-		{URL: playable + "?token=one", Quality: "Auto (HD-1)", Referer: "https://two.example/"},
-	})
-	agg.sort()
-	if agg.sources[0].URL != playable+"?token=one" {
-		t.Fatalf("sort did not move playable source first: %+v", agg.sources)
-	}
-
-	agg.add("anikoto", []provider.MediaSource{{
-		URL: playable + "?token=two", Quality: "1080p (Vidstream-2)", Referer: "https://two.example/",
-	}})
-	if len(agg.sources) != 2 {
-		t.Fatalf("sources = %d, want 2 after merging duplicate", len(agg.sources))
-	}
-	if agg.sources[0].URL != playable+"?token=two" || agg.sources[0].Resolver != "anikoto" {
-		t.Errorf("anikoto must replace duplicate at index 0 after sort: %+v", agg.sources)
-	}
-	if agg.sources[1].URL != "https://vault-01.uwucdn.top/stream/01/uwu.m3u8" {
-		t.Errorf("challenged source was modified: %+v", agg.sources[1])
-	}
-}
-
 func TestCanonicalSourceURL(t *testing.T) {
 	tests := []struct {
 		name string
@@ -482,7 +453,6 @@ func TestSourceAggregatorPreservesArrivalOrder(t *testing.T) {
 		{URL: "http://lo-1", Quality: "480p"},
 		{URL: "http://hi-1", Quality: "1080p"},
 	})
-	agg.sort()
 
 	wantOrder := []string{"http://hi-2", "http://lo-1", "http://hi-1"}
 	for i, want := range wantOrder {
@@ -500,7 +470,6 @@ func TestSourceAggregatorPreservesSubtitleArrivalOrder(t *testing.T) {
 		{URL: "http://soft", Quality: "1080p", SubType: provider.SubTypeSoft},
 		{URL: "http://hard", Quality: "1080p", SubType: provider.SubTypeHard},
 	})
-	agg.sort()
 
 	if len(agg.sources) != 2 || agg.sources[0].URL != "http://soft" || agg.sources[1].URL != "http://hard" {
 		t.Fatalf("subtitle type must not reorder sources (order=%+v)", agg.sources)
@@ -904,8 +873,6 @@ func TestAggregatorPreservesArrivalOrderAcrossProviders(t *testing.T) {
 			{Resolver: "movysx", Quality: "2160p"},
 		},
 	}
-
-	agg.sort()
 
 	if len(agg.sources) != 4 {
 		t.Fatalf("expected 4 sources, got %d", len(agg.sources))

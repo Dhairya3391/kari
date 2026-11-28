@@ -214,6 +214,7 @@ func mediaSource(stream apiStream, lane laneResult, base string, subtitles []pro
 		Language:       language,
 		Audio:          audio,
 		SuppressOrigin: true,
+		ExtraHeaders:   streamHeaders(),
 	}
 }
 
@@ -246,6 +247,7 @@ func bakedSources(meta embedMeta, base string) []provider.MediaSource {
 			Subtitles:      subtitles,
 			UserAgent:      config.DesktopUserAgent,
 			SuppressOrigin: true,
+			ExtraHeaders:   streamHeaders(),
 		})
 	}
 	appendSource(meta.BigBangURL, "BigBang", subtitleOptions(meta.BigBangSubs, base))
@@ -261,9 +263,18 @@ func bakedSources(meta embedMeta, base string) []provider.MediaSource {
 			Type:           kit.NormalizeSourceKind(resolved),
 			UserAgent:      config.DesktopUserAgent,
 			SuppressOrigin: true,
+			ExtraHeaders:   streamHeaders(),
 		})
 	}
 	return sources
+}
+
+// streamHeaders returns the transport headers VidRift's stream hosts require.
+// Their bot filter rejects a media request that lacks a Sec-Fetch-* header,
+// answering 403 even though the URL is freshly signed. mpv does not send
+// these by itself, so they travel with every source.
+func streamHeaders() map[string]string {
+	return map[string]string{"Sec-Fetch-Site": "same-origin"}
 }
 
 // streamHeight returns the tallest resolution declared by a stream's rungs,

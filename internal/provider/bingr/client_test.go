@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"kari/internal/config"
 	"kari/internal/provider"
@@ -256,6 +257,69 @@ func TestBingrExpandsHLSMaster(t *testing.T) {
 		if s.ManifestURL != masterURL || s.URL == masterURL {
 			t.Errorf("playable URL %q must be a variant with master %q on ManifestURL", s.URL, s.ManifestURL)
 		}
+	}
+}
+
+// TestExpandHLSMastersBlocked proves only a definite 403 drops the master:
+// timeouts, throttling and other inconclusive errors keep it so slow-but-working
+// streams stay playable, while a healthy master expands into its variants.
+func TestExpandHLSMastersBlocked(t *testing.T) {
+	c, err := NewClientWithURLs(tmdb.NewKeyPool([]string{"dummy-key"}), "https://example.com")
+	if err != nil {
+		t.Fatalf("NewClientWithURLs: %v", err)
+	}
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	blocked := func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "ERROR: ACCESS DENIED", http.StatusForbidden)
+	}
+	throttled := func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "slow down", http.StatusTooManyRequests)
+	}
+	valid := func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=854x480\n480.m3u8\n")
+	}
+
+	for _, tt := range []struct {
+		name       string
+		ctx        context.Context
+		handler    http.HandlerFunc
+		wantCount  int
+		wantMaster bool
+	}{
+		{name: "403 drops master", handler: blocked, wantCount: 0},
+		{name: "429 keeps master", handler: throttled, wantCount: 1, wantMaster: true},
+		{name: "timeout keeps master", ctx: expired, handler: valid, wantCount: 1, wantMaster: true},
+		{name: "valid master expands", handler: valid, wantCount: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(tt.handler)
+			defer srv.Close()
+			master := srv.URL + "/master.m3u8"
+			ctx := tt.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			got := c.expandHLSMasters(ctx, []provider.MediaSource{{
+				URL: master, Type: provider.SourceTypeHLS, Backend: "Edge",
+			}})
+			if len(got) != tt.wantCount {
+				t.Fatalf("sources = %d, want %d: %+v", len(got), tt.wantCount, got)
+			}
+			if tt.wantCount == 0 {
+				return
+			}
+			if tt.wantMaster {
+				if got[0].URL != master {
+					t.Errorf("kept URL = %q, want master %q", got[0].URL, master)
+				}
+				return
+			}
+			if got[0].URL == master || got[0].ManifestURL != master {
+				t.Errorf("variant = %q with manifest %q, want a variant of %q", got[0].URL, got[0].ManifestURL, master)
+			}
+		})
 	}
 }
 

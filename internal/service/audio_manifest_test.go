@@ -18,7 +18,7 @@ func TestDiscoverManifestAudioAcrossSources(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Header.Get("Referer") != "https://watch.example/" || r.Header.Get("Origin") != "https://watch.example" || r.Header.Get("User-Agent") != "test-agent" || r.Header.Get("Cookie") != "session=abc" {
+		if r.Header.Get("Referer") != "https://watch.example/" || r.Header.Get("Origin") != "https://watch.example" || r.Header.Get("User-Agent") != "test-agent" || r.Header.Get("Cookie") != "session=abc" || r.Header.Get("Sec-Fetch-Site") != "same-origin" {
 			http.Error(w, "missing playback headers", http.StatusForbidden)
 			return
 		}
@@ -26,10 +26,11 @@ func TestDiscoverManifestAudioAcrossSources(t *testing.T) {
 	}))
 	defer server.Close()
 
+	hostHeaders := map[string]string{"Sec-Fetch-Site": "same-origin"}
 	sources := []provider.MediaSource{
-		{URL: server.URL + "/one.m3u8", Referer: "https://watch.example/", UserAgent: "test-agent", CookieHeader: "session=abc"},
-		{URL: server.URL + "/two.M3U8?token=x", Referer: "https://watch.example/", UserAgent: "test-agent", CookieHeader: "session=abc"},
-		{URL: server.URL + "/proxy?token=x", Type: provider.SourceTypeHLS, AudioLabel: "Provider label", Referer: "https://watch.example/", UserAgent: "test-agent", CookieHeader: "session=abc"},
+		{URL: server.URL + "/one.m3u8", Referer: "https://watch.example/", UserAgent: "test-agent", CookieHeader: "session=abc", ExtraHeaders: hostHeaders},
+		{URL: server.URL + "/two.M3U8?token=x", Referer: "https://watch.example/", UserAgent: "test-agent", CookieHeader: "session=abc", ExtraHeaders: hostHeaders},
+		{URL: server.URL + "/proxy?token=x", Type: provider.SourceTypeHLS, AudioLabel: "Provider label", Referer: "https://watch.example/", UserAgent: "test-agent", CookieHeader: "session=abc", ExtraHeaders: hostHeaders},
 		{URL: server.URL + "/clip.mp4"},
 		{URL: "not a URL"},
 	}

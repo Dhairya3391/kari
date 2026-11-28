@@ -110,3 +110,32 @@ func TestLiveUpNext(t *testing.T) {
 		t.Fatalf("up next at end = %q %q, want empty", stamp, title)
 	}
 }
+
+func TestSortLiveResultsKeepsCategoriesContiguous(t *testing.T) {
+	now := time.Date(2026, time.June, 15, 20, 0, 0, 0, time.Local)
+	results := []provider.SearchResult{
+		{Title: "Soccer A", Group: "Soccer", Live: true, StartsAt: now.Add(-2 * time.Hour)},
+		{Title: "Darts A", Group: "Darts", Live: true, StartsAt: now.Add(-90 * time.Minute)},
+		{Title: "Soccer B", Group: "Soccer", Live: true, StartsAt: now.Add(-time.Hour)},
+		{Title: "Darts B", Group: "Darts", Live: true, StartsAt: now.Add(-30 * time.Minute)},
+	}
+	SortLiveResults(results, now)
+
+	guide := BuildLiveGuide(results, 0, now)
+	seen := make(map[string]bool)
+	for _, row := range guide.Rows {
+		if row.Kind != LiveRowCategory {
+			continue
+		}
+		if seen[row.Label] {
+			t.Errorf("category %q repeated in guide: %+v", row.Label, guide.Rows)
+		}
+		seen[row.Label] = true
+	}
+	want := []string{"Darts A", "Darts B", "Soccer A", "Soccer B"}
+	for i, title := range want {
+		if results[i].Title != title {
+			t.Fatalf("sorted order = %q, %q, %q, %q; want %v", results[0].Title, results[1].Title, results[2].Title, results[3].Title, want)
+		}
+	}
+}

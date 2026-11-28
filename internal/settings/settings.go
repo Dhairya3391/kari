@@ -84,7 +84,7 @@ type Data struct {
 	Modes []string `json:"modes"`
 	// ModesDisabled is the list of disabled mode keys.
 	ModesDisabled []string `json:"modes_disabled"`
-	// DisabledProviders is the list of user-disabled provider keys (e.g. "anivault", "cinecat").
+	// DisabledProviders is the list of user-disabled provider keys (e.g. "miruro", "cinecat").
 	// When empty/nil, all providers are enabled.
 	DisabledProviders []string `json:"disabled_providers,omitempty"`
 	// StremioAddonManifests stores user-configured Stremio-compatible addon manifest URLs.

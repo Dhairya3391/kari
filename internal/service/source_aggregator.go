@@ -14,7 +14,7 @@ import (
 
 // sourceAggregator merges playback sources and subtitle tracks from all
 // providers, deduplicating entries as they arrive. It is not safe for
-// concurrent use; callers must hold their own lock around add/sort/publish
+// concurrent use; callers must hold their own lock around add and publish
 // sequencing (see Resolve).
 type sourceAggregator struct {
 	priority    map[string]int // provider name -> priority (lower sorts first)
@@ -41,6 +41,7 @@ func sourceDedupeIdentity(src provider.MediaSource) string {
 		strings.TrimSpace(src.CookieHeader),
 		strings.TrimSpace(src.Language),
 		strconv.FormatBool(src.SuppressOrigin),
+		provider.ExtraHeaderIdentity(src.ExtraHeaders),
 		strings.Join(src.ExtraArgs, "\x00"),
 	}, "\x00")
 }
@@ -333,39 +334,6 @@ func (a *sourceAggregator) replaceProviderSources(providerName string, batch []p
 		a.seenSubs[strings.TrimSpace(sub.URL)+"\x00"+sub.SourceID] = struct{}{}
 	}
 	return a.add(providerName, valid)
-}
-
-// sort preserves the arrival order of playable sources across providers,
-// pushing only anti-bot challenged hosts to the bottom. It reindexes the
-// dedupe map because sorting reorders the backing slice.
-func (a *sourceAggregator) sort() {
-	slices.SortStableFunc(a.sources, func(si, sj provider.MediaSource) int {
-		return challengedRank(si) - challengedRank(sj)
-	})
-	a.reindexSources()
-}
-
-// reindexSources rebuilds the dedupe map after sorting. add and snapshot both
-// run under the service lock, but sort reorders the slice, so stale indices
-// would merge metadata into the wrong source on the next provider batch.
-func (a *sourceAggregator) reindexSources() {
-	if a.sourceIndex == nil {
-		a.sourceIndex = make(map[string]int)
-	}
-	clear(a.sourceIndex)
-	for i := range a.sources {
-		a.sourceIndex[sourceDedupeIdentity(a.sources[i])] = i
-	}
-}
-
-// challengedRank orders challenged-host sources below every playable-now
-// source, mirroring the ranking package so the aggregate, Preview, and
-// playback agree on what plays first.
-func challengedRank(s provider.MediaSource) int {
-	if provider.ChallengedHost(s.URL) {
-		return 1
-	}
-	return 0
 }
 
 func firstPlaybackURL(playback []provider.MediaSource) string {

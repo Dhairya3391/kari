@@ -11,18 +11,18 @@ import (
 func TestPrepareRankingHierarchy(t *testing.T) {
 	sources := []provider.MediaSource{
 		{URL: "normal-hd", Resolver: "r", Height: 720},
-		{URL: "https://uwucdn.top/challenge.m3u8", Resolver: "r", Height: 2160},
+		{URL: "normal-4k", Resolver: "r", Height: 2160},
 		{URL: "fallback-fhd", Resolver: "r", Height: 1080, FallbackOnly: true},
 		{URL: "normal-sd", Resolver: "r", Height: 480},
 	}
 	prefs := Preferences{Quality: QualityAll, Subtitles: SubtitlePreference{Mode: SubtitleOff}}
 	got := Prepare(sources, prefs, provider.ModeMovies, nil, time.Time{})
 
-	want := []string{"normal-hd", "normal-sd", "fallback-fhd", "https://uwucdn.top/challenge.m3u8"}
+	want := []string{"normal-4k", "normal-hd", "normal-sd", "fallback-fhd"}
 	if URLs := rankedURLs(got); !slices.Equal(URLs, want) {
 		t.Errorf("ranked order = %v, want %v", URLs, want)
 	}
-	if got[0].OriginalIndex != 0 || got[3].OriginalIndex != 1 {
+	if got[0].OriginalIndex != 1 || got[3].OriginalIndex != 2 {
 		t.Errorf("original indices were not preserved: %+v", got)
 	}
 }

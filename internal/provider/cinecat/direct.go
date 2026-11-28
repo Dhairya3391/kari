@@ -33,12 +33,13 @@ var (
 // aphroditeBackend labels Aphrodite rows in the source list.
 const aphroditeBackend = "Aphrodite"
 
-// errCapRequired marks the upstream cap.js proof-of-work gate on the ZCDN and
-// sources lanes. Those lanes are optional: the ungated Aphrodite edge still
-// provides playable sources, so this error only demotes the gated lanes. It
-// wraps ErrNoSources so a fully gated upstream stays a benign "empty catalog"
-// answer and never trips the provider circuit breaker.
-var errCapRequired = fmt.Errorf("cinecat: upstream cap pass required: %w", provider.ErrNoSources)
+// errCapRequired marks the cap.js proof-of-work gate or a Cloudflare rate
+// limit on the ZCDN and sources lanes. Those lanes are optional: the ungated
+// Aphrodite edge still provides playable sources, so this error only demotes
+// the gated lanes. It wraps ErrNoSources so a fully gated upstream stays a
+// benign "empty catalog" answer and never trips the provider circuit breaker,
+// while its text still names the cause when no lane can serve the title.
+var errCapRequired = fmt.Errorf("cinecat: gated lanes unavailable (cap pass required or rate limited): %w", provider.ErrNoSources)
 
 type zcdnResponse struct {
 	Ready  bool   `json:"ready"`
@@ -132,6 +133,20 @@ func (c *Client) newRequest(ctx context.Context, target string) (*http.Request, 
 	req.Header.Set("Referer", c.siteBase+"/")
 	req.Header.Set("Origin", c.siteBase)
 	return req, nil
+}
+
+// gatedStatusError opens the gated-lane cooldown for a cap.js 401 or a
+// Cloudflare 429; every other non-2xx status keeps its normal HTTP error.
+func (c *Client) gatedStatusError(target string, status int) error {
+	switch status {
+	case http.StatusUnauthorized:
+		c.markCapRequired(capCooldown)
+		return errCapRequired
+	case http.StatusTooManyRequests:
+		c.markCapRequired(rateLimitCooldown)
+		return errCapRequired
+	}
+	return &provider.HTTPError{Code: status, URL: target}
 }
 
 func (c *Client) fetchSources(
@@ -400,18 +415,14 @@ func (c *Client) fetchLaneNames(ctx context.Context) ([]string, error) {
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.gatedClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("cinecat sources: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		c.markCapRequired()
-		return nil, errCapRequired
-	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: target}
+		return nil, c.gatedStatusError(target, resp.StatusCode)
 	}
 
 	var data sourcesListResponse
@@ -454,7 +465,7 @@ func (c *Client) fetchLaneStreams(ctx context.Context, lane string, tmdbID int, 
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.gatedClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("cinecat lane %s: %w", lane, err)
 	}
@@ -464,7 +475,7 @@ func (c *Client) fetchLaneStreams(ctx context.Context, lane string, tmdbID int, 
 		return nil, provider.ErrNoSources
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, &provider.HTTPError{Code: resp.StatusCode, URL: target}
+		return nil, c.gatedStatusError(target, resp.StatusCode)
 	}
 
 	var data laneStreamsResponse
@@ -560,7 +571,7 @@ func (c *Client) fetchZCDN(ctx context.Context, tmdbID int, mediaType string, se
 		return "", err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.gatedClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("cinecat cdn: %w", err)
 	}
@@ -570,12 +581,8 @@ func (c *Client) fetchZCDN(ctx context.Context, tmdbID int, mediaType string, se
 		// 202 Accepted signifies stream is currently being transcoded/built upstream.
 		return "", provider.ErrNoSources
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		c.markCapRequired()
-		return "", errCapRequired
-	}
 	if resp.StatusCode != http.StatusOK {
-		return "", &provider.HTTPError{Code: resp.StatusCode, URL: target}
+		return "", c.gatedStatusError(target, resp.StatusCode)
 	}
 
 	var data zcdnResponse

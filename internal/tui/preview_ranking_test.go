@@ -252,22 +252,18 @@ func TestMergeResolvedQualitySettingFiltersSources(t *testing.T) {
 }
 
 // Sub-kind ranking now lives inside filter.Prepare: an anime hardsub earns
-// the top Key.SubKind plus the hard-sub title boost, while challenged hosts
-// still sort last. The signal itself is mode-dependent, not quality-dependent.
+// the top Key.SubKind plus the hard-sub title boost. The signal itself is
+// mode-dependent, not quality-dependent.
 func TestHardsubFirstLeadsAnimeTable(t *testing.T) {
 	mk := func(url, quality, subType string) provider.MediaSource {
 		return provider.MediaSource{URL: url, Quality: quality, SubType: subType, Resolver: "miruro"}
 	}
 	soft1080 := mk("https://cdn.example.com/soft.m3u8", "1080p", provider.SubTypeSoft)
 	hard720 := mk("https://cdn.example.com/hard.m3u8", "720p", provider.SubTypeHard)
-	challengedHard := mk("https://vault-01.uwucdn.top/stream/01/uwu.m3u8", "1080p", provider.SubTypeHard)
 
-	got := prepareForMode([]provider.MediaSource{soft1080, hard720, challengedHard}, provider.ModeAnime, qualityAll)
-	if len(got) != 3 || got[0].Source.URL != hard720.URL {
+	got := prepareForMode([]provider.MediaSource{soft1080, hard720}, provider.ModeAnime, qualityAll)
+	if len(got) != 2 || got[0].Source.URL != hard720.URL {
 		t.Fatalf("hardsub must lead, got %v", urls(got))
-	}
-	if got[2].Source.URL != challengedHard.URL {
-		t.Fatalf("challenged hardsub must stay last, got %v", urls(got))
 	}
 	rowByURL := func(rows []filter.RankedSource, url string) filter.RankedSource {
 		for _, row := range rows {
@@ -403,28 +399,6 @@ func TestGroupSourcesByProviderAnimeAudio(t *testing.T) {
 	}
 	if m.rankedSources[0].Source.URL != "src-ja" {
 		t.Errorf("anime mode should preserve Japanese track before English, got %s", m.rankedSources[0].Source.URL)
-	}
-}
-
-func TestGroupSourcesByProviderKeepsChallengedLast(t *testing.T) {
-	healthy := provider.MediaSource{
-		URL:      "https://cdn.example.com/1080.m3u8",
-		Quality:  "1080p",
-		Resolver: "miruro",
-	}
-	challenged := provider.MediaSource{
-		URL:      "https://vault-01.uwucdn.top/stream/01/uwu.m3u8",
-		Quality:  "2160p",
-		Resolver: "miruro",
-	}
-
-	got := prepareForMode([]provider.MediaSource{healthy, challenged}, provider.ModeAnime, qualityAll)
-
-	if len(got) != 2 || got[0].Source.URL != healthy.URL || got[1].Source.URL != challenged.URL {
-		t.Fatalf("challenged host must stay last, got %v", urls(got))
-	}
-	if got[1].Key.Playable >= got[0].Key.Playable {
-		t.Fatalf("challenged host must be demoted by transport, got %+v", got)
 	}
 }
 
