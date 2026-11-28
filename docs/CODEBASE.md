@@ -129,7 +129,7 @@ preferred anime subtitle language narrows playback candidates through
 
 | Kind of type | Lives in | Examples |
 | --- | --- | --- |
-| A provider's private API response/request shapes | that provider's package | `miruro.searchItem`, `movysx.movySourceItem`, `q62.releaseDetail` |
+| A provider's private API response/request shapes | that provider's package | `miruro.searchItem`, `movysx.movySourceItem`, `cinecat.laneStream` |
 | Shared wire DTOs crossing layer boundaries | `internal/provider` | `SearchResult`, `Episode`, `MediaSource`, `SubtitleOption` |
 | Cross-layer vocabularies | `internal/provider` constants only | `MediaTypeMovie`, `ModeAnime`, `AudioSub`, `SourceTypeHLS` |
 | Playback aggregates with behavior | `internal/model` | `ResolvedMedia`, `SubtitleTrack` |

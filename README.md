@@ -53,7 +53,7 @@ Type a query, press `Space`, pick a result, press `Enter` to play. `Tab` switche
 
 | Feature | Description |
 | --- | --- |
-| **7 modes** | Anime, Movies, TV, Cartoons, Live/Sports, Manga, Jellyfin |
+| **8 modes** | Anime, Movies, TV, Cartoons, Live/Sports, Manga, Stremio, Jellyfin |
 | **Parallel search** | Queries all providers at once, ranks streams by quality, language and server health |
 | **Resume** | Tracks playback position through mpv/IINA IPC, resume from history |
 | **Skip** | Auto-skip intros, outros and recaps, with seekbar chapter markers (mpv) |
@@ -62,7 +62,7 @@ Type a query, press `Space`, pick a result, press `Enter` to play. `Tab` switche
 | **Sub / Dub** | Toggle with `a`; the track sticks for following episodes, subtitles side-loaded automatically. Enabled audio languages are ordered in Settings → Languages, with English as the automatic fallback unless turned off |
 | **Subtitle language** | Pick Any / Off / a language in Settings; in Anime mode a preferred language hides sources without a matching soft subtitle when one exists (downloads keep all sources) |
 | **Downloads** | Single or batch via yt-dlp, 16-connection with aria2 |
-| **Stremio add-ons** | Add compatible stream manifests and browse their catalogs in Stremio mode |
+| **Stremio add-ons** | Add compatible stream manifests and browse their catalogs in a standalone Stremio mode; titles without addon catalogs are found through Kari's TMDB search |
 | **Discord presence** | Optional, local only |
 | **Self-update** | `kari -u` |
 
@@ -71,7 +71,7 @@ Providers per mode: [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
 To add an add-on, open Settings with `s`, choose **Add-ons**, then **Add Stremio addon manifest**. You can paste a bare addon URL (Kari appends `/manifest.json`) or the full manifest URL including its configuration query string. Kari fetches the HTTP(S) manifest and accepts any reachable HTTP addon; no playback probe is required. Addons that only expose YouTube, torrent, or external-app links are saved but produce no playable streams — Kari needs a direct HTTP stream URL.
 
-In the Add-ons list, `Enter`/`r` refreshes an add-on's manifest, `e` rebinds its URL, and `d` removes it. Disabling an add-on in any mode disables it everywhere, including Stremio browsing and playback.
+In the Add-ons list, `Enter`/`r` refreshes an add-on's manifest, `e` rebinds its URL, and `d` removes it. Add-ons appear only in Stremio mode; disabling one there hides it from Stremio browsing and playback.
 
 ## Essential keys
 
