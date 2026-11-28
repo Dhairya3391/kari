@@ -33,6 +33,17 @@ type IPCClient struct {
 	reqID      int
 }
 
+type ipcRequest struct {
+	Command   []any `json:"command"`
+	RequestID int   `json:"request_id"`
+}
+
+type ipcResponse struct {
+	RequestID json.Number     `json:"request_id"`
+	Error     string          `json:"error"`
+	Data      json.RawMessage `json:"data"`
+}
+
 // playbackStats guards PlaybackResult fields that are updated by the
 // ipcPoller goroutine and read by the caller once playback ends. Without a
 // lock, the final snapshot could race with the poller's last update.
@@ -40,7 +51,6 @@ type playbackStats struct {
 	mu           sync.Mutex
 	result       PlaybackResult
 	loaded       bool
-	connected    bool
 	shortWarning bool
 	shortDur     float64
 }
@@ -103,22 +113,6 @@ func (s *playbackStats) observedPlayback() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.hasEvidence()
-}
-
-// markConnected records that the poller reached the player's IPC socket.
-func (s *playbackStats) markConnected() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.connected = true
-}
-
-// ipcConnected reports whether the poller ever reached the player's socket.
-// It distinguishes "no evidence because IPC was unavailable" from "no
-// evidence because the media never loaded".
-func (s *playbackStats) ipcConnected() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.connected
 }
 
 func newIPCSerializer(conn net.Conn) *bufio.Scanner {
@@ -226,10 +220,7 @@ func (c *IPCClient) command(args ...any) (any, error) {
 
 	c.reqID++
 	reqID := c.reqID
-	data, err := json.Marshal(map[string]any{
-		ipcFieldCommand:   args,
-		ipcFieldRequestID: reqID,
-	})
+	data, err := json.Marshal(ipcRequest{Command: args, RequestID: reqID})
 	if err != nil {
 		return nil, err
 	}
@@ -242,18 +233,25 @@ func (c *IPCClient) command(args ...any) (any, error) {
 	}
 
 	for c.scanner.Scan() {
-		var response map[string]any
+		var response ipcResponse
 		if err := json.Unmarshal(c.scanner.Bytes(), &response); err != nil {
 			continue
 		}
-		id, ok := response[ipcFieldRequestID].(float64)
-		if !ok || int(id) != reqID {
+		id, err := response.RequestID.Int64()
+		if err != nil || id != int64(reqID) {
 			continue
 		}
-		if errText, ok := response[ipcFieldError].(string); ok && errText != ipcSuccess {
-			return nil, fmt.Errorf("mpv error: %s", errText)
+		if response.Error != "" && response.Error != ipcSuccess {
+			return nil, fmt.Errorf("mpv error: %s", response.Error)
 		}
-		return response[ipcFieldData], nil
+		if len(response.Data) == 0 || string(response.Data) == "null" {
+			return nil, nil
+		}
+		var value any
+		if err := json.Unmarshal(response.Data, &value); err != nil {
+			return nil, fmt.Errorf("decode mpv IPC response: %w", err)
+		}
+		return value, nil
 	}
 
 	err = c.scanner.Err()

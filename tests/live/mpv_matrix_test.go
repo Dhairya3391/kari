@@ -53,9 +53,6 @@ var mpvMatrixCases = []mpvMatrixCase{
 	{provider: "vidora", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "vidora", mode: provider.ModeCartoon, query: "SpongeBob"},
 	// Remaining TMDB-backed movie/TV/cartoon providers.
-	{provider: "mapple", mode: provider.ModeMovies, query: "Inception"},
-	{provider: "mapple", mode: provider.ModeTV, query: "Breaking Bad"},
-	{provider: "mapple", mode: provider.ModeCartoon, query: "SpongeBob"},
 	{provider: "a11", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "a11", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "vyla", mode: provider.ModeMovies, query: "Inception"},
@@ -63,16 +60,18 @@ var mpvMatrixCases = []mpvMatrixCase{
 	{provider: "bingr", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "bingr", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "bingr", mode: provider.ModeCartoon, query: "SpongeBob"},
+	{provider: "pengu", mode: provider.ModeMovies, query: "Inception"},
+	{provider: "pengu", mode: provider.ModeTV, query: "Breaking Bad"},
+	{provider: "pengu", mode: provider.ModeCartoon, query: "SpongeBob"},
+	{provider: "way2movies", mode: provider.ModeMovies, query: "Inception"},
+	{provider: "way2movies", mode: provider.ModeTV, query: "Breaking Bad"},
+	{provider: "way2movies", mode: provider.ModeCartoon, query: "SpongeBob"},
 	{provider: "vidrift", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "vidrift", mode: provider.ModeTV, query: "Breaking Bad"},
-	{provider: "lightflix", mode: provider.ModeMovies, query: "Inception"},
-	{provider: "lightflix", mode: provider.ModeTV, query: "Breaking Bad"},
-	{provider: "lightflix", mode: provider.ModeCartoon, query: "SpongeBob"},
 	{provider: "vumeto", mode: provider.ModeMovies, query: "Inception"},
 	{provider: "vumeto", mode: provider.ModeTV, query: "Breaking Bad"},
 	{provider: "vumeto", mode: provider.ModeCartoon, query: "Family Guy"},
 	// Anime providers.
-	{provider: "anivault", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "miruro", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "anidream", mode: provider.ModeAnime, query: "Naruto"},
 	{provider: "vidrift", mode: provider.ModeAnime, query: "Naruto"},
@@ -134,16 +133,6 @@ func TestMPVMatrixAllProviders(t *testing.T) {
 				t.Skipf("%s: no direct mpv-playable URLs (%d proxied)", p.Name(), len(sources))
 			}
 			sort.SliceStable(playable, func(i, j int) bool {
-				ci, cj := 0, 0
-				if provider.ChallengedHost(playable[i].URL) {
-					ci = 1
-				}
-				if provider.ChallengedHost(playable[j].URL) {
-					cj = 1
-				}
-				if ci != cj {
-					return ci < cj
-				}
 				return kit.QualityHeight(playable[i].Quality) > kit.QualityHeight(playable[j].Quality)
 			})
 
@@ -153,9 +142,6 @@ func TestMPVMatrixAllProviders(t *testing.T) {
 			for i, src := range playable {
 				if i >= maxMPVCandidates {
 					break
-				}
-				if provider.ChallengedHost(src.URL) {
-					t.Logf("candidate[%d] %q is challenged-host; trying anyway", i, src.Quality)
 				}
 				if err := probeSourceMPV(t, src); err != nil {
 					t.Logf("candidate[%d] %q failed: %v", i, src.Quality, err)

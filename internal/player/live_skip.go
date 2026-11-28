@@ -30,9 +30,8 @@ type liveSkipSink struct {
 	client   *IPCClient
 	settings SkipSettings
 	// pending is a late result awaiting a confirmed delivery. It is kept
-	// across attach calls so a result that resolved before the player started,
-	// or that was sent to a direct launch that then failed, is retried on the
-	// next client (e.g. the curl|mpv pipe fallback).
+	// across attach calls so a result that resolved before the player started
+	// is retried on the next IPC client.
 	pending  *combinedSkipTimes
 	attached chan struct{}
 	once     sync.Once

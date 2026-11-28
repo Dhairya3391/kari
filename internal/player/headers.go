@@ -32,7 +32,7 @@ func extraHeaderFields(source provider.MediaSource) []string {
 }
 
 // mpvExtraHeaderFields escapes commas because mpv and mpv-derived players
-// split their header list options on commas. curl needs the unescaped form.
+// split their header list options on commas.
 func mpvExtraHeaderFields(source provider.MediaSource) []string {
 	fields := extraHeaderFields(source)
 	for i, field := range fields {

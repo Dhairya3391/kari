@@ -514,25 +514,6 @@ func TestBuildMPVArgsOriginIsSchemeHost(t *testing.T) {
 	t.Errorf("--http-header-fields arg not found in: %v", args)
 }
 
-func TestBuildCurlArgsRejectsHTTPErrorBody(t *testing.T) {
-	args := buildCurlArgs("https://cdn.example.com/video.m3u8", nil)
-	if !containsArg(args, "--fail") {
-		t.Fatalf("curl args must reject HTTP error bodies: %v", args)
-	}
-}
-
-func TestLaunchResultRejectsFailedCurlProducer(t *testing.T) {
-	result := launchResult{
-		launched:   true,
-		observed:   true,
-		curlFailed: true,
-		playback:   PlaybackResult{FinalPositionSecs: 1},
-	}
-	if result.succeeded() {
-		t.Fatal("curl failure must not be reported as successful playback")
-	}
-}
-
 func TestLaunchResultRequiresObservedPlayback(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -599,30 +580,64 @@ func TestLaunchResultRequiresObservedPlayback(t *testing.T) {
 
 func TestTrustedWithoutIPC(t *testing.T) {
 	tests := []struct {
-		name      string
-		connected bool
-		marked    bool
-		url       string
-		exitCode  int
-		want      bool
+		name     string
+		marked   bool
+		url      string
+		exitCode int
+		want     bool
 	}{
-		{"IPC connected, no evidence", true, false, "https://cdn.example.com/v.m3u8", 0, false},
-		{"local file clean exit", false, false, "/tmp/movie.mp4", 0, true},
-		{"local file signal quit with marker", false, true, "/tmp/movie.mp4", 4, true},
-		{"local file failed to open", false, false, "/tmp/movie.mp4", 2, false},
-		{"network playback marker", false, true, "https://cdn.example.com/v.m3u8", 0, true},
-		{"network marker with IPC connected", true, true, "https://cdn.example.com/v.m3u8", 0, false},
-		{"network clean exit without marker", false, false, "https://cdn.example.com/v.m3u8", 0, false},
-		{"network failed open without marker", false, false, "https://cdn.example.com/v.m3u8", 2, false},
+		{"network, no evidence", false, "https://cdn.example.com/v.m3u8", 0, false},
+		{"local file clean exit", false, "/tmp/movie.mp4", 0, true},
+		{"local file signal quit with marker", true, "/tmp/movie.mp4", 4, true},
+		{"local file failed to open", false, "/tmp/movie.mp4", 2, false},
+		{"network playback marker", true, "https://cdn.example.com/v.m3u8", 0, true},
+		{"network marker overrides failed exit code", true, "https://cdn.example.com/v.m3u8", 4, true},
+		{"network clean exit without marker", false, "https://cdn.example.com/v.m3u8", 0, false},
+		{"network failed open without marker", false, "https://cdn.example.com/v.m3u8", 2, false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := trustedWithoutIPC(tc.connected, tc.marked, tc.url, tc.exitCode)
+			got := trustedWithoutIPC(tc.marked, tc.url, tc.exitCode)
 			if got != tc.want {
 				t.Fatalf("trustedWithoutIPC() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPlaybackReadyIncludesMarker(t *testing.T) {
+	stats := newPlaybackStats()
+	marker := &playbackMarkerWriter{}
+	if playbackReady(stats, marker) {
+		t.Fatal("no IPC evidence and no marker must not be ready")
+	}
+	if _, err := marker.Write([]byte(playbackMark)); err != nil {
+		t.Fatal(err)
+	}
+	if !playbackReady(stats, marker) {
+		t.Fatal("playback marker must win even when IPC saw no media")
+	}
+}
+
+func TestOutputTailKeepsLastBytes(t *testing.T) {
+	tail := &outputTail{}
+	if _, err := tail.Write([]byte(strings.Repeat("a", maxOutputTailBytes+10))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tail.Write([]byte("LAST")); err != nil {
+		t.Fatal(err)
+	}
+	got := tail.String()
+	if len(got) != maxOutputTailBytes || !strings.HasSuffix(got, "LAST") {
+		t.Fatalf("tail length = %d, content = %q", len(got), got)
+	}
+}
+
+func TestSummarizeTailSplitsCarriageReturns(t *testing.T) {
+	out := strings.Repeat("progress", 30) + "\rV: 00:00:02 / 00:00:02 (99%)\r[error] failed to open\r"
+	if got := summarizeTail(out); got != "[error] failed to open" {
+		t.Fatalf("summarizeTail() = %q, want the final carriage-return line", got)
 	}
 }
 

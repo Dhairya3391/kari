@@ -1,7 +1,7 @@
 package player
 
-// mpv JSON IPC commands, properties, and envelope fields. Grouped in one
-// place so a protocol tweak never has to hunt through player code.
+// mpv JSON IPC commands and properties. Grouped in one place so a protocol
+// tweak never has to hunt through player code.
 const (
 	ipcCmdGetProperty = "get_property"
 	ipcCmdSubAdd      = "sub-add"
@@ -12,9 +12,5 @@ const (
 	ipcPropPause      = "pause"
 	ipcPropIdleActive = "idle-active"
 
-	ipcFieldCommand   = "command"
-	ipcFieldRequestID = "request_id"
-	ipcFieldError     = "error"
-	ipcFieldData      = "data"
-	ipcSuccess        = "success"
+	ipcSuccess = "success"
 )

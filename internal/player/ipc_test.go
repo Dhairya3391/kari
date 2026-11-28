@@ -20,13 +20,8 @@ func TestPlaybackStats_LoadedState(t *testing.T) {
 	if ps.playing() {
 		t.Fatalf("expected playing() to be false initially")
 	}
-	if ps.observedPlayback() || ps.ipcConnected() {
-		t.Fatal("a fresh stats object has neither IPC connection nor media evidence")
-	}
-
-	ps.markConnected()
-	if !ps.ipcConnected() || ps.observedPlayback() {
-		t.Fatal("an IPC connection alone is not media evidence")
+	if ps.observedPlayback() {
+		t.Fatal("a fresh stats object has no media evidence")
 	}
 
 	ps.update(0.0, 0.0, true)
@@ -58,11 +53,65 @@ func TestMediaLoaded(t *testing.T) {
 	}
 }
 
-// A reachable IPC socket whose media properties are all "unavailable" (an
-// unplayable URL mpv never loaded) must record a connection but no playback
-// evidence. That is what makes the exit-code fallback unavailable for the
-// false "Playback finished" case.
-func TestIPCPollerConnectedWithoutMediaEvidence(t *testing.T) {
+func TestIPCClientCommandDecodesTypedResponse(t *testing.T) {
+	tests := []struct {
+		name    string
+		reply   string
+		want    any
+		wantErr bool
+	}{
+		{"numeric data", `{"request_id":%d,"error":"success","data":123.5}`, float64(123.5), false},
+		{"boolean data", `{"request_id":%d,"error":"success","data":false}`, false, false},
+		{"string data", `{"request_id":%d,"error":"success","data":"idle"}`, "idle", false},
+		{"null data", `{"request_id":%d,"error":"success","data":null}`, nil, false},
+		{"missing data", `{"request_id":%d,"error":"success"}`, nil, false},
+		{
+			"skips events and other request ids",
+			`{"event":"file-loaded"}` + "\n" +
+				`{"request_id":999,"error":"success","data":"wrong"}` + "\n" +
+				`{"request_id":%d,"error":"success","data":123.5}`,
+			float64(123.5), false,
+		},
+		{"error response", `{"request_id":%d,"error":"property unavailable"}`, nil, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clientConn, serverConn := net.Pipe()
+			defer clientConn.Close()
+			defer serverConn.Close()
+			client := &IPCClient{conn: clientConn, scanner: newIPCSerializer(clientConn)}
+
+			go func() {
+				defer serverConn.Close()
+				var req ipcRequest
+				if err := json.NewDecoder(serverConn).Decode(&req); err != nil {
+					return
+				}
+				_, _ = fmt.Fprintf(serverConn, tc.reply+"\n", req.RequestID)
+			}()
+
+			got, err := client.command(ipcCmdGetProperty, ipcPropTimePos)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an mpv error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("command() = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Unavailable media properties on a reachable socket (an unplayable URL mpv
+// never loaded) must never count as playback evidence. That is what makes the
+// exit-code fallback unavailable for the false "Playback finished" case.
+func TestIPCPollerUnavailablePropertiesAreNotPlayback(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix socket test")
 	}
@@ -85,10 +134,7 @@ func TestIPCPollerConnectedWithoutMediaEvidence(t *testing.T) {
 				defer c.Close()
 				sc := bufio.NewScanner(c)
 				for sc.Scan() {
-					var req struct {
-						Command   []any `json:"command"`
-						RequestID int   `json:"request_id"`
-					}
+					var req ipcRequest
 					if json.Unmarshal(sc.Bytes(), &req) != nil {
 						continue
 					}
@@ -112,13 +158,7 @@ func TestIPCPollerConnectedWithoutMediaEvidence(t *testing.T) {
 		"https://cdn.example.com/v.m3u8", false, nil, stop)
 	defer close(stop)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && !stats.ipcConnected() {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !stats.ipcConnected() {
-		t.Fatal("poller should record an IPC connection when properties answer")
-	}
+	time.Sleep(100 * time.Millisecond)
 	if stats.observedPlayback() {
 		t.Fatal("unavailable media properties must not count as playback evidence")
 	}
@@ -246,10 +286,7 @@ func TestHotAddSubtitleContextStopsWhenCanceled(t *testing.T) {
 		defer conn.Close()
 		sc := bufio.NewScanner(conn)
 		for sc.Scan() {
-			var req struct {
-				Command   []any `json:"command"`
-				RequestID int   `json:"request_id"`
-			}
+			var req ipcRequest
 			if err := json.Unmarshal(sc.Bytes(), &req); err != nil {
 				continue
 			}
